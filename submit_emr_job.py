@@ -58,7 +58,7 @@ if __name__ == "__main__":
     BUCKET = "xin-config"  # Your S3 bucket
     S3_KEY = "scripts/example_emr.py"
     DATA_SOURCE = "s3://amzn-s3-demo-bucket/food-establishment-data.csv"
-    OUTPUT_URI = "s3://amzn-s3-demo-bucket/restaurant_violation_results"
+    OUTPUT_URI = "s3://xin-config/restaurant_violation_results"
     CLUSTER_ID = "j-2YEHPSL08JSF4"  # Your EMR Cluster ID
     REGION = "us-west-2"
 
