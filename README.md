@@ -10,6 +10,7 @@ You may need to create an IAM user to generate aws access key for yourself.
 
 ## connect to s3 from local:
 
+Ensure your IAM role has `AmazonS3FullAccess` permission.
 run script  [example_read_data_from_s3.py](https://github.com/NxNiki/aws-example/blob/main/example_read_data_from_s3.py) to make sure you can upload and download data from s3.
 
 ## run script on emr:
