@@ -25,5 +25,10 @@ if __name__ == "__main__":
     # Read the body of the response into a pandas DataFrame
     df = read_to_pandas_df(bucket_name, object_key)
 
+    df['read_success'] = True
+
     # Display the first few rows
     print(df.head())
+
+    object_key = 'example_read.csv'
+    write_pandas_df(df, bucket_name, object_key)
