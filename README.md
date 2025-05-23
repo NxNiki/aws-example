@@ -1,4 +1,4 @@
-# sagemaker-example
+# aws-example
 
 ## install aws-cli:
 
