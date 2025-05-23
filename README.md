@@ -1,5 +1,13 @@
 # aws-example
 
+## how to use:
+
+If you use peotry within a conda environment, make sure to aovid creating virtual environment with peotry:
+```
+poetry config virtualenvs.create false --local
+```
+Otherwise, conda and peotry will use different virtual environments!
+
 ## install aws-cli:
 
 https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
@@ -27,5 +35,7 @@ run script [submit_emr_job.py](https://github.com/NxNiki/aws-example/blob/main/s
 Check data in result folder on s3 to verify code run sucessfully.
 
 https://docs.aws.amazon.com/emr/latest/ManagementGuide/emr-gs.html
+
+
 
 
