@@ -10,9 +10,15 @@ You may need to create an IAM user to generate aws access key for yourself.
 
 ## connect to s3 from local:
 
-run script  [example_read_data_from_s3](https://github.com/NxNiki/aws-example/blob/main/example_read_data_from_s3.py)
+run script  [example_read_data_from_s3.py](https://github.com/NxNiki/aws-example/blob/main/example_read_data_from_s3.py) to make sure you can upload and download data from s3.
 
 ## run script on emr:
 
+Create an EMR cluster on AWS.
+Add `AmazonEMRFullAccessPolicy_v2` to your IAM role.
+
+run script [submit_emr_job.py](https://github.com/NxNiki/aws-example/blob/main/submit_emr_job.py) to ensure you can submit EMR jobs.
+
 https://docs.aws.amazon.com/emr/latest/ManagementGuide/emr-gs.html
+
 
