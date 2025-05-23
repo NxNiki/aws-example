@@ -10,7 +10,7 @@ You may need to create an IAM user to generate aws access key for yourself.
 
 ## connect to s3 from local:
 
-run script [https://github.com/NxNiki/aws-example/blob/main/example_read_data_from_s3.py] (example_read_data_from_s3)
+run script  (example_read_data_from_s3)[https://github.com/NxNiki/aws-example/blob/main/example_read_data_from_s3.py]
 
 ## run script on emr:
 
