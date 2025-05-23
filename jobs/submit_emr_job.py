@@ -2,7 +2,7 @@ import boto3
 import os
 import time
 import logging
-from src.pyspark_project.s3_utils import upload_file_to_s3
+from pyspark_project.s3_utils import upload_file_to_s3
 
 # Setup logging
 os.makedirs('.log', exist_ok=True)
@@ -14,7 +14,6 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
-
 
 
 def wait_for_cluster_ready(cluster_id, region='us-west-2'):

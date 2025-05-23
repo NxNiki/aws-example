@@ -13,7 +13,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql import DataFrame
 from pyspark.sql.functions import col
 
-from src.pyspark_project.s3_utils import list_s3_files
+from pyspark_project.s3_utils import list_s3_files
 
 os.makedirs('.log', exist_ok=True)
 logging.basicConfig(
