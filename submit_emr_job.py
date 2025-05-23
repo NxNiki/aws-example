@@ -5,11 +5,12 @@ from botocore.exceptions import NoCredentialsError
 import logging
 
 # Setup logging
+os.makedirs('.log', exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s | %(levelname)s | %(message)s',
     handlers=[
-        logging.FileHandler("emr_job_submit.log"),
+        logging.FileHandler(".log/emr_job_submit.log"),
         logging.StreamHandler()
     ]
 )
