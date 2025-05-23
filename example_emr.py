@@ -4,7 +4,7 @@ use submit emr job to submit this script to EMR
 """
 
 import argparse
-
+import logging
 from pyspark.sql import SparkSession
 
 
@@ -21,6 +21,7 @@ def calculate_red_violations(data_source, output_uri):
         if data_source is not None:
             restaurants_df = spark.read.option("header", "true").csv(data_source)
 
+        logging.info("Calculating Red Health Violations")
         # Create an in-memory DataFrame to query
         restaurants_df.createOrReplaceTempView("restaurant_violations")
 

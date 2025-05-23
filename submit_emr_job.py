@@ -1,7 +1,18 @@
 import boto3
 import os
+import time
 from botocore.exceptions import NoCredentialsError
+import logging
 
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)s | %(message)s',
+    handlers=[
+        logging.FileHandler("emr_job_submit.log"),
+        logging.StreamHandler()
+    ]
+)
 
 def upload_script_to_s3(local_path, s3_bucket, s3_key):
     """
@@ -16,14 +27,31 @@ def upload_script_to_s3(local_path, s3_bucket, s3_key):
 
     try:
         s3.upload_file(local_path, s3_bucket, s3_key)
-        print(f"Uploaded {local_path} to s3://{s3_bucket}/{s3_key}")
+        logging.info(f"Uploaded {local_path} to s3://{s3_bucket}/{s3_key}")
         return f"s3://{s3_bucket}/{s3_key}"
     except FileNotFoundError:
-        print("Error: The specified file was not found.")
+        logging.info("Error: The specified file was not found.")
     except NoCredentialsError:
-        print("Error: AWS credentials not available.")
+        logging.info("Error: AWS credentials not available.")
     except Exception as e:
-        print(f"Unexpected error: {e}")
+        logging.info(f"Unexpected error: {e}")
+
+
+def wait_for_cluster_ready(cluster_id, region='us-west-2'):
+    emr = boto3.client('emr', region_name=region)
+    logging.info(f"Waiting for EMR cluster {cluster_id} to be ready...")
+
+    while True:
+        response = emr.describe_cluster(ClusterId=cluster_id)
+        state = response['Cluster']['Status']['State']
+        logging.info(f"Cluster state: {state}")
+        if state in ['WAITING', 'RUNNING']:
+            logging.info("Cluster is ready!")
+            return
+        elif state in ['TERMINATING', 'TERMINATED', 'TERMINATED_WITH_ERRORS']:
+            logging.error(f"Cluster is not usable (state: {state})")
+            raise Exception(f"Cluster is not usable (state: {state})")
+        time.sleep(15)
 
 
 def submit_spark_step(cluster_id, script_s3_path, data_source, output_uri, region='us-west-2'):
@@ -57,9 +85,9 @@ if __name__ == "__main__":
     LOCAL_SCRIPT = "example_emr.py"  # Your local Python script
     BUCKET = "xin-config"  # Your S3 bucket
     S3_KEY = "scripts/example_emr.py"
-    DATA_SOURCE = "s3://amzn-s3-demo-bucket/food-establishment-data.csv"
+    DATA_SOURCE = "s3://xin-config/food_establishment_data.csv"
     OUTPUT_URI = "s3://xin-config/restaurant_violation_results"
-    CLUSTER_ID = "j-2YEHPSL08JSF4"  # Your EMR Cluster ID
+    CLUSTER_ID = "j-WD67QQS5JW2Z"  # Your EMR Cluster ID
     REGION = "us-west-2"
 
     # === Upload and Submit ===
