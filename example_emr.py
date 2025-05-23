@@ -1,3 +1,8 @@
+"""
+This example script cannot run locally
+use submit emr job to submit this script to EMR
+"""
+
 import argparse
 
 from pyspark.sql import SparkSession
