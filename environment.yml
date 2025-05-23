@@ -9,8 +9,6 @@ dependencies:
   - scikit-learn=1.4.0
   - pip
   - pip:
-#      - requests==2.31.0
-#      - flask==2.3.3
       - sagemaker==2.244.2
       - boto3==1.38.22
       - pyspark==3.5.5

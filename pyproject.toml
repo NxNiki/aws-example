@@ -1,0 +1,28 @@
+[tool.poetry]
+name = "aws_project"
+version = "0.1.0"
+description = "A data science project using AWS SageMaker, PySpark, and Scikit-learn"
+authors = ["Xin Niu <michaelniki1988@.com>"]
+readme = "README.md"
+packages = [{ include = "pyspark_project", from = "src" }]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+numpy = "^1.26.0"
+pandas = "2.1.0"
+scikit-learn = "1.4.0"
+sagemaker = "2.244.2"
+boto3 = "1.38.22"
+pyspark = "3.5.5"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"
+jupyter = "^1.0"
+isort = "^6.0.1"
+black = "^24.3"
+mypy = "^1.10"
+flake8 = "^7.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

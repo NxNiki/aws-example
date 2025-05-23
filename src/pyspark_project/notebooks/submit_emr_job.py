@@ -1,8 +1,8 @@
 import boto3
 import os
 import time
-from botocore.exceptions import NoCredentialsError
 import logging
+from src.pyspark_project.s3_utils import upload_file_to_s3
 
 # Setup logging
 os.makedirs('.log', exist_ok=True)
@@ -15,27 +15,6 @@ logging.basicConfig(
     ]
 )
 
-def upload_script_to_s3(local_path, s3_bucket, s3_key):
-    """
-    Uploads a local Python script to an S3 bucket.
-
-    :param local_path: Path to the local Python file.
-    :param s3_bucket: Name of the S3 bucket.
-    :param s3_key: S3 object key (e.g., 'scripts/red_violations.py').
-    :return: Full S3 URI of the uploaded script.
-    """
-    s3 = boto3.client('s3')
-
-    try:
-        s3.upload_file(local_path, s3_bucket, s3_key)
-        logging.info(f"Uploaded {local_path} to s3://{s3_bucket}/{s3_key}")
-        return f"s3://{s3_bucket}/{s3_key}"
-    except FileNotFoundError:
-        logging.info("Error: The specified file was not found.")
-    except NoCredentialsError:
-        logging.info("Error: AWS credentials not available.")
-    except Exception as e:
-        logging.info(f"Unexpected error: {e}")
 
 
 def wait_for_cluster_ready(cluster_id, region='us-west-2'):
@@ -92,6 +71,6 @@ if __name__ == "__main__":
     REGION = "us-west-2"
 
     # === Upload and Submit ===
-    s3_script_uri = upload_script_to_s3(LOCAL_SCRIPT, BUCKET, S3_KEY)
+    s3_script_uri = upload_file_to_s3(LOCAL_SCRIPT, BUCKET, S3_KEY)
     if s3_script_uri:
         submit_spark_step(CLUSTER_ID, s3_script_uri, DATA_SOURCE, OUTPUT_URI, region=REGION)
