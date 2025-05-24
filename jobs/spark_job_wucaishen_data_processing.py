@@ -8,7 +8,7 @@ process wucaishen data
 import logging
 import os
 import time
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import pandas as pd
 from pyspark.ml.feature import StringIndexer
@@ -164,7 +164,27 @@ def create_aggregations() -> List[Column]:
     return agg_expressions
 
 
-def process_wucaishen_data(df: DataFrame) -> DataFrame:
+def get_currency_count_by_group(df: DataFrame) -> DataFrame:
+    """
+    # 每个 group_id（loginname + group_index + sub_index）里统计 currency 出现次数
+    :param df:
+    :param column_name:
+    :return:
+    """
+    currency_count = df.groupBy("loginname", "group_index", "sub_index", "group_id", "currency_label", "currency").agg(
+        Fcount("*").alias("currency_count")
+    )
+    # 取每个 group_id 出现最多的 currency
+    currency_window = Window.partitionBy("group_id").orderBy(col("currency_count").desc())
+
+    currency_count = currency_count.withColumn("row_number", row_number().over(currency_window)).filter(
+        col("row_number") == 1
+    )  # 只保留每组里出现次数最多的那一行
+
+    return currency_count
+
+
+def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
     start_time = time.time()
 
     df = df.filter((col("flag") != -8.0) & (col("productid") != "B26"))
@@ -285,11 +305,20 @@ def process_wucaishen_data(df: DataFrame) -> DataFrame:
         df = df.withColumn(f"result_pos{i + 1}", split_cols.getItem(i).cast(IntegerType()))
 
     agg_expressions = create_aggregations()
+    currency_count = get_currency_count_by_group(df)
+
+    df_grouped = df.groupBy("loginname", "group_index", "sub_index", "group_id").agg(*agg_expressions)
+    # 把 currency_label 和 currency 也 join 回来
+    df_grouped = df_grouped.join(
+        currency_count.select("group_id", "currency_label", "currency"), on="group_id", how="left"
+    )
+
+    df = df.orderBy("loginname", "billtime")
 
     end_time = time.time()
     print("Total execution time: {:.2f} seconds".format(end_time - start_time))
 
-    return df
+    return df, df_grouped
 
 
 if __name__ == "__main__":
