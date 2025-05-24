@@ -1,12 +1,14 @@
+from typing import List, Optional
 
-from typing import List
-from pyspark.sql import SparkSession
-from pyspark.sql import DataFrame
+from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.functions import col
 
 
 def read_files_to_spark(
-        spark: SparkSession, s3_files: List[str], column_names: List[str]=None, keep_columns: List[str]=None
+    spark: SparkSession,
+    s3_files: List[str],
+    column_names: Optional[List[str]] = None,
+    keep_columns: Optional[List[str]] = None,
 ) -> DataFrame:
     """
     read files to spark dataframe
@@ -32,4 +34,3 @@ def read_files_to_spark(
     df.show(5)
 
     return df
-

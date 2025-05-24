@@ -1,21 +1,19 @@
-import os
 import logging
+import os
+from typing import List, Optional
+
 import boto3
-from typing import List
 from botocore.exceptions import NoCredentialsError
 
-
-os.makedirs('../.log', exist_ok=True)
+os.makedirs("../.log", exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s | %(levelname)s | %(message)s',
-    handlers=[
-        logging.FileHandler("../.log/s3_utils.log"),
-        logging.StreamHandler()
-    ]
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    handlers=[logging.FileHandler("../.log/s3_utils.log"), logging.StreamHandler()],
 )
 
-def upload_file_to_s3(local_path, s3_bucket, s3_key) -> str|None:
+
+def upload_file_to_s3(local_path, s3_bucket, s3_key) -> Optional[str]:
     """
     Uploads a local file to an S3 bucket.
 
@@ -24,7 +22,7 @@ def upload_file_to_s3(local_path, s3_bucket, s3_key) -> str|None:
     :param s3_key: S3 object key (e.g., 'scripts/red_violations.py').
     :return: Full S3 URI of the uploaded script.
     """
-    s3 = boto3.client('s3')
+    s3 = boto3.client("s3")
 
     try:
         s3.upload_file(local_path, s3_bucket, s3_key)
@@ -37,8 +35,10 @@ def upload_file_to_s3(local_path, s3_bucket, s3_key) -> str|None:
     except Exception as e:
         logging.info(f"Unexpected error: {e}")
 
+    return None
 
-def list_s3_files(bucket: str, prefix:str, suffix:str = None) -> List[str]:
+
+def list_s3_files(bucket: str, prefix: str, suffix: Optional[str] = None) -> List[str]:
     """
     list all S3 files in bucket with prefix and suffix
     :param bucket:
@@ -62,4 +62,4 @@ def list_s3_files(bucket: str, prefix:str, suffix:str = None) -> List[str]:
 
 if __name__ == "__main__":
     list_s3_files("hyber-slot", "wucaishen_oringaldata/", ".csv.gz")
-    #list_s3_files("xin-config", "", ".csv")
+    # list_s3_files("xin-config", "", ".csv")

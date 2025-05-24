@@ -8,25 +8,43 @@ process wucaishen data
 import logging
 import os
 import time
+from typing import List, Optional
 
-from typing import List
-from pyspark.sql import SparkSession
-from pyspark.sql import DataFrame
-from pyspark.sql.column import Column
-
-
-from pyspark.sql.functions import (
-    col, unix_timestamp, to_timestamp, expr, lag, when, split, row_number,hour, dayofweek,stddev,monotonically_increasing_id,
-    sum as Fsum, floor, concat_ws, count as Fcount, min as Fmin, max as Fmax, avg as Favg, percentile_approx, coalesce, lit
-)
-from pyspark.sql.window import Window
-from pyspark.sql.types import IntegerType
 import pandas as pd
-from pyspark.sql.functions import pandas_udf, PandasUDFType
-from pyspark.sql.functions import hour, dayofweek
 from pyspark.ml.feature import StringIndexer
-from pyspark_project.s3_utils import list_s3_files
+from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql.column import Column
+from pyspark.sql.functions import (
+    PandasUDFType,
+    avg as Favg,
+    coalesce,
+    col,
+    concat_ws,
+    count as Fcount,
+    dayofweek,
+    expr,
+    floor,
+    hour,
+    lag,
+    lit,
+    max as Fmax,
+    min as Fmin,
+    monotonically_increasing_id,
+    pandas_udf,
+    percentile_approx,
+    row_number,
+    split,
+    stddev,
+    sum as Fsum,
+    to_timestamp,
+    unix_timestamp,
+    when,
+)
+from pyspark.sql.types import IntegerType
+from pyspark.sql.window import Window
+
 from pyspark_project.pyspark_utils import read_files_to_spark
+from pyspark_project.s3_utils import list_s3_files
 
 
 @pandas_udf("row_id long, streak int", PandasUDFType.GROUPED_MAP)
@@ -78,13 +96,12 @@ def compute_win_lose_streak(pdf: DataFrame) -> DataFrame:
     return pdf[["row_id", "win_streak", "lose_streak"]]
 
 
-def create_aggregations(column_name:str, rename:str=None) -> List[Column]:
+def create_stat_aggregations(column_name: str, rename: Optional[str] = None) -> List[Column]:
 
     if rename is None:
         rename = column_name
 
     return [
-        Fcount("*").alias("group_num"),
         Fmin(column_name).alias(f"{rename}_min"),
         Fmax(column_name).alias(f"{rename}_max"),
         Favg(column_name).alias(f"{rename}_mean"),
@@ -92,6 +109,59 @@ def create_aggregations(column_name:str, rename:str=None) -> List[Column]:
         percentile_approx(column_name, 0.5).alias(f"{rename}_median"),
         percentile_approx(column_name, 0.75).alias(f"{rename}_p75"),
     ]
+
+
+def create_aggregations() -> List[Column]:
+
+    agg_expressions = []
+
+    agg_expressions.extend([Fcount("*").alias("group_num")])
+    agg_expressions.extend([Favg("rtp").alias("rtp_mean")])
+
+    agg_expressions.extend(create_stat_aggregations("account", "bet"))
+    agg_expressions.extend(create_stat_aggregations("basepoint"))
+    agg_expressions.extend(create_stat_aggregations("payout"))
+    agg_expressions.extend(create_stat_aggregations("cus_account", "profit"))
+    agg_expressions.extend(create_stat_aggregations("delta_t"))
+    agg_expressions.extend(create_stat_aggregations("delta_bet"))
+    agg_expressions.extend(create_stat_aggregations("delta_profit"))
+    agg_expressions.extend(create_stat_aggregations("streak"))
+    agg_expressions.extend(create_stat_aggregations("win_streak"))
+    agg_expressions.extend(create_stat_aggregations("loss_streak"))
+    agg_expressions.extend(create_stat_aggregations("deposit"))
+    agg_expressions.extend(create_stat_aggregations("withdrawal"))
+
+    agg_expressions.extend(
+        [
+            Fsum(when(col("slottype") == 2.0, 1).otherwise(0)).alias("slottype_2_count"),
+            # 获奖率：is_payout_gt0 的和 / group_num
+            (Fsum("is_payout_gt0") / Fcount("*")).alias("payout_rate"),
+            # 盈利率：is_profit_gt0 的和 / group_num
+            (Fsum("is_profit_gt0") / Fcount("*")).alias("profit_rate"),
+            # 盈利波动率：利润的标准差
+            coalesce(stddev("cus_account"), lit(0)).alias("profit_stddev"),
+            # 投注波动率：投注额的标准差
+            coalesce(stddev("account"), lit(0)).alias("account_stddev"),
+            # start_time（切片开始时间）
+            Fmin("billtime").alias("start_time"),
+            # end_time（切片结束时间）
+            Fmax("billtime").alias("end_time"),
+            # 时间段
+            Fsum("is_morning").alias("morning_count"),
+            Fsum("is_afternoon").alias("afternoon_count"),
+            Fsum("is_night").alias("night_count"),
+            Fsum("is_midnight").alias("midnight_count"),
+            Fsum("is_weekend").alias("weekend_count"),
+            # 持续时间（秒）
+            (unix_timestamp(Fmax("billtime")) - unix_timestamp(Fmin("billtime"))).alias("duration_seconds"),
+            # 每注平均耗时（秒/注）
+            ((unix_timestamp(Fmax("billtime")) - unix_timestamp(Fmin("billtime"))) / Fcount("*")).alias(
+                "avg_time_per_bet"
+            ),
+        ]
+    )
+
+    return agg_expressions
 
 
 def process_wucaishen_data(df: DataFrame) -> DataFrame:
@@ -121,60 +191,90 @@ def process_wucaishen_data(df: DataFrame) -> DataFrame:
     w = Window.partitionBy("loginname").orderBy("billtime")
     df = df.withColumn("prev_time", lag("billtime").over(w))
 
-    df = df.withColumn("prev_account",
-                       when(lag("account").over(w).isNotNull(),
-                            lag("account").over(w)).otherwise(0)
-                       )
-    df = df.withColumn("prev_profit",
-                       when(lag("cus_account").over(w).isNotNull(),
-                            lag("cus_account").over(w)).otherwise(0)
-                       )
-    df = df.withColumn("prev_payout",
-                       when((col("prev_account") + col("prev_profit")).isNotNull(),
-                       col("prev_account") + col("prev_profit")).otherwise(0)
-                       )
-    df = df.withColumn("last_current_point",
-                       when(lag("basepoint").over(w).isNotNull(),
-                            lag("basepoint").over(w) + lag("cus_account").over(w)).otherwise(0)
-                       )
+    df = df.withColumn(
+        "prev_account",
+        when(lag("account").over(w).isNotNull(), lag("account").over(w)).otherwise(0),
+    )
+    df = df.withColumn(
+        "prev_profit",
+        when(lag("cus_account").over(w).isNotNull(), lag("cus_account").over(w)).otherwise(0),
+    )
+    df = df.withColumn(
+        "prev_payout",
+        when(
+            (col("prev_account") + col("prev_profit")).isNotNull(),
+            col("prev_account") + col("prev_profit"),
+        ).otherwise(0),
+    )
+    df = df.withColumn(
+        "last_current_point",
+        when(
+            lag("basepoint").over(w).isNotNull(),
+            lag("basepoint").over(w) + lag("cus_account").over(w),
+        ).otherwise(0),
+    )
 
     df = df.withColumn("is_payout_gt0", when(col("payout") > 0, 1).otherwise(0))
     df = df.withColumn("is_profit_gt0", when(col("cus_account") > 0, 1).otherwise(0))
     # 衍生字段：delta_t
-    df = df.withColumn("delta_t", when(col("prev_time").isNull(), 0.0).otherwise( (unix_timestamp("billtime") - unix_timestamp("prev_time")).cast("double")))
+    df = df.withColumn(
+        "delta_t",
+        when(col("prev_time").isNull(), 0.0).otherwise(
+            (unix_timestamp("billtime") - unix_timestamp("prev_time")).cast("double")
+        ),
+    )
 
     # delta_bet
-    df = df.withColumn( "delta_bet",
-        when(col("prev_account").isNotNull(), col("account") - col("prev_account")).otherwise(0)
+    df = df.withColumn(
+        "delta_bet",
+        when(col("prev_account").isNotNull(), col("account") - col("prev_account")).otherwise(0),
     )
 
     # delta_profit
     df = df.withColumn(
         "delta_profit",
-        when(col("prev_profit").isNotNull(), col("cus_account") - col("prev_profit")).otherwise(0)
+        when(col("prev_profit").isNotNull(), col("cus_account") - col("prev_profit")).otherwise(0),
     )
     # delta_payout
     df = df.withColumn(
         "delta_payout",
-        when(col("prev_payout").isNotNull(), col("payout") - col("prev_payout")).otherwise(0)
+        when(col("prev_payout").isNotNull(), col("payout") - col("prev_payout")).otherwise(0),
     )
     # balance_change = 当前 basepoint - 上一笔 current_point
     df = df.withColumn(
         "balance_change",
-        when(col("last_current_point").isNotNull(), col("basepoint") - col("last_current_point")).otherwise(0)
+        when(
+            col("last_current_point").isNotNull(),
+            col("basepoint") - col("last_current_point"),
+        ).otherwise(0),
     )
 
     # 识别充值与提现
     df = df.withColumn("deposit", when(col("balance_change") > 0, col("balance_change")).otherwise(0))
-    df = df.withColumn("withdrawal", when(col("balance_change") < 0, -col("balance_change")).otherwise(0))
+    df = df.withColumn(
+        "withdrawal",
+        when(col("balance_change") < 0, -col("balance_change")).otherwise(0),
+    )
 
     df = df.withColumn("rtp", when(col("account") != 0, col("payout") / col("account")).otherwise(0))
     # 添加时段分类列
     df = df.withColumn("hour_of_day", hour("billtime"))
-    df = df.withColumn("is_morning", when((col("hour_of_day") >= 6) & (col("hour_of_day") < 12), 1).otherwise(0))
-    df = df.withColumn("is_afternoon", when((col("hour_of_day") >= 12) & (col("hour_of_day") < 18), 1).otherwise(0))
-    df = df.withColumn("is_night", when((col("hour_of_day") >= 18) & (col("hour_of_day") <= 23), 1).otherwise(0))
-    df = df.withColumn("is_midnight", when((col("hour_of_day") >= 0) & (col("hour_of_day") < 6), 1).otherwise(0))
+    df = df.withColumn(
+        "is_morning",
+        when((col("hour_of_day") >= 6) & (col("hour_of_day") < 12), 1).otherwise(0),
+    )
+    df = df.withColumn(
+        "is_afternoon",
+        when((col("hour_of_day") >= 12) & (col("hour_of_day") < 18), 1).otherwise(0),
+    )
+    df = df.withColumn(
+        "is_night",
+        when((col("hour_of_day") >= 18) & (col("hour_of_day") <= 23), 1).otherwise(0),
+    )
+    df = df.withColumn(
+        "is_midnight",
+        when((col("hour_of_day") >= 0) & (col("hour_of_day") < 6), 1).otherwise(0),
+    )
 
     # 节假日（周末）
     df = df.withColumn("is_weekend", when(dayofweek("billtime").isin([1, 7]), 1).otherwise(0))  # 1=Sunday, 7=Saturday
@@ -184,6 +284,8 @@ def process_wucaishen_data(df: DataFrame) -> DataFrame:
     for i in range(15):
         df = df.withColumn(f"result_pos{i + 1}", split_cols.getItem(i).cast(IntegerType()))
 
+    agg_expressions = create_aggregations()
+
     end_time = time.time()
     print("Total execution time: {:.2f} seconds".format(end_time - start_time))
 
@@ -192,37 +294,55 @@ def process_wucaishen_data(df: DataFrame) -> DataFrame:
 
 if __name__ == "__main__":
 
-    os.makedirs('.log', exist_ok=True)
+    os.makedirs(".log", exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s | %(levelname)s | %(message)s',
+        format="%(asctime)s | %(levelname)s | %(message)s",
         handlers=[
             logging.FileHandler(".log/spark_job_wucaishen_data_processing.log"),
-            logging.StreamHandler()
-        ]
+            logging.StreamHandler(),
+        ],
     )
 
     print("🚀 正在初始化 SparkSession ...")
-    spark = SparkSession.builder \
-        .appName("Aggregateddata") \
-        .config("spark.driver.memory", "64g") \
-        .config("spark.executor.memory", "64g") \
-        .config("spark.sql.shuffle.partitions", "200") \
+    spark = (
+        SparkSession.builder.appName("Aggregateddata")
+        .config("spark.driver.memory", "64g")
+        .config("spark.executor.memory", "64g")
+        .config("spark.sql.shuffle.partitions", "200")
         .getOrCreate()
+    )
     print("SparkSession 初始化完成！")
 
     s3_files = list_s3_files("hyber-slot", "wucaishen_oringaldata/", ".csv.gz")
 
     column_names = [
-        'productid', 'loginname', 'billno', 'billtime',
-        'account', 'cus_account', 'currency', 'slottype',
-        'basepoint', 'result', 'cur_ip', 'flag'
+        "productid",
+        "loginname",
+        "billno",
+        "billtime",
+        "account",
+        "cus_account",
+        "currency",
+        "slottype",
+        "basepoint",
+        "result",
+        "cur_ip",
+        "flag",
     ]
 
     columns_to_keep = [
-        'productid', 'loginname', 'billno', 'billtime',
-        'account', 'cus_account', 'currency', 'slottype',
-        'basepoint', 'result', 'cur_ip'
+        "productid",
+        "loginname",
+        "billno",
+        "billtime",
+        "account",
+        "cus_account",
+        "currency",
+        "slottype",
+        "basepoint",
+        "result",
+        "cur_ip",
     ]
 
-    read_files_to_spark(spark, s3_files, column_names, columns_to_keep)
+    pdf = read_files_to_spark(spark, s3_files, column_names, columns_to_keep)

@@ -1,60 +1,61 @@
-import boto3
+import logging
 import os
 import time
-import logging
+
+import boto3
+
 from pyspark_project.s3_utils import upload_file_to_s3
 
 # Setup logging
-os.makedirs('.log', exist_ok=True)
+os.makedirs(".log", exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s | %(levelname)s | %(message)s',
-    handlers=[
-        logging.FileHandler(".log/emr_job_submit.log"),
-        logging.StreamHandler()
-    ]
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    handlers=[logging.FileHandler(".log/emr_job_submit.log"), logging.StreamHandler()],
 )
 
 
-def wait_for_cluster_ready(cluster_id, region='us-west-2'):
-    emr = boto3.client('emr', region_name=region)
+def wait_for_cluster_ready(cluster_id, region="us-west-2"):
+    emr = boto3.client("emr", region_name=region)
     logging.info(f"Waiting for EMR cluster {cluster_id} to be ready...")
 
     while True:
         response = emr.describe_cluster(ClusterId=cluster_id)
-        state = response['Cluster']['Status']['State']
+        state = response["Cluster"]["Status"]["State"]
         logging.info(f"Cluster state: {state}")
-        if state in ['WAITING', 'RUNNING']:
+        if state in ["WAITING", "RUNNING"]:
             logging.info("Cluster is ready!")
             return
-        elif state in ['TERMINATING', 'TERMINATED', 'TERMINATED_WITH_ERRORS']:
+        elif state in ["TERMINATING", "TERMINATED", "TERMINATED_WITH_ERRORS"]:
             logging.error(f"Cluster is not usable (state: {state})")
             raise Exception(f"Cluster is not usable (state: {state})")
         time.sleep(15)
 
 
-def submit_spark_step(cluster_id, script_s3_path, data_source, output_uri, region='us-west-2'):
+def submit_spark_step(cluster_id, script_s3_path, data_source, output_uri, region="us-west-2"):
     """
     Submits a Spark step to an EMR cluster.
     """
-    emr_client = boto3.client('emr', region_name=region)
+    emr_client = boto3.client("emr", region_name=region)
 
     step = {
-        'Name': 'RedViolationJob',
-        'ActionOnFailure': 'CONTINUE',
-        'HadoopJarStep': {
-            'Jar': 'command-runner.jar',
-            'Args': [
-                'spark-submit',
+        "Name": "RedViolationJob",
+        "ActionOnFailure": "CONTINUE",
+        "HadoopJarStep": {
+            "Jar": "command-runner.jar",
+            "Args": [
+                "spark-submit",
                 script_s3_path,
-                '--data_source', data_source,
-                '--output_uri', output_uri
-            ]
-        }
+                "--data_source",
+                data_source,
+                "--output_uri",
+                output_uri,
+            ],
+        },
     }
 
     response = emr_client.add_job_flow_steps(JobFlowId=cluster_id, Steps=[step])
-    step_id = response['StepIds'][0]
+    step_id = response["StepIds"][0]
     print(f"Step submitted successfully. Step ID: {step_id}")
     return step_id
 
