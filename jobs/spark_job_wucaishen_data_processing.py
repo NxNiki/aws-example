@@ -7,53 +7,134 @@ process wucaishen data
 
 import logging
 import os
+import time
 
 from typing import List
 from pyspark.sql import SparkSession
 from pyspark.sql import DataFrame
-from pyspark.sql.functions import col
 
-from pyspark_project.s3_utils import list_s3_files
 
-os.makedirs('.log', exist_ok=True)
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(levelname)s | %(message)s',
-    handlers=[
-        logging.FileHandler(".log/spark_job_wucaishen_data_processing.log"),
-        logging.StreamHandler()
-    ]
+from pyspark.sql.functions import (
+    col, unix_timestamp, to_timestamp, expr, lag, when, split, row_number,hour, dayofweek,stddev,monotonically_increasing_id,
+    sum as Fsum, floor, concat_ws, count as Fcount, min as Fmin, max as Fmax, avg as Favg, percentile_approx, coalesce, lit
 )
+from pyspark.sql.window import Window
+from pyspark.sql.types import IntegerType
+import pandas as pd
+from pyspark.sql.functions import pandas_udf, PandasUDFType
+from pyspark.sql.functions import hour, dayofweek
+from pyspark.ml.feature import StringIndexer
+from pyspark_project.s3_utils import list_s3_files
+from pyspark_project.pyspark_utils import read_files_to_spark
 
-def read_files_to_spark(spark: SparkSession, s3_files: List[str], column_names: List[str]=None) -> DataFrame:
-    """
-    read files to spark dataframe
-    :param spark: spark session
-    :param s3_files:
-    :param column_names:
-    :return:
-    """
 
-    df = spark.read.option("header", "false").csv(s3_files)
-    print("数据加载完成！")
+def process_wucaishen_data(df: DataFrame) -> DataFrame:
+    start_time = time.time()
 
-    if column_names:
-        print("重新命名列 ...")
-        for i, col_name in enumerate(column_names):
-            df = df.withColumnRenamed(f"_c{i}", col_name)
-        print("列重命名完成！")
+    df = df.filter((col("flag") != -8.0) & (col("productid") != "B26"))
+    df = df.orderBy(col("loginname"), col("billtime"))
 
-    print("正在按照 user_id, created_at, creditseq 排序 ...")
-    df_sorted = df.orderBy(col("loginname"), col("billtime"))
-    print("排序完成！")
+    # 时间转换
+    df = df.withColumn("billtime_utc", to_timestamp((col("billtime") / 1e9).cast("long")))
+    df = df.withColumn("billtime", expr("from_utc_timestamp(billtime_utc, 'America/New_York')"))
 
-    print("显示前 5 行数据预览：")
-    df_sorted.show(5)
+    # 排序窗口
+    # 添加唯一标识行 ID
+    df = df.withColumn("row_id", monotonically_increasing_id())
+
+    # payout + current_point
+    df = df.withColumn("payout", col("cus_account") + col("account"))
+    df = df.withColumn("current_point", col("basepoint") + col("cus_account"))
+
+    # 对 currency 做 label encoding
+    indexer = StringIndexer(inputCol="currency", outputCol="currency_label")
+    currency_model = indexer.fit(df)
+    df = currency_model.transform(df)
+
+    # 上一笔记录
+    w = Window.partitionBy("loginname").orderBy("billtime")
+    df = df.withColumn("prev_time", lag("billtime").over(w))
+
+    df = df.withColumn("prev_account",
+                       when(lag("account").over(w).isNotNull(),
+                            lag("account").over(w)).otherwise(0)
+                       )
+    df = df.withColumn("prev_profit",
+                       when(lag("cus_account").over(w).isNotNull(),
+                            lag("cus_account").over(w)).otherwise(0)
+                       )
+    df = df.withColumn("prev_payout",
+                       when((col("prev_account") + col("prev_profit")).isNotNull(),
+                       col("prev_account") + col("prev_profit")).otherwise(0)
+                       )
+    df = df.withColumn("last_current_point",
+                       when(lag("basepoint").over(w).isNotNull(),
+                            lag("basepoint").over(w) + lag("cus_account").over(w)).otherwise(0)
+                       )
+
+    df = df.withColumn("is_payout_gt0", when(col("payout") > 0, 1).otherwise(0))
+    df = df.withColumn("is_profit_gt0", when(col("cus_account") > 0, 1).otherwise(0))
+    # 衍生字段：delta_t
+    df = df.withColumn("delta_t", when(col("prev_time").isNull(), 0.0).otherwise( (unix_timestamp("billtime") - unix_timestamp("prev_time")).cast("double")))
+
+    # delta_bet
+    df = df.withColumn( "delta_bet",
+        when(col("prev_account").isNotNull(), col("account") - col("prev_account")).otherwise(0)
+    )
+
+    # delta_profit
+    df = df.withColumn(
+        "delta_profit",
+        when(col("prev_profit").isNotNull(), col("cus_account") - col("prev_profit")).otherwise(0)
+    )
+    # delta_payout
+    df = df.withColumn(
+        "delta_payout",
+        when(col("prev_payout").isNotNull(), col("payout") - col("prev_payout")).otherwise(0)
+    )
+    # balance_change = 当前 basepoint - 上一笔 current_point
+    df = df.withColumn(
+        "balance_change",
+        when(col("last_current_point").isNotNull(), col("basepoint") - col("last_current_point")).otherwise(0)
+    )
+
+    # 识别充值与提现
+    df = df.withColumn("deposit", when(col("balance_change") > 0, col("balance_change")).otherwise(0))
+    df = df.withColumn("withdrawal", when(col("balance_change") < 0, -col("balance_change")).otherwise(0))
+
+    df = df.withColumn("rtp", when(col("account") != 0, col("payout") / col("account")).otherwise(0))
+    # 添加时段分类列
+    df = df.withColumn("hour_of_day", hour("billtime"))
+    df = df.withColumn("is_morning", when((col("hour_of_day") >= 6) & (col("hour_of_day") < 12), 1).otherwise(0))
+    df = df.withColumn("is_afternoon", when((col("hour_of_day") >= 12) & (col("hour_of_day") < 18), 1).otherwise(0))
+    df = df.withColumn("is_night", when((col("hour_of_day") >= 18) & (col("hour_of_day") <= 23), 1).otherwise(0))
+    df = df.withColumn("is_midnight", when((col("hour_of_day") >= 0) & (col("hour_of_day") < 6), 1).otherwise(0))
+
+    # 节假日（周末）
+    df = df.withColumn("is_weekend", when(dayofweek("billtime").isin([1, 7]), 1).otherwise(0))  # 1=Sunday, 7=Saturday
+    # 拆分 result 字段为 result_pos1 ~ result_pos15
+    df = df.withColumn("result_clean", expr("trim(BOTH ';' FROM result)"))
+    split_cols = split(col("result_clean"), ",")
+    for i in range(15):
+        df = df.withColumn(f"result_pos{i + 1}", split_cols.getItem(i).cast(IntegerType()))
+
+    end_time = time.time()
+    print("Total execution time: {:.2f} seconds".format(end_time - start_time))
 
     return df
 
 
 if __name__ == "__main__":
+
+    os.makedirs('.log', exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s | %(levelname)s | %(message)s',
+        handlers=[
+            logging.FileHandler(".log/spark_job_wucaishen_data_processing.log"),
+            logging.StreamHandler()
+        ]
+    )
 
     print("🚀 正在初始化 SparkSession ...")
     spark = SparkSession.builder \
@@ -65,17 +146,17 @@ if __name__ == "__main__":
     print("SparkSession 初始化完成！")
 
     s3_files = list_s3_files("hyber-slot", "wucaishen_oringaldata/", ".csv.gz")
-    column_names = ['productid',
-                    'loginname',
-                    'billno',
-                    'billtime',
-                    'account',
-                    'cus_account',
-                    'currency',
-                    'slottype',
-                    'basepoint',
-                    'result',
-                    'cur_ip',
-                    'flag']
 
-    read_files_to_spark(spark, s3_files, column_names)
+    column_names = [
+        'productid', 'loginname', 'billno', 'billtime',
+        'account', 'cus_account', 'currency', 'slottype',
+        'basepoint', 'result', 'cur_ip', 'flag'
+    ]
+
+    columns_to_keep = [
+        'productid', 'loginname', 'billno', 'billtime',
+        'account', 'cus_account', 'currency', 'slottype',
+        'basepoint', 'result', 'cur_ip'
+    ]
+
+    read_files_to_spark(spark, s3_files, column_names, columns_to_keep)
