@@ -12,6 +12,7 @@ import time
 from typing import List
 from pyspark.sql import SparkSession
 from pyspark.sql import DataFrame
+from pyspark.sql.column import Column
 
 
 from pyspark.sql.functions import (
@@ -26,6 +27,71 @@ from pyspark.sql.functions import hour, dayofweek
 from pyspark.ml.feature import StringIndexer
 from pyspark_project.s3_utils import list_s3_files
 from pyspark_project.pyspark_utils import read_files_to_spark
+
+
+@pandas_udf("row_id long, streak int", PandasUDFType.GROUPED_MAP)
+def compute_streak_udf(pdf: DataFrame) -> DataFrame:
+    """
+    ========= 连续投注（streak） =========
+    :param pdf:
+    :return:
+    """
+    pdf = pdf.sort_values("billtime")
+    streaks = []
+    streak = 0
+    for dt in pdf["delta_t"]:
+        if pd.isna(dt) or dt > 200:
+            streak = 0
+        else:
+            streak += 1
+        streaks.append(streak)
+    pdf["streak"] = streaks
+    return pdf[["row_id", "streak"]]
+
+
+@pandas_udf("row_id long, win_streak int, lose_streak int", PandasUDFType.GROUPED_MAP)
+def compute_win_lose_streak(pdf: DataFrame) -> DataFrame:
+    """
+    ========= 连续赢钱/输钱 streak =========
+    :param pdf:
+    :return:
+    """
+    pdf = pdf.sort_values("billtime")
+    win_streaks = []
+    lose_streaks = []
+    win_streak = 0
+    lose_streak = 0
+    for profit in pdf["cus_account"]:
+        if profit > 0:
+            win_streak += 1
+            lose_streak = 0
+        elif profit < 0:
+            lose_streak += 1
+            win_streak = 0
+        else:
+            win_streak = 0
+            lose_streak = 0
+        win_streaks.append(win_streak)
+        lose_streaks.append(lose_streak)
+    pdf["win_streak"] = win_streaks
+    pdf["lose_streak"] = lose_streaks
+    return pdf[["row_id", "win_streak", "lose_streak"]]
+
+
+def create_aggregations(column_name:str, rename:str=None) -> List[Column]:
+
+    if rename is None:
+        rename = column_name
+
+    return [
+        Fcount("*").alias("group_num"),
+        Fmin(column_name).alias(f"{rename}_min"),
+        Fmax(column_name).alias(f"{rename}_max"),
+        Favg(column_name).alias(f"{rename}_mean"),
+        percentile_approx(column_name, 0.25).alias(f"{rename}_p25"),
+        percentile_approx(column_name, 0.5).alias(f"{rename}_median"),
+        percentile_approx(column_name, 0.75).alias(f"{rename}_p75"),
+    ]
 
 
 def process_wucaishen_data(df: DataFrame) -> DataFrame:
