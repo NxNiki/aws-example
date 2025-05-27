@@ -13,7 +13,7 @@ logging.basicConfig(
 )
 
 
-def upload_file_to_s3(local_path, s3_bucket, s3_key) -> Optional[str]:
+def upload_file_to_s3(local_path: str, s3_bucket: str, s3_key: str) -> Optional[str]:
     """
     Uploads a local file to an S3 bucket.
 

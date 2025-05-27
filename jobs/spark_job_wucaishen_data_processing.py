@@ -11,7 +11,6 @@ import time
 from typing import List, Optional, Tuple
 
 import pandas as pd
-from pyspark.ml.feature import StringIndexer
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.column import Column
 from pyspark.sql.functions import (
@@ -41,14 +40,14 @@ from pyspark.sql.functions import (
     when,
 )
 from pyspark.sql.types import IntegerType
-from pyspark.sql.window import Window
+from pyspark.sql.window import Window, WindowSpec
 
-from pyspark_project.pyspark_utils import read_files_to_spark
+from pyspark_project.pyspark_utils import create_stat_aggregations, encode_label, read_files_to_spark
 from pyspark_project.s3_utils import list_s3_files
 
 
 @pandas_udf("row_id long, streak int", PandasUDFType.GROUPED_MAP)
-def compute_streak_udf(pdf: DataFrame) -> DataFrame:
+def compute_streak_udf(pdf: pd.DataFrame) -> pd.DataFrame:
     """
     ========= 连续投注（streak） =========
     :param pdf:
@@ -68,7 +67,7 @@ def compute_streak_udf(pdf: DataFrame) -> DataFrame:
 
 
 @pandas_udf("row_id long, win_streak int, lose_streak int", PandasUDFType.GROUPED_MAP)
-def compute_win_lose_streak(pdf: DataFrame) -> DataFrame:
+def compute_win_lose_streak(pdf: pd.DataFrame) -> pd.DataFrame:
     """
     ========= 连续赢钱/输钱 streak =========
     :param pdf:
@@ -96,27 +95,12 @@ def compute_win_lose_streak(pdf: DataFrame) -> DataFrame:
     return pdf[["row_id", "win_streak", "lose_streak"]]
 
 
-def create_stat_aggregations(column_name: str, rename: Optional[str] = None) -> List[Column]:
-
-    if rename is None:
-        rename = column_name
-
-    return [
-        Fmin(column_name).alias(f"{rename}_min"),
-        Fmax(column_name).alias(f"{rename}_max"),
-        Favg(column_name).alias(f"{rename}_mean"),
-        percentile_approx(column_name, 0.25).alias(f"{rename}_p25"),
-        percentile_approx(column_name, 0.5).alias(f"{rename}_median"),
-        percentile_approx(column_name, 0.75).alias(f"{rename}_p75"),
-    ]
-
-
 def create_aggregations() -> List[Column]:
 
-    agg_expressions = []
-
-    agg_expressions.extend([Fcount("*").alias("group_num")])
-    agg_expressions.extend([Favg("rtp").alias("rtp_mean")])
+    agg_expressions = [
+        Fcount("*").alias("group_num"),
+        Favg("rtp").alias("rtp_mean"),
+    ]
 
     agg_expressions.extend(create_stat_aggregations("account", "bet"))
     agg_expressions.extend(create_stat_aggregations("basepoint"))
@@ -166,7 +150,8 @@ def create_aggregations() -> List[Column]:
 
 def get_currency_count_by_group(df: DataFrame) -> DataFrame:
     """
-    # 每个 group_id（loginname + group_index + sub_index）里统计 currency 出现次数
+    统计每个 group_id（loginname + group_index + sub_index）里统计 currency 出现次数
+    并选择每组中使用次数最多的currency
     :param df:
     :param column_name:
     :return:
@@ -182,6 +167,30 @@ def get_currency_count_by_group(df: DataFrame) -> DataFrame:
     )  # 只保留每组里出现次数最多的那一行
 
     return currency_count
+
+
+def get_previous_value(
+    df: DataFrame, col_name: str, prev_name: str, window: WindowSpec, check_null: bool = True
+) -> DataFrame:
+    """
+    Get the previous value of a column and put into a new name
+    :param df:
+    :param col_name:
+    :param prev_name:
+    :param window:
+    :param check_null:
+    :return:
+    """
+
+    if check_null:
+        df = df.withColumn(
+            prev_name,
+            when(lag(col_name).over(window).isNotNull(), lag(col_name).over(window)).otherwise(0),
+        )
+    else:
+        df = df.withColumn(prev_name, lag(col_name).over(window))
+
+    return df
 
 
 def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
@@ -202,23 +211,14 @@ def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
     df = df.withColumn("payout", col("cus_account") + col("account"))
     df = df.withColumn("current_point", col("basepoint") + col("cus_account"))
 
-    # 对 currency 做 label encoding
-    indexer = StringIndexer(inputCol="currency", outputCol="currency_label")
-    currency_model = indexer.fit(df)
-    df = currency_model.transform(df)
+    df = encode_label(df, "currency", "currency_label")
 
     # 上一笔记录
     w = Window.partitionBy("loginname").orderBy("billtime")
-    df = df.withColumn("prev_time", lag("billtime").over(w))
+    df = get_previous_value(df, "billtime", "prev_time", w, check_null=False)
+    df = get_previous_value(df, "account", "prev_account", w)
+    df = get_previous_value(df, "cus_account", "prev_profit", w)
 
-    df = df.withColumn(
-        "prev_account",
-        when(lag("account").over(w).isNotNull(), lag("account").over(w)).otherwise(0),
-    )
-    df = df.withColumn(
-        "prev_profit",
-        when(lag("cus_account").over(w).isNotNull(), lag("cus_account").over(w)).otherwise(0),
-    )
     df = df.withColumn(
         "prev_payout",
         when(
@@ -236,6 +236,7 @@ def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
 
     df = df.withColumn("is_payout_gt0", when(col("payout") > 0, 1).otherwise(0))
     df = df.withColumn("is_profit_gt0", when(col("cus_account") > 0, 1).otherwise(0))
+
     # 衍生字段：delta_t
     df = df.withColumn(
         "delta_t",
