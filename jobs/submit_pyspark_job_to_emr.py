@@ -62,9 +62,9 @@ def submit_spark_step(cluster_id, script_s3_path, data_source, output_uri, regio
 
 if __name__ == "__main__":
     # === Configuration ===
-    LOCAL_SCRIPT = "example_emr.py"  # Your local Python script
+    LOCAL_SCRIPT = "data_loader_pyspark_example.py"  # Your local Python script
     BUCKET = "xin-config"  # Your S3 bucket
-    S3_KEY = "scripts/example_emr.py"
+    S3_KEY = "scripts/data_loader_pyspark_example.py"
     DATA_SOURCE = "s3://xin-config/food_establishment_data.csv"
     OUTPUT_URI = "s3://xin-config/restaurant_violation_results"
     CLUSTER_ID = "j-WD67QQS5JW2Z"  # Your EMR Cluster ID

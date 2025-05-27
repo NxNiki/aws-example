@@ -1,8 +1,10 @@
+import io
 import logging
 import os
 from typing import List, Optional
 
 import boto3
+import pandas as pd
 from botocore.exceptions import NoCredentialsError
 
 os.makedirs("../.log", exist_ok=True)
@@ -11,6 +13,22 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
     handlers=[logging.FileHandler("../.log/s3_utils.log"), logging.StreamHandler()],
 )
+
+# Initialize S3 client globally
+s3_client = boto3.client("s3")
+
+
+def read_to_pandas_df(bucket: str, key: str) -> pd.DataFrame:
+    """Read a CSV file from S3 and return it as a Pandas DataFrame."""
+    response = s3_client.get_object(Bucket=bucket, Key=key)
+    return pd.read_csv(response["Body"])
+
+
+def write_pandas_df(df: pd.DataFrame, bucket: str, key: str) -> None:
+    """Write a Pandas DataFrame to a CSV file in S3."""
+    csv_buffer = io.StringIO()
+    df.to_csv(csv_buffer, index=False)
+    s3_client.put_object(Bucket=bucket, Key=key, Body=csv_buffer.getvalue())
 
 
 def upload_file_to_s3(local_path: str, s3_bucket: str, s3_key: str) -> Optional[str]:
@@ -22,10 +40,9 @@ def upload_file_to_s3(local_path: str, s3_bucket: str, s3_key: str) -> Optional[
     :param s3_key: S3 object key (e.g., 'scripts/red_violations.py').
     :return: Full S3 URI of the uploaded script.
     """
-    s3 = boto3.client("s3")
 
     try:
-        s3.upload_file(local_path, s3_bucket, s3_key)
+        s3_client.upload_file(local_path, s3_bucket, s3_key)
         logging.info(f"Uploaded {local_path} to s3://{s3_bucket}/{s3_key}")
         return f"s3://{s3_bucket}/{s3_key}"
     except FileNotFoundError:
@@ -46,10 +63,9 @@ def list_s3_files(bucket: str, prefix: str, suffix: Optional[str] = None) -> Lis
     :param suffix:
     :return:
     """
-    s3 = boto3.client("s3")
     logging.info(f"list s3 files: {bucket}/{prefix}*{suffix}")
     matching_keys = []
-    paginator = s3.get_paginator("list_objects_v2")
+    paginator = s3_client.get_paginator("list_objects_v2")
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
         for obj in page.get("Contents", []):
             key = obj["Key"]

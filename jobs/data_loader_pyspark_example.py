@@ -28,11 +28,14 @@ def calculate_red_violations(data_source, output_uri):
 
         # Create a DataFrame of the top 10 restaurants with the most Red violations
         top_red_violation_restaurants = spark.sql(
-            """SELECT name, count(*) AS total_red_violations
-                                                     FROM restaurant_violations
-                                                     WHERE violation_type = 'RED'
-                                                     GROUP BY name
-                                                     ORDER BY total_red_violations DESC LIMIT 10"""
+            """
+                SELECT name, count(*) AS total_red_violations
+                FROM restaurant_violations
+                WHERE violation_type = 'RED'
+                GROUP BY name
+                ORDER BY total_red_violations DESC 
+                LIMIT 10
+            """
         )
 
         # Write the results to the specified output URI
