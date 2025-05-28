@@ -13,3 +13,4 @@ dependencies:
       - sagemaker==2.244.2
       - boto3==1.38.22
       - pyspark==3.5.5
+      - matplotlib==3.10.0
