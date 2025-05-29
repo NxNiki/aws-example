@@ -94,6 +94,22 @@ def list_s3_files(bucket: str, prefix: str, pattern: Optional[str] = None) -> Li
     return matching_keys
 
 
+def read_files(bucket: str, files: List[str]) -> pd.DataFrame:
+    """
+    Read a CSV file from S3 and return it as a Pandas DataFrame.
+    :param bucket: S3 bucket name
+    :param files: s3 Path to the CSV file.
+    """
+
+    dfs = []
+    for file in files:
+        print(f"Reading {file}")
+        dfs.append(read_to_pandas_df(bucket, file))
+
+    df = pd.concat(dfs)
+    return df
+
+
 if __name__ == "__main__":
     list_s3_files("hyber-slot", "wucaishen_oringaldata/", r"\.csv.gz$")
     # list_s3_files("xin-config", "", ".csv")
