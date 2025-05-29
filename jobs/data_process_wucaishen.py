@@ -42,8 +42,8 @@ from pyspark.sql.functions import (
 from pyspark.sql.types import IntegerType
 from pyspark.sql.window import Window, WindowSpec
 
-from pyspark_project.pyspark_utils import create_stat_aggregations, encode_label, read_files_to_spark
-from pyspark_project.s3_utils import list_s3_files
+from bituslabs_ds.pyspark_utils import create_stat_aggregations, encode_label, read_files_to_spark
+from bituslabs_ds.s3_utils import list_s3_files
 
 
 @pandas_udf("row_id long, streak int", PandasUDFType.GROUPED_MAP)

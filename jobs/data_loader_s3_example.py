@@ -1,4 +1,4 @@
-from pyspark_project.s3_utils import read_to_pandas_df, write_pandas_df
+from bituslabs_ds.s3_utils import read_to_pandas_df, write_pandas_df
 
 if __name__ == "__main__":
     # Define your bucket and object key

@@ -4,7 +4,7 @@ import time
 
 import boto3
 
-from pyspark_project.s3_utils import upload_file_to_s3
+from bituslabs_ds.s3_utils import upload_file_to_s3
 
 # Setup logging
 os.makedirs(".log", exist_ok=True)
