@@ -23,7 +23,7 @@ def calculate_red_violations(data_source, output_uri):
             restaurants_df = spark.read.option("header", "true").csv(data_source)
 
         logging.info("Calculating Red Health Violations")
-        # Create an in-memory DataFrame to query
+        # Create an in-memory DataFrame to athena_query
         restaurants_df.createOrReplaceTempView("restaurant_violations")
 
         # Create a DataFrame of the top 10 restaurants with the most Red violations

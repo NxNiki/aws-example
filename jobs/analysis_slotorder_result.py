@@ -1,8 +1,13 @@
-import pandas as pd
+"""
+check the values of columns in slotmachine and convert them to values according to a LUT.
+"""
 
-# Load the data
-data_file = "/Users/niuxin/Downloads/slot_orders_wucaishen_for_mathtable.csv"
-df = pd.read_csv(data_file)
+from bituslabs_ds.s3_utils import read_to_pandas_df
+
+bucket = "bituslabs-team-ai"
+data = "ds-data-slotorders/slot_orders_wucaishen_for_mathtable.csv"
+
+df = read_to_pandas_df(bucket, data)
 
 # Set to store unique integers
 unique_numbers = set()

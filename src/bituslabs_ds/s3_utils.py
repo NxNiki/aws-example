@@ -7,6 +7,8 @@ import boto3
 import pandas as pd
 from botocore.exceptions import NoCredentialsError
 
+s3_client = boto3.client("s3")
+
 os.makedirs("../.log", exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
@@ -14,21 +16,33 @@ logging.basicConfig(
     handlers=[logging.FileHandler("../.log/s3_utils.log"), logging.StreamHandler()],
 )
 
-# Initialize S3 client globally
-s3_client = boto3.client("s3")
+
+def parse_bucket_name(bucket: str) -> str:
+    if bucket.endswith("/"):
+        logging.warning(f"remove '/' from {bucket}")
+        bucket = bucket[:-1]
+    if bucket.startswith("s3://"):
+        logging.warning(f"remove 's3://' from {bucket}")
+        bucket = bucket[len("s3://") :]
+
+    return bucket
 
 
 def read_to_pandas_df(bucket: str, key: str) -> pd.DataFrame:
     """Read a CSV file from S3 and return it as a Pandas DataFrame."""
+    bucket = parse_bucket_name(bucket)
     response = s3_client.get_object(Bucket=bucket, Key=key)
     return pd.read_csv(response["Body"])
 
 
-def write_pandas_df(df: pd.DataFrame, bucket: str, key: str) -> None:
+def write_df_to_s3(df: pd.DataFrame, bucket: str, key: str) -> None:
     """Write a Pandas DataFrame to a CSV file in S3."""
+    bucket = parse_bucket_name(bucket)
     csv_buffer = io.StringIO()
     df.to_csv(csv_buffer, index=False)
     s3_client.put_object(Bucket=bucket, Key=key, Body=csv_buffer.getvalue())
+
+    logging.info(f"Writing {key} to {bucket}")
 
 
 def upload_file_to_s3(local_path: str, s3_bucket: str, s3_key: str) -> Optional[str]:

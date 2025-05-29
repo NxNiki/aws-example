@@ -3,19 +3,29 @@ import time
 import boto3
 import pandas as pd
 
+from bituslabs_ds.config import ATHENA_OUTPUT, S3_BUCKET
+from bituslabs_ds.s3_utils import write_df_to_s3
+
 athena = boto3.client("athena")
 s3 = boto3.client("s3")
 
 
-def submit_query(query: str, athena_output: str, athena_database: str) -> str:
+def execute_query(query: str, database: str, data_output: str) -> pd.DataFrame:
+    query_execution_id = submit_query(query, database)
+    df = get_query_result(query_execution_id)
+    write_df_to_s3(df, S3_BUCKET, data_output)
+    return df
+
+
+def submit_query(query: str, database: str) -> str:
     response = athena.start_query_execution(
         QueryString=query,
-        QueryExecutionContext={"Database": athena_database},
-        ResultConfiguration={"OutputLocation": athena_output},
+        QueryExecutionContext={"Database": database},
+        ResultConfiguration={"OutputLocation": ATHENA_OUTPUT},
     )
     query_execution_id = response["QueryExecutionId"]
     print(f"Started query: {query_execution_id}")
-    print(f"result will be saved to {athena_output}")
+    print(f"result will be saved to {ATHENA_OUTPUT}")
 
     return query_execution_id
 
@@ -24,6 +34,7 @@ def check_query_status(query_execution_id: str) -> str:
     result = athena.get_query_execution(QueryExecutionId=query_execution_id)
     status = result["QueryExecution"]["Status"]["State"]
     print(f"check query {query_execution_id} status: {status}")
+
     return status
 
 
@@ -73,20 +84,15 @@ def get_query_result(query_execution_id: str) -> pd.DataFrame:
 
 if __name__ == "__main__":
 
-    # Configuration
-    s3_bucket = "xin-config"
-    athena_output = f"s3://{s3_bucket}/athena-results/wucaishen/"  # Use a subfolder for clarity
     athena_database = "ag_share_data"
-
-    # Athena query
-    query = """
-    SELECT type, column1, column2, column3, column4, column5, column6, column7, column8
-    FROM sampled_slotorders_timeblocks
-    WHERE bet_amount <= 500
-    ORDER BY bet_time
-    LIMIT 100
+    athena_query = """
+        SELECT type, column1, column2, column3, column4, column5, column6, column7, column8
+        FROM sampled_slotorders_timeblocks
+        WHERE bet_amount <= 500
+        ORDER BY bet_time
+        LIMIT 100
     """
 
-    query_execution_id = submit_query(query, athena_output, athena_database)
-    df = get_query_result(query_execution_id)
-    print(df.head())
+    execution_id = submit_query(athena_query, athena_database)
+    dataframe = get_query_result(execution_id)
+    print(dataframe.head())

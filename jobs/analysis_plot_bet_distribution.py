@@ -68,6 +68,6 @@ def plot_account_distribution(df, col_name: str, value_thresh: Optional[float] =
     plt.show()
 
 
-# plot_account_distribution(df, 'account', 5000)
+# plot_account_distribution(dataframe, 'account', 5000)
 plot_account_distribution(account_range, "max_by_productid")
 plot_account_distribution(account_range, "min_by_productid")
