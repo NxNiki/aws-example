@@ -20,16 +20,16 @@ You may need to create an IAM user to generate aws access key for yourself.
 
 The jobs folder contains scripts with following patterns:
 
-- data_loader_*.py: to download data from s3 bucket
-- data_process_*.py to process data and upload result to s3
-- analysis_*.py run statistic analysis and make plots.
+- `data_loader_*.py`: to download data from s3 bucket
+- `data_process_*.py`: to process data and upload result to s3
+- `analysis_*.py`: run statistic analysis and make plots.
 
 
 ### connect to s3 from local:
 
 Ensure your IAM role has `AmazonS3FullAccess` permission.
 
-run script [example_read_data_from_s3.py](https://github.com/NxNiki/aws-example/blob/main/example_read_data_from_s3.py) to upload and download data from s3.
+run script [s3_utils.py](https://github.com/NxNiki/aws-example/blob/main/src/bituslabs_ds/s3_utils.py) to upload and download data from s3.
 
 Check data in result folder on s3 to verify code run sucessfully.
 
@@ -45,7 +45,7 @@ Create an EMR cluster on AWS.
 
 Add `AmazonEMRFullAccessPolicy_v2` to your IAM role.
 
-run script [submit_emr_job.py](https://github.com/NxNiki/aws-example/blob/main/submit_emr_job.py) to ensure you can submit EMR jobs.
+run script [submit_data_loader_pyspark_example.py](https://github.com/NxNiki/aws-example/blob/main/jobs/submit_data_loader_pyspark_example.py) to ensure you can submit EMR jobs.
 
 Check data in result folder on s3 to verify code run sucessfully.
 
