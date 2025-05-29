@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "A data science project using AWS SageMaker, PySpark, and Scikit-learn"
 authors = ["Xin Niu <michaelniki1988@.com>"]
 readme = "README.md"
-packages = [{ include = "pyspark_project", from = "src" }]
+packages = [{ include = "bituslabs_ds", from = "src" }]
 
 [tool.poetry.dependencies]
 python = "^3.11"
@@ -17,6 +17,7 @@ pyspark = "3.5.5"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"
+matplotlib = "3.10.0"
 jupyter = "^1.0"
 isort = "^6.0.1"
 black = "^24.3"

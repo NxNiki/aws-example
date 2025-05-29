@@ -17,7 +17,7 @@ def read_files_to_spark(
     :param spark: spark session
     :param s3_files:
     :param column_names:
-    :param keep_columns:
+    :param keep_columns: a subset of columns to keep.
     :return:
     """
 
