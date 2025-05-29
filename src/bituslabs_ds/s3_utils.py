@@ -1,6 +1,7 @@
 import io
 import logging
 import os
+import re
 from typing import List, Optional
 
 import boto3
@@ -69,27 +70,30 @@ def upload_file_to_s3(local_path: str, s3_bucket: str, s3_key: str) -> Optional[
     return None
 
 
-def list_s3_files(bucket: str, prefix: str, suffix: Optional[str] = None) -> List[str]:
+def list_s3_files(bucket: str, prefix: str, pattern: Optional[str] = None) -> List[str]:
     """
-    list all S3 files in bucket with prefix and suffix
-    :param bucket:
-    :param prefix:
-    :param suffix:
-    :return:
+    List all S3 files in bucket starting from the prefix, filtering with optional regex pattern.
+
+    :param bucket: S3 bucket name
+    :param prefix: S3 key prefix (acts like a root folder)
+    :param pattern: Optional regex pattern to match the key
+    :return: List of matching s3 keys (not including bucket)
     """
-    logging.info(f"list s3 files: {bucket}/{prefix}*{suffix}")
+    logging.info(f"Listing S3 files in: {bucket}/{prefix}, with pattern: {pattern}")
     matching_keys = []
     paginator = s3_client.get_paginator("list_objects_v2")
+
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
         for obj in page.get("Contents", []):
             key = obj["Key"]
-            if key.endswith(suffix):
-                matching_keys.append(f"s3a://{bucket}/{key}")
+            if pattern is None or re.search(pattern, key):  # Changed from match to search
+                matching_keys.append(key)
                 logging.info(f"Found {key}")
 
+    logging.info(f"Found {len(matching_keys)} S3 keys")
     return matching_keys
 
 
 if __name__ == "__main__":
-    list_s3_files("hyber-slot", "wucaishen_oringaldata/", ".csv.gz")
+    list_s3_files("hyber-slot", "wucaishen_oringaldata/", r"\.csv.gz$")
     # list_s3_files("xin-config", "", ".csv")
