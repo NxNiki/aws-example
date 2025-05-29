@@ -4,16 +4,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-# Load the data
 bet_file = "/Users/niuxin/Downloads/slot_orders_distinct_account.csv"
 df = pd.read_csv(bet_file)
 
-# Convert account to numeric
 df["account"] = pd.to_numeric(df["account"], errors="coerce")
-
 print("number of samples:", len(df))
 
-# Show basic statistics
 print("Account Value Statistics:")
 print(df["account"].describe())
 
