@@ -16,7 +16,16 @@ This is required to run aws commands locally to upload/download data from s3, su
 After installation, run `aws configure` to setup your aws access key, secret key, etc. 
 You may need to create an IAM user to generate aws access key for yourself.
 
-## connect to s3 from local:
+## jobs:
+
+The jobs folder contains scripts with following patterns:
+
+- data_loader_*.py: to download data from s3 bucket
+- data_process_*.py to process data and upload result to s3
+- analysis_*.py run statistic analysis and make plots.
+
+
+### connect to s3 from local:
 
 Ensure your IAM role has `AmazonS3FullAccess` permission.
 
@@ -24,7 +33,13 @@ run script [example_read_data_from_s3.py](https://github.com/NxNiki/aws-example/
 
 Check data in result folder on s3 to verify code run sucessfully.
 
-## run script on emr:
+### run sql query to fetch data with AWS Athena:
+
+Add `AmazonAthenaFullAccess` to your IAM role.
+
+run script [athena_utils.py](https://github.com/NxNiki/aws-example/blob/main/src/bituslabs_ds/athena_utils.py)
+
+### submit script two AWS EMR:
 
 Create an EMR cluster on AWS.
 
