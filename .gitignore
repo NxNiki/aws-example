@@ -2,5 +2,7 @@
 *.log/*
 */.log/*
 *.csv
+*/result/*
+*/figures/*
 .ipynb_checkpoints/*
 */__pycache__/*

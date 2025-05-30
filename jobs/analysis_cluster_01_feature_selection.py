@@ -1,29 +1,28 @@
+"""
+This script run multiple feature selection algorithms to help determine the features to feed into cluster analysis.
+"""
+
 import logging
 import os
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import boto3
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from schema import Optional
 from sklearn.decomposition import PCA
 from sklearn.feature_selection import VarianceThreshold
 
 from bituslabs_ds.config import S3_BUCKET
 from bituslabs_ds.s3_utils import list_s3_files, read_files, upload_file_to_s3
-
-os.makedirs("./.log", exist_ok=True)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-    handlers=[logging.FileHandler("../.log/s3_utils.log"), logging.StreamHandler()],
-)
-
-s3 = boto3.client("s3")
+from bituslabs_ds.utils import keep_numeric_columns, save_list
 
 OUT_PATH = "wucaishen_analysis_kmeans"
+s3 = boto3.client("s3")
+
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())  # Safe for import; silent if no config
 
 
 def count_missing_columns(df: pd.DataFrame, verbose: bool = True) -> int:
@@ -38,7 +37,7 @@ def count_missing_columns(df: pd.DataFrame, verbose: bool = True) -> int:
     cols_with_missing = missing_counts[missing_counts > 0]
 
     if verbose:
-        logging.info(f"Columns with missing values: \n{cols_with_missing}")
+        logger.info(f"Columns with missing values: \n{cols_with_missing}")
 
     return len(cols_with_missing)
 
@@ -59,6 +58,7 @@ def smart_feature_selection(
     if prefer_keywords is None:
         prefer_keywords = ["mean", "median"]
 
+    data = keep_numeric_columns(data)
     corr_matrix = data.corr().abs()
     upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
     to_drop = set()
@@ -87,13 +87,13 @@ def smart_feature_selection(
             # 如果没有高度相关的，可以直接保留
             kept.add(column)
 
-    logging.info(f"kept: {len(kept)} features: \n({kept}")
-    logging.info(f"remove: {len(to_drop)} features: \n({to_drop}")
+    logger.info(f"kept: {len(kept)} features: \n({kept}")
+    logger.info(f"remove: {len(to_drop)} features: \n({to_drop}")
 
     return list(to_drop), list(kept)
 
 
-def feature_selection_by_variance(data: pd.DataFrame, threshold: float = 0.01) -> List[str]:
+def feature_selection_by_variance(data: pd.DataFrame, threshold: float = 0.01) -> Tuple[pd.DataFrame, List[str]]:
     """
     remove features with variance < threshold.
     :param data:
@@ -101,14 +101,23 @@ def feature_selection_by_variance(data: pd.DataFrame, threshold: float = 0.01) -
     :return:
     """
     selector = VarianceThreshold(threshold=threshold)
+    data = keep_numeric_columns(data)
+    data_filtered = selector.fit_transform(data)
     # 获取保留的列名
-    selected_features = data.columns[selector.get_support()]
-    print(f"方差筛选后保留的变量：{list(selected_features)}")
-    return selected_features
+    selected_features = data.columns[selector.get_support()].tolist()
+    logging.info(f"方差筛选后保留的变量：{list(selected_features)}")
+    return data_filtered, selected_features
 
 
 # DISCUSSION: should we consider features with high contribution to other components?
-def feature_selection_by_pca(data: pd.DataFrame):
+def feature_selection_by_pca(data: pd.DataFrame) -> List[str]:
+    """
+    remove features with variance < threshold.
+    :param data:
+    :return:
+    """
+
+    data = keep_numeric_columns(data)
     pca = PCA(n_components=data.shape[1])  # 保留所有主成分
     pca.fit(data)
 
@@ -129,27 +138,39 @@ def feature_selection_by_pca(data: pd.DataFrame):
     plt.grid(axis="x", linestyle="--", alpha=0.6)
     plt.show()
 
-    plt.savefig(f"./images/{title}.png")
-    upload_file_to_s3(f"./images/{title}.png", S3_BUCKET, f"{OUT_PATH}/{title}.png")
+    os.makedirs("./figures", exist_ok=True)
+    plt.savefig(f"./figures/{title}.png")
+    upload_file_to_s3(f"./figures/{title}.png", S3_BUCKET, f"{OUT_PATH}/{title}.png")
 
-    important_features = [features[i] for i in np.argsort(importance)]
-    logging.info(f"Top Important Features: \n{important_features}")
+    important_features = [features[i] for i in np.argsort(importance)[::-1]]
+    os.makedirs(f"./result", exist_ok=True)
+    save_list(important_features, f"./result/important_features.json")
 
     return important_features
 
 
 def plot_correlation(data: pd.DataFrame):
+    data = keep_numeric_columns(data)
     corr_matrix = data.corr()
     plt.figure(figsize=(14, 10))
     sns.heatmap(corr_matrix, annot=False, cmap="coolwarm", fmt=".2f", linewidths=0.5, vmin=-1, vmax=1)
     title = "Feature Correlation Heatmap"
     plt.title(title, fontsize=16)
-    plt.savefig(f"./images/{title}.png")
+    os.makedirs("./figures", exist_ok=True)
+    plt.savefig(f"./figures/{title}.png")
     plt.show()
-    upload_file_to_s3(f"./images/{title}.png", S3_BUCKET, f"{OUT_PATH}/{title}.png")
+    upload_file_to_s3(f"./figures/{title}.png", S3_BUCKET, f"{OUT_PATH}/{title}.png")
 
 
 if __name__ == "__main__":
+
+    os.makedirs("./.log", exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(message)s",
+        handlers=[logging.FileHandler("./.log/analysis_cluster_01_feature_selection.log"), logging.StreamHandler()],
+    )
+
     non_feature_col = ["group_id", "loginname", "start_time"]
     feature_col = [
         "group_num",
@@ -231,8 +252,6 @@ if __name__ == "__main__":
         "profit_rate",
         "profit_stddev",
         "account_stddev",
-        "start_time",
-        "end_time",
         "morning_count",
         "afternoon_count",
         "night_count",
@@ -249,7 +268,11 @@ if __name__ == "__main__":
     wucaishen_data = read_files(S3_BUCKET, wucaishen_files)
     count_missing_columns(wucaishen_data)
 
+    plot_correlation(wucaishen_data)
+
     # remove highly correlated features:
     _, kept_features = smart_feature_selection(wucaishen_data[feature_col], threshold=0.9)
-    kept_features = feature_selection_by_variance(wucaishen_data[kept_features], threshold=0.01)
+    _, kept_features = feature_selection_by_variance(wucaishen_data[kept_features], threshold=0.01)
     data_select = wucaishen_data[kept_features + non_feature_col]
+
+    feature_selection_by_pca(data_select)
