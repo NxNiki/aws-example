@@ -14,3 +14,4 @@ dependencies:
       - boto3==1.38.22
       - pyspark==3.5.5
       - matplotlib==3.10.0
+      - seaborn == 0.13.2
