@@ -1,13 +1,29 @@
+import logging
+import os
 from typing import List, Tuple
 
+import boto3
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from schema import Optional
+from sklearn.decomposition import PCA
 from sklearn.feature_selection import VarianceThreshold
 
 from bituslabs_ds.config import S3_BUCKET
-from bituslabs_ds.s3_utils import list_s3_files, read_files
+from bituslabs_ds.s3_utils import list_s3_files, read_files, upload_file_to_s3
+
+os.makedirs("./.log", exist_ok=True)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    handlers=[logging.FileHandler("../.log/s3_utils.log"), logging.StreamHandler()],
+)
+
+s3 = boto3.client("s3")
+
+OUT_PATH = "wucaishen_analysis_kmeans"
 
 
 def count_missing_columns(df: pd.DataFrame, verbose: bool = True) -> int:
@@ -22,13 +38,14 @@ def count_missing_columns(df: pd.DataFrame, verbose: bool = True) -> int:
     cols_with_missing = missing_counts[missing_counts > 0]
 
     if verbose:
-        print("Columns with missing values:")
-        print(cols_with_missing)
+        logging.info(f"Columns with missing values: \n{cols_with_missing}")
 
     return len(cols_with_missing)
 
 
-def smart_feature_selection(data: pd.DataFrame, threshold: float = 0.9, prefer_keywords=["mean", "median"]):
+def smart_feature_selection(
+    data: pd.DataFrame, threshold: float = 0.9, prefer_keywords: Optional[List[str]] = None
+) -> Tuple[List[str], List[str]]:
     """
     data: DataFrame，完整数据集
     threshold: float，相关性阈值，比如 0.9
@@ -39,33 +56,30 @@ def smart_feature_selection(data: pd.DataFrame, threshold: float = 0.9, prefer_k
         kept_features: list，保留的特征
     """
 
+    if prefer_keywords is None:
+        prefer_keywords = ["mean", "median"]
+
     corr_matrix = data.corr().abs()
     upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
-
     to_drop = set()
     kept = set()
-
     for column in upper.columns:
         # 找到当前列与其他列高度相关的
         high_corr = upper[column][upper[column] > threshold].index.tolist()
-
         if high_corr:
             # 包括自己和高度相关的列
             group = [column] + high_corr
-
             # 看这组里面有没有带 prefer_keywords 的特征
             preferred = []
             for feat in group:
                 if any(key in feat.lower() for key in prefer_keywords):
                     preferred.append(feat)
-
             if preferred:
                 # 如果有偏好的，保留偏好的第一个，删除其他
                 keep_feat = preferred[0]
             else:
                 # 否则，保留这一组的第一个
                 keep_feat = group[0]
-
             kept.add(keep_feat)
             group.remove(keep_feat)  # 删掉自己
             to_drop.update(group)
@@ -73,10 +87,13 @@ def smart_feature_selection(data: pd.DataFrame, threshold: float = 0.9, prefer_k
             # 如果没有高度相关的，可以直接保留
             kept.add(column)
 
+    logging.info(f"kept: {len(kept)} features: \n({kept}")
+    logging.info(f"remove: {len(to_drop)} features: \n({to_drop}")
+
     return list(to_drop), list(kept)
 
 
-def feature_selection_by_variance(data: pd.DataFrame, threshold: float = 0.01) -> Tuple[List[str], pd.DataFrame]:
+def feature_selection_by_variance(data: pd.DataFrame, threshold: float = 0.01) -> List[str]:
     """
     remove features with variance < threshold.
     :param data:
@@ -84,24 +101,57 @@ def feature_selection_by_variance(data: pd.DataFrame, threshold: float = 0.01) -
     :return:
     """
     selector = VarianceThreshold(threshold=threshold)
-    data_variance_filtered = selector.fit_transform(data)
     # 获取保留的列名
     selected_features = data.columns[selector.get_support()]
     print(f"方差筛选后保留的变量：{list(selected_features)}")
-    return selected_features, data_variance_filtered
+    return selected_features
+
+
+# DISCUSSION: should we consider features with high contribution to other components?
+def feature_selection_by_pca(data: pd.DataFrame):
+    pca = PCA(n_components=data.shape[1])  # 保留所有主成分
+    pca.fit(data)
+
+    # 计算每个特征在所有主成分上的贡献度（取绝对值求和）
+    importance = np.abs(pca.components_).sum(axis=0).tolist()
+
+    features = data.columns.tolist()
+    feature_importance = pd.DataFrame({"Feature": features, "Importance": importance})
+    feature_importance = feature_importance.sort_values(by="Importance", ascending=False)
+
+    plt.figure(figsize=(18, 10))
+    colors = sns.color_palette("viridis", len(feature_importance))
+    sns.barplot(x="Importance", y="Feature", data=feature_importance, palette=colors)
+    title = "Feature Importance Rank"
+    plt.title(title, fontsize=16)
+    plt.xlabel("Importance Score", fontsize=12)
+    plt.ylabel("Feature", fontsize=12)
+    plt.grid(axis="x", linestyle="--", alpha=0.6)
+    plt.show()
+
+    plt.savefig(f"./images/{title}.png")
+    upload_file_to_s3(f"./images/{title}.png", S3_BUCKET, f"{OUT_PATH}/{title}.png")
+
+    important_features = [features[i] for i in np.argsort(importance)]
+    logging.info(f"Top Important Features: \n{important_features}")
+
+    return important_features
 
 
 def plot_correlation(data: pd.DataFrame):
     corr_matrix = data.corr()
     plt.figure(figsize=(14, 10))
     sns.heatmap(corr_matrix, annot=False, cmap="coolwarm", fmt=".2f", linewidths=0.5, vmin=-1, vmax=1)
-    plt.title("Feature Correlation Heatmap", fontsize=16)
-    plt.savefig("./images/Feature Correlation Heatmap.png")
+    title = "Feature Correlation Heatmap"
+    plt.title(title, fontsize=16)
+    plt.savefig(f"./images/{title}.png")
     plt.show()
+    upload_file_to_s3(f"./images/{title}.png", S3_BUCKET, f"{OUT_PATH}/{title}.png")
 
 
 if __name__ == "__main__":
-    features = [
+    non_feature_col = ["group_id", "loginname", "start_time"]
+    feature_col = [
         "group_num",
         "rtp_mean",
         "bet_min",
@@ -199,7 +249,7 @@ if __name__ == "__main__":
     wucaishen_data = read_files(S3_BUCKET, wucaishen_files)
     count_missing_columns(wucaishen_data)
 
-    to_drop, kept_features = smart_feature_selection(wucaishen_data[features], threshold=0.9)
-
-    # 删掉冗余特征
-    data_filtered = wucaishen_data[kept_features + ["group_id", "loginname", "start_time"]]
+    # remove highly correlated features:
+    _, kept_features = smart_feature_selection(wucaishen_data[feature_col], threshold=0.9)
+    kept_features = feature_selection_by_variance(wucaishen_data[kept_features], threshold=0.01)
+    data_select = wucaishen_data[kept_features + non_feature_col]
