@@ -13,5 +13,5 @@ if __name__ == "__main__":
     # Display the first few rows
     print(df.head())
 
-    object_key = "example_read.csv"
+    object_key = "xin-config/example_read.csv"
     write_df_to_s3(df, S3_BUCKET, object_key)
