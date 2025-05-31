@@ -2,11 +2,14 @@ import io
 import logging
 import os
 import re
-from typing import List, Optional
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from typing import Callable, List, Literal, Optional
 
 import boto3
 import pandas as pd
 from botocore.exceptions import NoCredentialsError
+
+from bituslabs_ds.config import MAX_JOBS
 
 s3_client = boto3.client("s3")
 
@@ -91,20 +94,60 @@ def list_s3_files(bucket: str, prefix: str, pattern: Optional[str] = None) -> Li
     return matching_keys
 
 
-def read_files(bucket: str, files: List[str]) -> pd.DataFrame:
+# def read_files(bucket: str, files: List[str]) -> pd.DataFrame:
+#     """
+#     Read a CSV file from S3 and return it as a Pandas DataFrame.
+#     :param bucket: S3 bucket name
+#     :param files: s3 Path to the CSV file.
+#     """
+#
+#     dfs = []
+#     for file in files:
+#         logger.info(f"Reading {file}")
+#         dfs.append(read_to_pandas_df(bucket, file))
+#
+#     df = pd.concat(dfs)
+#     return df
+
+
+def read_files(
+    bucket: str,
+    files: List[str],
+    max_workers: int = MAX_JOBS,
+    parallel_mode: Literal["thread", "process", "none"] = "thread",
+) -> pd.DataFrame:
     """
-    Read a CSV file from S3 and return it as a Pandas DataFrame.
-    :param bucket: S3 bucket name
-    :param files: s3 Path to the CSV file.
+    Read CSV files from S3 using optional parallelization.
+
+    :param bucket: S3 bucket name.
+    :param files: List of S3 paths to CSV files.
+    :param max_workers: Number of workers to use in parallel execution.
+    :param parallel_mode: Parallel execution strategy: 'thread', 'process', or 'none'.
+    :return: Concatenated DataFrame of all read files.
     """
 
-    dfs = []
-    for file in files:
+    def read_file(file: str) -> pd.DataFrame:
         logger.info(f"Reading {file}")
-        dfs.append(read_to_pandas_df(bucket, file))
+        return read_to_pandas_df(bucket, file)
 
-    df = pd.concat(dfs)
-    return df
+    if parallel_mode == "none" or max_workers <= 1:
+        # Sequential fallback
+        dfs = [read_file(file) for file in files]
+
+    else:
+        executor_cls: Callable = ThreadPoolExecutor if parallel_mode == "thread" else ProcessPoolExecutor
+        dfs = []
+
+        with executor_cls(max_workers=max_workers) as executor:
+            future_to_file = {executor.submit(read_file, file): file for file in files}
+            for future in as_completed(future_to_file):
+                file = future_to_file[future]
+                try:
+                    dfs.append(future.result())
+                except Exception as e:
+                    logger.error(f"Failed to read {file}: {e}")
+
+    return pd.concat(dfs, ignore_index=True)
 
 
 if __name__ == "__main__":

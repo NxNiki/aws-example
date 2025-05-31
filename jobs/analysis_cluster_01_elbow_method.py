@@ -1,5 +1,6 @@
 """
-This script run multiple feature selection algorithms to help determine the features to feed into cluster analysis.
+This script use multiple feature selection algorithms and elbow method to help determine the features to feed into
+cluster analysis and the optimal number of clusters.
 """
 
 import logging
@@ -11,35 +12,23 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from joblib import parallel_backend
+from sklearn.base import ClusterMixin
+from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.feature_selection import VarianceThreshold
+from sklearn.metrics import silhouette_score
+from sklearn.preprocessing import StandardScaler
 
 from bituslabs_ds.config import S3_BUCKET
 from bituslabs_ds.s3_utils import list_s3_files, read_files, upload_file_to_s3
-from bituslabs_ds.utils import keep_numeric_columns, save_list
+from bituslabs_ds.utils import column_iterator, count_missing_columns, keep_numeric_columns, remove_outliers, save_list
 
-OUT_PATH = "wucaishen_analysis_kmeans"
+OUTPUT_PATH = "wucaishen_analysis_kmeans"
 s3 = boto3.client("s3")
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())  # Safe for import; silent if no config
-
-
-def count_missing_columns(df: pd.DataFrame, verbose: bool = True) -> int:
-    """
-    Count the number of columns in a DataFrame that contain missing (NaN) values.
-
-    :param df: Input DataFrame
-    :param verbose: If True, print columns with their missing counts
-    :return: Number of columns with missing values
-    """
-    missing_counts = df.isnull().sum()
-    cols_with_missing = missing_counts[missing_counts > 0]
-
-    if verbose:
-        logger.info(f"Columns with missing values: \n{cols_with_missing}")
-
-    return len(cols_with_missing)
 
 
 def smart_feature_selection(
@@ -89,7 +78,6 @@ def smart_feature_selection(
 
     logger.info(f"kept: {len(kept)} features: \n({kept}")
     logger.info(f"remove: {len(to_drop)} features: \n({to_drop}")
-
     return list(to_drop), list(kept)
 
 
@@ -136,17 +124,17 @@ def feature_selection_by_pca(data: pd.DataFrame) -> List[str]:
     plt.xlabel("Importance Score", fontsize=12)
     plt.ylabel("Feature", fontsize=12)
     plt.grid(axis="x", linestyle="--", alpha=0.6)
-    plt.show()
 
     os.makedirs("./figures", exist_ok=True)
     plt.savefig(f"./figures/{title}.png")
-    upload_file_to_s3(f"./figures/{title}.png", S3_BUCKET, f"{OUT_PATH}/{title}.png")
+    plt.show()
+    upload_file_to_s3(f"./figures/{title}.png", S3_BUCKET, f"{OUTPUT_PATH}/{title}.png")
 
-    important_features = [features[i] for i in np.argsort(importance)[::-1]]
+    features = [features[i] for i in np.argsort(importance)[::-1]]
     os.makedirs(f"./result", exist_ok=True)
-    save_list(important_features, f"./result/important_features.json")
+    save_list(features, f"./result/important_features.json")
 
-    return important_features
+    return features
 
 
 def plot_correlation(data: pd.DataFrame):
@@ -159,7 +147,98 @@ def plot_correlation(data: pd.DataFrame):
     os.makedirs("./figures", exist_ok=True)
     plt.savefig(f"./figures/{title}.png")
     plt.show()
-    upload_file_to_s3(f"./figures/{title}.png", S3_BUCKET, f"{OUT_PATH}/{title}.png")
+    upload_file_to_s3(f"./figures/{title}.png", S3_BUCKET, f"{OUTPUT_PATH}/{title}.png")
+
+
+def elbow_method(data: pd.DataFrame, features: List[str], n_features: Optional[List[int] | int] = None):
+    """
+    run elbow method to determine number of clusters
+    :param data:
+    :param features: label of columns of data that order by feature importance.
+    :param n_features: select top n features
+    :return:
+    """
+
+    os.makedirs("./figures", exist_ok=True)
+    k_range = range(2, 10)
+    scaler = StandardScaler()
+
+    for x, n in column_iterator(data, features, n_features):
+        x = remove_outliers(x)
+        x = scaler.fit_transform(x)
+        inertia = []
+        silhouette_scores = []
+        cluster_sizes = []
+        for k in k_range:
+            kmeans = KMeans(n_clusters=k, random_state=42, n_init="auto", max_iter=100)
+            kmeans.fit(x)
+            inertia.append(kmeans.inertia_)
+
+            silhouette_scores.append(calculate_silhouette_score(x, kmeans))
+            cluster_counts = np.bincount(kmeans.labels_)
+            cluster_sizes.append(cluster_counts)
+
+        title = f"Elbow Method for Optimal k n_features({n})"
+        fig, ax1 = plt.subplots(figsize=(10, 9))
+        (line1,) = ax1.plot(k_range, inertia, marker="o", linestyle="-", label="Inertia")
+        ax1.set_xlabel("Number of Clusters (k)")
+        ax1.set_ylabel("Inertia")
+        ax1.set_title(title, fontsize=16)
+
+        ax2 = ax1.twinx()
+        (line2,) = ax2.plot(
+            k_range, silhouette_scores, marker="s", linestyle="-", color="red", label="Silhouette Score"
+        )
+        ax2.set_ylabel("Silhouette Score")
+
+        lines = [line1, line2]
+        labels = [str(line.get_label()) for line in lines]
+        ax1.legend(lines, labels, loc="upper right")
+
+        # Add table with cluster sizes
+        # Convert and pad cluster counts to string rows of equal length
+        max_clusters = max(len(sizes) for sizes in cluster_sizes)
+        cluster_sizes_str = []
+        for sizes in cluster_sizes:
+            row = [str(count) for count in sizes]  # convert counts to strings
+            row += [""] * (max_clusters - len(row))  # pad with empty strings
+            cluster_sizes_str.append(row)
+
+        # Transpose to get clusters as rows
+        cluster_sizes_table = list(map(list, zip(*cluster_sizes_str)))
+
+        # Create column labels like C1, C2, ..., Cn
+        row_labels = [f"C{i + 1}" for i in range(max_clusters)]
+
+        # Add table below plot
+        plt.table(
+            cellText=cluster_sizes_table,
+            rowLabels=row_labels,
+            colLabels=[f"k={k}" for k in k_range],
+            cellLoc="center",
+            loc="bottom",
+            bbox=[0.0, -0.5, 1, 0.3],
+        )  # [left, bottom, width, height]
+
+        plt.subplots_adjust(left=0.1, bottom=0.3)
+
+        plt.savefig(f"./figures/{title}.png")
+        plt.show()
+        upload_file_to_s3(f"./figures/{title}.png", S3_BUCKET, f"{OUTPUT_PATH}/{title}.png")
+
+
+def calculate_silhouette_score(x: np.ndarray | pd.DataFrame, cluster_obj: ClusterMixin) -> float:
+
+    if len(np.unique(cluster_obj.labels_)) < 2:
+        return float("nan")
+
+    try:
+        with parallel_backend("loky"):
+            # a small sample size may lead to small cluster totally omitted!
+            score = silhouette_score(x, cluster_obj.labels_, sample_size=min(5000, x.shape[0]), random_state=42)
+    except ValueError:
+        score = float("nan")
+    return score
 
 
 if __name__ == "__main__":
@@ -262,9 +341,7 @@ if __name__ == "__main__":
         "currency_label",
     ]
 
-    wucaishen_files = list_s3_files(
-        S3_BUCKET, "wucaishen_processed_data", r"wucaishen_grouped_stat_output_2401.*\.csv$"
-    )
+    wucaishen_files = list_s3_files(S3_BUCKET, "wucaishen_processed_data", r"wucaishen_grouped_stat_output_24.*\.csv$")
     wucaishen_data = read_files(S3_BUCKET, wucaishen_files)
     count_missing_columns(wucaishen_data)
 
@@ -275,4 +352,5 @@ if __name__ == "__main__":
     _, kept_features = feature_selection_by_variance(wucaishen_data[kept_features], threshold=0.01)
     data_select = wucaishen_data[kept_features + non_feature_col]
 
-    feature_selection_by_pca(data_select)
+    important_features = feature_selection_by_pca(data_select)
+    elbow_method(wucaishen_data, important_features, [10, 15, 20, 25])
