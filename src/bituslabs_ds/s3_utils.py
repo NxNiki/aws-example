@@ -22,6 +22,9 @@ def parse_bucket_name(bucket: str) -> str:
     if bucket.endswith("/"):
         logger.warning(f"remove '/' from {bucket}")
         bucket = bucket[:-1]
+    if bucket.startswith("s3a://"):
+        logger.warning(f"remove 's3a://' from {bucket}")
+        bucket = bucket[len("s3a://") :]
     if bucket.startswith("s3://"):
         logger.warning(f"remove 's3://' from {bucket}")
         bucket = bucket[len("s3://") :]
@@ -36,11 +39,11 @@ def read_to_pandas_df(bucket: str, key: str) -> pd.DataFrame:
     return pd.read_csv(response["Body"])
 
 
-def write_df_to_s3(df: pd.DataFrame, bucket: str, key: str) -> None:
+def write_df_to_s3(data: pd.DataFrame, bucket: str, key: str) -> None:
     """Write a Pandas DataFrame to a CSV file in S3."""
     bucket = parse_bucket_name(bucket)
     csv_buffer = io.StringIO()
-    df.to_csv(csv_buffer, index=False)
+    data.to_csv(csv_buffer, index=False)
     s3_client.put_object(Bucket=bucket, Key=key, Body=csv_buffer.getvalue())
 
     logger.info(f"Writing {key} to {bucket}")
@@ -131,7 +134,6 @@ def read_files(
         return read_to_pandas_df(bucket, file)
 
     if parallel_mode == "none" or max_workers <= 1:
-        # Sequential fallback
         dfs = [read_file(file) for file in files]
 
     else:

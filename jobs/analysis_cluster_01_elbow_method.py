@@ -128,7 +128,7 @@ def feature_selection_by_pca(data: pd.DataFrame) -> List[str]:
     os.makedirs("./figures", exist_ok=True)
     plt.savefig(f"./figures/{title}.png")
     plt.show()
-    upload_file_to_s3(f"./figures/{title}.png", S3_BUCKET, f"{OUTPUT_PATH}/{title}.png")
+    # upload_file_to_s3(f"./figures/{title}.png", S3_BUCKET, f"{OUTPUT_PATH}/{title}.png")
 
     features = [features[i] for i in np.argsort(importance)[::-1]]
     os.makedirs(f"./result", exist_ok=True)
@@ -147,7 +147,7 @@ def plot_correlation(data: pd.DataFrame):
     os.makedirs("./figures", exist_ok=True)
     plt.savefig(f"./figures/{title}.png")
     plt.show()
-    upload_file_to_s3(f"./figures/{title}.png", S3_BUCKET, f"{OUTPUT_PATH}/{title}.png")
+    # upload_file_to_s3(f"./figures/{title}.png", S3_BUCKET, f"{OUTPUT_PATH}/{title}.png")
 
 
 def elbow_method(data: pd.DataFrame, features: List[str], n_features: Optional[List[int] | int] = None):
@@ -224,7 +224,7 @@ def elbow_method(data: pd.DataFrame, features: List[str], n_features: Optional[L
 
         plt.savefig(f"./figures/{title}.png")
         plt.show()
-        upload_file_to_s3(f"./figures/{title}.png", S3_BUCKET, f"{OUTPUT_PATH}/{title}.png")
+        # upload_file_to_s3(f"./figures/{title}.png", S3_BUCKET, f"{OUTPUT_PATH}/{title}.png")
 
 
 def calculate_silhouette_score(x: np.ndarray | pd.DataFrame, cluster_obj: ClusterMixin) -> float:
@@ -247,7 +247,7 @@ if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(message)s",
-        handlers=[logging.FileHandler("./.log/analysis_cluster_01_feature_selection.log"), logging.StreamHandler()],
+        handlers=[logging.FileHandler("./.log/analysis_cluster_01_elbow_method.log"), logging.StreamHandler()],
     )
 
     non_feature_col = ["group_id", "loginname", "start_time"]

@@ -1,13 +1,16 @@
 name: aws-example
 channels:
-  - defaults
   - conda-forge
+  - defaults
 dependencies:
   - python=3.11
   - openjdk=11
   - numpy=1.26.0
   - pandas=2.1.0
   - scikit-learn=1.5.0
+  - skl2onnx == 1.16.0
+  - onnx == 1.14.1
+  - pre-commit == 4.2.0
   - pip
   - pip:
       - sagemaker==2.244.2

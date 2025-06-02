@@ -37,7 +37,9 @@ def save_list(items: List[BasicType], filepath: str, format: Literal["json", "py
         raise ValueError(message)
 
 
-def remove_outliers(data: np.ndarray | pd.DataFrame, z_thresh: float = 3) -> np.ndarray | pd.DataFrame:
+def remove_outliers(
+    data: np.ndarray | pd.DataFrame, z_thresh: float = 3
+) -> Tuple[np.ndarray | pd.DataFrame, np.ndarray]:
     """
     remove samples (rows) of data that has zscore above a certain threshold.
     :param data:
@@ -47,7 +49,7 @@ def remove_outliers(data: np.ndarray | pd.DataFrame, z_thresh: float = 3) -> np.
     z_scores = np.abs(zscore(data))
     filtered_indices = (z_scores < z_thresh).all(axis=1)
     data_filtered = data[filtered_indices]
-    return data_filtered
+    return data_filtered, filtered_indices
 
 
 def count_missing_columns(df: pd.DataFrame, verbose: bool = True) -> int:
