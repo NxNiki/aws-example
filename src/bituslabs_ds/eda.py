@@ -228,8 +228,12 @@ def plot_seasonality(time: Series, data: Union[Series, DataFrame], freq: str = "
 
     plt.figure(figsize=(12, 6))
     for col in df.columns[1:-1]:  # Skip 'time' and 'period'
-        seasonal_mean = df.groupby("period")[col].mean()
-        plt.plot(seasonal_mean.index, seasonal_mean.values, marker="o", label=col)
+        grouped = df.groupby("period")[col]
+        seasonal_mean = grouped.mean()
+        seasonal_std = grouped.std()
+        plt.errorbar(
+            seasonal_mean.index, seasonal_mean.values, yerr=seasonal_std.values, fmt="-o", capsize=4, label=col
+        )
 
     plt.title(f"Seasonality Plot ({freq.capitalize()})")
     plt.xlabel(freq.capitalize())
