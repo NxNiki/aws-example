@@ -33,24 +33,30 @@ def scale_features(data: pd.DataFrame, output_dir: str, output_file_name: str) -
     """
     os.makedirs(output_dir, exist_ok=True)
 
-    scaler = StandardScaler()
-    x_scaled = scaler.fit_transform(data)
-    df_scaled = pd.DataFrame(x_scaled, columns=data.columns)
+    if os.path.exists(f"{output_dir}/{output_file_name}.csv"):
+        logger.info(f"read existing output file {output_file_name}...")
+        df_scaled = pd.read_csv(f"{output_dir}/{output_file_name}.csv")
+    else:
+        scaler = StandardScaler()
+        x_scaled = scaler.fit_transform(data)
+        df_scaled = pd.DataFrame(x_scaled, columns=data.columns)
 
-    df_scaled.to_csv(f"{output_dir}/{output_file_name}.csv", index=False)
-    df_scaled.to_json(f"{output_dir}/{output_file_name}.json", orient="records", indent=2)
+        df_scaled.to_csv(f"{output_dir}/{output_file_name}.csv", index=False)
+        df_scaled.to_json(f"{output_dir}/{output_file_name}.json", orient="records", indent=2)
 
-    mean_std_df = pd.DataFrame({"Mean": scaler.mean_, "Std": scaler.scale_}, index=data.columns)
-    mean_std_df.to_csv(f"{output_dir}/{output_file_name}_parameters.csv")
-    print("\n 每个特征的标准化参数（均值与标准差）：")
-    print(mean_std_df)
+        mean_std_df = pd.DataFrame({"Mean": scaler.mean_, "Std": scaler.scale_}, index=data.columns)
+        mean_std_df.to_csv(f"{output_dir}/{output_file_name}_parameters.csv")
+        print("\n 每个特征的标准化参数（均值与标准差）：")
+        print(mean_std_df)
 
-    logger.info(f"update standardized_features.csv to s3: {OUTPUT_PATH}")
-    upload_file_to_s3(f"{output_dir}/{output_file_name}.csv", S3_BUCKET, f"{OUTPUT_PATH}/{output_file_name}.csv")
-    upload_file_to_s3(f"{output_dir}/{output_file_name}.json", S3_BUCKET, f"{OUTPUT_PATH}/{output_file_name}.json")
-    upload_file_to_s3(
-        f"{output_dir}/{output_file_name}_parameters.csv", S3_BUCKET, f"{OUTPUT_PATH}/{output_file_name}_parameters.csv"
-    )
+        logger.info(f"update standardized_features.csv to s3: {OUTPUT_PATH}")
+        upload_file_to_s3(f"{output_dir}/{output_file_name}.csv", S3_BUCKET, f"{OUTPUT_PATH}/{output_file_name}.csv")
+        upload_file_to_s3(f"{output_dir}/{output_file_name}.json", S3_BUCKET, f"{OUTPUT_PATH}/{output_file_name}.json")
+        upload_file_to_s3(
+            f"{output_dir}/{output_file_name}_parameters.csv",
+            S3_BUCKET,
+            f"{OUTPUT_PATH}/{output_file_name}_parameters.csv",
+        )
 
     return df_scaled
 
@@ -135,9 +141,10 @@ def plot_radar_chart(data: pd.DataFrame, data_cluster: np.ndarray) -> None:
         ax.fill(angles, vals, alpha=0.2)
 
     ax.set_xticks(angles[:-1])
-    ax.set_xticklabels(categories, fontsize=8)
+    ax.set_xticklabels(categories, fontsize=12)
     plt.title("Cluster Feature Means (Standardized) - Radar Chart")
     plt.legend(loc="upper right")
+    plt.subplots_adjust(left=0.1, bottom=0.1)
     plt.savefig("./figures/Radar_Clusters.png")
     plt.show()
 
@@ -159,8 +166,8 @@ def save_cluster_data(
     :return:
     """
 
-    data_original.merge(data_cluster, on=merge_columns, how="inner")
-    for cluster, group_df in data_original.groupby(cluster_column):
+    data_merged = data_original.merge(data_cluster, on=merge_columns, how="inner")
+    for cluster, group_df in data_merged.groupby(cluster_column):
         file_name = f"original_data_cluster_{cluster}.csv"
         group_df.drop(columns=[cluster_column]).to_csv(f"./output/{file_name}", index=False)
         upload_file_to_s3(f"./output/{file_name}", S3_BUCKET, f"{OUTPUT_PATH}/{file_name}")
@@ -228,7 +235,7 @@ if __name__ == "__main__":
     ]
 
     wucaishen_files = list_s3_files(S3_BUCKET, "wucaishen_processed_data", r"wucaishen_grouped_stat_output_24.*\.csv$")
-    wucaishen_data = read_files(S3_BUCKET, wucaishen_files)
+    wucaishen_data = read_files(S3_BUCKET, wucaishen_files, "./output/wucaishen_grouped_stat_output_24.csv")
 
     data = scale_features(wucaishen_data[features], "./result", "standardized_features")
     data, row_index = remove_outliers(data)
@@ -240,4 +247,4 @@ if __name__ == "__main__":
     plot_radar_chart(data, cluster_index)
 
     data_reference["Cluster"] = cluster_index
-    save_cluster_data(data, data_reference, non_feature_col)
+    save_cluster_data(wucaishen_data, data_reference, non_feature_col, "Cluster")

@@ -116,6 +116,7 @@ def list_s3_files(bucket: str, prefix: str, pattern: Optional[str] = None) -> Li
 def read_files(
     bucket: str,
     files: List[str],
+    local_cache_path: Optional[str] = None,
     max_workers: int = MAX_JOBS,
     parallel_mode: Literal["thread", "process", "none"] = "thread",
 ) -> pd.DataFrame:
@@ -124,10 +125,16 @@ def read_files(
 
     :param bucket: S3 bucket name.
     :param files: List of S3 paths to CSV files.
+    :param local_cache_path: Local cache path.
     :param max_workers: Number of workers to use in parallel execution.
     :param parallel_mode: Parallel execution strategy: 'thread', 'process', or 'none'.
     :return: Concatenated DataFrame of all read files.
     """
+
+    if local_cache_path is not None and os.path.exists(local_cache_path):
+        logger.info(f"Found local cache at {local_cache_path}")
+        data = pd.read_csv(local_cache_path)
+        return data
 
     def read_file(file: str) -> pd.DataFrame:
         logger.info(f"Reading {file}")
@@ -149,7 +156,10 @@ def read_files(
                 except Exception as e:
                     logger.error(f"Failed to read {file}: {e}")
 
-    return pd.concat(dfs, ignore_index=True)
+    data = pd.concat(dfs, ignore_index=True)
+    if local_cache_path is not None:
+        data.to_csv(local_cache_path, index=False)
+    return data
 
 
 if __name__ == "__main__":
