@@ -3,7 +3,9 @@ import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import matplotlib.cm as cm
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series
 
@@ -136,13 +138,18 @@ def plot_df_distribution(
 
 
 def plot_scatter_pairs(
-    data: pd.DataFrame, max_per_row: int = 5, figsize_per_plot: Tuple[int, int] = (4, 4), alpha: float = 0.7
+    data: pd.DataFrame,
+    pairs: Optional[List[Tuple[str, str]]] = None,
+    max_per_row: int = 5,
+    figsize_per_plot: Tuple[int, int] = (4, 4),
+    alpha: float = 0.7,
 ) -> None:
     """
     Plots scatter plots for every unique pair of numeric columns in the DataFrame.
 
     Parameters:
     - data (pd.DataFrame): DataFrame containing numeric columns.
+    - pairs (List[Tuple[str, str]]): List of pairs of numeric column names.
     - max_per_row (int): Maximum number of plots per row.
     - figsize_per_plot (Tuple[int, int]): Size of each subplot (width, height).
     - alpha (float): Marker transparency.
@@ -153,11 +160,12 @@ def plot_scatter_pairs(
     # Select only numeric columns
     numeric_cols = data.select_dtypes(include="number").columns.tolist()
 
-    # Generate all unique pairs (combinations)
-    pairs = []
-    for i in range(len(numeric_cols)):
-        for j in range(i + 1, len(numeric_cols)):
-            pairs.append((numeric_cols[i], numeric_cols[j]))
+    if pairs is None or len(pairs) == 0:
+        # Generate all unique pairs (combinations)
+        pairs = []
+        for i in range(len(numeric_cols)):
+            for j in range(i + 1, len(numeric_cols)):
+                pairs.append((numeric_cols[i], numeric_cols[j]))
 
     num_plots = len(pairs)
     if num_plots == 0:
@@ -187,14 +195,67 @@ def plot_scatter_pairs(
     plt.show()
 
 
-def plot_seasonality(time: Series, data: Union[Series, DataFrame], freq: str = "monthly") -> None:
+def _prepare_dataframe(time: Series, data: Union[Series, DataFrame], freq: str) -> DataFrame:
+    """Convert data to DataFrame, align with time, and extract seasonal period."""
+    if isinstance(data, Series):
+        data = data.to_frame()
+
+    df = data.copy()
+    df.insert(0, "time", time)
+
+    if freq == "monthly":
+        df["period"] = df["time"].dt.month
+    elif freq == "weekly":
+        df["period"] = df["time"].dt.dayofweek
+    elif freq == "daily":
+        df["period"] = df["time"].dt.day
+    elif freq == "hourly":
+        df["period"] = df["time"].dt.hour
+    else:
+        raise ValueError("`freq` must be one of 'monthly', 'weekly', 'daily', 'hourly'")
+
+    return df
+
+
+def _plot_grouped_data(ax, df: DataFrame, marker: str, shift_scale: float, colors, alpha: float = 0.7):
+    """Group by period and plot mean with error bars."""
+    n_series = len(df.columns) - 2  # Exclude 'time' and 'period'
+    for i, (col, color) in enumerate(zip(df.columns[1:-1], colors)):
+        grouped = df.groupby("period")[col]
+        seasonal_mean = grouped.mean()
+        seasonal_sem = grouped.sem()
+        x = seasonal_mean.index + (i - n_series / 2) * shift_scale
+        ax.errorbar(x, seasonal_mean, yerr=seasonal_sem, fmt=marker, capsize=4, label=col, alpha=alpha, color=color)
+
+
+def _get_x_labels(freq: str):
+    """Return x-axis tick labels based on frequency."""
+    if freq == "monthly":
+        return list(range(1, 13)), ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    elif freq == "weekly":
+        return list(range(7)), ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    elif freq == "daily":
+        return list(range(1, 32)), [str(i) for i in range(1, 32)]
+    elif freq == "hourly":
+        return list(range(24)), [str(i) for i in range(24)]
+    else:
+        raise ValueError("Invalid frequency")
+
+
+def plot_seasonality(
+    time: Series,
+    data_left: Union[Series, DataFrame],
+    data_right: Optional[Union[Series, DataFrame]] = None,
+    freq: str = "monthly",
+) -> None:
     """
-    Plots the seasonality of one or more variables over time.
+    Plots the seasonality of one or two datasets with optional dual y-axes.
 
     Parameters:
     - time (pd.Series): Series with datetime-like values.
-    - data (Union[pd.Series, pd.DataFrame]): Series or DataFrame with one or more columns.
-    - freq (str): Frequency for seasonal grouping. One of 'monthly', 'weekly', 'daily', 'hourly'.
+    - data_left (Union[pd.Series, pd.DataFrame]): Left axis data.
+    - data_right (Optional[Union[pd.Series, pd.DataFrame]]): Right axis data (optional).
+    - freq (str): Frequency for seasonal grouping.
 
     Returns:
     - None: Displays a matplotlib plot.
@@ -205,41 +266,41 @@ def plot_seasonality(time: Series, data: Union[Series, DataFrame], freq: str = "
         except Exception as e:
             raise ValueError("Failed to convert `time` to datetime.") from e
 
-    if isinstance(data, Series):
-        data = data.to_frame()
+    df_left = _prepare_dataframe(time, data_left, freq)
+    df_right = _prepare_dataframe(time, data_right, freq) if data_right is not None else None
 
-    df = data.copy()
-    df.insert(0, "time", time)
+    n_left = len(df_left.columns) - 2
+    n_right = len(df_right.columns) - 2 if df_right is not None else 0
+    total = n_left + n_right
 
-    if freq == "monthly":
-        df["period"] = df["time"].dt.month
-        x_labels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-    elif freq == "weekly":
-        df["period"] = df["time"].dt.dayofweek
-        x_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-    elif freq == "daily":
-        df["period"] = df["time"].dt.day
-        x_labels = [str(i) for i in range(1, 32)]
-    elif freq == "hourly":
-        df["period"] = df["time"].dt.hour
-        x_labels = [str(i) for i in range(24)]
+    # Use a single colormap and split the colors
+    color_map = cm.get_cmap("tab10", total)
+    colors = [color_map(i) for i in range(total)]
+    left_colors = colors[:n_left]
+    right_colors = colors[n_left:]
+
+    ticks, labels = _get_x_labels(freq)
+
+    fig, ax1 = plt.subplots(figsize=(12, 6))
+    _plot_grouped_data(ax1, df_left, marker="-o", shift_scale=0.1, colors=left_colors)
+    ax1.set_xlabel(freq.capitalize())
+    ax1.set_ylabel("Left Axis")
+    ax1.set_xticks(ticks)
+    ax1.set_xticklabels(labels[: len(ticks)])
+    ax1.grid(True)
+
+    if df_right is not None:
+        ax2 = ax1.twinx()
+        _plot_grouped_data(ax2, df_right, marker="-s", shift_scale=0.1, colors=right_colors)
+        ax2.set_ylabel("Right Axis")
+
+        left_handles, left_labels = ax1.get_legend_handles_labels()
+        right_handles, right_labels = ax2.get_legend_handles_labels()
+        ax1.legend(left_handles, left_labels, loc="upper left")
+        ax2.legend(right_handles, right_labels, loc="upper right")
     else:
-        raise ValueError("`freq` must be one of 'monthly', 'weekly', 'daily', 'hourly'")
-
-    plt.figure(figsize=(12, 6))
-    for col in df.columns[1:-1]:  # Skip 'time' and 'period'
-        grouped = df.groupby("period")[col]
-        seasonal_mean = grouped.mean()
-        seasonal_std = grouped.std()
-        plt.errorbar(
-            seasonal_mean.index, seasonal_mean.values, yerr=seasonal_std.values, fmt="-o", capsize=4, label=col
-        )
+        ax1.legend(loc="upper left")
 
     plt.title(f"Seasonality Plot ({freq.capitalize()})")
-    plt.xlabel(freq.capitalize())
-    plt.ylabel("Mean Value")
-    plt.xticks(ticks=seasonal_mean.index, labels=x_labels[: len(seasonal_mean.index)])
-    plt.legend()
-    plt.grid(True)
     plt.tight_layout()
     plt.show()
