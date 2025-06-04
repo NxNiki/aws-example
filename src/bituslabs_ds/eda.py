@@ -5,8 +5,8 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
+import seaborn as sns
 from pandas import DataFrame, Series
 
 
@@ -113,7 +113,8 @@ def plot_df_distribution(
     for i, col in enumerate(numeric_cols):
         ax = axes[i]
         values = data[col].dropna()
-        counts, bin_edges, _ = ax.hist(values, bins=bins, alpha=alpha, edgecolor="black")
+        n_bins = min(bins, values.nunique())
+        counts, bin_edges, _ = ax.hist(values, bins=n_bins, alpha=alpha, edgecolor="black")
 
         # Annotate with column name at max bin
         if len(counts) > 0:
@@ -139,7 +140,7 @@ def plot_df_distribution(
 
 def plot_scatter_pairs(
     data: pd.DataFrame,
-    pairs: Optional[List[Tuple[str, str]]] = None,
+    pairs: Optional[List[Tuple[str, str, bool, bool]]] = None,
     max_per_row: int = 5,
     figsize_per_plot: Tuple[int, int] = (4, 4),
     alpha: float = 0.7,
@@ -165,7 +166,7 @@ def plot_scatter_pairs(
         pairs = []
         for i in range(len(numeric_cols)):
             for j in range(i + 1, len(numeric_cols)):
-                pairs.append((numeric_cols[i], numeric_cols[j]))
+                pairs.append((numeric_cols[i], numeric_cols[j], False, False))
 
     num_plots = len(pairs)
     if num_plots == 0:
@@ -180,12 +181,17 @@ def plot_scatter_pairs(
     )
     axes = axes.flatten() if num_plots > 1 else [axes]
 
-    for ax_idx, (col_x, col_y) in enumerate(pairs):
+    for ax_idx, (col_x, col_y, logx, logy) in enumerate(pairs):
         ax = axes[ax_idx]
         ax.scatter(data[col_x], data[col_y], alpha=alpha, s=2)
         ax.set_xlabel(col_x)
         ax.set_ylabel(col_y)
         ax.set_title(f"{col_x} vs {col_y}")
+
+        if logx:
+            ax.set_xscale("symlog")
+        if logy:
+            ax.set_yscale("symlog")
 
     # Hide unused subplots if any
     for i in range(num_plots, len(axes)):

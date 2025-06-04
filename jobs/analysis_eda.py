@@ -8,9 +8,9 @@ import pandas as pd
 from bituslabs_ds.eda import plot_df_distribution, plot_scatter_pairs, plot_seasonality, read_csv_cols
 
 
-def load_enriched_data(files: List[str], sampling: int | float, output: str) -> pd.DataFrame:
+def load_enriched_data(files: List[str], sampling: int | float, output: str, reload=False) -> pd.DataFrame:
 
-    if os.path.exists(output):
+    if os.path.exists(output) and not reload:
         return pd.read_csv(output)
 
     data = read_csv_cols(
@@ -50,33 +50,39 @@ def make_seasonality_plots(
         plot_seasonality(data[time_column], data[value_column_left], data[value_column_right], freq=freq)
 
 
-if __name__ == "__main__":
+def run_enriched_analysis():
 
-    # files = glob.glob(f'./output/wucaishen_enriched_output_24??.csv')
-    # sampling = 2_000_000
-    # data = load_enriched_data(files, sampling, f'./output/wucaishen_enriched_output_24_group_mean_{sampling}.csv')
-    #
-    # time_column = 'bill_day'
-    # seasonality_data_columns = [
-    #     (['account', 'payout'], ['cus_account', 'rtp']),
-    #     (['streak'], ['win_streak', 'lose_streak']),
-    #     (['basepoint'], ['delta_t']),
-    # ]
-    #
-    # pairs = [
-    #     ('delta_t', 'basepoint'),
-    #     ('delta_t', 'account'),
-    #     ('delta_t', 'payout'),
-    #     ('delta_t', 'cus_account'),
-    #     ('delta_t', 'rtp'),
-    #     ('streak', 'basepoint'),
-    #     ('streak', 'account'),
-    #     ('streak', 'payout'),
-    #     ('streak', 'cus_account'),
-    #     ('streak', 'rtp'),
-    #     ('cus_account', 'rtp'),
-    # ]
+    files = glob.glob(f"./output/wucaishen_enriched_output_24??.csv")
+    sampling = 2_000_000
+    data = load_enriched_data(files, sampling, f"./output/wucaishen_enriched_output_24_group_mean_{sampling}.csv")
 
+    time_column = "bill_day"
+    seasonality_data_columns = [
+        (["account", "payout"], ["cus_account", "rtp"]),
+        (["streak"], ["win_streak", "lose_streak"]),
+        (["basepoint"], ["delta_t"]),
+    ]
+
+    logx = True
+    logy = True
+    pairs = [
+        ("delta_t", "basepoint", logx, logy),
+        ("delta_t", "account", logx, logy),
+        ("delta_t", "payout", logx, logy),
+        ("delta_t", "cus_account", logx, logy),
+        ("delta_t", "rtp", logx, logy),
+        ("streak", "basepoint", logx, logy),
+        ("streak", "account", logx, logy),
+        ("streak", "payout", logx, logy),
+        ("streak", "cus_account", logx, logy),
+        ("streak", "rtp", logx, logy),
+        ("cus_account", "rtp", logx, logy),
+    ]
+
+    run_eda(data, time_column, seasonality_data_columns, pairs)
+
+
+def run_grouped_analysis():
     ## grouped data (aggregate by 40 consecutive bets):
     data = pd.read_csv("./output/wucaishen_grouped_stat_output_24.csv")
     columns = [
@@ -103,21 +109,55 @@ if __name__ == "__main__":
         (["rtp_mean"], ["payout_median"]),
     ]
 
+    logx = True
+    logy = True
     pairs = [
-        ("delta_t_median", "basepoint_median"),
-        ("delta_t_median", "bet_median"),
-        ("delta_t_median", "payout_median"),
-        ("delta_t_median", "profit_median"),
-        ("delta_t_median", "rtp_mean"),
-        ("streak_median", "basepoint_median"),
-        ("streak_median", "bet_median"),
-        ("streak_median", "payout_median"),
-        ("streak_median", "profit_median"),
-        ("streak_median", "rtp_mean"),
+        ("delta_t_median", "basepoint_median", logx, logy),
+        ("delta_t_median", "bet_median", logx, logy),
+        ("delta_t_median", "payout_median", logx, logy),
+        ("delta_t_median", "profit_median", logx, logy),
+        ("delta_t_median", "rtp_mean", logx, logy),
+        ("streak_median", "basepoint_median", logx, logy),
+        ("streak_median", "bet_median", logx, logy),
+        ("streak_median", "payout_median", logx, logy),
+        ("streak_median", "profit_median", logx, logy),
+        ("streak_median", "rtp_mean", logx, logy),
     ]
+
+    run_eda(data, time_column, seasonality_data_columns, pairs)
+
+
+def run_user_analysis():
+
+    data = pd.read_csv("./output/wucaishen_grouped_stat_output_24.csv", usecols=["group_id", "start_time"])
+    data["start_time"] = pd.to_datetime(data["start_time"]).dt.date
+
+    data = data.groupby(["start_time"]).count().reset_index()
+    data.rename(columns={"group_id": "num_users"}, inplace=True)
+    plot_seasonality(data["start_time"], data["num_users"], freq="monthly")
+    plot_seasonality(data["start_time"], data["num_users"], freq="weekly")
+    plot_seasonality(data["start_time"], data["num_users"], freq="daily")
+
+
+def run_eda(
+    data: pd.DataFrame,
+    time_column: str,
+    seasonality_data_columns: List[Tuple[List[str], List[str]]],
+    pairs: List[Tuple[str, str, bool, bool]],
+):
 
     plot_df_distribution(data.iloc[:, 1:], log=True)
     make_seasonality_plots(data, time_column, seasonality_data_columns, freq="monthly")
     make_seasonality_plots(data, time_column, seasonality_data_columns, freq="weekly")
     make_seasonality_plots(data, time_column, seasonality_data_columns, freq="daily")
-    # plot_scatter_pairs(data.iloc[:, 1:], pairs)
+    plot_scatter_pairs(data.iloc[:, 1:], pairs, alpha=0.2)
+
+
+if __name__ == "__main__":
+
+    # data = pd.read_csv("./output/wucaishen_grouped_stat_output_24.csv", nrows=5)
+    # print(data.columns)
+
+    run_enriched_analysis()
+    run_grouped_analysis()
+    run_user_analysis()
