@@ -6,14 +6,6 @@ import boto3
 
 from bituslabs_ds.s3_utils import upload_file_to_s3
 
-# Setup logging
-os.makedirs(".log", exist_ok=True)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-    handlers=[logging.FileHandler(".log/emr_job_submit.log"), logging.StreamHandler()],
-)
-
 
 def wait_for_cluster_ready(cluster_id, region="us-west-2"):
     emr = boto3.client("emr", region_name=region)
@@ -61,12 +53,21 @@ def submit_spark_step(cluster_id, script_s3_path, data_source, output_uri, regio
 
 
 if __name__ == "__main__":
+
+    # Setup logging
+    os.makedirs(".log", exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(message)s",
+        handlers=[logging.FileHandler(".log/emr_job_submit.log"), logging.StreamHandler()],
+    )
+
     # === Configuration ===
-    LOCAL_SCRIPT = "data_loader_pyspark_example.py"  # Your local Python script
-    BUCKET = "xin-config"  # Your S3 bucket
-    S3_KEY = "scripts/data_loader_pyspark_example.py"
-    DATA_SOURCE = "s3://xin-config/food_establishment_data.csv"
-    OUTPUT_URI = "s3://xin-config/restaurant_violation_results"
+    LOCAL_SCRIPT = "data_loader_pyspark_example.py"
+    BUCKET = "bituslabs-team-ai"
+    S3_KEY = "data_loader_pyspark_example.py"
+    DATA_SOURCE = f"s3://{BUCKET}/xin-config/food_establishment_data.csv"
+    OUTPUT_URI = f"s3://{BUCKET}/xin-config/restaurant_violation_results"
     CLUSTER_ID = "j-WD67QQS5JW2Z"  # Your EMR Cluster ID
     REGION = "us-west-2"
 
