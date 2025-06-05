@@ -360,7 +360,7 @@ if __name__ == "__main__":
     )
     print("SparkSession 初始化完成！")
 
-    s3_files = list_s3_files("hyber-slot", "wucaishen_oringaldata/", ".csv.gz")
+    s3_files = list_s3_files("hyber-slot", "wucaishen_oringaldata/0401", ".csv.gz")
 
     column_names = [
         "productid",
