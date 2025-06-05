@@ -42,43 +42,44 @@ from pyspark.sql.functions import (
 from pyspark.sql.types import IntegerType
 from pyspark.sql.window import Window, WindowSpec
 
+from bituslabs_ds.config import S3_BUCKET
 from bituslabs_ds.pyspark_utils import create_stat_aggregations, encode_label, read_files_to_spark
-from bituslabs_ds.s3_utils import list_s3_files
+from bituslabs_ds.s3_utils import list_s3_files, write_spark_to_s3
 
 
 @pandas_udf("row_id long, streak int", PandasUDFType.GROUPED_MAP)
-def compute_streak_udf(pdf: pd.DataFrame) -> pd.DataFrame:
+def compute_streak_udf(data: pd.DataFrame) -> pd.DataFrame:
     """
     ========= 连续投注（streak） =========
-    :param pdf:
+    :param data:
     :return:
     """
-    pdf = pdf.sort_values("billtime")
+    data = data.sort_values("billtime")
     streaks = []
     streak = 0
-    for dt in pdf["delta_t"]:
+    for dt in data["delta_t"]:
         if pd.isna(dt) or dt > 200:
             streak = 0
         else:
             streak += 1
         streaks.append(streak)
-    pdf["streak"] = streaks
-    return pdf[["row_id", "streak"]]
+    data["streak"] = streaks
+    return data[["row_id", "streak"]]
 
 
 @pandas_udf("row_id long, win_streak int, lose_streak int", PandasUDFType.GROUPED_MAP)
-def compute_win_lose_streak(pdf: pd.DataFrame) -> pd.DataFrame:
+def compute_win_lose_streak(data: pd.DataFrame) -> pd.DataFrame:
     """
     ========= 连续赢钱/输钱 streak =========
-    :param pdf:
+    :param data:
     :return:
     """
-    pdf = pdf.sort_values("billtime")
+    data = data.sort_values("billtime")
     win_streaks = []
     lose_streaks = []
     win_streak = 0
     lose_streak = 0
-    for profit in pdf["cus_account"]:
+    for profit in data["cus_account"]:
         if profit > 0:
             win_streak += 1
             lose_streak = 0
@@ -90,9 +91,9 @@ def compute_win_lose_streak(pdf: pd.DataFrame) -> pd.DataFrame:
             lose_streak = 0
         win_streaks.append(win_streak)
         lose_streaks.append(lose_streak)
-    pdf["win_streak"] = win_streaks
-    pdf["lose_streak"] = lose_streaks
-    return pdf[["row_id", "win_streak", "lose_streak"]]
+    data["win_streak"] = win_streaks
+    data["lose_streak"] = lose_streaks
+    return data[["row_id", "win_streak", "lose_streak"]]
 
 
 def create_aggregations() -> List[Column]:
@@ -193,6 +194,32 @@ def get_previous_value(
     return df
 
 
+def add_date_columns(df: DataFrame, time_column: str) -> DataFrame:
+    # 添加时段分类列
+    df = df.withColumn("hour_of_day", hour(time_column))
+    df = df.withColumn(
+        "is_morning",
+        when((col("hour_of_day") >= 6) & (col("hour_of_day") < 12), 1).otherwise(0),
+    )
+    df = df.withColumn(
+        "is_afternoon",
+        when((col("hour_of_day") >= 12) & (col("hour_of_day") < 18), 1).otherwise(0),
+    )
+    df = df.withColumn(
+        "is_night",
+        when((col("hour_of_day") >= 18) & (col("hour_of_day") <= 23), 1).otherwise(0),
+    )
+    df = df.withColumn(
+        "is_midnight",
+        when((col("hour_of_day") >= 0) & (col("hour_of_day") < 6), 1).otherwise(0),
+    )
+
+    # 节假日（周末）
+    df = df.withColumn("is_weekend", when(dayofweek(time_column).isin([1, 7]), 1).otherwise(0))  # 1=Sunday, 7=Saturday
+
+    return df
+
+
 def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
     start_time = time.time()
 
@@ -204,7 +231,6 @@ def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
     df = df.withColumn("billtime", expr("from_utc_timestamp(billtime_utc, 'America/New_York')"))
 
     # 排序窗口
-    # 添加唯一标识行 ID
     df = df.withColumn("row_id", monotonically_increasing_id())
 
     # payout + current_point
@@ -278,32 +304,22 @@ def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
     )
 
     df = df.withColumn("rtp", when(col("account") != 0, col("payout") / col("account")).otherwise(0))
-    # 添加时段分类列
-    df = df.withColumn("hour_of_day", hour("billtime"))
-    df = df.withColumn(
-        "is_morning",
-        when((col("hour_of_day") >= 6) & (col("hour_of_day") < 12), 1).otherwise(0),
-    )
-    df = df.withColumn(
-        "is_afternoon",
-        when((col("hour_of_day") >= 12) & (col("hour_of_day") < 18), 1).otherwise(0),
-    )
-    df = df.withColumn(
-        "is_night",
-        when((col("hour_of_day") >= 18) & (col("hour_of_day") <= 23), 1).otherwise(0),
-    )
-    df = df.withColumn(
-        "is_midnight",
-        when((col("hour_of_day") >= 0) & (col("hour_of_day") < 6), 1).otherwise(0),
-    )
 
-    # 节假日（周末）
-    df = df.withColumn("is_weekend", when(dayofweek("billtime").isin([1, 7]), 1).otherwise(0))  # 1=Sunday, 7=Saturday
     # 拆分 result 字段为 result_pos1 ~ result_pos15
     df = df.withColumn("result_clean", expr("trim(BOTH ';' FROM result)"))
     split_cols = split(col("result_clean"), ",")
     for i in range(15):
         df = df.withColumn(f"result_pos{i + 1}", split_cols.getItem(i).cast(IntegerType()))
+
+    streak_df = df.select("row_id", "loginname", "billtime", "delta_t").groupby("loginname").apply(compute_streak_udf)
+    df = df.join(streak_df, on=["row_id"], how="left")
+
+    streak_df = (
+        df.select("row_id", "loginname", "billtime", "cus_account").groupby("loginname").apply(compute_win_lose_streak)
+    )
+    df = df.join(streak_df, on=["row_id"], how="left")
+
+    df = add_date_columns(df, "billtime")
 
     agg_expressions = create_aggregations()
     currency_count = get_currency_count_by_group(df)
@@ -375,4 +391,9 @@ if __name__ == "__main__":
         "cur_ip",
     ]
 
-    pdf = read_files_to_spark(spark, s3_files, column_names, columns_to_keep)
+    spark_df = read_files_to_spark(spark, s3_files, column_names, columns_to_keep)
+
+    sdf_enriched, sdf_grouped = process_wucaishen_data(spark_df)
+
+    write_spark_to_s3(sdf_enriched, S3_BUCKET, "wucaishen_processed_enriched")
+    write_spark_to_s3(sdf_grouped, S3_BUCKET, "wucaishen_processed_grouped")

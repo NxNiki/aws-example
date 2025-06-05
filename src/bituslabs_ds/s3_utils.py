@@ -3,11 +3,12 @@ import logging
 import os
 import re
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-from typing import Callable, List, Literal, Optional
+from typing import Callable, List, Literal, Optional, Union
 
 import boto3
 import pandas as pd
 from botocore.exceptions import NoCredentialsError
+from pyspark.sql import DataFrame as SparkDataFrame
 
 from bituslabs_ds.config import MAX_JOBS
 
@@ -20,13 +21,13 @@ logger.addHandler(logging.NullHandler())  # Safe for import
 
 def parse_bucket_name(bucket: str) -> str:
     if bucket.endswith("/"):
-        logger.warning(f"remove '/' from {bucket}")
+        logger.info(f"remove '/' from {bucket}")
         bucket = bucket[:-1]
     if bucket.startswith("s3a://"):
-        logger.warning(f"remove 's3a://' from {bucket}")
+        logger.info(f"remove 's3a://' from {bucket}")
         bucket = bucket[len("s3a://") :]
     if bucket.startswith("s3://"):
-        logger.warning(f"remove 's3://' from {bucket}")
+        logger.info(f"remove 's3://' from {bucket}")
         bucket = bucket[len("s3://") :]
 
     return bucket
@@ -39,7 +40,16 @@ def read_to_pandas_df(bucket: str, key: str) -> pd.DataFrame:
     return pd.read_csv(response["Body"])
 
 
-def write_df_to_s3(data: pd.DataFrame, bucket: str, key: str) -> None:
+def write_df_to_s3(data: Union[pd.DataFrame, SparkDataFrame], bucket: str, key: str) -> None:
+    if isinstance(data, pd.DataFrame):
+        return write_pandas_to_s3(data, bucket, key)
+    elif isinstance(data, SparkDataFrame):
+        return write_spark_to_s3(data, bucket, key)
+    else:
+        raise TypeError("Unsupported DataFrame type.")
+
+
+def write_pandas_to_s3(data: pd.DataFrame, bucket: str, key: str) -> None:
     """Write a Pandas DataFrame to a CSV file in S3."""
     bucket = parse_bucket_name(bucket)
     csv_buffer = io.StringIO()
@@ -47,6 +57,23 @@ def write_df_to_s3(data: pd.DataFrame, bucket: str, key: str) -> None:
     s3_client.put_object(Bucket=bucket, Key=key, Body=csv_buffer.getvalue())
 
     logger.info(f"Writing {key} to {bucket}")
+
+
+def write_spark_to_s3(data: SparkDataFrame, bucket: str, key: str, file_format: str = "csv") -> None:
+    """Write a PySpark DataFrame to S3 in CSV or Parquet format."""
+    bucket = parse_bucket_name(bucket)
+    s3_path = f"s3://{bucket}/{key}"
+
+    if file_format not in ("csv", "parquet"):
+        raise ValueError("PySpark supports only 'csv' or 'parquet' formats.")
+
+    try:
+        write_options = {"header": "true", "compression": "gzip"} if file_format == "csv" else {}
+        data.write.mode("overwrite").options(**write_options).format(file_format).save(s3_path)
+        logger.info(f"Successfully wrote PySpark DataFrame to {s3_path}")
+    except Exception as e:
+        logger.error(f"Failed to write PySpark DataFrame to S3: {e}")
+        raise
 
 
 def upload_file_to_s3(local_path: str, s3_bucket: str, s3_key: str) -> Optional[str]:
