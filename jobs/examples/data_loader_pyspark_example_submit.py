@@ -1,8 +1,43 @@
 import logging
 import os
 
-from bituslabs_ds.emr_utils import submit_spark_step
+import boto3
+
 from bituslabs_ds.s3_utils import upload_file_to_s3
+
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())  # Safe for import
+
+
+def submit_spark_step(
+    cluster_id: str, script_s3_path: str, data_source: str, output_uri: str, region: str = "us-west-2"
+):
+    """
+    Submits a Spark step to an EMR cluster.
+    """
+    emr_client = boto3.client("emr", region_name=region)
+
+    step = {
+        "Name": "RedViolationJob",
+        "ActionOnFailure": "CONTINUE",
+        "HadoopJarStep": {
+            "Jar": "command-runner.jar",
+            "Args": [
+                "spark-submit",
+                script_s3_path,
+                "--data_source",
+                data_source,
+                "--output_uri",
+                output_uri,
+            ],
+        },
+    }
+
+    response = emr_client.add_job_flow_steps(JobFlowId=cluster_id, Steps=[step])
+    step_id = response["StepIds"][0]
+    logger.info(f"Step submitted successfully. Step ID: {step_id}")
+    return step_id
+
 
 if __name__ == "__main__":
 

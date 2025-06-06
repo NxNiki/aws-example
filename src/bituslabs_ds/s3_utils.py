@@ -3,6 +3,7 @@ import logging
 import os
 import re
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from pathlib import Path
 from typing import Callable, List, Literal, Optional, Union
 
 import boto3
@@ -76,7 +77,7 @@ def write_spark_to_s3(data: SparkDataFrame, bucket: str, key: str, file_format: 
         raise
 
 
-def upload_file_to_s3(local_path: str, s3_bucket: str, s3_key: str) -> Optional[str]:
+def upload_file_to_s3(local_path: str | Path, s3_bucket: str, s3_key: str) -> Optional[str]:
     """
     Uploads a local file to an S3 bucket.
 
