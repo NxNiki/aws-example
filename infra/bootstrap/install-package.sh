@@ -7,6 +7,12 @@ set -e
 
 echo "Starting bootstrap script"
 
+# Wait for yum lock if necessary
+while sudo fuser /var/run/yum.pid >/dev/null 2>&1; do
+    echo "Waiting for yum lock..."
+    sleep 5
+done
+
 # Update yum packages
 sudo yum update -y
 
@@ -16,12 +22,18 @@ sudo yum install -y git
 # Install Python packages
 if [[ $1 == *.txt ]]; then
   echo "Installing Python packages from requirements.txt: $1"
-  aws s3 cp "$1" /home/hadoop/requirements.txt
-  sudo python3 -m pip install -r /home/hadoop/requirements.txt
+
+  filename=$(basename "$1")
+  aws s3 cp "$1" "/home/hadoop/$filename"
+  sudo python3 -m pip install -r "/home/hadoop/$filename"
+
 elif [[ $1 == *.whl ]]; then
   echo "Installing Python wheel package: $1"
-  aws s3 cp "$1" /home/hadoop/package.whl
-  sudo python3 -m pip install /home/hadoop/package.whl
+
+  filename=$(basename "$1")
+  aws s3 cp "$1" "/home/hadoop/$filename"
+  sudo python3 -m pip install "/home/hadoop/$filename"
+
 else
   echo "Unknown file format. Please provide a .txt or .whl file."
   exit 1

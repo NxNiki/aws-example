@@ -36,7 +36,7 @@ def build_package() -> str | None:
 def start_emr_cluster(
     cluster_name: str,
     log_uri: str,
-    release_label: str = "emr-6.15.0",
+    release_label: str = "emr-7.9.0",
     instance_type: str = "m5.xlarge",
     instance_count: int = 3,
     region: str = "us-west-2",
@@ -129,4 +129,4 @@ def wait_for_cluster_ready(cluster_id: str, region: str = "us-west-2"):
         elif state in ["TERMINATING", "TERMINATED", "TERMINATED_WITH_ERRORS"]:
             logger.error(f"Cluster is not usable (state: {state})")
             raise Exception(f"Cluster is not usable (state: {state})")
-        time.sleep(15)
+        time.sleep(30)

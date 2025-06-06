@@ -50,7 +50,7 @@ if __name__ == "__main__":
     package_file_uri = build_package()
     bootstrap_script_uri = upload_bootstrap_script()
     cluster_id, status = start_emr_cluster(
-        cluster_name="my-spark-cluster",
+        cluster_name="xin-spark-cluster",
         log_uri=f"s3://{S3_BUCKET}/emr-logs/data_process_wucaishen/",
         instance_type="m5.xlarge",
         instance_count=3,
