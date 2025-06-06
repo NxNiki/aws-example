@@ -3,7 +3,7 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - python=3.11
+  - python=3.9
   - openjdk=11
   - numpy=1.26.0
   - pandas=2.1.0
