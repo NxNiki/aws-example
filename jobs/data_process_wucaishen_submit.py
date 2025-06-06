@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 
-def submit_spark_step(cluster_id: str, script_s3_path: str, output_uri: str, region: str = "us-west-2"):
+def submit_spark_step(cluster_id: str, script_s3_path: str, region: str = "us-west-2"):
     """
     Submits a Spark step to an EMR cluster.
     """
@@ -25,8 +25,6 @@ def submit_spark_step(cluster_id: str, script_s3_path: str, output_uri: str, reg
             "Args": [
                 "spark-submit",
                 script_s3_path,
-                "--output_uri",
-                output_uri,
             ],
         },
     }
@@ -63,11 +61,10 @@ if __name__ == "__main__":
     # === Configuration ===
     LOCAL_SCRIPT = "data_process_wucaishen.py"
     S3_KEY = "emr_jobs/data_process_wucaishen.py"
-    OUTPUT_URI = f"s3://{S3_BUCKET}/wucaishen_process_result/"
 
     # === Upload and Submit ===
     s3_script_uri = upload_file_to_s3(LOCAL_SCRIPT, S3_BUCKET, S3_KEY)
 
     if s3_script_uri:
         wait_for_cluster_ready(cluster_id, region=REGION)
-        submit_spark_step(cluster_id, s3_script_uri, OUTPUT_URI, region=REGION)
+        submit_spark_step(cluster_id, s3_script_uri, region=REGION)
