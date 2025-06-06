@@ -16,14 +16,14 @@ logger.addHandler(logging.NullHandler())
 rootdir = Path(__file__).parent.parent
 
 
-def upload_bootstrap_script() -> str | None:
+def upload_bootstrap_script() -> Optional[str]:
     bootstrap_script = rootdir / "infra/bootstrap/install-package.sh"
     bootstrap_script_uri = upload_file_to_s3(bootstrap_script, S3_BUCKET, "package/install-package.sh")
 
     return bootstrap_script_uri
 
 
-def build_package() -> str | None:
+def build_package() -> Optional[str]:
     print("Building package with poetry...")
     subprocess.run(["poetry", "build"], check=True)
     dist_files = os.listdir(rootdir / "dist")

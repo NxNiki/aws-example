@@ -46,6 +46,16 @@ from bituslabs_ds.config import S3_BUCKET
 from bituslabs_ds.pyspark_utils import create_stat_aggregations, encode_label, read_files_to_spark
 from bituslabs_ds.s3_utils import list_s3_files, write_spark_to_s3
 
+print("🚀 正在初始化 SparkSession ...")
+spark = (
+    SparkSession.builder.appName("Aggregateddata")
+    .config("spark.driver.memory", "64g")
+    .config("spark.executor.memory", "64g")
+    .config("spark.sql.shuffle.partitions", "200")
+    .getOrCreate()
+)
+print("SparkSession 初始化完成！")
+
 
 @pandas_udf("row_id long, streak int", PandasUDFType.GROUPED_MAP)
 def compute_streak_udf(data: pd.DataFrame) -> pd.DataFrame:
@@ -112,7 +122,7 @@ def create_aggregations() -> List[Column]:
     agg_expressions.extend(create_stat_aggregations("delta_profit"))
     agg_expressions.extend(create_stat_aggregations("streak"))
     agg_expressions.extend(create_stat_aggregations("win_streak"))
-    agg_expressions.extend(create_stat_aggregations("loss_streak"))
+    agg_expressions.extend(create_stat_aggregations("lose_streak"))
     agg_expressions.extend(create_stat_aggregations("deposit"))
     agg_expressions.extend(create_stat_aggregations("withdrawal"))
 
@@ -350,16 +360,6 @@ if __name__ == "__main__":
         ],
     )
 
-    print("🚀 正在初始化 SparkSession ...")
-    spark = (
-        SparkSession.builder.appName("Aggregateddata")
-        .config("spark.driver.memory", "64g")
-        .config("spark.executor.memory", "64g")
-        .config("spark.sql.shuffle.partitions", "200")
-        .getOrCreate()
-    )
-    print("SparkSession 初始化完成！")
-
     s3_files = list_s3_files("hyber-slot", "wucaishen_oringaldata/0401", ".csv.gz")
 
     column_names = [
@@ -391,9 +391,9 @@ if __name__ == "__main__":
         "cur_ip",
     ]
 
-    spark_df = read_files_to_spark(spark, s3_files, column_names, columns_to_keep)
+    # spark_df = read_files_to_spark(spark, s3_files, column_names, columns_to_keep)
 
-    sdf_enriched, sdf_grouped = process_wucaishen_data(spark_df)
+    # sdf_enriched, sdf_grouped = process_wucaishen_data(spark_df)
 
-    write_spark_to_s3(sdf_enriched, S3_BUCKET, "wucaishen_processed_enriched")
-    write_spark_to_s3(sdf_grouped, S3_BUCKET, "wucaishen_processed_grouped")
+    # write_spark_to_s3(sdf_enriched, S3_BUCKET, "wucaishen_processed_enriched")
+    # write_spark_to_s3(sdf_grouped, S3_BUCKET, "wucaishen_processed_grouped")
