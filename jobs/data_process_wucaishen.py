@@ -5,8 +5,10 @@ To run, use the EMR job submission script.
 Purpose: Process and aggregate Wucaishen gaming data.
 """
 
+import gzip
 import logging
 import os
+import shutil
 import sys
 import time
 from datetime import datetime
@@ -114,6 +116,35 @@ def compute_win_lose_streak(data: pd.DataFrame) -> pd.DataFrame:
     return data[["row_id", "win_streak", "lose_streak"]]
 
 
+def get_column_delta(
+    data: DataFrame, column_name: str, orderby: str, partition_by: str, delta_column_name: Optional[str]
+) -> DataFrame:
+    """
+    calculate the difference of the column_name on current row and previous row.
+    :param data:
+    :param column_name:
+    :param orderby:
+    :param partition_by:
+    :param delta_column_name:
+    :return:
+    """
+
+    if delta_column_name is None:
+        delta_column_name = f"delta_{column_name}"
+    if partition_by is not None:
+        window_spec = Window.partitionBy(partition_by).orderBy(orderby)
+    else:
+        window_spec = Window.orderBy(orderby)
+
+    # Use lag to get previous value and compute difference
+    data = data.withColumn("prev_value", lag(column_name).over(window_spec)).withColumn(
+        delta_column_name, col(column_name) - col("prev_value")
+    )
+
+    data.drop("prev_value")
+    return data
+
+
 def create_aggregations() -> List[Column]:
 
     agg_expressions = [
@@ -175,6 +206,7 @@ def get_currency_count_by_group(df: DataFrame) -> DataFrame:
     :param column_name:
     :return:
     """
+
     currency_count = df.groupBy("loginname", "group_index", "sub_index", "group_id", "currency_label", "currency").agg(
         Fcount("*").alias("currency_count")
     )
@@ -340,6 +372,17 @@ def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
 
     df = add_date_columns(df, "billtime")
 
+    # ========== 基于 delta_t > 7 天 切断分组 ==========
+    df = df.withColumn("is_split", when(col("delta_t") > 604800, 1).otherwise(0))
+    split_window = Window.partitionBy("loginname").orderBy("billtime")
+    df = df.withColumn("group_index", Fsum("is_split").over(split_window))
+
+    # ========== 每个断组再按 40 条一分 ==========
+    block_window = Window.partitionBy("loginname", "group_index").orderBy("billtime")
+    df = df.withColumn("row_number_in_block", row_number().over(block_window))
+    df = df.withColumn("sub_index", floor((col("row_number_in_block") - 1) / 40))
+    df = df.withColumn("group_id", concat_ws("_", col("loginname"), col("group_index"), col("sub_index")))
+
     agg_expressions = create_aggregations()
     currency_count = get_currency_count_by_group(df)
 
@@ -412,4 +455,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(e)
     finally:
-        upload_file_to_s3(log_file_path, S3_BUCKET, f"emr-logs/data_process_wucaishen_{execution_time}.log")
+        compressed_log_path = f"{log_file_path}.gz"
+        with open(log_file_path, "rb") as f_in, gzip.open(compressed_log_path, "wb") as f_out:
+            shutil.copyfileobj(f_in, f_out)
+        upload_file_to_s3(compressed_log_path, S3_BUCKET, f"emr-logs/data_process_wucaishen_{execution_time}.log.gz")
