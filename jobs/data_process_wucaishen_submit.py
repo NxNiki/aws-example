@@ -19,7 +19,7 @@ def submit_spark_step(cluster_id: str, script_s3_path: str, region: str = "us-we
 
     step = {
         "Name": "RedViolationJob",
-        "ActionOnFailure": "CONTINUE",
+        "ActionOnFailure": "TERMINATE_CLUSTER",  # "CONTINUE", "CANCEL_AND_WAIT"
         "HadoopJarStep": {
             "Jar": "command-runner.jar",
             "Args": [
@@ -50,7 +50,7 @@ if __name__ == "__main__":
     cluster_id, status = start_emr_cluster(
         cluster_name="xin-spark-cluster",
         log_uri=f"s3://{S3_BUCKET}/emr-logs/data_process_wucaishen/",
-        instance_type="m5.xlarge",
+        instance_type="m5.4xlarge",  # 64GB memory
         instance_count=3,
         region=REGION,
         bootstrap_script_uri=bootstrap_script_uri,

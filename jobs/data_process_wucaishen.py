@@ -1,13 +1,15 @@
 """
-This example script cannot run locally
-use submit emr job to submit this script to EMR
+This script is designed to run on AWS EMR and cannot be executed locally.
+To run, use the EMR job submission script.
 
-process wucaishen data
+Purpose: Process and aggregate Wucaishen gaming data.
 """
 
 import logging
 import os
+import sys
 import time
+from datetime import datetime
 from typing import List, Optional, Tuple
 
 import pandas as pd
@@ -44,17 +46,22 @@ from pyspark.sql.window import Window, WindowSpec
 
 from bituslabs_ds.config import S3_BUCKET
 from bituslabs_ds.pyspark_utils import create_stat_aggregations, encode_label, read_files_to_spark
-from bituslabs_ds.s3_utils import list_s3_files, write_spark_to_s3
+from bituslabs_ds.s3_utils import list_s3_files, upload_file_to_s3, write_spark_to_s3
 
-print("🚀 正在初始化 SparkSession ...")
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
+
+logger.info("start SparkSession ...")
 spark = (
     SparkSession.builder.appName("Aggregateddata")
-    .config("spark.driver.memory", "64g")
-    .config("spark.executor.memory", "64g")
+    .config("spark.driver.memory", "32g")  # choose instance >=m5.4xlarge to meet memory demand
+    .config("spark.executor.memory", "28g")
+    .config("spark.executor.memoryOverhead", "4g")
     .config("spark.sql.shuffle.partitions", "200")
+    .config("spark.sql.execution.arrow.pyspark.enabled", "true")  # for better performance with Pandas UDFs
     .getOrCreate()
 )
-print("SparkSession 初始化完成！")
+logger.info("SparkSession started！")
 
 
 @pandas_udf("row_id long, streak int", PandasUDFType.GROUPED_MAP)
@@ -343,7 +350,7 @@ def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
     df = df.orderBy("loginname", "billtime")
 
     end_time = time.time()
-    print("Total execution time: {:.2f} seconds".format(end_time - start_time))
+    logger.info("Total execution time: {:.2f} seconds".format(end_time - start_time))
 
     return df, df_grouped
 
@@ -351,16 +358,21 @@ def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
 if __name__ == "__main__":
 
     os.makedirs(".log", exist_ok=True)
+    log_file_path = f".log/data_process_wucaishen{datetime.now()}.log"
+
+    # Redirect stdout and stderr
+    sys.stdout = open(log_file_path, "w")
+    sys.stderr = sys.stdout
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(message)s",
         handlers=[
-            logging.FileHandler(".log/spark_job_wucaishen_data_processing.log"),
-            logging.StreamHandler(),
+            logging.StreamHandler(sys.stdout),
         ],
     )
 
-    s3_files = list_s3_files("hyber-slot", "wucaishen_oringaldata/0401", ".csv.gz")
+    s3_files = list_s3_files("hyber-slot", "wucaishen_oringaldata/2401", ".csv.gz")
 
     column_names = [
         "productid",
@@ -391,9 +403,9 @@ if __name__ == "__main__":
         "cur_ip",
     ]
 
-    # spark_df = read_files_to_spark(spark, s3_files, column_names, columns_to_keep)
+    spark_df = read_files_to_spark(spark, s3_files, column_names, columns_to_keep)
+    sdf_enriched, sdf_grouped = process_wucaishen_data(spark_df)
+    write_spark_to_s3(sdf_enriched, S3_BUCKET, "wucaishen_processed_enriched")
+    write_spark_to_s3(sdf_grouped, S3_BUCKET, "wucaishen_processed_grouped")
 
-    # sdf_enriched, sdf_grouped = process_wucaishen_data(spark_df)
-
-    # write_spark_to_s3(sdf_enriched, S3_BUCKET, "wucaishen_processed_enriched")
-    # write_spark_to_s3(sdf_grouped, S3_BUCKET, "wucaishen_processed_grouped")
+    upload_file_to_s3(log_file_path, S3_BUCKET, "emr-logs/data_process_wucaishen.log")
