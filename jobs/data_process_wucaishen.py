@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import List, Optional, Tuple
 
 import pandas as pd
+from exceptiongroup import catch
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.column import Column
 from pyspark.sql.functions import (
@@ -238,6 +239,7 @@ def add_date_columns(df: DataFrame, time_column: str) -> DataFrame:
 
 
 def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
+    logger.info("process_wucaishen_data start...")
     start_time = time.time()
 
     df = df.filter((col("flag") != -8.0) & (col("productid") != "B26"))
@@ -358,54 +360,56 @@ def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
 if __name__ == "__main__":
 
     os.makedirs(".log", exist_ok=True)
-    log_file_path = f".log/data_process_wucaishen{datetime.now()}.log"
-
-    # Redirect stdout and stderr
-    sys.stdout = open(log_file_path, "w")
-    sys.stderr = sys.stdout
+    execution_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file_path = f".log/data_process_wucaishen{execution_time}.log"
 
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(message)s",
         handlers=[
+            logging.FileHandler(log_file_path),
             logging.StreamHandler(sys.stdout),
         ],
     )
 
-    s3_files = list_s3_files("hyber-slot", "wucaishen_oringaldata/2401", ".csv.gz")
+    try:
+        s3_files = list_s3_files("hyber-slot", "wucaishen_oringaldata/2401", ".csv.gz")
 
-    column_names = [
-        "productid",
-        "loginname",
-        "billno",
-        "billtime",
-        "account",
-        "cus_account",
-        "currency",
-        "slottype",
-        "basepoint",
-        "result",
-        "cur_ip",
-        "flag",
-    ]
+        column_names = [
+            "productid",
+            "loginname",
+            "billno",
+            "billtime",
+            "account",
+            "cus_account",
+            "currency",
+            "slottype",
+            "basepoint",
+            "result",
+            "cur_ip",
+            "flag",
+        ]
 
-    columns_to_keep = [
-        "productid",
-        "loginname",
-        "billno",
-        "billtime",
-        "account",
-        "cus_account",
-        "currency",
-        "slottype",
-        "basepoint",
-        "result",
-        "cur_ip",
-    ]
+        columns_to_keep = [
+            "productid",
+            "loginname",
+            "billno",
+            "billtime",
+            "account",
+            "cus_account",
+            "currency",
+            "slottype",
+            "basepoint",
+            "result",
+            "cur_ip",
+        ]
 
-    spark_df = read_files_to_spark(spark, s3_files, column_names, columns_to_keep)
-    sdf_enriched, sdf_grouped = process_wucaishen_data(spark_df)
-    write_spark_to_s3(sdf_enriched, S3_BUCKET, "wucaishen_processed_enriched")
-    write_spark_to_s3(sdf_grouped, S3_BUCKET, "wucaishen_processed_grouped")
+        spark_df = read_files_to_spark(spark, s3_files, column_names, columns_to_keep)
+        sdf_enriched, sdf_grouped = process_wucaishen_data(spark_df)
+        write_spark_to_s3(sdf_enriched, S3_BUCKET, "wucaishen_processed_enriched")
+        write_spark_to_s3(sdf_grouped, S3_BUCKET, "wucaishen_processed_grouped")
 
-    upload_file_to_s3(log_file_path, S3_BUCKET, "emr-logs/data_process_wucaishen.log")
+    except Exception as e:
+        logger.error(e)
+    finally:
+        upload_file_to_s3(log_file_path, S3_BUCKET, f"emr-logs/data_process_wucaishen_{execution_time}.log")

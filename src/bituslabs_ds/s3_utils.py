@@ -120,8 +120,9 @@ def list_s3_files(bucket: str, prefix: str, pattern: Optional[str] = None) -> Li
         for obj in page.get("Contents", []):
             key = obj["Key"]
             if pattern is None or re.search(pattern, key):  # Changed from match to search
-                matching_keys.append(key)
-                logging.info(f"Found {key}")
+                s3_uri = f"s3://{bucket}/{key}"
+                matching_keys.append(s3_uri)
+                logging.info(f"Found {s3_uri}")
 
     logger.info(f"Found {len(matching_keys)} S3 keys")
     return matching_keys
