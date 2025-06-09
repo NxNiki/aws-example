@@ -93,7 +93,7 @@ def upload_file_to_s3(
     """
 
     try:
-        s3_client.upload_file(local_path, s3_bucket, s3_key, extra_args=extra_args)
+        s3_client.upload_file(local_path, s3_bucket, s3_key, ExtraArgs=extra_args)
         logger.info(f"Uploaded {local_path} to s3://{s3_bucket}/{s3_key}")
         return f"s3://{s3_bucket}/{s3_key}"
     except FileNotFoundError:

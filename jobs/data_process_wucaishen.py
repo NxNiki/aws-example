@@ -15,7 +15,6 @@ from datetime import datetime
 from typing import List, Optional, Tuple
 
 import pandas as pd
-from exceptiongroup import catch
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.column import Column
 from pyspark.sql.functions import (
@@ -283,6 +282,8 @@ def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
 
     # 排序窗口
     df = df.withColumn("row_id", monotonically_increasing_id())
+
+    df = df.withColumn("cus_account", col("cus_account").cast("float"))
 
     # payout + current_point
     df = df.withColumn("payout", col("cus_account") + col("account"))
