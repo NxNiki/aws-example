@@ -79,18 +79,21 @@ def write_spark_to_s3(data: SparkDataFrame, bucket: str, key: str, file_format: 
         raise
 
 
-def upload_file_to_s3(local_path: str | Path, s3_bucket: str, s3_key: str) -> Optional[str]:
+def upload_file_to_s3(
+    local_path: str | Path, s3_bucket: str, s3_key: str, extra_args: Optional[dict] = None
+) -> Optional[str]:
     """
     Uploads a local file to an S3 bucket.
 
     :param local_path: Path to the local Python file.
     :param s3_bucket: Name of the S3 bucket.
     :param s3_key: S3 object key (e.g., 'scripts/red_violations.py').
+    :param extra_args: Extra arguments to pass to the S3 upload function.
     :return: Full S3 URI of the uploaded script.
     """
 
     try:
-        s3_client.upload_file(local_path, s3_bucket, s3_key)
+        s3_client.upload_file(local_path, s3_bucket, s3_key, extra_args=extra_args)
         logger.info(f"Uploaded {local_path} to s3://{s3_bucket}/{s3_key}")
         return f"s3://{s3_bucket}/{s3_key}"
     except FileNotFoundError:

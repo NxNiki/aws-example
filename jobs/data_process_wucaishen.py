@@ -458,4 +458,9 @@ if __name__ == "__main__":
         compressed_log_path = f"{log_file_path}.gz"
         with open(log_file_path, "rb") as f_in, gzip.open(compressed_log_path, "wb") as f_out:
             shutil.copyfileobj(f_in, f_out)
-        upload_file_to_s3(compressed_log_path, S3_BUCKET, f"emr-logs/data_process_wucaishen_{execution_time}.log.gz")
+        upload_file_to_s3(
+            compressed_log_path,
+            S3_BUCKET,
+            f"emr-logs/data_process_wucaishen_{execution_time}.log.gz",
+            extra_args={"ContentType": "text/plain", "ContentEncoding": "gzip"},
+        )
