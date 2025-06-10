@@ -4,21 +4,18 @@ channels:
   - defaults
 dependencies:
   - python=3.9
-  - onnx=1.14.1
-  - ninja
-  - pkg-config
-#  - gcc              # on macOS this will be clang wrappers, helps compile C/C++ extensions
-  - clang
-  - cython
   - pip
   - poetry
-  # Optional system-level dependencies; add what you need:
-  # - libpython        # ensure Python dev headers
-  # - openssl
-  # - libffi
-  # - zlib
-  # - cmake
-  # - sqlite
-  # - rust (if using cryptography/maturin/etc.)
+#  - libpython # ensure Python dev headers
+#  - openssl
+#  - libffi
+#  - zlib
+#  - cmake
+#  - sqlite
+#  - rust (if using cryptography/maturin/etc.)
+#  - ninja
+#  - pkg-config
+#  - gcc # on macOS this will be clang wrappers, helps compile C/C++ extensions
+#  - clang
+#  - cython
 
-  # Optional: install Poetry within the Conda env (you can skip this if Poetry is installed globally)
