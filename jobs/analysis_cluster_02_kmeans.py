@@ -52,7 +52,7 @@ def scale_features(
         print("\n 每个特征的标准化参数（均值与标准差）：")
         print(mean_std_df)
 
-        logger.info(f"update standardized_features.csv to s3: {OUTPUT_PATH}")
+        logger.info(f"update standardized_features.csv to s3: {OUTPUT_PATH}/{output_file_name}/")
         upload_file_to_s3(
             f"{output_dir}/{output_file_name}.csv", S3_BUCKET, f"{OUTPUT_PATH}/{output_dir}/{output_file_name}.csv"
         )

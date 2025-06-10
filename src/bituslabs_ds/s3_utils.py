@@ -112,7 +112,8 @@ def upload_file_to_s3(local_path: Union[str, Path], s3_bucket: str, s3_key: str)
 
     filename = os.path.basename(local_path).lower()
     content_type_map = {
-        ".csv": "text/csv",
+        # ".csv": "text/csv",
+        ".csv": "text/plain",  # make it plain so that we can view small csv file online
         ".json": "application/json",
         ".log": "text/plain",
         ".txt": "text/plain",

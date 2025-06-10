@@ -358,7 +358,8 @@ if __name__ == "__main__":
         "weekend_count",
         "duration_seconds",
         "avg_time_per_bet",
-        "currency_label",
+        # currently we combine all currencies as different currency users may have different purchase power.
+        # "currency_label",
     ]
 
     # features to apply log transform, this should be decided with EDA:
