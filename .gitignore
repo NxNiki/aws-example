@@ -1,3 +1,4 @@
+.DS_Store
 .idea/*
 *.log/*
 */.log/*
@@ -6,5 +7,5 @@
 */figures/*
 */models/*
 */.ipynb_checkpoints/*
-*/__pycache__/*
+__pycache__
 dist/*
