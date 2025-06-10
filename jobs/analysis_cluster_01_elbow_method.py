@@ -44,6 +44,7 @@ def smart_feature_selection(
     data: pd.DataFrame, threshold: float = 0.9, prefer_keywords: Optional[List[str]] = None
 ) -> Tuple[List[str], List[str]]:
     """
+    remove features (one of two) that are highly correlated with each other
     data: DataFrame，完整数据集
     threshold: float，相关性阈值，比如 0.9
     prefer_keywords: list，优先保留的关键词，比如 'mean', 'median'
@@ -66,21 +67,18 @@ def smart_feature_selection(
         high_corr = upper[column][upper[column] > threshold].index.tolist()
         if high_corr:
             # 包括自己和高度相关的列
-            group = [column] + high_corr
+            high_corr = [column] + high_corr
+            # 保留这一组的第一个
+            keep_feat = high_corr[0]
             # 看这组里面有没有带 prefer_keywords 的特征
-            preferred = []
-            for feat in group:
+            for feat in high_corr:
                 if any(key in feat.lower() for key in prefer_keywords):
-                    preferred.append(feat)
-            if preferred:
-                # 如果有偏好的，保留偏好的第一个，删除其他
-                keep_feat = preferred[0]
-            else:
-                # 否则，保留这一组的第一个
-                keep_feat = group[0]
+                    # 如果有偏好的，保留偏好的第一个，删除其他
+                    keep_feat = feat
+                    break
             kept.add(keep_feat)
-            group.remove(keep_feat)  # 删掉自己
-            to_drop.update(group)
+            high_corr.remove(keep_feat)  # 删掉自己
+            to_drop.update(high_corr)
         else:
             # 如果没有高度相关的，可以直接保留
             kept.add(column)
@@ -261,7 +259,7 @@ def calculate_silhouette_score(x: Union[np.ndarray, pd.DataFrame], cluster_obj: 
 if __name__ == "__main__":
 
     os.makedirs("./.log", exist_ok=True)
-    os.makedirs(".output", exist_ok=True)
+    os.makedirs("./output", exist_ok=True)
     os.makedirs("./features", exist_ok=True)
     os.makedirs("./figures", exist_ok=True)
 
