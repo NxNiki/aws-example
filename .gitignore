@@ -2,9 +2,9 @@
 *.log/*
 */.log/*
 *.csv
-*/result/*
+*/features/*
 */figures/*
+*/models/*
 */.ipynb_checkpoints/*
 */__pycache__/*
-*/models/*
 dist/*
