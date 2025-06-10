@@ -6,7 +6,8 @@ import os
 import re
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Callable, List, Literal, Optional, Union
+from typing import Callable, List, Literal, Optional, Tuple, Union
+from urllib.parse import urlparse
 
 import boto3
 import pandas as pd
@@ -34,6 +35,26 @@ def parse_bucket_name(bucket: str) -> str:
         bucket = bucket[len("s3://") :]
 
     return bucket
+
+
+def parse_s3_path(s3_path: str) -> Tuple[str, str]:
+    """
+    Parse an S3 URI (s3://, s3a://, s3n://) into (bucket, key).
+
+    :param s3_path: S3 URI like s3://bucket/key
+    :return: Tuple of (bucket, key)
+    """
+    if not s3_path.startswith(("s3://", "s3a://", "s3n://")):
+        raise ValueError(f"Unsupported S3 URI scheme: {s3_path}")
+
+    parsed = urlparse(s3_path)
+    bucket = parsed.netloc
+    key = parsed.path.lstrip("/")
+
+    if not bucket:
+        raise ValueError(f"Missing bucket in S3 URI: {s3_path}")
+
+    return bucket, key
 
 
 def read_to_pandas_df(bucket: str, key: str) -> pd.DataFrame:
@@ -79,18 +100,32 @@ def write_spark_to_s3(data: SparkDataFrame, bucket: str, key: str, file_format: 
         raise
 
 
-def upload_file_to_s3(
-    local_path: str | Path, s3_bucket: str, s3_key: str, extra_args: Optional[dict] = None
-) -> Optional[str]:
+def upload_file_to_s3(local_path: Union[str, Path], s3_bucket: str, s3_key: str) -> Optional[str]:
     """
     Uploads a local file to an S3 bucket.
 
     :param local_path: Path to the local Python file.
     :param s3_bucket: Name of the S3 bucket.
     :param s3_key: S3 object key (e.g., 'scripts/red_violations.py').
-    :param extra_args: Extra arguments to pass to the S3 upload function.
     :return: Full S3 URI of the uploaded script.
     """
+
+    filename = os.path.basename(local_path).lower()
+    content_type_map = {
+        ".csv": "text/csv",
+        ".json": "application/json",
+        ".log": "text/plain",
+        ".txt": "text/plain",
+        ".parquet": "application/x-parquet",
+    }
+    extra_args = {"ContentType": "application/octet-stream"}
+    for ext, content_type in content_type_map.items():
+        if filename.endswith(ext + ".gz"):
+            extra_args = {"ContentType": content_type, "ContentEncoding": "gzip"}
+        if filename.endswith(ext):
+            extra_args = {"ContentType": content_type}
+
+    s3_bucket = parse_bucket_name(s3_bucket)
 
     try:
         s3_client.upload_file(local_path, s3_bucket, s3_key, ExtraArgs=extra_args)
@@ -148,30 +183,31 @@ def list_s3_files(bucket: str, prefix: str, pattern: Optional[str] = None) -> Li
 
 
 def read_files(
-    bucket: str,
     files: List[str],
     local_cache_path: Optional[str] = None,
     max_workers: int = MAX_JOBS,
     parallel_mode: Literal["thread", "process", "none"] = "thread",
+    reload: bool = False,
 ) -> pd.DataFrame:
     """
     Read CSV files from S3 using optional parallelization.
 
-    :param bucket: S3 bucket name.
     :param files: List of S3 paths to CSV files.
     :param local_cache_path: Local cache path.
     :param max_workers: Number of workers to use in parallel execution.
     :param parallel_mode: Parallel execution strategy: 'thread', 'process', or 'none'.
+    :param reload: Whether to reload files from S3 or not.
     :return: Concatenated DataFrame of all read files.
     """
 
-    if local_cache_path is not None and os.path.exists(local_cache_path):
+    if local_cache_path is not None and os.path.exists(local_cache_path) and not reload:
         logger.info(f"Found local cache at {local_cache_path}")
         data = pd.read_csv(local_cache_path)
         return data
 
     def read_file(file: str) -> pd.DataFrame:
         logger.info(f"Reading {file}")
+        bucket, file = parse_s3_path(file)
         return read_to_pandas_df(bucket, file)
 
     if parallel_mode == "none" or max_workers <= 1:

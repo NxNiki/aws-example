@@ -1,7 +1,7 @@
 import json
 import logging
 import warnings
-from typing import Iterator, List, Literal, Optional, Tuple, Union
+from typing import Any, Iterator, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -10,10 +10,8 @@ from scipy.stats import zscore
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-BasicType = Union[str, int, float, bool, None]
 
-
-def save_list(items: List[BasicType], filepath: str, format: Literal["json", "python"] = "json") -> None:
+def save_list(items: List[Any], filepath: str, format: Literal["json", "python"] = "json") -> None:
     """
     Saves a list of strings to a file in either JSON or Python list format.
 
@@ -38,8 +36,8 @@ def save_list(items: List[BasicType], filepath: str, format: Literal["json", "py
 
 
 def remove_outliers(
-    data: np.ndarray | pd.DataFrame, z_thresh: float = 3
-) -> Tuple[np.ndarray | pd.DataFrame, np.ndarray]:
+    data: Union[np.ndarray, pd.DataFrame], z_thresh: float = 3
+) -> Tuple[Union[np.ndarray, pd.DataFrame], np.ndarray]:
     """
     remove samples (rows) of data that has zscore above a certain threshold.
     :param data:
@@ -92,8 +90,37 @@ def keep_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def log_transform(data: pd.DataFrame, col_names: Optional[List[str]] = None, base: int = 10) -> pd.DataFrame:
+    """
+    Apply log transformation to selected numeric columns of a DataFrame.
+    Handles negative values by preserving their sign: log(abs(x)) * sign(x)
+    0 will be preserved.
+
+    :param data: Input DataFrame
+    :param col_names: List of column names to transform
+    :param base: Log base, default is 10
+    :return: Transformed DataFrame
+    """
+    data_transformed = data.copy()
+
+    if col_names is None:
+        col_names = data.columns.tolist()
+
+    for col in col_names:
+        if col in data_transformed.columns and np.issubdtype(data_transformed[col].dtype, np.number):
+            col_data = data_transformed[col].astype(float).copy()
+            mask_nonzero = col_data != 0
+            with np.errstate(divide="ignore", invalid="ignore"):
+                col_data[mask_nonzero] = (
+                    np.sign(col_data[mask_nonzero]) * np.log(np.abs(col_data[mask_nonzero])) / np.log(base)
+                )
+            data_transformed[col] = col_data
+
+    return data_transformed
+
+
 def column_iterator(
-    data: pd.DataFrame, ordered_column_names: List[str], n_columns: Optional[List[int] | int] = None
+    data: pd.DataFrame, ordered_column_names: List[str], n_columns: Optional[Union[List[int], int]] = None
 ) -> Iterator[Tuple[pd.DataFrame, int]]:
     """
     iterator to select first n columns of dataframe with order defined by ordered_column_names.

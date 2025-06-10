@@ -3,9 +3,11 @@ This script use multiple feature selection algorithms and elbow method to help d
 cluster analysis and the optimal number of clusters.
 """
 
+from __future__ import annotations
+
 import logging
 import os
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import boto3
 import matplotlib.pyplot as plt
@@ -21,8 +23,15 @@ from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
 
 from bituslabs_ds.config import S3_BUCKET
-from bituslabs_ds.s3_utils import list_s3_files, read_files, upload_file_to_s3
-from bituslabs_ds.utils import column_iterator, count_missing_columns, keep_numeric_columns, remove_outliers, save_list
+from bituslabs_ds.s3_utils import list_s3_files, parse_s3_path, read_files, upload_file_to_s3
+from bituslabs_ds.utils import (
+    column_iterator,
+    count_missing_columns,
+    keep_numeric_columns,
+    log_transform,
+    remove_outliers,
+    save_list,
+)
 
 OUTPUT_PATH = "wucaishen_analysis_kmeans"
 s3 = boto3.client("s3")
@@ -97,11 +106,11 @@ def feature_selection_by_variance(data: pd.DataFrame, threshold: float = 0.01) -
     return data_filtered, selected_features
 
 
-# DISCUSSION: should we consider features with high contribution to other components?
-def feature_selection_by_pca(data: pd.DataFrame) -> List[str]:
+def feature_selection_by_pca(data: pd.DataFrame, s3_path: Optional[str] = None) -> List[str]:
     """
     remove features with variance < threshold.
     :param data:
+    :param s3_path:
     :return:
     """
 
@@ -118,21 +127,28 @@ def feature_selection_by_pca(data: pd.DataFrame) -> List[str]:
 
     plt.figure(figsize=(18, 10))
     colors = sns.color_palette("viridis", len(feature_importance))
-    sns.barplot(x="Importance", y="Feature", data=feature_importance, palette=colors)
+    sns.barplot(x="Importance", y="Feature", hue="Feature", data=feature_importance, palette=colors, legend=False)
     title = "Feature Importance Rank"
     plt.title(title, fontsize=16)
     plt.xlabel("Importance Score", fontsize=12)
     plt.ylabel("Feature", fontsize=12)
     plt.grid(axis="x", linestyle="--", alpha=0.6)
 
-    os.makedirs("./figures", exist_ok=True)
     plt.savefig(f"./figures/{title}.png")
     plt.show()
     # upload_file_to_s3(f"./figures/{title}.png", S3_BUCKET, f"{OUTPUT_PATH}/{title}.png")
 
     features = [features[i] for i in np.argsort(importance)[::-1]]
-    os.makedirs(f"./result", exist_ok=True)
-    save_list(features, f"./result/important_features.json")
+    save_list(features, f"./features/important_features.json")
+
+    if s3_path:
+        logger.info(f"upload important_features.json to: {s3_path}")
+        bucket, key = parse_s3_path(s3_path)
+        upload_file_to_s3(
+            f"./features/important_features.json",
+            bucket,
+            key,
+        )
 
     return features
 
@@ -144,13 +160,12 @@ def plot_correlation(data: pd.DataFrame):
     sns.heatmap(corr_matrix, annot=False, cmap="coolwarm", fmt=".2f", linewidths=0.5, vmin=-1, vmax=1)
     title = "Feature Correlation Heatmap"
     plt.title(title, fontsize=16)
-    os.makedirs("./figures", exist_ok=True)
     plt.savefig(f"./figures/{title}.png")
     plt.show()
     # upload_file_to_s3(f"./figures/{title}.png", S3_BUCKET, f"{OUTPUT_PATH}/{title}.png")
 
 
-def elbow_method(data: pd.DataFrame, features: List[str], n_features: Optional[List[int] | int] = None):
+def elbow_method(data: pd.DataFrame, features: List[str], n_features: Optional[Union[List[int], int]] = None):
     """
     run elbow method to determine number of clusters
     :param data:
@@ -159,12 +174,11 @@ def elbow_method(data: pd.DataFrame, features: List[str], n_features: Optional[L
     :return:
     """
 
-    os.makedirs("./figures", exist_ok=True)
     k_range = range(2, 10)
     scaler = StandardScaler()
 
     for x, n in column_iterator(data, features, n_features):
-        x = remove_outliers(x)
+        x, _ = remove_outliers(x)
         x = scaler.fit_transform(x)
         inertia = []
         silhouette_scores = []
@@ -200,7 +214,9 @@ def elbow_method(data: pd.DataFrame, features: List[str], n_features: Optional[L
         max_clusters = max(len(sizes) for sizes in cluster_sizes)
         cluster_sizes_str = []
         for sizes in cluster_sizes:
-            row = [str(count) for count in sizes]  # convert counts to strings
+            row = [
+                f"{count} ({count/sum(sizes):.3f})".replace("(0.", "(.") for count in sizes
+            ]  # convert counts to strings
             row += [""] * (max_clusters - len(row))  # pad with empty strings
             cluster_sizes_str.append(row)
 
@@ -227,7 +243,7 @@ def elbow_method(data: pd.DataFrame, features: List[str], n_features: Optional[L
         # upload_file_to_s3(f"./figures/{title}.png", S3_BUCKET, f"{OUTPUT_PATH}/{title}.png")
 
 
-def calculate_silhouette_score(x: np.ndarray | pd.DataFrame, cluster_obj: ClusterMixin) -> float:
+def calculate_silhouette_score(x: Union[np.ndarray, pd.DataFrame], cluster_obj: ClusterMixin) -> float:
 
     if len(np.unique(cluster_obj.labels_)) < 2:
         return float("nan")
@@ -244,6 +260,10 @@ def calculate_silhouette_score(x: np.ndarray | pd.DataFrame, cluster_obj: Cluste
 if __name__ == "__main__":
 
     os.makedirs("./.log", exist_ok=True)
+    os.makedirs(".output", exist_ok=True)
+    os.makedirs("./features", exist_ok=True)
+    os.makedirs("./figures", exist_ok=True)
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(message)s",
@@ -252,7 +272,7 @@ if __name__ == "__main__":
 
     non_feature_col = ["group_id", "loginname", "start_time"]
     feature_col = [
-        "group_num",
+        # "group_num",
         "rtp_mean",
         "bet_min",
         "bet_max",
@@ -341,16 +361,106 @@ if __name__ == "__main__":
         "currency_label",
     ]
 
+    # features to apply log transform, this should be decided with EDA:
+    feature_col_log = [
+        "rtp_mean",
+        "bet_min",
+        "bet_max",
+        "bet_mean",
+        "bet_p25",
+        "bet_median",
+        "bet_p75",
+        "basepoint_min",
+        "basepoint_max",
+        "basepoint_mean",
+        "basepoint_p25",
+        "basepoint_median",
+        "basepoint_p75",
+        "payout_min",
+        "payout_max",
+        "payout_mean",
+        "payout_p25",
+        "payout_median",
+        "payout_p75",
+        "profit_min",
+        "profit_max",
+        "profit_mean",
+        "profit_p25",
+        "profit_median",
+        "profit_p75",
+        "delta_t_min",
+        "delta_t_max",
+        "delta_t_mean",
+        "delta_t_p25",
+        "delta_t_median",
+        "delta_t_p75",
+        "delta_bet_min",
+        "delta_bet_max",
+        "delta_bet_mean",
+        "delta_bet_p25",
+        "delta_bet_median",
+        "delta_bet_p75",
+        "delta_profit_min",
+        "delta_profit_max",
+        "delta_profit_mean",
+        "delta_profit_p25",
+        "delta_profit_median",
+        "delta_profit_p75",
+        "streak_min",
+        "streak_max",
+        "streak_mean",
+        "streak_p25",
+        "streak_median",
+        "streak_p75",
+        "win_streak_min",
+        "win_streak_max",
+        "win_streak_mean",
+        "win_streak_p25",
+        "win_streak_median",
+        "win_streak_p75",
+        "lose_streak_min",
+        "lose_streak_max",
+        "lose_streak_mean",
+        "lose_streak_p25",
+        "lose_streak_median",
+        "lose_streak_p75",
+        "deposit_min",
+        "deposit_max",
+        "deposit_mean",
+        "deposit_p25",
+        "deposit_median",
+        "deposit_p75",
+        "withdrawal_min",
+        "withdrawal_max",
+        "withdrawal_mean",
+        "withdrawal_p25",
+        "withdrawal_median",
+        "withdrawal_p75",
+    ]
+
     wucaishen_files = list_s3_files(S3_BUCKET, "wucaishen_processed_data", r"wucaishen_grouped_stat_output_24.*\.csv$")
-    wucaishen_data = read_files(S3_BUCKET, wucaishen_files)
+    wucaishen_data = read_files(
+        wucaishen_files, local_cache_path="./output/wucaishen_grouped_stat_output_24.csv", reload=False
+    )
+
     count_missing_columns(wucaishen_data)
 
-    plot_correlation(wucaishen_data)
+    wucaishen_data = log_transform(wucaishen_data, feature_col_log)
+    save_list(feature_col_log, "./features/log_transform_features.json")
+    upload_file_to_s3(
+        "./features/log_transform_features.json",
+        S3_BUCKET,
+        f"{OUTPUT_PATH}/features/log_transform_features.json",
+    )
+    plot_correlation(wucaishen_data[feature_col])
 
     # remove highly correlated features:
     _, kept_features = smart_feature_selection(wucaishen_data[feature_col], threshold=0.9)
     _, kept_features = feature_selection_by_variance(wucaishen_data[kept_features], threshold=0.01)
     data_select = wucaishen_data[kept_features + non_feature_col]
 
-    important_features = feature_selection_by_pca(data_select)
+    important_features = feature_selection_by_pca(
+        data_select,
+        f"s3://{S3_BUCKET}/{OUTPUT_PATH}/features/important_features.json",
+    )
     elbow_method(wucaishen_data, important_features, [10, 15, 20, 25])

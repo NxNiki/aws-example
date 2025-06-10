@@ -463,5 +463,4 @@ if __name__ == "__main__":
             compressed_log_path,
             S3_BUCKET,
             f"emr-logs/data_process_wucaishen_{execution_time}.log.gz",
-            extra_args={"ContentType": "text/plain", "ContentEncoding": "gzip"},
         )

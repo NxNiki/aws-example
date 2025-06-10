@@ -16,24 +16,27 @@ from sklearn.preprocessing import StandardScaler
 
 from bituslabs_ds.config import S3_BUCKET
 from bituslabs_ds.s3_utils import list_s3_files, read_files, upload_file_to_s3
-from bituslabs_ds.utils import remove_outliers
+from bituslabs_ds.utils import log_transform, remove_outliers
 from jobs.analysis_cluster_01_elbow_method import OUTPUT_PATH
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())  # Safe for import; silent if no config
 
 
-def scale_features(data: pd.DataFrame, output_dir: str, output_file_name: str) -> pd.DataFrame:
+def scale_features(
+    data: pd.DataFrame, output_dir: str, output_file_name: str, load_cache: bool = False
+) -> pd.DataFrame:
     """
     Normalize the columns of df to have zero mean and unit variance.
     :param data:
     :param output_dir:
     :param output_file_name:
+    :param load_cache:
     :return:
     """
-    os.makedirs(output_dir, exist_ok=True)
+    output_dir = output_dir.lstrip("./")
 
-    if os.path.exists(f"{output_dir}/{output_file_name}.csv"):
+    if os.path.exists(f"{output_dir}/{output_file_name}.csv") and load_cache:
         logger.info(f"read existing output file {output_file_name}...")
         df_scaled = pd.read_csv(f"{output_dir}/{output_file_name}.csv")
     else:
@@ -50,12 +53,16 @@ def scale_features(data: pd.DataFrame, output_dir: str, output_file_name: str) -
         print(mean_std_df)
 
         logger.info(f"update standardized_features.csv to s3: {OUTPUT_PATH}")
-        upload_file_to_s3(f"{output_dir}/{output_file_name}.csv", S3_BUCKET, f"{OUTPUT_PATH}/{output_file_name}.csv")
-        upload_file_to_s3(f"{output_dir}/{output_file_name}.json", S3_BUCKET, f"{OUTPUT_PATH}/{output_file_name}.json")
+        upload_file_to_s3(
+            f"{output_dir}/{output_file_name}.csv", S3_BUCKET, f"{OUTPUT_PATH}/{output_dir}/{output_file_name}.csv"
+        )
+        upload_file_to_s3(
+            f"{output_dir}/{output_file_name}.json", S3_BUCKET, f"{OUTPUT_PATH}/{output_dir}/{output_file_name}.json"
+        )
         upload_file_to_s3(
             f"{output_dir}/{output_file_name}_parameters.csv",
             S3_BUCKET,
-            f"{OUTPUT_PATH}/{output_file_name}_parameters.csv",
+            f"{OUTPUT_PATH}/{output_dir}/{output_file_name}_parameters.csv",
         )
 
     return df_scaled
@@ -69,13 +76,14 @@ def run_cluster_analysis(data: pd.DataFrame, n_clusters: int, output_dir: str = 
     :param output_dir:
     :return:
     """
+    output_dir = output_dir.lstrip("./")
     kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
     data_cluster = kmeans.fit_predict(data)
 
     # ===== 每个聚类中心在标准化空间的特征值 =====
-    centroids_df = pd.DataFrame(kmeans.cluster_centers_, columns=features)
+    centroids_df = pd.DataFrame(kmeans.cluster_centers_, columns=data.columns)
     logger.info(f"\n 各聚类中心的标准化特征值：\n {centroids_df}")
-    centroids_df.to_csv(f"./{output_dir}/cluster_centers_standardized.csv", index=False)
+    centroids_df.to_csv(f"./{output_dir}/cluster_centers_standardized_{len(data.columns)}.csv", index=False)
 
     # ===== 模型保存 =====
     joblib.dump(kmeans, f"./{output_dir}/kmeans_model.pkl")
@@ -87,7 +95,7 @@ def run_cluster_analysis(data: pd.DataFrame, n_clusters: int, output_dir: str = 
 
     upload_file_to_s3(f"./{output_dir}/kmeans_model.pkl", S3_BUCKET, f"{OUTPUT_PATH}/{output_dir}/kmeans_model.pkl")
     upload_file_to_s3(f"./{output_dir}/kmeans_model.onnx", S3_BUCKET, f"{OUTPUT_PATH}/{output_dir}/kmeans_model.onnx")
-    logger.info(f"save cluster model to s3：{OUTPUT_PATH}/models/")
+    logger.info(f"save cluster model to s3：{OUTPUT_PATH}/{output_dir}/")
     return data_cluster
 
 
@@ -155,6 +163,7 @@ def save_cluster_data(
     merge_columns: List[str],
     cluster_column: str = "Cluster",
     feature_columns: Optional[List[str]] = None,
+    output_dir: str = "output",
 ) -> None:
     """
     merge cluster index with original data and save data for each cluster.
@@ -163,14 +172,17 @@ def save_cluster_data(
     :param merge_columns:
     :param cluster_column:
     :param feature_columns: show stats of columns used in cluster analysis.
+    :param output_dir:
     :return:
     """
+
+    output_dir.lstrip("./")
 
     data_merged = data_original.merge(data_cluster, on=merge_columns, how="inner")
     for cluster, group_df in data_merged.groupby(cluster_column):
         file_name = f"original_data_cluster_{cluster}.csv"
-        group_df.drop(columns=[cluster_column]).to_csv(f"./output/{file_name}", index=False)
-        upload_file_to_s3(f"./output/{file_name}", S3_BUCKET, f"{OUTPUT_PATH}/{file_name}")
+        group_df.drop(columns=[cluster_column]).to_csv(f"./{output_dir}/{file_name}", index=False)
+        upload_file_to_s3(f"./{output_dir}/{file_name}", S3_BUCKET, f"{OUTPUT_PATH}/{output_dir}/{file_name}")
 
         if feature_columns is not None:
             stats = group_df[feature_columns].describe().T  # include: count, mean, std, min, 25%, 50%, 75%, max
@@ -181,63 +193,34 @@ def save_cluster_data(
 if __name__ == "__main__":
 
     os.makedirs("./.log", exist_ok=True)
+    os.makedirs("./figures", exist_ok=True)
+    os.makedirs("./models", exist_ok=True)
+    os.makedirs("./features", exist_ok=True)
+    os.makedirs("./output", exist_ok=True)
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(message)s",
         handlers=[logging.FileHandler("./.log/analysis_cluster_02_kmeans.log"), logging.StreamHandler()],
     )
 
-    os.makedirs("./figures", exist_ok=True)
-    os.makedirs("./models", exist_ok=True)
-    os.makedirs("./result", exist_ok=True)
-    os.makedirs("./output", exist_ok=True)
-
     n_clusters = 3
-
+    top_n_features = 25
     non_feature_col = ["group_id", "loginname", "start_time"]
-    features = [
-        "streak_max",
-        "morning_count",
-        "delta_bet_p25",
-        "delta_bet_mean",
-        "lose_streak_mean",
-        "delta_bet_p75",
-        "basepoint_min",
-        "lose_streak_p25",
-        "delta_profit_min",
-        "midnight_count",
-        "delta_profit_mean",
-        "basepoint_median",
-        "lose_streak_max",
-        "delta_profit_max",
-        "delta_bet_max",
-        "lose_streak_median",
-        "delta_profit_median",
-        "delta_profit_p25",
-        "payout_min",
-        "payout_p25",
-        "delta_bet_min",
-        "bet_median",
-        "account_stddev",
-        "delta_profit_p75",
-        "payout_median",
-        "payout_p75",
-        "profit_p75",
-        "payout_max",
-        "bet_mean",
-        "profit_max",
-        "profit_min",
-        "payout_mean",
-        "profit_median",
-        "profit_mean",
-        "bet_max",
-        "bet_min",
-    ]
+
+    with open("./features/important_features.json", "r") as f:
+        features = json.load(f)
+    with open("./features/log_transform_features.json", "r") as f:
+        features_log = json.load(f)
 
     wucaishen_files = list_s3_files(S3_BUCKET, "wucaishen_processed_data", r"wucaishen_grouped_stat_output_24.*\.csv$")
-    wucaishen_data = read_files(S3_BUCKET, wucaishen_files, "./output/wucaishen_grouped_stat_output_24.csv")
+    wucaishen_data = read_files(wucaishen_files, "./output/wucaishen_grouped_stat_output_24.csv")
 
-    data = scale_features(wucaishen_data[features], "./result", "standardized_features")
+    wucaishen_data = log_transform(wucaishen_data, features_log)
+
+    data = scale_features(
+        wucaishen_data[features[:top_n_features]], "./features", f"standardized_features_top_{top_n_features}"
+    )
     data, row_index = remove_outliers(data)
     data_reference = wucaishen_data.loc[row_index, non_feature_col]
 
