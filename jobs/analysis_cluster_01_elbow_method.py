@@ -184,7 +184,8 @@ def elbow_method(data: pd.DataFrame, features: List[str], n_features: Optional[U
         silhouette_scores = []
         cluster_sizes = []
         for k in k_range:
-            kmeans = KMeans(n_clusters=k, random_state=42, n_init="auto", max_iter=100)
+            # kmeans = KMeans(n_clusters=k, random_state=42, n_init="auto", max_iter=100)
+            kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
             kmeans.fit(x)
             inertia.append(kmeans.inertia_)
 
@@ -359,10 +360,10 @@ if __name__ == "__main__":
         "duration_seconds",
         "avg_time_per_bet",
         # currently we combine all currencies as different currency users may have different purchase power.
-        # "currency_label",
+        "currency_label",
     ]
 
-    # features to apply log transform, this should be decided with EDA:
+    # features to apply log transform; this should be decided with EDA:
     feature_col_log = [
         "rtp_mean",
         "bet_min",
@@ -464,4 +465,4 @@ if __name__ == "__main__":
         data_select,
         f"s3://{S3_BUCKET}/{OUTPUT_PATH}/features/important_features.json",
     )
-    elbow_method(wucaishen_data, important_features, [10, 15, 20, 25])
+    elbow_method(wucaishen_data, important_features, [15, 20, 25, 30, 35, 40])
