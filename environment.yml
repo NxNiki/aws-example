@@ -4,18 +4,21 @@ channels:
   - defaults
 dependencies:
   - python=3.9
-  - openjdk=11
-  - numpy=1.26.0
-  - pandas=2.1.0
-  - scikit-learn=1.5.0
-  - skl2onnx == 1.16.0
-  - onnx == 1.14.1
-  - pre-commit == 4.2.0
+  - onnx=1.14.1
+  - ninja
+  - pkg-config
+#  - gcc              # on macOS this will be clang wrappers, helps compile C/C++ extensions
+  - clang
+  - cython
   - pip
-  - pip:
-      - sagemaker==2.244.2
-      - boto3==1.38.22
-      - pyspark==3.5.5
-      - matplotlib==3.9.0
-      - seaborn == 0.13.2
-      - pyarrow == 12.0.0
+  - poetry
+  # Optional system-level dependencies; add what you need:
+  # - libpython        # ensure Python dev headers
+  # - openssl
+  # - libffi
+  # - zlib
+  # - cmake
+  # - sqlite
+  # - rust (if using cryptography/maturin/etc.)
+
+  # Optional: install Poetry within the Conda env (you can skip this if Poetry is installed globally)
