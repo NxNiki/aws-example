@@ -83,10 +83,15 @@ def read_files_to_spark(
             df = df.withColumnRenamed(f"_c{i}", col_name)
 
     df = df.select(*keep_columns)
-    print("显示前 5 行数据预览：")
-    df.show(5)
-
+    display_df_rows(df, "data loaded:")
     return df
+
+
+def display_df_rows(df: DataFrame, msg: str = "dataframe rows:", n_rows: int = 5) -> None:
+    logger.info(msg)
+    rows = df.take(n_rows)
+    for row in rows:
+        logger.info(row)
 
 
 def encode_label(df: DataFrame, label: str, index_label: str) -> DataFrame:

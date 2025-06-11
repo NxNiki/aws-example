@@ -47,7 +47,7 @@ from pyspark.sql.types import IntegerType
 from pyspark.sql.window import Window, WindowSpec
 
 from bituslabs_ds.config import S3_BUCKET
-from bituslabs_ds.pyspark_utils import create_stat_aggregations, encode_label, read_data_with_partition
+from bituslabs_ds.pyspark_utils import create_stat_aggregations, display_df_rows, encode_label, read_data_with_partition
 from bituslabs_ds.s3_utils import upload_file_to_s3
 
 logger = logging.getLogger(__name__)
@@ -417,6 +417,9 @@ def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
 
     end_time = time.time()
     logger.info("Total execution time: {:.2f} seconds".format(end_time - start_time))
+
+    display_df_rows(df, "Enriched data:")
+    display_df_rows(df_grouped, "Grouped data:")
 
     return df, df_grouped
 
