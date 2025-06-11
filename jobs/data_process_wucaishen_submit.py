@@ -18,7 +18,7 @@ def submit_spark_step(cluster_id: str, script_s3_path: str, region: str = "us-we
     emr_client = boto3.client("emr", region_name=region)
 
     step = {
-        "Name": "RedViolationJob",
+        "Name": "wucaishenJob",
         "ActionOnFailure": "CONTINUE",  # "CONTINUE", "CANCEL_AND_WAIT", "TERMINATE_CLUSTER"
         "HadoopJarStep": {
             "Jar": "command-runner.jar",
