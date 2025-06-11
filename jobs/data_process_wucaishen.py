@@ -447,8 +447,12 @@ if __name__ == "__main__":
         )
         spark_df = spark_df.drop("flag")
         sdf_enriched, sdf_grouped = process_wucaishen_data(spark_df)
-        sdf_enriched.write.mode("overwrite").partitionBy("year", "month").parquet("s3://your-bucket/path/output/")
-        sdf_grouped.write.mode("overwrite").partitionBy("year", "month").parquet("s3://your-bucket/path/output/")
+        sdf_enriched.write.mode("overwrite").partitionBy("year", "month").parquet(
+            f"s3://{S3_BUCKET}/wucaishen_process_enriched/"
+        )
+        sdf_grouped.write.mode("overwrite").partitionBy("year", "month").parquet(
+            f"s3://{S3_BUCKET}/wucaishen_process_grouped/"
+        )
 
     except Exception as e:
         logger.error(e)
