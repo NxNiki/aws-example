@@ -5,12 +5,20 @@ from typing import List, Optional
 from pyspark.ml.feature import StringIndexer
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.column import Column
-from pyspark.sql.functions import avg as Favg, col, max as Fmax, min as Fmin, percentile_approx, sum as Fsum, when
+from pyspark.sql.functions import (
+    avg as Favg,
+    col,
+    input_file_name,
+    max as Fmax,
+    min as Fmin,
+    percentile_approx,
+    regexp_extract,
+    sum as Fsum,
+    when,
+)
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
-
-from pyspark.sql.functions import col, input_file_name, regexp_extract
 
 
 def read_data_with_partition(
