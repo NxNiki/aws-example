@@ -37,8 +37,17 @@ def read_data_with_partition(
     read_opts = read_opts or {}
     df = spark.read.format(format).options(**read_opts).load(path_pattern)
     df = df.withColumn("_filepath", input_file_name())
-    for group in re.findall(r"\?P<(\w+)>", regex_pattern):
-        df = df.withColumn(group, regexp_extract(col("_filepath"), regex_pattern, group).cast("int"))
+
+    compiled = re.compile(regex_pattern)
+    group_index_map = {name: idx for idx, name in enumerate(compiled.groupindex, start=1)}
+
+    # Convert named groups to unnamed groups for Spark regex engine
+    # remove all occurrences of ?P<name>
+    spark_compatible_pattern = re.sub(r"\?P<\w+>", "", regex_pattern)
+
+    # Extract each group by its index, assign column name as original group name
+    for group_name, group_idx in group_index_map.items():
+        df = df.withColumn(group_name, regexp_extract(col("_filepath"), spark_compatible_pattern, group_idx))
 
     return df.drop("_filepath")
 
