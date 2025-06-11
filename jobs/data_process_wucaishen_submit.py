@@ -19,7 +19,7 @@ def submit_spark_step(cluster_id: str, script_s3_path: str, region: str = "us-we
 
     step = {
         "Name": "RedViolationJob",
-        "ActionOnFailure": "TERMINATE_CLUSTER",  # "CONTINUE", "CANCEL_AND_WAIT"
+        "ActionOnFailure": "CONTINUE",  # "CONTINUE", "CANCEL_AND_WAIT", "TERMINATE_CLUSTER"
         "HadoopJarStep": {
             "Jar": "command-runner.jar",
             "Args": [
