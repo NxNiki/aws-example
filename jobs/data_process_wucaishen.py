@@ -179,7 +179,6 @@ def create_aggregations() -> List[Column]:
     agg_expressions.extend(create_stat_aggregations("win_streak"))
     agg_expressions.extend(create_stat_aggregations("lose_streak"))
     agg_expressions.extend(create_stat_aggregations("deposit"))
-    agg_expressions.extend(create_stat_aggregations("withdrawal"))
 
     agg_expressions.extend(
         [
