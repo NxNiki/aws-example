@@ -84,7 +84,6 @@ def start_emr_cluster(
         "Ec2SubnetId": "subnet-02571e70cb058d27a",  # your public subnet here
         "EmrManagedMasterSecurityGroup": "sg-069ce0aa8db40f042",
         "EmrManagedSlaveSecurityGroup": "sg-0df70a2677f24ff31",
-        "AutoTerminationPolicy": {"IdleTimeout": 600},  # terminate clusters after it being idle for 600 seconds
     }
 
     job_flow_args = {
@@ -96,6 +95,7 @@ def start_emr_cluster(
         "JobFlowRole": "EMR_EC2_DefaultRole",
         "ServiceRole": "EMR_DefaultRole",
         "VisibleToAllUsers": True,
+        "AutoTerminationPolicy": {"IdleTimeout": 600},  # terminate clusters after it being idle for 600 seconds
     }
 
     if bootstrap_script_uri and package_uri:
