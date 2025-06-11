@@ -1,5 +1,5 @@
 """
-This script use multiple feature selection algorithms and elbow method to help determine the features to feed into
+This script uses multiple feature selection algorithms and elbow method to help determine the features to feed into
 cluster analysis and the optimal number of clusters.
 """
 
