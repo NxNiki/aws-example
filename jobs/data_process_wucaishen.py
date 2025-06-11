@@ -245,7 +245,7 @@ def get_previous_value(
     :param col_name:
     :param prev_name:
     :param window:
-    :param check_null:
+    :param check_null: if true, replace null value with 0.
     :return:
     """
 
@@ -257,6 +257,25 @@ def get_previous_value(
     else:
         df = df.withColumn(prev_name, lag(col_name).over(window))
 
+    return df
+
+
+def get_delta_value(
+    df: DataFrame, col_name: str, delta_col_name: str, window: WindowSpec, check_null: bool = True
+) -> DataFrame:
+    """
+    get the difference between the value of the current and previous row on specified column
+    :param df:
+    :param col_name:
+    :param delta_col_name:
+    :param window:
+    :param check_null:
+    :return:
+    """
+
+    df = get_previous_value(df, col_name, "prev_val", window, check_null)
+    df = df.withColumn(delta_col_name, col(col_name) - col("prev_val"))
+    df = df.drop("prev_val")
     return df
 
 
