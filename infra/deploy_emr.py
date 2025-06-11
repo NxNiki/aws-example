@@ -79,7 +79,7 @@ def start_emr_cluster(
             },
         ],
         "Ec2KeyName": "xin-key-us-west2",  # Optional, if you want SSH access
-        "KeepJobFlowAliveWhenNoSteps": False,
+        "KeepJobFlowAliveWhenNoSteps": True,  # Set to True to make sure log files are uploaded to s3.
         "TerminationProtected": False,
         "Ec2SubnetId": "subnet-02571e70cb058d27a",  # your public subnet here
         "EmrManagedMasterSecurityGroup": "sg-069ce0aa8db40f042",

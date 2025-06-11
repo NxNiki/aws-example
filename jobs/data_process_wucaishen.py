@@ -16,9 +16,7 @@ from typing import Callable, List, Optional, Tuple, Union
 
 import pandas as pd
 from pyspark.sql import DataFrame, SparkSession
-from pyspark.sql._typing import UserDefinedFunctionLike
 from pyspark.sql.column import Column
-from pyspark.sql.connect._typing import GroupedMapPandasUserDefinedFunction
 from pyspark.sql.functions import (
     PandasUDFType,
     avg as Favg,
@@ -71,14 +69,14 @@ def create_spark_session() -> SparkSession:
     return spark
 
 
-def create_compute_streak_udf() -> Union[UserDefinedFunctionLike, GroupedMapPandasUserDefinedFunction]:
+def create_compute_streak_udf() -> Callable:
     """
     warp udf to avoid starting spark session in the module.
     :return:
     """
 
     @pandas_udf("row_id long, streak int", PandasUDFType.GROUPED_MAP)
-    def compute_streak_udf(data: pd.DataFrame) -> pd.DataFrame:
+    def udf(data: pd.DataFrame) -> pd.DataFrame:
         """
         ========= 连续投注（streak） =========
         :param data:
@@ -96,13 +94,13 @@ def create_compute_streak_udf() -> Union[UserDefinedFunctionLike, GroupedMapPand
         data["streak"] = streaks
         return data[["row_id", "streak"]]
 
-    return compute_streak_udf
+    return udf
 
 
-def create_compute_win_lose_streak() -> Union[UserDefinedFunctionLike, GroupedMapPandasUserDefinedFunction]:
+def create_compute_win_lose_streak_udf() -> Callable:
 
     @pandas_udf("row_id long, win_streak int, lose_streak int", PandasUDFType.GROUPED_MAP)
-    def compute_win_lose_streak(data: pd.DataFrame) -> pd.DataFrame:
+    def udf(data: pd.DataFrame) -> pd.DataFrame:
         """
         ========= 连续赢钱/输钱 streak =========
         :param data:
@@ -129,7 +127,7 @@ def create_compute_win_lose_streak() -> Union[UserDefinedFunctionLike, GroupedMa
         data["lose_streak"] = lose_streaks
         return data[["row_id", "win_streak", "lose_streak"]]
 
-    return compute_win_lose_streak
+    return udf
 
 
 def get_column_delta(
@@ -383,11 +381,11 @@ def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
     for i in range(15):
         df = df.withColumn(f"result_pos{i + 1}", split_cols.getItem(i).cast(IntegerType()))
 
-    compute_streak_udf = create_compute_streak_udf()
-    streak_df = df.select("row_id", "loginname", "billtime", "delta_t").groupby("loginname").apply(compute_streak_udf)
+    compute_streak = create_compute_streak_udf()
+    streak_df = df.select("row_id", "loginname", "billtime", "delta_t").groupby("loginname").apply(compute_streak)
     df = df.join(streak_df, on=["row_id"], how="left")
 
-    compute_win_lose_streak = create_compute_win_lose_streak()
+    compute_win_lose_streak = create_compute_win_lose_streak_udf()
     streak_df = (
         df.select("row_id", "loginname", "billtime", "cus_account").groupby("loginname").apply(compute_win_lose_streak)
     )
@@ -442,17 +440,14 @@ if __name__ == "__main__":
         spark = create_spark_session()
         spark_df = read_data_with_partition(
             spark,
-            path_pattern="hyber-slot/wucaishen_oringaldata/24*/*.csv.gz",
+            path_pattern="s3://hyber-slot/wucaishen_oringaldata/24*/*.csv.gz",
             regex_pattern=r"wucaishen_oringaldata/(?P<year>\d{2})(?P<month>\d{2})/",
             format="csv",
             read_opts={"header": "true"},  # or "false" if there's no header
         )
         spark_df = spark_df.drop("flag")
-
         sdf_enriched, sdf_grouped = process_wucaishen_data(spark_df)
-
         sdf_enriched.write.mode("overwrite").partitionBy("year", "month").parquet("s3://your-bucket/path/output/")
-
         sdf_grouped.write.mode("overwrite").partitionBy("year", "month").parquet("s3://your-bucket/path/output/")
 
     except Exception as e:
