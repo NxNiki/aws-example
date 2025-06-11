@@ -144,7 +144,7 @@ def upload_file_to_s3(local_path: Union[str, Path], s3_bucket: str, s3_key: str)
 
 def list_s3_files(bucket: str, prefix: str, pattern: Optional[str] = None) -> List[str]:
     """
-    List all S3 files in bucket starting from the prefix, filtering with optional regex pattern.
+    List all S3 files in bucket starting from the prefix, filtering with an optional regex pattern.
 
     :param bucket: S3 bucket name
     :param prefix: S3 key prefix (acts like a root folder)

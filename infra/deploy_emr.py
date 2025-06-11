@@ -79,7 +79,7 @@ def start_emr_cluster(
             },
         ],
         "Ec2KeyName": "xin-key-us-west2",  # Optional, if you want SSH access
-        "KeepJobFlowAliveWhenNoSteps": True,
+        "KeepJobFlowAliveWhenNoSteps": False,
         "TerminationProtected": False,
         "Ec2SubnetId": "subnet-02571e70cb058d27a",  # your public subnet here
         "EmrManagedMasterSecurityGroup": "sg-069ce0aa8db40f042",
@@ -119,10 +119,13 @@ def wait_for_cluster_ready(cluster_id: str, region: str = "us-west-2"):
     emr = boto3.client("emr", region_name=region)
     logger.info(f"Waiting for EMR cluster {cluster_id} to be ready...")
 
+    last_state = ""
     while True:
         response = emr.describe_cluster(ClusterId=cluster_id)
         state = response["Cluster"]["Status"]["State"]
-        logger.info(f"Cluster state: {state}")
+        if state != last_state:
+            logger.info(f"Cluster state: {state}")
+            last_state = state
         if state in ["WAITING", "RUNNING"]:
             logger.info("Cluster is ready!")
             return

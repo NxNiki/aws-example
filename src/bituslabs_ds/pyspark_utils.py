@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import List, Optional
 
 from pyspark.ml.feature import StringIndexer
@@ -8,6 +9,38 @@ from pyspark.sql.functions import avg as Favg, col, max as Fmax, min as Fmin, pe
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
+
+from pyspark.sql.functions import col, input_file_name, regexp_extract
+
+
+def read_data_with_partition(
+    spark: SparkSession,
+    path_pattern: str,
+    regex_pattern: str,
+    format: str = "csv",  # or "parquet"
+    read_opts: Optional[dict] = None,
+) -> DataFrame:
+    """
+    Load CSV or Parquet files and extract partition info (e.g., year/month) from the file path using regex.
+
+    Args:
+        spark: SparkSession
+        path_pattern: File path pattern (e.g., "s3://bucket/data/*/*.csv")
+        regex_pattern: Regex with named capture groups (?P<year>...), (?P<month>...), etc.
+        format: "csv" or "parquet"
+        read_opts: Dictionary of read options for Spark (e.g., {"header": "true"})
+
+    Returns:
+        DataFrame with extracted partition columns added.
+    """
+
+    read_opts = read_opts or {}
+    df = spark.read.format(format).options(**read_opts).load(path_pattern)
+    df = df.withColumn("_filepath", input_file_name())
+    for group in re.findall(r"\?P<(\w+)>", regex_pattern):
+        df = df.withColumn(group, regexp_extract(col("_filepath"), regex_pattern, group).cast("int"))
+
+    return df.drop("_filepath")
 
 
 def read_files_to_spark(

@@ -12,11 +12,13 @@ import shutil
 import sys
 import time
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple, Union
 
 import pandas as pd
 from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql._typing import UserDefinedFunctionLike
 from pyspark.sql.column import Column
+from pyspark.sql.connect._typing import GroupedMapPandasUserDefinedFunction
 from pyspark.sql.functions import (
     PandasUDFType,
     avg as Favg,
@@ -47,72 +49,87 @@ from pyspark.sql.types import IntegerType
 from pyspark.sql.window import Window, WindowSpec
 
 from bituslabs_ds.config import S3_BUCKET
-from bituslabs_ds.pyspark_utils import create_stat_aggregations, encode_label, read_files_to_spark
-from bituslabs_ds.s3_utils import list_s3_files, upload_file_to_s3, write_spark_to_s3
+from bituslabs_ds.pyspark_utils import create_stat_aggregations, encode_label, read_data_with_partition
+from bituslabs_ds.s3_utils import upload_file_to_s3
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-logger.info("start SparkSession ...")
-spark = (
-    SparkSession.builder.appName("Aggregateddata")
-    .config("spark.driver.memory", "32g")  # choose instance >=m5.4xlarge to meet memory demand
-    .config("spark.executor.memory", "28g")
-    .config("spark.executor.memoryOverhead", "4g")
-    .config("spark.sql.shuffle.partitions", "200")
-    .config("spark.sql.execution.arrow.pyspark.enabled", "true")  # for better performance with Pandas UDFs
-    .getOrCreate()
-)
-logger.info("SparkSession started！")
+
+def create_spark_session() -> SparkSession:
+    logger.info("start SparkSession ...")
+    spark = (
+        SparkSession.builder.appName("Aggregateddata")
+        .config("spark.driver.memory", "32g")  # choose instance >=m5.4xlarge to meet memory demand
+        .config("spark.executor.memory", "28g")
+        .config("spark.executor.memoryOverhead", "4g")
+        .config("spark.sql.shuffle.partitions", "200")
+        .config("spark.sql.execution.arrow.pyspark.enabled", "true")  # for better performance with Pandas UDFs
+        .getOrCreate()
+    )
+    logger.info("SparkSession started！")
+    return spark
 
 
-@pandas_udf("row_id long, streak int", PandasUDFType.GROUPED_MAP)
-def compute_streak_udf(data: pd.DataFrame) -> pd.DataFrame:
+def create_compute_streak_udf() -> Union[UserDefinedFunctionLike, GroupedMapPandasUserDefinedFunction]:
     """
-    ========= 连续投注（streak） =========
-    :param data:
+    warp udf to avoid starting spark session in the module.
     :return:
     """
-    data = data.sort_values("billtime")
-    streaks = []
-    streak = 0
-    for dt in data["delta_t"]:
-        if pd.isna(dt) or dt > 200:
-            streak = 0
-        else:
-            streak += 1
-        streaks.append(streak)
-    data["streak"] = streaks
-    return data[["row_id", "streak"]]
+
+    @pandas_udf("row_id long, streak int", PandasUDFType.GROUPED_MAP)
+    def compute_streak_udf(data: pd.DataFrame) -> pd.DataFrame:
+        """
+        ========= 连续投注（streak） =========
+        :param data:
+        :return:
+        """
+        data = data.sort_values("billtime")
+        streaks = []
+        streak = 0
+        for dt in data["delta_t"]:
+            if pd.isna(dt) or dt > 200:
+                streak = 0
+            else:
+                streak += 1
+            streaks.append(streak)
+        data["streak"] = streaks
+        return data[["row_id", "streak"]]
+
+    return compute_streak_udf
 
 
-@pandas_udf("row_id long, win_streak int, lose_streak int", PandasUDFType.GROUPED_MAP)
-def compute_win_lose_streak(data: pd.DataFrame) -> pd.DataFrame:
-    """
-    ========= 连续赢钱/输钱 streak =========
-    :param data:
-    :return:
-    """
-    data = data.sort_values("billtime")
-    win_streaks = []
-    lose_streaks = []
-    win_streak = 0
-    lose_streak = 0
-    for profit in data["cus_account"]:
-        if profit > 0:
-            win_streak += 1
-            lose_streak = 0
-        elif profit < 0:
-            lose_streak += 1
-            win_streak = 0
-        else:
-            win_streak = 0
-            lose_streak = 0
-        win_streaks.append(win_streak)
-        lose_streaks.append(lose_streak)
-    data["win_streak"] = win_streaks
-    data["lose_streak"] = lose_streaks
-    return data[["row_id", "win_streak", "lose_streak"]]
+def create_compute_win_lose_streak() -> Union[UserDefinedFunctionLike, GroupedMapPandasUserDefinedFunction]:
+
+    @pandas_udf("row_id long, win_streak int, lose_streak int", PandasUDFType.GROUPED_MAP)
+    def compute_win_lose_streak(data: pd.DataFrame) -> pd.DataFrame:
+        """
+        ========= 连续赢钱/输钱 streak =========
+        :param data:
+        :return:
+        """
+        data = data.sort_values("billtime")
+        win_streaks = []
+        lose_streaks = []
+        win_streak = 0
+        lose_streak = 0
+        for profit in data["cus_account"]:
+            if profit > 0:
+                win_streak += 1
+                lose_streak = 0
+            elif profit < 0:
+                lose_streak += 1
+                win_streak = 0
+            else:
+                win_streak = 0
+                lose_streak = 0
+            win_streaks.append(win_streak)
+            lose_streaks.append(lose_streak)
+        data["win_streak"] = win_streaks
+        data["lose_streak"] = lose_streaks
+        return data[["row_id", "win_streak", "lose_streak"]]
+
+    return compute_win_lose_streak
 
 
 def get_column_delta(
@@ -147,6 +164,8 @@ def get_column_delta(
 def create_aggregations() -> List[Column]:
 
     agg_expressions = [
+        Favg("year").alias("year"),
+        Fmax("month").alias("month"),
         Fcount("*").alias("group_num"),
         Favg("rtp").alias("rtp_mean"),
     ]
@@ -270,6 +289,7 @@ def add_date_columns(df: DataFrame, time_column: str) -> DataFrame:
 
 
 def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
+
     logger.info("process_wucaishen_data start...")
     start_time = time.time()
 
@@ -363,9 +383,11 @@ def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
     for i in range(15):
         df = df.withColumn(f"result_pos{i + 1}", split_cols.getItem(i).cast(IntegerType()))
 
+    compute_streak_udf = create_compute_streak_udf()
     streak_df = df.select("row_id", "loginname", "billtime", "delta_t").groupby("loginname").apply(compute_streak_udf)
     df = df.join(streak_df, on=["row_id"], how="left")
 
+    compute_win_lose_streak = create_compute_win_lose_streak()
     streak_df = (
         df.select("row_id", "loginname", "billtime", "cus_account").groupby("loginname").apply(compute_win_lose_streak)
     )
@@ -417,41 +439,21 @@ if __name__ == "__main__":
     )
 
     try:
-        s3_files = list_s3_files("hyber-slot", "wucaishen_oringaldata/2401", ".csv.gz")
+        spark = create_spark_session()
+        spark_df = read_data_with_partition(
+            spark,
+            path_pattern="hyber-slot/wucaishen_oringaldata/24*/*.csv.gz",
+            regex_pattern=r"wucaishen_oringaldata/(?P<year>\d{2})(?P<month>\d{2})/",
+            format="csv",
+            read_opts={"header": "true"},  # or "false" if there's no header
+        )
+        spark_df = spark_df.drop("flag")
 
-        column_names = [
-            "productid",
-            "loginname",
-            "billno",
-            "billtime",
-            "account",
-            "cus_account",
-            "currency",
-            "slottype",
-            "basepoint",
-            "result",
-            "cur_ip",
-            "flag",
-        ]
-
-        columns_to_keep = [
-            "productid",
-            "loginname",
-            "billno",
-            "billtime",
-            "account",
-            "cus_account",
-            "currency",
-            "slottype",
-            "basepoint",
-            "result",
-            "cur_ip",
-        ]
-
-        spark_df = read_files_to_spark(spark, s3_files, column_names, columns_to_keep)
         sdf_enriched, sdf_grouped = process_wucaishen_data(spark_df)
-        write_spark_to_s3(sdf_enriched, S3_BUCKET, "wucaishen_processed_enriched")
-        write_spark_to_s3(sdf_grouped, S3_BUCKET, "wucaishen_processed_grouped")
+
+        sdf_enriched.write.mode("overwrite").partitionBy("year", "month").parquet("s3://your-bucket/path/output/")
+
+        sdf_grouped.write.mode("overwrite").partitionBy("year", "month").parquet("s3://your-bucket/path/output/")
 
     except Exception as e:
         logger.error(e)
