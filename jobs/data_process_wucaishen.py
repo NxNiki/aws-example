@@ -305,100 +305,40 @@ def add_date_columns(df: DataFrame, time_column: str) -> DataFrame:
     return df
 
 
-def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
+def get_deposit(df: DataFrame, window: WindowSpec, col_name: str) -> DataFrame:
+    """
+    calculate deposit amount before the current bet, a negative value means withdrawal from balance.
+    :param df:
+    :param window:
+    :param col_name:
+    :return:
+    """
 
-    logger.info("process_wucaishen_data start...")
-    start_time = time.time()
-
-    df = df.filter((col("flag") != -8.0) & (col("productid") != "B26"))
-    df = df.orderBy(col("loginname"), col("billtime"))
-
-    # 时间转换
-    df = df.withColumn("billtime_utc", to_timestamp((col("billtime") / 1e9).cast("long")))
-    df = df.withColumn("billtime", expr("from_utc_timestamp(billtime_utc, 'America/New_York')"))
-
-    # 排序窗口
-    df = df.withColumn("row_id", monotonically_increasing_id())
-
-    df = df.withColumn("cus_account", col("cus_account").cast("float"))
-
-    # payout + current_point
-    df = df.withColumn("payout", col("cus_account") + col("account"))
-    df = df.withColumn("current_point", col("basepoint") + col("cus_account"))
-
-    df = encode_label(df, "currency", "currency_label")
-
-    # 上一笔记录
-    w = Window.partitionBy("loginname").orderBy("billtime")
-    df = get_previous_value(df, "billtime", "prev_time", w, check_null=False)
-    df = get_previous_value(df, "account", "prev_account", w)
-    df = get_previous_value(df, "cus_account", "prev_profit", w)
-
-    df = df.withColumn(
-        "prev_payout",
-        when(
-            (col("prev_account") + col("prev_profit")).isNotNull(),
-            col("prev_account") + col("prev_profit"),
-        ).otherwise(0),
-    )
+    # balance_change = 当前 basepoint - 上一笔 current_point
     df = df.withColumn(
         "last_current_point",
         when(
-            lag("basepoint").over(w).isNotNull(),
-            lag("basepoint").over(w) + lag("cus_account").over(w),
+            lag("basepoint").over(window).isNotNull(),
+            lag("basepoint").over(window) + lag("cus_account").over(window),
         ).otherwise(0),
     )
-
-    df = df.withColumn("is_payout_gt0", when(col("payout") > 0, 1).otherwise(0))
-    df = df.withColumn("is_profit_gt0", when(col("cus_account") > 0, 1).otherwise(0))
-
-    # 衍生字段：delta_t
     df = df.withColumn(
-        "delta_t",
-        when(col("prev_time").isNull(), 0.0).otherwise(
-            (unix_timestamp("billtime") - unix_timestamp("prev_time")).cast("double")
-        ),
-    )
-
-    # delta_bet
-    df = df.withColumn(
-        "delta_bet",
-        when(col("prev_account").isNotNull(), col("account") - col("prev_account")).otherwise(0),
-    )
-
-    # delta_profit
-    df = df.withColumn(
-        "delta_profit",
-        when(col("prev_profit").isNotNull(), col("cus_account") - col("prev_profit")).otherwise(0),
-    )
-    # delta_payout
-    df = df.withColumn(
-        "delta_payout",
-        when(col("prev_payout").isNotNull(), col("payout") - col("prev_payout")).otherwise(0),
-    )
-    # balance_change = 当前 basepoint - 上一笔 current_point
-    df = df.withColumn(
-        "balance_change",
+        col_name,
         when(
             col("last_current_point").isNotNull(),
             col("basepoint") - col("last_current_point"),
         ).otherwise(0),
     )
 
-    # 识别充值与提现
-    df = df.withColumn("deposit", when(col("balance_change") > 0, col("balance_change")).otherwise(0))
-    df = df.withColumn(
-        "withdrawal",
-        when(col("balance_change") < 0, -col("balance_change")).otherwise(0),
-    )
+    df = df.drop("last_current_point")
 
-    df = df.withColumn("rtp", when(col("account") != 0, col("payout") / col("account")).otherwise(0))
+    return df
 
-    # 拆分 result 字段为 result_pos1 ~ result_pos15
-    df = df.withColumn("result_clean", expr("trim(BOTH ';' FROM result)"))
-    split_cols = split(col("result_clean"), ",")
-    for i in range(15):
-        df = df.withColumn(f"result_pos{i + 1}", split_cols.getItem(i).cast(IntegerType()))
+
+def get_grouped_data(df: DataFrame) -> DataFrame:
+
+    df = df.withColumn("is_payout_gt0", when(col("payout") > 0, 1).otherwise(0))
+    df = df.withColumn("is_profit_gt0", when(col("cus_account") > 0, 1).otherwise(0))
 
     compute_streak = create_compute_streak_udf()
     streak_df = df.select("row_id", "loginname", "billtime", "delta_t").groupby("loginname").apply(compute_streak)
@@ -432,7 +372,44 @@ def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
         currency_count.select("group_id", "currency_label", "currency"), on="group_id", how="left"
     )
 
-    df = df.orderBy("loginname", "billtime")
+    return df_grouped
+
+
+def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
+
+    logger.info("process_wucaishen_data start...")
+    start_time = time.time()
+
+    df = df.filter((col("flag") != -8.0) & (col("productid") != "B26"))
+    df = df.orderBy(col("loginname"), col("billtime"))
+
+    df = df.withColumn("billtime_utc", to_timestamp((col("billtime") / 1e9).cast("long")))
+    df = df.withColumn("billtime", expr("from_utc_timestamp(billtime_utc, 'America/New_York')"))
+    df = encode_label(df, "currency", "currency_label")
+    df = df.withColumn("row_id", monotonically_increasing_id())
+
+    df = df.withColumn("cus_account", col("cus_account").cast("float"))
+    df = df.withColumn("payout", col("cus_account") + col("account"))
+    df = df.withColumn("current_point", col("basepoint") + col("cus_account"))
+
+    w = Window.partitionBy("loginname").orderBy("billtime")
+    df = get_delta_value(df, "billtime", "delta_t", w, check_null=False)
+    df = df.withColumn("delta_t", col("delta_t").cast("long"))
+
+    df = get_delta_value(df, "account", "delta_bet", w)
+    df = get_delta_value(df, "cus_account", "delta_profit", w)
+    df = get_delta_value(df, "payout", "delta_payout", w)
+
+    df = get_deposit(df, w, "deposit")
+
+    df = df.withColumn("rtp", when(col("account") != 0, col("payout") / col("account")).otherwise(0))
+    # 拆分 result 字段为 result_pos1 ~ result_pos15
+    df = df.withColumn("result_clean", expr("trim(BOTH ';' FROM result)"))
+    split_cols = split(col("result_clean"), ",")
+    for i in range(15):
+        df = df.withColumn(f"result_pos{i + 1}", split_cols.getItem(i).cast(IntegerType()))
+
+    df_grouped = get_grouped_data(df)
 
     end_time = time.time()
     logger.info("Total execution time: {:.2f} seconds".format(end_time - start_time))
