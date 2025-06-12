@@ -96,18 +96,20 @@ def display_df_rows(df: DataFrame, msg: str = "dataframe rows:", n_rows: int = 5
         logger.info(row)
 
 
-def encode_label(df: DataFrame, label: str, index_label: str) -> DataFrame:
+def encode_label(df: DataFrame, label: str, index_label: str, data_type: str = "int") -> DataFrame:
     """
     create index label for the selected column.
     :param df:
     :param label:
     :param index_label:
+    :param data_type:
     :return:
     """
 
     indexer = StringIndexer(inputCol=label, outputCol=index_label)
     currency_model = indexer.fit(df)
     df = currency_model.transform(df)
+    df = df.withColumn(index_label, col(index_label).cast(data_type))
 
     return df
 
