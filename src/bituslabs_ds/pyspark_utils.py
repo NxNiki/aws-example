@@ -1,7 +1,9 @@
 import logging
 import re
+import sys
 from typing import List, Optional
 
+from pyspark import StorageLevel
 from pyspark.ml.feature import StringIndexer
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.column import Column
@@ -140,12 +142,23 @@ def estimate_num_partitions(sdf: DataFrame, target_file_size_mb: int = 128) -> i
     Returns:
         Estimated number of partitions
     """
-    target_size_bytes = target_file_size_mb * 1024 * 1024
-    sample_size = sdf.sample(False, 0.01).rdd.map(lambda r: len(str(r))).mean()
-    estimated_size = sample_size * sdf.count()
-    num_partitions = max(1, int(estimated_size / target_size_bytes))
 
-    return num_partitions
+    sample_df = sdf.sample(False, 0.01)
+    sample_df.persist(StorageLevel.MEMORY_AND_DISK)
+
+    sample_count = sample_df.count()
+    if sample_count == 0:
+        return 1
+
+    sample_size = sample_df.rdd.map(lambda row: sys.getsizeof(row)).mean()
+    total_count = sdf.count()
+    estimated_total_size = sample_size * total_count
+    target_size_bytes = target_file_size_mb * 1024 * 1024
+
+    estimated_partitions = max(1, int(estimated_total_size / target_size_bytes))
+    sample_df.unpersist()
+
+    return estimated_partitions
 
 
 def split_column(

@@ -440,11 +440,14 @@ if __name__ == "__main__":
         sdf_enriched, sdf_grouped = process_wucaishen_data(spark_df)
         num_partitions = estimate_num_partitions(sdf_enriched)
         sdf_enriched = sdf_enriched.repartition(num_partitions, "year", "month")
+        logging.info(f"save enriched data with num_partitions: {num_partitions}")
         sdf_enriched.write.mode("overwrite").partitionBy("year", "month").parquet(
             f"s3://{S3_BUCKET}/wucaishen_process_enriched/"
         )
+
         num_partitions = estimate_num_partitions(sdf_grouped)
         sdf_grouped = sdf_grouped.repartition(num_partitions, "year", "month")
+        logging.info(f"save grouped data with num_partitions: {num_partitions}")
         sdf_grouped.write.mode("overwrite").partitionBy("year", "month").parquet(
             f"s3://{S3_BUCKET}/wucaishen_process_grouped/"
         )
