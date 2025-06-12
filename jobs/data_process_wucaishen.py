@@ -334,6 +334,16 @@ def get_deposit(df: DataFrame, window: WindowSpec, col_name: str) -> DataFrame:
     return df
 
 
+def parse_result_column(df: DataFrame, col_name: str) -> DataFrame:
+    # 拆分 result 字段为 result_pos1 ~ result_pos15
+    df = df.withColumn(col_name, expr(f"trim(BOTH ';' FROM {col_name})"))
+    split_cols = split(col(col_name), ",")
+    for i in range(15):
+        df = df.withColumn(f"result_pos{i + 1}", split_cols.getItem(i).cast(IntegerType()))
+    df = df.drop(col_name)
+    return df
+
+
 def get_grouped_data(df: DataFrame) -> DataFrame:
 
     df = df.withColumn("is_payout_gt0", when(col("payout") > 0, 1).otherwise(0))
@@ -370,16 +380,15 @@ def get_grouped_data(df: DataFrame) -> DataFrame:
     df_grouped = df_grouped.join(
         currency_count.select("group_id", "currency_label", "currency"), on="group_id", how="left"
     )
-
+    df_grouped = df_grouped.withColumn("year", col("year").cast("int"))
+    df_grouped = df_grouped.withColumn("month", col("month").cast("int"))
     return df_grouped
 
 
 def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
 
-    logger.info("process_wucaishen_data start...")
-    start_time = time.time()
-
     df = df.filter((col("flag") != -8.0) & (col("productid") != "B26"))
+    df = df.drop("flag")
     df = df.orderBy(col("loginname"), col("billtime"))
 
     df = df.withColumn("billtime_utc", to_timestamp((col("billtime") / 1e9).cast("long")))
@@ -387,7 +396,9 @@ def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
     df = encode_label(df, "currency", "currency_label")
     df = df.withColumn("row_id", monotonically_increasing_id())
 
+    df = df.withColumn("account", col("account").cast("float"))
     df = df.withColumn("cus_account", col("cus_account").cast("float"))
+    df = df.withColumn("basepoint", col("basepoint").cast("float"))
     df = df.withColumn("payout", col("cus_account") + col("account"))
     df = df.withColumn("current_point", col("basepoint") + col("cus_account"))
 
@@ -402,16 +413,9 @@ def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
     df = get_deposit(df, w, "deposit")
 
     df = df.withColumn("rtp", when(col("account") != 0, col("payout") / col("account")).otherwise(0))
-    # 拆分 result 字段为 result_pos1 ~ result_pos15
-    df = df.withColumn("result_clean", expr("trim(BOTH ';' FROM result)"))
-    split_cols = split(col("result_clean"), ",")
-    for i in range(15):
-        df = df.withColumn(f"result_pos{i + 1}", split_cols.getItem(i).cast(IntegerType()))
+    df = parse_result_column(df, "result")
 
     df_grouped = get_grouped_data(df)
-
-    end_time = time.time()
-    logger.info("Total execution time: {:.2f} seconds".format(end_time - start_time))
 
     display_df_rows(df, "Enriched data:")
     display_df_rows(df_grouped, "Grouped data:")
@@ -420,7 +424,6 @@ def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
 
 
 if __name__ == "__main__":
-
     os.makedirs(".log", exist_ok=True)
     execution_time = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file_path = f".log/data_process_wucaishen{execution_time}.log"
@@ -435,6 +438,9 @@ if __name__ == "__main__":
     )
 
     try:
+        logger.info("process_wucaishen_data start...")
+        start_time = time.time()
+
         spark = create_spark_session()
         spark_df = read_data_with_partition(
             spark,
@@ -443,15 +449,19 @@ if __name__ == "__main__":
             format="csv",
             read_opts={"header": "true"},  # or "false" if there's no header
         )
-        spark_df = spark_df.drop("flag")
+
         sdf_enriched, sdf_grouped = process_wucaishen_data(spark_df)
+        sdf_enriched = sdf_enriched.repartition(10, "year", "month")
         sdf_enriched.write.mode("overwrite").partitionBy("year", "month").parquet(
             f"s3://{S3_BUCKET}/wucaishen_process_enriched/"
         )
+        sdf_grouped = sdf_grouped.repartition(1, "year", "month")
         sdf_grouped.write.mode("overwrite").partitionBy("year", "month").parquet(
             f"s3://{S3_BUCKET}/wucaishen_process_grouped/"
         )
 
+        end_time = time.time()
+        logger.info("Total execution time: {:.2f} seconds".format(end_time - start_time))
     except Exception as e:
         logger.error(e)
     finally:

@@ -52,7 +52,6 @@ def read_data_with_partition(
     # Convert named groups to unnamed groups for Spark regex engine
     # remove all occurrences of ?P<name>
     spark_compatible_pattern = re.sub(r"\?P<\w+>", "", regex_pattern)
-
     # Extract each group by its index, assign column name as original group name
     for group_name, group_idx in group_index_map.items():
         df = df.withColumn(group_name, regexp_extract(col("_filepath"), spark_compatible_pattern, group_idx))
