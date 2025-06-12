@@ -37,7 +37,6 @@ from pyspark.sql.functions import (
     percentile_approx,
     regexp_replace,
     row_number,
-    split,
     stddev,
     sum as Fsum,
     to_timestamp,
@@ -326,7 +325,6 @@ def get_deposit(df: DataFrame, window: WindowSpec, col_name: str) -> DataFrame:
     )
 
     df = df.drop("last_current_point")
-
     return df
 
 
