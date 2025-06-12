@@ -190,10 +190,10 @@ def create_aggregations() -> List[Column]:
     agg_expressions.extend(
         [
             Fsum(when(col("slottype") == 2.0, 1).otherwise(0)).alias("slottype_2_count"),
-            (Fsum("is_payout_gt0") / Fcount("*")).alias("payout_rate"),
-            (Fsum("is_profit_gt0") / Fcount("*")).alias("profit_rate"),
-            coalesce(stddev("cus_account"), lit(0)).alias("profit_stddev"),
-            coalesce(stddev("account"), lit(0)).alias("account_stddev"),
+            (Fsum("is_payout_gt0") / Fcount("*")).cast("float").alias("payout_rate"),
+            (Fsum("is_profit_gt0") / Fcount("*")).cast("float").alias("profit_rate"),
+            coalesce(stddev("cus_account").cast("float"), lit(0)).alias("profit_stddev"),
+            coalesce(stddev("account").cast("float"), lit(0)).alias("account_stddev"),
             Fmin("billtime").alias("start_time"),
             Fmax("billtime").alias("end_time"),
             Fsum("is_morning").alias("morning_count"),
@@ -202,9 +202,9 @@ def create_aggregations() -> List[Column]:
             Fsum("is_midnight").alias("midnight_count"),
             Fsum("is_weekend").alias("weekend_count"),
             (unix_timestamp(Fmax("billtime")) - unix_timestamp(Fmin("billtime"))).alias("duration_seconds"),
-            ((unix_timestamp(Fmax("billtime")) - unix_timestamp(Fmin("billtime"))) / Fcount("*")).alias(
-                "avg_time_per_bet"
-            ),
+            ((unix_timestamp(Fmax("billtime")) - unix_timestamp(Fmin("billtime"))) / Fcount("*"))
+            .cast("float")
+            .alias("avg_time_per_bet"),
         ]
     )
 
@@ -388,7 +388,7 @@ def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
 
     df = get_deposit(df, w, "deposit")
 
-    df = df.withColumn("rtp", when(col("account") != 0, col("payout") / col("account")).otherwise(0))
+    df = df.withColumn("rtp", when(col("account") != 0, col("payout") / col("account")).otherwise(0).cast("float"))
 
     # df = df.withColumn("result", expr("trim(BOTH ';' FROM result)"))
     df = df.withColumn("result", regexp_replace("result", r"^;+|;+$", ""))

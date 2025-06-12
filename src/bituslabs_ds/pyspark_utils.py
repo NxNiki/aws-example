@@ -112,7 +112,7 @@ def encode_label(df: DataFrame, label: str, index_label: str) -> DataFrame:
     return df
 
 
-def create_stat_aggregations(column_name: str, rename: Optional[str] = None) -> List[Column]:
+def create_stat_aggregations(column_name: str, rename: Optional[str] = None, avg_type: str = "float") -> List[Column]:
 
     if rename is None:
         rename = column_name
@@ -120,7 +120,7 @@ def create_stat_aggregations(column_name: str, rename: Optional[str] = None) -> 
     return [
         Fmin(column_name).alias(f"{rename}_min"),
         Fmax(column_name).alias(f"{rename}_max"),
-        Favg(column_name).alias(f"{rename}_mean"),
+        Favg(column_name).cast(avg_type).alias(f"{rename}_mean"),
         percentile_approx(column_name, 0.25).alias(f"{rename}_p25"),
         percentile_approx(column_name, 0.5).alias(f"{rename}_median"),
         percentile_approx(column_name, 0.75).alias(f"{rename}_p75"),
