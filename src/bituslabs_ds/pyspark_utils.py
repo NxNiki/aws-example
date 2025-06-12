@@ -13,9 +13,12 @@ from pyspark.sql.functions import (
     min as Fmin,
     percentile_approx,
     regexp_extract,
+    size,
+    split,
     sum as Fsum,
     when,
 )
+from pyspark.sql.types import IntegerType
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -122,3 +125,60 @@ def create_stat_aggregations(column_name: str, rename: Optional[str] = None) -> 
         percentile_approx(column_name, 0.5).alias(f"{rename}_median"),
         percentile_approx(column_name, 0.75).alias(f"{rename}_p75"),
     ]
+
+
+def estimate_num_partitions(sdf: DataFrame, target_file_size_mb: int = 128) -> int:
+    """
+    Estimate the number of partitions based on DataFrame size and desired file size.
+
+    Args:
+        sdf: Spark DataFrame
+        target_file_size_mb: Target file size per partition in megabytes
+
+    Returns:
+        Estimated number of partitions
+    """
+    target_size_bytes = target_file_size_mb * 1024 * 1024
+    sample_size = sdf.sample(False, 0.01).rdd.map(lambda r: len(str(r))).mean()
+    estimated_size = sample_size * sdf.count()
+    num_partitions = max(1, int(estimated_size / target_size_bytes))
+
+    return num_partitions
+
+
+def split_column(
+    df: DataFrame,
+    col_name: str,
+    sep: str = ",",
+    max_items: Optional[int] = None,
+    drop_original: bool = True,
+    cast_type=IntegerType(),
+) -> DataFrame:
+    """
+    Split a string column into multiple columns by a separator.
+
+    Args:
+        df (DataFrame): Input Spark DataFrame.
+        col_name (str): Column name to split.
+        sep (str): Separator (default is comma).
+        max_items (int, optional): Max number of items to split. If None, compute from data.
+        drop_original (bool): If True, drop the original column after split.
+        cast_type (DataType): Spark type to cast split values to (e.g., IntegerType()).
+
+    Returns:
+        DataFrame: Updated DataFrame with new columns.
+    """
+
+    split_col = split(col(col_name), sep)
+
+    if max_items is None:
+        max_items = df.select(size(split_col).alias("len")).agg({"len": "max"}).collect()[0][0]
+
+    for i in range(max_items):
+        new_col = f"{col_name}_pos{i + 1}"
+        df = df.withColumn(new_col, split_col.getItem(i).cast(cast_type))
+
+    if drop_original:
+        df = df.drop(col_name)
+
+    return df

@@ -35,6 +35,7 @@ from pyspark.sql.functions import (
     monotonically_increasing_id,
     pandas_udf,
     percentile_approx,
+    regexp_replace,
     row_number,
     split,
     stddev,
@@ -43,11 +44,17 @@ from pyspark.sql.functions import (
     unix_timestamp,
     when,
 )
-from pyspark.sql.types import IntegerType
 from pyspark.sql.window import Window, WindowSpec
 
 from bituslabs_ds.config import S3_BUCKET
-from bituslabs_ds.pyspark_utils import create_stat_aggregations, display_df_rows, encode_label, read_data_with_partition
+from bituslabs_ds.pyspark_utils import (
+    create_stat_aggregations,
+    display_df_rows,
+    encode_label,
+    estimate_num_partitions,
+    read_data_with_partition,
+    split_column,
+)
 from bituslabs_ds.s3_utils import upload_file_to_s3
 
 logger = logging.getLogger(__name__)
@@ -86,7 +93,7 @@ def create_compute_streak_udf() -> Callable:
         streaks = []
         streak = 0
         for dt in data["delta_t"]:
-            if pd.isna(dt) or dt > 200:
+            if pd.isna(dt) or dt > 200:  # seconds
                 streak = 0
             else:
                 streak += 1
@@ -183,27 +190,18 @@ def create_aggregations() -> List[Column]:
     agg_expressions.extend(
         [
             Fsum(when(col("slottype") == 2.0, 1).otherwise(0)).alias("slottype_2_count"),
-            # 获奖率：is_payout_gt0 的和 / group_num
             (Fsum("is_payout_gt0") / Fcount("*")).alias("payout_rate"),
-            # 盈利率：is_profit_gt0 的和 / group_num
             (Fsum("is_profit_gt0") / Fcount("*")).alias("profit_rate"),
-            # 盈利波动率：利润的标准差
             coalesce(stddev("cus_account"), lit(0)).alias("profit_stddev"),
-            # 投注波动率：投注额的标准差
             coalesce(stddev("account"), lit(0)).alias("account_stddev"),
-            # start_time（切片开始时间）
             Fmin("billtime").alias("start_time"),
-            # end_time（切片结束时间）
             Fmax("billtime").alias("end_time"),
-            # 时间段
             Fsum("is_morning").alias("morning_count"),
             Fsum("is_afternoon").alias("afternoon_count"),
             Fsum("is_night").alias("night_count"),
             Fsum("is_midnight").alias("midnight_count"),
             Fsum("is_weekend").alias("weekend_count"),
-            # 持续时间（秒）
             (unix_timestamp(Fmax("billtime")) - unix_timestamp(Fmin("billtime"))).alias("duration_seconds"),
-            # 每注平均耗时（秒/注）
             ((unix_timestamp(Fmax("billtime")) - unix_timestamp(Fmin("billtime"))) / Fcount("*")).alias(
                 "avg_time_per_bet"
             ),
@@ -278,8 +276,7 @@ def get_delta_value(
     return df
 
 
-def add_date_columns(df: DataFrame, time_column: str) -> DataFrame:
-    # 添加时段分类列
+def add_daytime_columns(df: DataFrame, time_column: str) -> DataFrame:
     df = df.withColumn("hour_of_day", hour(time_column))
     df = df.withColumn(
         "is_morning",
@@ -298,7 +295,6 @@ def add_date_columns(df: DataFrame, time_column: str) -> DataFrame:
         when((col("hour_of_day") >= 0) & (col("hour_of_day") < 6), 1).otherwise(0),
     )
 
-    # 节假日（周末）
     df = df.withColumn("is_weekend", when(dayofweek(time_column).isin([1, 7]), 1).otherwise(0))  # 1=Sunday, 7=Saturday
 
     return df
@@ -334,16 +330,6 @@ def get_deposit(df: DataFrame, window: WindowSpec, col_name: str) -> DataFrame:
     return df
 
 
-def parse_result_column(df: DataFrame, col_name: str) -> DataFrame:
-    # 拆分 result 字段为 result_pos1 ~ result_pos15
-    df = df.withColumn(col_name, expr(f"trim(BOTH ';' FROM {col_name})"))
-    split_cols = split(col(col_name), ",")
-    for i in range(15):
-        df = df.withColumn(f"result_pos{i + 1}", split_cols.getItem(i).cast(IntegerType()))
-    df = df.drop(col_name)
-    return df
-
-
 def get_grouped_data(df: DataFrame) -> DataFrame:
 
     df = df.withColumn("is_payout_gt0", when(col("payout") > 0, 1).otherwise(0))
@@ -359,7 +345,7 @@ def get_grouped_data(df: DataFrame) -> DataFrame:
     )
     df = df.join(streak_df, on=["row_id"], how="left")
 
-    df = add_date_columns(df, "billtime")
+    df = add_daytime_columns(df, "billtime")
 
     # ========== 基于 delta_t > 7 天 切断分组 ==========
     df = df.withColumn("is_split", when(col("delta_t") > 604800, 1).otherwise(0))
@@ -413,7 +399,10 @@ def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
     df = get_deposit(df, w, "deposit")
 
     df = df.withColumn("rtp", when(col("account") != 0, col("payout") / col("account")).otherwise(0))
-    df = parse_result_column(df, "result")
+
+    # df = df.withColumn("result", expr("trim(BOTH ';' FROM result)"))
+    df = df.withColumn("result", regexp_replace("result", r"^;+|;+$", ""))
+    df = split_column(df, "result", sep=",", max_items=15, drop_original=True)
 
     df_grouped = get_grouped_data(df)
 
@@ -451,11 +440,13 @@ if __name__ == "__main__":
         )
 
         sdf_enriched, sdf_grouped = process_wucaishen_data(spark_df)
-        sdf_enriched = sdf_enriched.repartition(10, "year", "month")
+        num_partitions = estimate_num_partitions(sdf_enriched)
+        sdf_enriched = sdf_enriched.repartition(num_partitions, "year", "month")
         sdf_enriched.write.mode("overwrite").partitionBy("year", "month").parquet(
             f"s3://{S3_BUCKET}/wucaishen_process_enriched/"
         )
-        sdf_grouped = sdf_grouped.repartition(1, "year", "month")
+        num_partitions = estimate_num_partitions(sdf_grouped)
+        sdf_grouped = sdf_grouped.repartition(num_partitions, "year", "month")
         sdf_grouped.write.mode("overwrite").partitionBy("year", "month").parquet(
             f"s3://{S3_BUCKET}/wucaishen_process_grouped/"
         )
