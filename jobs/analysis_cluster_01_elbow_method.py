@@ -13,6 +13,7 @@ import boto3
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import pyarrow.fs as fs
 import seaborn as sns
 from joblib import parallel_backend
 from sklearn.base import ClusterMixin
@@ -22,8 +23,8 @@ from sklearn.feature_selection import VarianceThreshold
 from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
 
-from bituslabs_ds.config import S3_BUCKET
-from bituslabs_ds.s3_utils import list_s3_files, parse_s3_path, read_files, upload_file_to_s3
+from bituslabs_ds.config import REGION, S3_BUCKET
+from bituslabs_ds.s3_utils import list_s3_files, parse_s3_path, read_dataset, read_files, upload_file_to_s3
 from bituslabs_ds.utils import (
     column_iterator,
     count_missing_columns,
@@ -182,7 +183,7 @@ def elbow_method(data: pd.DataFrame, features: List[str], n_features: Optional[U
         silhouette_scores = []
         cluster_sizes = []
         for k in k_range:
-            # kmeans = KMeans(n_clusters=k, random_state=42, n_init="auto", max_iter=100)
+            # kmeans = KMeans(n_clusters=k, random_state=42, n_init="auto", max_iter=100) # run faster for testing
             kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
             kmeans.fit(x)
             inertia.append(kmeans.inertia_)
@@ -339,12 +340,6 @@ if __name__ == "__main__":
         "deposit_p25",
         "deposit_median",
         "deposit_p75",
-        "withdrawal_min",
-        "withdrawal_max",
-        "withdrawal_mean",
-        "withdrawal_p25",
-        "withdrawal_median",
-        "withdrawal_p75",
         "slottype_2_count",
         "payout_rate",
         "profit_rate",
@@ -358,7 +353,7 @@ if __name__ == "__main__":
         "duration_seconds",
         "avg_time_per_bet",
         # currently we combine all currencies as different currency users may have different purchase power.
-        "currency_label",
+        # "currency_label",
     ]
 
     # features to apply log transform; this should be decided with EDA:
@@ -430,21 +425,20 @@ if __name__ == "__main__":
         "deposit_p25",
         "deposit_median",
         "deposit_p75",
-        "withdrawal_min",
-        "withdrawal_max",
-        "withdrawal_mean",
-        "withdrawal_p25",
-        "withdrawal_median",
-        "withdrawal_p75",
     ]
 
-    wucaishen_files = list_s3_files(S3_BUCKET, "wucaishen_processed_data", r"wucaishen_grouped_stat_output_24.*\.csv$")
-    wucaishen_data = read_files(
-        wucaishen_files, local_cache_path="./output/wucaishen_grouped_stat_output_24.csv", reload=False
-    )
+    # wucaishen_files = list_s3_files(S3_BUCKET, "wucaishen_processed_data", r"wucaishen_grouped_stat_output_24.*\.csv$")
+    # wucaishen_data = read_files(
+    #     wucaishen_files, local_cache_path="./output/wucaishen_grouped_stat_output_24.csv", reload=False
+    # )
+
+    dataset = read_dataset(f"{S3_BUCKET}/wucaishen_process_grouped", REGION)
+    # table = dataset.to_table(filter=(ds.field("month") == "01"))
+    table = dataset.to_table(columns=non_feature_col + feature_col, use_threads=True)
+    wucaishen_data = table.to_pandas(use_threads=True)
 
     count_missing_columns(wucaishen_data)
-
+    wucaishen_data.fillna(0, inplace=True)
     wucaishen_data = log_transform(wucaishen_data, feature_col_log)
     save_list(feature_col_log, "./features/log_transform_features.json")
     upload_file_to_s3(
