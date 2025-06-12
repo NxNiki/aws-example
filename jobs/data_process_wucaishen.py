@@ -91,10 +91,10 @@ def create_compute_streak_udf() -> Callable:
         """
         data = data.sort_values("billtime")
         streaks = []
-        streak = 0
+        streak = 1
         for dt in data["delta_t"]:
             if pd.isna(dt) or dt > 200:  # seconds
-                streak = 0
+                streak = 1
             else:
                 streak += 1
             streaks.append(streak)
@@ -109,7 +109,7 @@ def create_compute_win_lose_streak_udf() -> Callable:
     @pandas_udf("row_id long, win_streak int, lose_streak int", PandasUDFType.GROUPED_MAP)
     def udf(data: pd.DataFrame) -> pd.DataFrame:
         """
-        ========= 连续赢钱/输钱 streak =========
+        win lose streak does not consider delta time.
         :param data:
         :return:
         """
@@ -335,16 +335,6 @@ def get_grouped_data(df: DataFrame) -> DataFrame:
     df = df.withColumn("is_payout_gt0", when(col("payout") > 0, 1).otherwise(0))
     df = df.withColumn("is_profit_gt0", when(col("cus_account") > 0, 1).otherwise(0))
 
-    compute_streak = create_compute_streak_udf()
-    streak_df = df.select("row_id", "loginname", "billtime", "delta_t").groupby("loginname").apply(compute_streak)
-    df = df.join(streak_df, on=["row_id"], how="left")
-
-    compute_win_lose_streak = create_compute_win_lose_streak_udf()
-    streak_df = (
-        df.select("row_id", "loginname", "billtime", "cus_account").groupby("loginname").apply(compute_win_lose_streak)
-    )
-    df = df.join(streak_df, on=["row_id"], how="left")
-
     df = add_daytime_columns(df, "billtime")
 
     # ========== 基于 delta_t > 7 天 切断分组 ==========
@@ -403,6 +393,16 @@ def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
     # df = df.withColumn("result", expr("trim(BOTH ';' FROM result)"))
     df = df.withColumn("result", regexp_replace("result", r"^;+|;+$", ""))
     df = split_column(df, "result", sep=",", max_items=15, drop_original=True)
+
+    compute_streak = create_compute_streak_udf()
+    streak_df = df.select("row_id", "loginname", "billtime", "delta_t").groupby("loginname").apply(compute_streak)
+    df = df.join(streak_df, on=["row_id"], how="left")
+
+    compute_win_lose_streak = create_compute_win_lose_streak_udf()
+    streak_df = (
+        df.select("row_id", "loginname", "billtime", "cus_account").groupby("loginname").apply(compute_win_lose_streak)
+    )
+    df = df.join(streak_df, on=["row_id"], how="left")
 
     df_grouped = get_grouped_data(df)
 
