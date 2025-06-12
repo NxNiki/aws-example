@@ -17,8 +17,6 @@ from pyspark.sql.functions import (
     regexp_extract,
     size,
     split,
-    sum as Fsum,
-    when,
 )
 from pyspark.sql.types import IntegerType
 
