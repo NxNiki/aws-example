@@ -168,10 +168,12 @@ def get_column_delta(
 def create_aggregations() -> List[Column]:
 
     agg_expressions = [
-        Favg("year").alias("year"),
-        Fmax("month").alias("month"),
+        Favg("year")
+        .alias("year")
+        .cast("int"),  # make sure to have "year" and "month" so data is partitioned correctly.
+        Fmax("month").alias("month").cast("int"),
         Fcount("*").alias("group_num"),
-        Favg("rtp").alias("rtp_mean"),
+        Favg("rtp").alias("rtp_mean").cast("float"),
     ]
 
     agg_expressions.extend(create_stat_aggregations("account", "bet"))
@@ -354,8 +356,6 @@ def get_grouped_data(df: DataFrame) -> DataFrame:
     df_grouped = df_grouped.join(
         currency_count.select("group_id", "currency_label", "currency"), on="group_id", how="left"
     )
-    df_grouped = df_grouped.withColumn("year", col("year").cast("int"))
-    df_grouped = df_grouped.withColumn("month", col("month").cast("int"))
     return df_grouped
 
 
@@ -436,6 +436,8 @@ if __name__ == "__main__":
             format="csv",
             read_opts={"header": "true"},  # or "false" if there's no header
         )
+        spark_df.withColumn("year", col("year").cast("int"))
+        spark_df.withColumn("month", col("month").cast("int"))
 
         sdf_enriched, sdf_grouped = process_wucaishen_data(spark_df)
         num_partitions = estimate_num_partitions(sdf_enriched)
