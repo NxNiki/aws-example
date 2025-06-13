@@ -59,6 +59,8 @@ from bituslabs_ds.s3_utils import upload_file_to_s3
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
+MAX_PARTITIONS = 100
+
 
 def create_spark_session() -> SparkSession:
     logger.info("start SparkSession ...")
@@ -67,7 +69,9 @@ def create_spark_session() -> SparkSession:
         .config("spark.driver.memory", "32g")  # choose instance >= m5.4xlarge to meet memory demand
         .config("spark.executor.memory", "28g")
         .config("spark.executor.memoryOverhead", "4g")
-        .config("spark.sql.shuffle.partitions", "100")  # adjust partitions based on data size and ec2 instances.
+        .config(
+            "spark.sql.shuffle.partitions", f"{MAX_PARTITIONS}"
+        )  # adjust partitions based on data size and ec2 instances.
         .config("spark.sql.execution.arrow.pyspark.enabled", "true")  # for better performance with Pandas UDFs
         .getOrCreate()
     )
@@ -358,7 +362,7 @@ def get_grouped_data(df: DataFrame) -> DataFrame:
     return df_grouped
 
 
-def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
+def process_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
     start_t = time.time()
 
     df = df.filter((col("flag") != -8.0) & (col("productid") != "B26"))
@@ -413,6 +417,25 @@ def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
     return df, df_grouped
 
 
+def write_data(sdf: DataFrame, file_path: str, max_partition: int = 40, single_file_size: int = 1000) -> None:
+    """
+
+    :param sdf:
+    :param file_path:
+    :param max_partition:
+    :param single_file_size: MB, usually we do not want a single file exceeds 1GB.
+    :return:
+    """
+    curr_partitions = sdf.rdd.getNumPartitions()
+    num_partitions = min(estimate_num_partitions(sdf, single_file_size), max_partition)
+
+    if curr_partitions < curr_partitions:
+        sdf = sdf.coalesce(num_partitions)
+        logging.info(f"change partition of data from {curr_partitions} to: {num_partitions}")
+
+    sdf.write.mode("overwrite").partitionBy("year", "month").parquet(f"s3://{S3_BUCKET}/{file_path}/")
+
+
 if __name__ == "__main__":
     os.makedirs(".log", exist_ok=True)
     execution_time = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -437,30 +460,14 @@ if __name__ == "__main__":
             path_pattern="s3://hyber-slot/wucaishen_oringaldata/24*/*.csv.gz",
             regex_pattern=r"wucaishen_oringaldata/(?P<year>\d{2})(?P<month>\d{2})/",
             format="csv",
-            read_opts={"header": "true"},  # or "false" if there's no header
+            read_opts={"header": "true"},
         )
         spark_df.withColumn("year", col("year").cast("int"))
         spark_df.withColumn("month", col("month").cast("int"))
 
-        num_partitions = estimate_num_partitions(spark_df)
-        curr_partitions = spark_df.rdd.getNumPartitions()
-        spark_df = spark_df.repartition(num_partitions, "year", "month")
-        logging.info(f"change partition of enriched data from {curr_partitions} to: {num_partitions}")
-        logger.info("Partition data execution time: {:.2f} seconds".format(time.time() - start_time))
-
-        spark_df, sdf_grouped = process_wucaishen_data(spark_df)
-
-        spark_df.write.mode("overwrite").partitionBy("year", "month").parquet(
-            f"s3://{S3_BUCKET}/wucaishen_process_enriched/"
-        )
-
-        num_partitions = estimate_num_partitions(sdf_grouped)
-        curr_partitions = sdf_grouped.rdd.getNumPartitions()
-        sdf_grouped = sdf_grouped.coalesce(num_partitions)
-        logging.info(f"change partition of grouped data from {curr_partitions} to: {num_partitions}")
-        sdf_grouped.write.mode("overwrite").partitionBy("year", "month").parquet(
-            f"s3://{S3_BUCKET}/wucaishen_process_grouped/"
-        )
+        spark_df, sdf_grouped = process_data(spark_df)
+        write_data(spark_df, "wucaishen_process_enriched", 10)
+        write_data(sdf_grouped, "wucaishen_process_grouped", 1)
 
         logger.info("Total execution time: {:.2f} seconds".format(time.time() - start_time))
         spark.stop()

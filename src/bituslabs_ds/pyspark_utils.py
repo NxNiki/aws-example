@@ -142,7 +142,7 @@ def estimate_num_partitions(sdf: DataFrame, target_file_size_mb: int = 128) -> i
         Estimated number of partitions
     """
 
-    sample_df = sdf.sample(False, 0.01)
+    sample_df = sdf.sample(False, 0.05)
     sample_df.persist(StorageLevel.MEMORY_AND_DISK)
 
     sample_count = sample_df.count()
