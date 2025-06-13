@@ -6,7 +6,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import pandas as pd
-import seaborn as sns
 from pandas import DataFrame, Series
 
 
@@ -14,7 +13,7 @@ def read_csv_cols(
     files: List[str],
     columns: List[str],
     filters: Optional[Dict[str, Any]] = None,
-    sampling: Optional[int | float] = None,
+    sampling: Optional[Union[int, float]] = None,
     max_workers: int = 8,
 ) -> pd.DataFrame:
     """

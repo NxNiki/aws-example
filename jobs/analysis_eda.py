@@ -1,14 +1,14 @@
 import glob
 import logging
 import os
-from typing import List, Tuple
+from typing import List, Tuple, Union
 
 import pandas as pd
 
 from bituslabs_ds.eda import plot_df_distribution, plot_scatter_pairs, plot_seasonality, read_csv_cols
 
 
-def load_enriched_data(files: List[str], sampling: int | float, output: str, reload=False) -> pd.DataFrame:
+def load_enriched_data(files: List[str], sampling: Union[int, float], output: str, reload=False) -> pd.DataFrame:
 
     if os.path.exists(output) and not reload:
         return pd.read_csv(output)
