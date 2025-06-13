@@ -429,10 +429,11 @@ def write_data(sdf: DataFrame, file_path: str, max_partition: int = 40, single_f
     curr_partitions = sdf.rdd.getNumPartitions()
     num_partitions = min(estimate_num_partitions(sdf, single_file_size), max_partition)
 
-    if curr_partitions < curr_partitions:
+    if num_partitions < curr_partitions:
         sdf = sdf.coalesce(num_partitions)
         logging.info(f"change partition of data from {curr_partitions} to: {num_partitions}")
 
+    logging.info(f"write data to {file_path}")
     sdf.write.mode("overwrite").partitionBy("year", "month").parquet(f"s3://{S3_BUCKET}/{file_path}/")
 
 
