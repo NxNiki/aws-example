@@ -169,10 +169,10 @@ def create_aggregations() -> List[Column]:
 
     agg_expressions = [
         # make sure to have "year" and "month" so data is partitioned correctly.
-        Favg("year").alias("year").cast("int"),
-        Fmax("month").alias("month").cast("int"),
+        Favg("year").cast("int").alias("year"),
+        Fmax("month").cast("int").alias("month"),
         Fcount("*").alias("group_num"),
-        Favg("rtp").alias("rtp_mean").cast("float"),
+        Favg("rtp").cast("float").alias("rtp_mean"),
     ]
 
     agg_expressions.extend(create_stat_aggregations("account", "bet"))
@@ -446,8 +446,7 @@ if __name__ == "__main__":
         curr_partitions = spark_df.rdd.getNumPartitions()
         spark_df = spark_df.repartition(num_partitions, "year", "month")
         logging.info(f"change partition of enriched data from {curr_partitions} to: {num_partitions}")
-        end_time = time.time()
-        logger.info("Partition data execution time: {:.2f} seconds".format(end_time - start_time))
+        logger.info("Partition data execution time: {:.2f} seconds".format(time.time() - start_time))
 
         spark_df, sdf_grouped = process_wucaishen_data(spark_df)
 
@@ -463,8 +462,7 @@ if __name__ == "__main__":
             f"s3://{S3_BUCKET}/wucaishen_process_grouped/"
         )
 
-        end_time = time.time()
-        logger.info("Total execution time: {:.2f} seconds".format(end_time - start_time))
+        logger.info("Total execution time: {:.2f} seconds".format(time.time() - start_time))
         spark.stop()
     except Exception as e:
         logger.error(e)
