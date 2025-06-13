@@ -5,6 +5,7 @@ import logging
 import os
 import re
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from functools import partial
 from pathlib import Path
 from typing import Callable, List, Literal, Optional, Tuple, Union
 from urllib.parse import urlparse
@@ -59,11 +60,11 @@ def parse_s3_path(s3_path: str) -> Tuple[str, str]:
     return bucket, key
 
 
-def read_to_pandas_df(bucket: str, key: str) -> pd.DataFrame:
+def read_to_pandas_df(bucket: str, key: str, columns: Optional[List[str]] = None) -> pd.DataFrame:
     """Read a CSV file from S3 and return it as a Pandas DataFrame."""
     bucket = parse_bucket_name(bucket)
     response = s3_client.get_object(Bucket=bucket, Key=key)
-    return pd.read_csv(response["Body"])
+    return pd.read_csv(response["Body"], usecols=columns)
 
 
 def write_df_to_s3(data: Union[pd.DataFrame, SparkDataFrame], bucket: str, key: str) -> None:
@@ -185,9 +186,16 @@ def list_s3_files(bucket: str, prefix: str, pattern: Optional[str] = None) -> Li
 #     return df
 
 
+def _read_file(file: str, columns: Optional[List[str]]) -> pd.DataFrame:
+    logger.info(f"Reading {file}")
+    bucket, file = parse_s3_path(file)
+    return read_to_pandas_df(bucket, file, columns)
+
+
 def read_files(
     files: List[str],
     local_cache_path: Optional[str] = None,
+    columns: Optional[List[str]] = None,
     max_workers: int = MAX_JOBS,
     parallel_mode: Literal["thread", "process", "none"] = "thread",
     reload: bool = False,
@@ -197,6 +205,7 @@ def read_files(
 
     :param files: List of S3 paths to CSV files.
     :param local_cache_path: Local cache path.
+    :param columns: List of column names to read from each file.
     :param max_workers: Number of workers to use in parallel execution.
     :param parallel_mode: Parallel execution strategy: 'thread', 'process', or 'none'.
     :param reload: Whether to reload files from S3 or not.
@@ -208,20 +217,16 @@ def read_files(
         data = pd.read_csv(local_cache_path)
         return data
 
-    def read_file(file: str) -> pd.DataFrame:
-        logger.info(f"Reading {file}")
-        bucket, file = parse_s3_path(file)
-        return read_to_pandas_df(bucket, file)
+    read_func = partial(_read_file, columns=columns)
 
     if parallel_mode == "none" or max_workers <= 1:
-        dfs = [read_file(file) for file in files]
-
+        dfs = [read_func(file) for file in files]
     else:
         executor_cls: Callable = ThreadPoolExecutor if parallel_mode == "thread" else ProcessPoolExecutor
         dfs = []
 
         with executor_cls(max_workers=max_workers) as executor:
-            future_to_file = {executor.submit(read_file, file): file for file in files}
+            future_to_file = {executor.submit(read_func, file): file for file in files}
             for future in as_completed(future_to_file):
                 file = future_to_file[future]
                 try:
