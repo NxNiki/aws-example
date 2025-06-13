@@ -60,6 +60,6 @@ for i in range(3):
     cluster_data["cluster"] = i
     data = pd.merge(data, cluster_data, how="inner", on="group_id")
 
-    f_name = f"./output/wucaishen_with_cluster_2024_{i}.csv"
-    data.to_csv(f_name)
+    f_name = f"wucaishen_with_cluster_2024_{i}.csv"
+    data.to_csv(f"./output/{f_name}", index=False)
     upload_file_to_s3(f_name, S3_BUCKET, f"wucaishen_analysis_kmeans/output/{f_name}")
