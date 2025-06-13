@@ -58,8 +58,9 @@ for i in range(3):
     cluster_file = f"./output/original_data_cluster_{i}.csv"
     cluster_data = pd.read_csv(cluster_file, usecols=["group_id"])
     cluster_data["cluster"] = i
-    data = pd.merge(data, cluster_data, how="inner", on="group_id")
+    cluster_data = pd.merge(data, cluster_data, how="inner", on="group_id")
+    # cluster_data.drop("group_id", axis=1, inplace=True)
 
     f_name = f"wucaishen_with_cluster_2024_{i}.csv"
-    data.to_csv(f"./output/{f_name}", index=False)
-    upload_file_to_s3(f_name, S3_BUCKET, f"wucaishen_analysis_kmeans/output/{f_name}")
+    cluster_data.to_csv(f"./output/{f_name}", index=False)
+    upload_file_to_s3(f_name, S3_BUCKET, f"ds-data-kmeans/{f_name}")
