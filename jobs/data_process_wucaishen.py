@@ -64,10 +64,10 @@ def create_spark_session() -> SparkSession:
     logger.info("start SparkSession ...")
     spark = (
         SparkSession.builder.appName("Aggregateddata")
-        .config("spark.driver.memory", "32g")  # choose instance >=m5.4xlarge to meet memory demand
+        .config("spark.driver.memory", "32g")  # choose instance >= m5.4xlarge to meet memory demand
         .config("spark.executor.memory", "28g")
         .config("spark.executor.memoryOverhead", "4g")
-        .config("spark.sql.shuffle.partitions", "200")
+        .config("spark.sql.shuffle.partitions", "100")  # adjust partitions based on data size and ec2 instances.
         .config("spark.sql.execution.arrow.pyspark.enabled", "true")  # for better performance with Pandas UDFs
         .getOrCreate()
     )
@@ -168,9 +168,8 @@ def get_column_delta(
 def create_aggregations() -> List[Column]:
 
     agg_expressions = [
-        Favg("year")
-        .alias("year")
-        .cast("int"),  # make sure to have "year" and "month" so data is partitioned correctly.
+        # make sure to have "year" and "month" so data is partitioned correctly.
+        Favg("year").alias("year").cast("int"),
         Fmax("month").alias("month").cast("int"),
         Fcount("*").alias("group_num"),
         Favg("rtp").alias("rtp_mean").cast("float"),
@@ -360,6 +359,7 @@ def get_grouped_data(df: DataFrame) -> DataFrame:
 
 
 def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
+    start_t = time.time()
 
     df = df.filter((col("flag") != -8.0) & (col("productid") != "B26"))
     df = df.drop("flag")
@@ -407,6 +407,9 @@ def process_wucaishen_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
     display_df_rows(df, "Enriched data:")
     display_df_rows(df_grouped, "Grouped data:")
 
+    end_t = time.time()
+    logger.info("Process data execution time: {:.2f} seconds".format(end_t - start_t))
+
     return df, df_grouped
 
 
@@ -439,23 +442,30 @@ if __name__ == "__main__":
         spark_df.withColumn("year", col("year").cast("int"))
         spark_df.withColumn("month", col("month").cast("int"))
 
-        sdf_enriched, sdf_grouped = process_wucaishen_data(spark_df)
-        num_partitions = estimate_num_partitions(sdf_enriched)
-        sdf_enriched = sdf_enriched.repartition(num_partitions, "year", "month")
-        logging.info(f"save enriched data with num_partitions: {num_partitions}")
-        sdf_enriched.write.mode("overwrite").partitionBy("year", "month").parquet(
+        num_partitions = estimate_num_partitions(spark_df)
+        curr_partitions = spark_df.rdd.getNumPartitions()
+        spark_df = spark_df.repartition(num_partitions, "year", "month")
+        logging.info(f"change partition of enriched data from {curr_partitions} to: {num_partitions}")
+        end_time = time.time()
+        logger.info("Partition data execution time: {:.2f} seconds".format(end_time - start_time))
+
+        spark_df, sdf_grouped = process_wucaishen_data(spark_df)
+
+        spark_df.write.mode("overwrite").partitionBy("year", "month").parquet(
             f"s3://{S3_BUCKET}/wucaishen_process_enriched/"
         )
 
         num_partitions = estimate_num_partitions(sdf_grouped)
-        sdf_grouped = sdf_grouped.repartition(num_partitions, "year", "month")
-        logging.info(f"save grouped data with num_partitions: {num_partitions}")
+        curr_partitions = sdf_grouped.rdd.getNumPartitions()
+        sdf_grouped = sdf_grouped.coalesce(num_partitions)
+        logging.info(f"change partition of grouped data from {curr_partitions} to: {num_partitions}")
         sdf_grouped.write.mode("overwrite").partitionBy("year", "month").parquet(
             f"s3://{S3_BUCKET}/wucaishen_process_grouped/"
         )
 
         end_time = time.time()
         logger.info("Total execution time: {:.2f} seconds".format(end_time - start_time))
+        spark.stop()
     except Exception as e:
         logger.error(e)
     finally:

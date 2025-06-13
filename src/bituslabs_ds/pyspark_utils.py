@@ -132,6 +132,7 @@ def create_stat_aggregations(column_name: str, rename: Optional[str] = None, avg
 def estimate_num_partitions(sdf: DataFrame, target_file_size_mb: int = 128) -> int:
     """
     Estimate the number of partitions based on DataFrame size and desired file size.
+    The actual file size should be much smaller than target_file_size_mb due to compression.
 
     Args:
         sdf: Spark DataFrame
