@@ -1,6 +1,5 @@
 import argparse
 import glob
-import subprocess
 
 import pandas as pd
 
@@ -49,8 +48,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--package", required=True)
+    # parser.add_argument("--package", required=True)
     args = parser.parse_args()
 
-    subprocess.check_call(["pip", "install", args.package])
+    # subprocess.check_call(["pip", "install", args.package])
     main(args.input, args.output)
