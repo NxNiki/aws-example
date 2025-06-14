@@ -1,21 +1,22 @@
+from pathlib import Path
+
 import sagemaker
-from sagemaker import get_execution_role
 from sagemaker.processing import ProcessingInput, ProcessingOutput, ScriptProcessor
+from sagemaker.pytorch import PyTorchProcessor
 
 from bituslabs_ds.config import S3_BUCKET
 from infra.deploy_emr import build_package
 
 input_dir = "/opt/ml/processing/input"
 output_dir = "/opt/ml/processing/output"
+dependency_dir = Path(__file__).parent.parent.parent / "src"
 
 role = "arn:aws:iam::338568447110:role/SageMakerExecutionRole"
 session = sagemaker.Session()
 
-# Use built-in scikit-learn image (includes pandas)
-image_uri = sagemaker.image_uris.retrieve(framework="sklearn", region=session.boto_region_name, version="1.2-1")
 
-processor = ScriptProcessor(
-    image_uri=image_uri,
+processor = PyTorchProcessor(
+    framework_version="2.0.0",
     command=["python3"],
     role=role,
     instance_type="ml.m5.xlarge",
@@ -51,4 +52,5 @@ processor.run(
     inputs=inputs,
     outputs=outputs,
     arguments=["--input", input_dir, "--output", output_dir, "--package", f"{input_dir}/dependencies/{package_name}"],
+    dependencies=[f"{input_dir}/dependencies/{package_name}"],
 )
