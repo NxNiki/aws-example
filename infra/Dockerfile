@@ -22,5 +22,6 @@ COPY ./src/bituslabs_ds ./bituslabs_ds
 # Set Python environment variables
 ENV PYTHONUNBUFFERED=TRUE
 ENV PYTHONDONTWRITEBYTECODE=TRUE
+ENV PYTHONPATH="/opt/program:${PYTHONPATH}"
 
 ENTRYPOINT ["python3"]

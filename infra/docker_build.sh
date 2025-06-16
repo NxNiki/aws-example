@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# run bash infra/docker_build.sh from root directory or source code will not be found!
+# run bash infra/docker_build.sh from project root directory to ensure build context is correctly specified.
 
 IMAGE_NAME="bituslabs-ds-sagemaker"
 TAG="latest"
