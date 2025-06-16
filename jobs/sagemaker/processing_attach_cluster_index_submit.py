@@ -1,35 +1,39 @@
 from pathlib import Path
 
 import sagemaker
+from sagemaker import image_uris
 from sagemaker.processing import ProcessingInput, ProcessingOutput, ScriptProcessor
-from sagemaker.pytorch import PyTorchProcessor
 
 from bituslabs_ds.config import S3_BUCKET
-from infra.deploy_emr import build_package
 
 input_dir = "/opt/ml/processing/input"
 output_dir = "/opt/ml/processing/output"
-role = "arn:aws:iam::338568447110:role/SageMakerExecutionRole"
-dependency = str(Path(__file__).parent.parent.parent / "dist/aws_project-0.1.0.tar.gz")
 
-print(f"dependency: {dependency}")
+role = "arn:aws:iam::338568447110:role/SageMakerExecutionRole"
 session = sagemaker.Session()
-processor = PyTorchProcessor(
-    framework_version="2.0.0",
-    py_version="py310",
+
+# image_uri = image_uris.retrieve(
+#     framework="sklearn",           # or "pytorch", "xgboost", "tensorflow", etc.
+#     region="us-west-2",            # your region
+#     version="1.0-1",               # framework version
+#     instance_type="ml.m5.xlarge",  # optional; helps select CPU vs GPU image
+# )
+
+image_uri = "338568447110.dkr.ecr.us-west-2.amazonaws.com/bituslabs-ds-sagemaker:latest"
+
+print(f"image_uri: {image_uri}")
+
+processor = ScriptProcessor(
+    image_uri=image_uri,
+    command=["python3"],
     role=role,
     instance_type="ml.m5.xlarge",
     instance_count=1,
-    base_job_name="etl-processing-job",
+    base_job_name="attach-cluster-index",
     sagemaker_session=session,
 )
 
-package_file_uri, package_name = build_package()
 inputs = [
-    # ProcessingInput(
-    #     source=package_file_uri,
-    #     destination=f"{input_dir}/dependencies",
-    # ),
     ProcessingInput(
         source=f"s3://bituslabs-team-ai/wucaishen_processed_data/",
         destination=f"{input_dir}/wucaishen_processed_data/",
@@ -55,7 +59,5 @@ processor.run(
         input_dir,
         "--output",
         output_dir,
-        # "--package", f"{input_dir}/dependencies/{package_name}",
     ],
-    dependencies=[dependency],
 )

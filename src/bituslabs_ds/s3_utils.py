@@ -105,7 +105,7 @@ def write_spark_to_s3(data: SparkDataFrame, bucket: str, key: str, file_format: 
 
 def upload_file_to_s3(local_path: Union[str, Path], s3_bucket: str, s3_key: str) -> Optional[str]:
     """
-    Uploads a local file to an S3 bucket.
+    Uploads a local file to an S3 bucket. Add content type so we can open uploaded files directly on aws.
 
     :param local_path: Path to the local Python file.
     :param s3_bucket: Name of the S3 bucket.
