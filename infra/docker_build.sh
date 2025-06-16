@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
 
+# run bash infra/docker_build.sh from root directory or source code will not be found!
+
 IMAGE_NAME="bituslabs-ds-sagemaker"
 TAG="latest"
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
@@ -12,7 +14,7 @@ echo "ECR_URL: $ECR_URL"
 #aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin 246618743249.dkr.ecr.us-west-2.amazonaws.com
 
 # Build the Docker image
-docker build -t $IMAGE_NAME -f infra/Dockerfile ./
+docker build --platform linux/amd64 -t $IMAGE_NAME -f infra/Dockerfile ./
 
 # Tag and push to ECR
 docker tag $IMAGE_NAME "$ECR_URL:$TAG"
