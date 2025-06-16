@@ -1,13 +1,19 @@
 import argparse
 import glob
+import logging
+import sys
+import time
 
 import pandas as pd
 
 from bituslabs_ds.eda import read_csv_cols
 
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
+
 
 def main(input_dir, output_dir):
-
+    start_time = time.time()
     columns_to_read = [
         "loginname",
         "billno",
@@ -43,8 +49,21 @@ def main(input_dir, output_dir):
         f_name = f"wucaishen_with_cluster_2024_{i}.csv"
         cluster_data.to_csv(f"{output_dir}/{f_name}", index=False)
 
+    logger.info(f"job took {time.time() - start_time} seconds")
+
 
 if __name__ == "__main__":
+
+    log_file_path = f".log/processing_attach_cluster_index.log"
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(message)s",
+        handlers=[
+            logging.FileHandler(log_file_path),
+            logging.StreamHandler(sys.stdout),
+        ],
+    )
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True)
