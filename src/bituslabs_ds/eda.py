@@ -1,4 +1,6 @@
+import logging
 import math
+import os
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -7,6 +9,9 @@ import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import pandas as pd
 from pandas import DataFrame, Series
+
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
 
 
 def read_csv_cols(
@@ -64,6 +69,12 @@ def read_csv_cols(
             return pd.DataFrame(columns=columns)
 
     df_list = []
+    num_cores = os.cpu_count()
+    if num_cores is None:
+        max_workers = min(max_workers, len(files))
+    else:
+        max_workers = min(max_workers, len(files), num_cores - 1)
+    logger.info(f"run jobs on {max_workers} threads")
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(process_file, file): file for file in files}
         for future in as_completed(futures):

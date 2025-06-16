@@ -28,7 +28,7 @@ def main(input_dir, output_dir):
     ]
 
     files = glob.glob(f"{input_dir}/wucaishen_processed_data/wucaishen_enriched_output_24??/*.csv")
-    data = read_csv_cols(files, columns=columns_to_read)
+    data = read_csv_cols(files, columns=columns_to_read, max_workers=12)
 
     print(data.head(10))
     print(data.shape)
