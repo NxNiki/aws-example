@@ -8,8 +8,7 @@ RUN pip install poetry==1.8.2
 WORKDIR /opt/program
 
 # Copy poetry files
-#COPY ./pyproject.toml poetry.lock ./
-COPY ./pyproject.toml ./
+COPY ./pyproject.toml poetry.lock ./
 
 # Install dependencies first (excluding dev deps for SageMaker)
 RUN poetry config virtualenvs.create false && poetry install --no-dev --no-interaction
