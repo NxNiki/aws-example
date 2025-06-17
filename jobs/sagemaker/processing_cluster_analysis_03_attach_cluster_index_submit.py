@@ -51,7 +51,7 @@ outputs = [
 ]
 
 processor.run(
-    code="processing_attach_cluster_index.py",
+    code="processing_cluster_analysis_03_attach_cluster_index.py",
     inputs=inputs,
     outputs=outputs,
     arguments=[

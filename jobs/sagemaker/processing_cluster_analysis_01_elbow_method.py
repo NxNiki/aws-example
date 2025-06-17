@@ -5,6 +5,7 @@ cluster analysis and the optimal number of clusters.
 
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 from typing import List, Optional, Tuple, Union
@@ -34,7 +35,7 @@ from bituslabs_ds.utils import (
     save_list,
 )
 
-OUTPUT_PATH = "wucaishen_analysis_kmeans"
+S3_OUTPUT_PATH = "wucaishen_analysis_kmeans"
 s3 = boto3.client("s3")
 
 logger = logging.getLogger(__name__)
@@ -135,7 +136,7 @@ def feature_selection_by_pca(data: pd.DataFrame, s3_path: Optional[str] = None) 
 
     plt.savefig(f"./figures/{title}.png")
     plt.show()
-    # upload_file_to_s3(f"./figures/{title}.png", S3_BUCKET, f"{OUTPUT_PATH}/{title}.png")
+    # upload_file_to_s3(f"./figures/{title}.png", S3_BUCKET, f"{S3_OUTPUT_PATH}/{title}.png")
 
     features = [features[i] for i in np.argsort(importance)[::-1]]
     save_list(features, f"./features/important_features.json")
@@ -161,15 +162,18 @@ def plot_correlation(data: pd.DataFrame):
     plt.title(title, fontsize=16)
     plt.savefig(f"./figures/{title}.png")
     plt.show()
-    # upload_file_to_s3(f"./figures/{title}.png", S3_BUCKET, f"{OUTPUT_PATH}/{title}.png")
+    # upload_file_to_s3(f"./figures/{title}.png", S3_BUCKET, f"{S3_OUTPUT_PATH}/{title}.png")
 
 
-def elbow_method(data: pd.DataFrame, features: List[str], n_features: Optional[Union[List[int], int]] = None):
+def elbow_method(
+    data: pd.DataFrame, features: List[str], n_features: Optional[Union[List[int], int]] = None, output_path: str = "."
+):
     """
     run elbow method to determine number of clusters
     :param data:
     :param features: label of columns of data that order by feature importance.
     :param n_features: select top n features
+    :param output_path:
     :return:
     """
 
@@ -238,9 +242,9 @@ def elbow_method(data: pd.DataFrame, features: List[str], n_features: Optional[U
 
         plt.subplots_adjust(left=0.1, bottom=0.3)
 
-        plt.savefig(f"./figures/{title}.png")
+        plt.savefig(f"{output_path}/figures/{title}.png")
         plt.show()
-        # upload_file_to_s3(f"./figures/{title}.png", S3_BUCKET, f"{OUTPUT_PATH}/{title}.png")
+        # upload_file_to_s3(f"./figures/{title}.png", S3_BUCKET, f"{S3_OUTPUT_PATH}/{title}.png")
 
 
 def calculate_silhouette_score(x: Union[np.ndarray, pd.DataFrame], cluster_obj: ClusterMixin) -> float:
@@ -257,89 +261,29 @@ def calculate_silhouette_score(x: Union[np.ndarray, pd.DataFrame], cluster_obj: 
     return score
 
 
-if __name__ == "__main__":
+def get_feature_names() -> Tuple[List[str], List[str], List[str]]:
 
-    os.makedirs("./.log", exist_ok=True)
-    os.makedirs("./output", exist_ok=True)
-    os.makedirs("./features", exist_ok=True)
-    os.makedirs("./figures", exist_ok=True)
+    non_features = ["group_id", "loginname", "start_time"]
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)s | %(message)s",
-        handlers=[logging.FileHandler("./.log/analysis_cluster_01_elbow_method.log"), logging.StreamHandler()],
-    )
+    base_features = [
+        "bet",
+        "basepoint",
+        "payout",
+        "profit",
+        "delta_t",
+        "delta_bet",
+        "delta_profit",
+        "streak",
+        "win_streak",
+        "lose_streak",
+        "deposit",
+    ]
+    suffixes = ["min", "max", "mean", "p25", "median", "p75"]
+    features = [f"{bf}_{suf}" for bf in base_features for suf in suffixes]
+    skewed_features = ["rtp_mean"] + features
 
-    non_feature_col = ["group_id", "loginname", "start_time"]
-    feature_col = [
+    normal_features = [
         # "group_num",
-        "rtp_mean",
-        "bet_min",
-        "bet_max",
-        "bet_mean",
-        "bet_p25",
-        "bet_median",
-        "bet_p75",
-        "basepoint_min",
-        "basepoint_max",
-        "basepoint_mean",
-        "basepoint_p25",
-        "basepoint_median",
-        "basepoint_p75",
-        "payout_min",
-        "payout_max",
-        "payout_mean",
-        "payout_p25",
-        "payout_median",
-        "payout_p75",
-        "profit_min",
-        "profit_max",
-        "profit_mean",
-        "profit_p25",
-        "profit_median",
-        "profit_p75",
-        "delta_t_min",
-        "delta_t_max",
-        "delta_t_mean",
-        "delta_t_p25",
-        "delta_t_median",
-        "delta_t_p75",
-        "delta_bet_min",
-        "delta_bet_max",
-        "delta_bet_mean",
-        "delta_bet_p25",
-        "delta_bet_median",
-        "delta_bet_p75",
-        "delta_profit_min",
-        "delta_profit_max",
-        "delta_profit_mean",
-        "delta_profit_p25",
-        "delta_profit_median",
-        "delta_profit_p75",
-        "streak_min",
-        "streak_max",
-        "streak_mean",
-        "streak_p25",
-        "streak_median",
-        "streak_p75",
-        "win_streak_min",
-        "win_streak_max",
-        "win_streak_mean",
-        "win_streak_p25",
-        "win_streak_median",
-        "win_streak_p75",
-        "lose_streak_min",
-        "lose_streak_max",
-        "lose_streak_mean",
-        "lose_streak_p25",
-        "lose_streak_median",
-        "lose_streak_p75",
-        "deposit_min",
-        "deposit_max",
-        "deposit_mean",
-        "deposit_p25",
-        "deposit_median",
-        "deposit_p75",
         "slottype_2_count",
         "payout_rate",
         "profit_rate",
@@ -356,76 +300,17 @@ if __name__ == "__main__":
         # "currency_label",
     ]
 
-    # features to apply log transform; this should be decided with EDA:
-    feature_col_log = [
-        "rtp_mean",
-        "bet_min",
-        "bet_max",
-        "bet_mean",
-        "bet_p25",
-        "bet_median",
-        "bet_p75",
-        "basepoint_min",
-        "basepoint_max",
-        "basepoint_mean",
-        "basepoint_p25",
-        "basepoint_median",
-        "basepoint_p75",
-        "payout_min",
-        "payout_max",
-        "payout_mean",
-        "payout_p25",
-        "payout_median",
-        "payout_p75",
-        "profit_min",
-        "profit_max",
-        "profit_mean",
-        "profit_p25",
-        "profit_median",
-        "profit_p75",
-        "delta_t_min",
-        "delta_t_max",
-        "delta_t_mean",
-        "delta_t_p25",
-        "delta_t_median",
-        "delta_t_p75",
-        "delta_bet_min",
-        "delta_bet_max",
-        "delta_bet_mean",
-        "delta_bet_p25",
-        "delta_bet_median",
-        "delta_bet_p75",
-        "delta_profit_min",
-        "delta_profit_max",
-        "delta_profit_mean",
-        "delta_profit_p25",
-        "delta_profit_median",
-        "delta_profit_p75",
-        "streak_min",
-        "streak_max",
-        "streak_mean",
-        "streak_p25",
-        "streak_median",
-        "streak_p75",
-        "win_streak_min",
-        "win_streak_max",
-        "win_streak_mean",
-        "win_streak_p25",
-        "win_streak_median",
-        "win_streak_p75",
-        "lose_streak_min",
-        "lose_streak_max",
-        "lose_streak_mean",
-        "lose_streak_p25",
-        "lose_streak_median",
-        "lose_streak_p75",
-        "deposit_min",
-        "deposit_max",
-        "deposit_mean",
-        "deposit_p25",
-        "deposit_median",
-        "deposit_p75",
-    ]
+    return non_features, normal_features, skewed_features
+
+
+def main(local_output_path: str):
+
+    os.makedirs(f"{local_output_path}/.log", exist_ok=True)
+    os.makedirs(f"{local_output_path}/output", exist_ok=True)
+    os.makedirs(f"{local_output_path}/features", exist_ok=True)
+    os.makedirs(f"{local_output_path}/figures", exist_ok=True)
+
+    non_features, normal_features, skewed_features = get_feature_names()
 
     # wucaishen_files = list_s3_files(S3_BUCKET, "wucaishen_processed_data", r"wucaishen_grouped_stat_output_24.*\.csv$")
     # wucaishen_data = read_files(
@@ -434,27 +319,46 @@ if __name__ == "__main__":
 
     dataset = read_dataset(f"{S3_BUCKET}/wucaishen_process_grouped", REGION)
     # table = dataset.to_table(filter=(ds.field("month") == "01"))
-    table = dataset.to_table(columns=non_feature_col + feature_col, use_threads=True)
+    table = dataset.to_table(columns=non_features + normal_features + skewed_features, use_threads=True)
     wucaishen_data = table.to_pandas(use_threads=True)
 
     count_missing_columns(wucaishen_data)
     wucaishen_data.fillna(0, inplace=True)
-    wucaishen_data = log_transform(wucaishen_data, feature_col_log)
-    save_list(feature_col_log, "./features/log_transform_features.json")
+    wucaishen_data = log_transform(wucaishen_data, skewed_features)
+    save_list(normal_features + skewed_features, "./features/log_transform_features.json")
     upload_file_to_s3(
-        "./features/log_transform_features.json",
+        f"{local_output_path}/features/log_transform_features.json",
         S3_BUCKET,
-        f"{OUTPUT_PATH}/features/log_transform_features.json",
+        f"{S3_OUTPUT_PATH}/features/log_transform_features.json",
     )
-    plot_correlation(wucaishen_data[feature_col])
+    plot_correlation(wucaishen_data[normal_features + skewed_features])
 
     # remove highly correlated features:
-    _, kept_features = smart_feature_selection(wucaishen_data[feature_col], threshold=0.9)
+    _, kept_features = smart_feature_selection(wucaishen_data[normal_features + skewed_features], threshold=0.9)
     _, kept_features = feature_selection_by_variance(wucaishen_data[kept_features], threshold=0.01)
-    data_select = wucaishen_data[kept_features + non_feature_col]
+    data_select = wucaishen_data[kept_features + non_features]
 
     important_features = feature_selection_by_pca(
         data_select,
-        f"s3://{S3_BUCKET}/{OUTPUT_PATH}/features/important_features.json",
+        f"s3://{S3_BUCKET}/{S3_OUTPUT_PATH}/features/important_features.json",
     )
-    elbow_method(wucaishen_data, important_features, [15, 20, 25, 30, 35, 40])
+    elbow_method(wucaishen_data, important_features, [15, 20, 25, 30, 35, 40], local_output_path)
+
+
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input", required=True, default=f"s3://bituslabs-team-ai/wucaishen_processed_data/")
+    parser.add_argument("--local_output_path", required=True, default=".")
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(message)s",
+        handlers=[
+            logging.FileHandler(f"{args.local_output_path}/.log/analysis_cluster_01_elbow_method.log"),
+            logging.StreamHandler(),
+        ],
+    )
+
+    main(args.local_output_path)
