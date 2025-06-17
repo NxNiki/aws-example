@@ -1,6 +1,7 @@
 import argparse
 import glob
 import logging
+import os
 import sys
 import time
 
@@ -39,6 +40,7 @@ def main(input_dir, output_dir):
     print(data.head(10))
     print(data.shape)
 
+    os.makedirs(output_dir, exist_ok=True)
     for i in range(3):
         cluster_file = f"{input_dir}/kmeans_output/original_data_cluster_{i}.csv"
         cluster_data = pd.read_csv(cluster_file, usecols=["group_id"])
@@ -66,8 +68,8 @@ if __name__ == "__main__":
     )
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", required=True)
-    parser.add_argument("--output", required=True)
+    parser.add_argument("--input", required=True, default=f"s3://bituslabs-team-ai/wucaishen_processed_data/")
+    parser.add_argument("--output", required=True, default="./output")
     args = parser.parse_args()
 
     main(args.input, args.output)
