@@ -312,12 +312,7 @@ def main(output_path: str):
     count_missing_columns(wucaishen_data)
     wucaishen_data.fillna(0, inplace=True)
     wucaishen_data = log_transform(wucaishen_data, skewed_features)
-    save_list(normal_features + skewed_features, "./features/log_transform_features.json")
-    upload_file_to_s3(
-        f"{output_path}/features/log_transform_features.json",
-        S3_BUCKET,
-        f"{S3_OUTPUT_PATH}/features/log_transform_features.json",
-    )
+    save_list(normal_features + skewed_features, f"{output_path}/features/log_transform_features.json")
     plot_correlation(wucaishen_data[normal_features + skewed_features])
 
     # remove highly correlated features:
@@ -325,16 +320,13 @@ def main(output_path: str):
     _, kept_features = feature_selection_by_variance(wucaishen_data[kept_features], threshold=0.01)
     data_select = wucaishen_data[kept_features + non_features]
 
-    important_features = feature_selection_by_pca(
-        data_select, f"s3://{S3_BUCKET}/{S3_OUTPUT_PATH}/features/important_features.json"
-    )
+    important_features = feature_selection_by_pca(data_select, output_path)
     elbow_method(wucaishen_data, important_features, [15, 20, 25, 30, 35, 40], output_path)
 
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", required=True, default=f"s3://bituslabs-team-ai/wucaishen_processed_data/")
     parser.add_argument("--output_path", required=True, default=".")
     args = parser.parse_args()
 
