@@ -17,7 +17,7 @@ from sklearn.preprocessing import StandardScaler
 from bituslabs_ds.config import S3_BUCKET
 from bituslabs_ds.s3_utils import list_s3_files, read_files, upload_file_to_s3
 from bituslabs_ds.utils import log_transform, remove_outliers
-from jobs.sagemaker.processing_cluster_analysis_01_elbow_method import S3_OUTPUT_PATH
+from jobs.sagemaker.cluster_analysis_01_processing_elbow_method import S3_OUTPUT_PATH
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())  # Safe for import; silent if no config

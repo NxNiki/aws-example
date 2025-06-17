@@ -157,7 +157,7 @@ def elbow_method(
     data: pd.DataFrame, features: List[str], n_features: Optional[Union[List[int], int]] = None, output_path: str = "."
 ):
     """
-    run elbow method to determine number of clusters
+    run elbow method to determine the number of clusters
     :param data:
     :param features: label of columns of data that order by feature importance.
     :param n_features: select top n features
@@ -292,28 +292,27 @@ def get_feature_names() -> Tuple[List[str], List[str], List[str]]:
 
 def main(output_path: str):
 
-    os.makedirs(f"{output_path}/.log", exist_ok=True)
     os.makedirs(f"{output_path}/output", exist_ok=True)
     os.makedirs(f"{output_path}/features", exist_ok=True)
     os.makedirs(f"{output_path}/figures", exist_ok=True)
 
     non_features, normal_features, skewed_features = get_feature_names()
 
-    # wucaishen_files = list_s3_files(S3_BUCKET, "wucaishen_processed_data", r"wucaishen_grouped_stat_output_24.*\.csv$")
-    # wucaishen_data = read_files(
-    #     wucaishen_files, local_cache_path="./output/wucaishen_grouped_stat_output_24.csv", reload=False
-    # )
+    wucaishen_files = list_s3_files(S3_BUCKET, "wucaishen_processed_data", r"wucaishen_grouped_stat_output_24.*\.csv$")
+    wucaishen_data = read_files(
+        wucaishen_files, local_cache_path=f"{output_path}/output/wucaishen_grouped_stat_output_24.csv", reload=False
+    )
 
-    dataset = read_dataset(f"{S3_BUCKET}/wucaishen_process_grouped", REGION)
-    # table = dataset.to_table(filter=(ds.field("month") == "01"))
-    table = dataset.to_table(columns=non_features + normal_features + skewed_features, use_threads=True)
-    wucaishen_data = table.to_pandas(use_threads=True)
+    # dataset = read_dataset(f"{S3_BUCKET}/wucaishen_process_grouped", REGION)
+    # # table = dataset.to_table(filter=(ds.field("month") == "01"))
+    # table = dataset.to_table(columns=non_features + normal_features + skewed_features, use_threads=True)
+    # wucaishen_data = table.to_pandas(use_threads=True)
 
     count_missing_columns(wucaishen_data)
     wucaishen_data.fillna(0, inplace=True)
     wucaishen_data = log_transform(wucaishen_data, skewed_features)
     save_list(normal_features + skewed_features, f"{output_path}/features/log_transform_features.json")
-    plot_correlation(wucaishen_data[normal_features + skewed_features])
+    plot_correlation(wucaishen_data[normal_features + skewed_features], output_path)
 
     # remove highly correlated features:
     _, kept_features = smart_feature_selection(wucaishen_data[normal_features + skewed_features], threshold=0.9)
@@ -327,9 +326,10 @@ def main(output_path: str):
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output_path", required=True, default=".")
+    parser.add_argument("--output_path", required=False, default=".")
     args = parser.parse_args()
 
+    os.makedirs(f"{args.output_path}/.log", exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(message)s",

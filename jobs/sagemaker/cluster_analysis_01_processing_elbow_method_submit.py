@@ -9,7 +9,6 @@ role = "arn:aws:iam::338568447110:role/SageMakerExecutionRole"
 session = sagemaker.Session()
 
 image_uri = "338568447110.dkr.ecr.us-west-2.amazonaws.com/bituslabs-ds-sagemaker:latest"
-
 print(f"image_uri: {image_uri}")
 
 processor = ScriptProcessor(
