@@ -106,11 +106,11 @@ def feature_selection_by_variance(data: pd.DataFrame, threshold: float = 0.01) -
     return data_filtered, selected_features
 
 
-def feature_selection_by_pca(data: pd.DataFrame, s3_path: Optional[str] = None) -> List[str]:
+def feature_selection_by_pca(data: pd.DataFrame, output_path: str = ".") -> List[str]:
     """
     remove features with variance < threshold.
     :param data:
-    :param s3_path:
+    :param output_path:
     :return:
     """
 
@@ -133,36 +133,24 @@ def feature_selection_by_pca(data: pd.DataFrame, s3_path: Optional[str] = None) 
     plt.xlabel("Importance Score", fontsize=12)
     plt.ylabel("Feature", fontsize=12)
     plt.grid(axis="x", linestyle="--", alpha=0.6)
-
-    plt.savefig(f"./figures/{title}.png")
+    plt.savefig(f"{output_path}/figures/{title}.png")
     plt.show()
-    # upload_file_to_s3(f"./figures/{title}.png", S3_BUCKET, f"{S3_OUTPUT_PATH}/{title}.png")
 
     features = [features[i] for i in np.argsort(importance)[::-1]]
-    save_list(features, f"./features/important_features.json")
-
-    if s3_path:
-        logger.info(f"upload important_features.json to: {s3_path}")
-        bucket, key = parse_s3_path(s3_path)
-        upload_file_to_s3(
-            f"./features/important_features.json",
-            bucket,
-            key,
-        )
+    save_list(features, f"{output_path}/features/important_features.json")
 
     return features
 
 
-def plot_correlation(data: pd.DataFrame):
+def plot_correlation(data: pd.DataFrame, output_path: str = ".") -> None:
     data = keep_numeric_columns(data)
     corr_matrix = data.corr()
     plt.figure(figsize=(14, 10))
     sns.heatmap(corr_matrix, annot=False, cmap="coolwarm", fmt=".2f", linewidths=0.5, vmin=-1, vmax=1)
     title = "Feature Correlation Heatmap"
     plt.title(title, fontsize=16)
-    plt.savefig(f"./figures/{title}.png")
+    plt.savefig(f"{output_path}/figures/{title}.png")
     plt.show()
-    # upload_file_to_s3(f"./figures/{title}.png", S3_BUCKET, f"{S3_OUTPUT_PATH}/{title}.png")
 
 
 def elbow_method(
@@ -244,7 +232,6 @@ def elbow_method(
 
         plt.savefig(f"{output_path}/figures/{title}.png")
         plt.show()
-        # upload_file_to_s3(f"./figures/{title}.png", S3_BUCKET, f"{S3_OUTPUT_PATH}/{title}.png")
 
 
 def calculate_silhouette_score(x: Union[np.ndarray, pd.DataFrame], cluster_obj: ClusterMixin) -> float:
@@ -303,12 +290,12 @@ def get_feature_names() -> Tuple[List[str], List[str], List[str]]:
     return non_features, normal_features, skewed_features
 
 
-def main(local_output_path: str):
+def main(output_path: str):
 
-    os.makedirs(f"{local_output_path}/.log", exist_ok=True)
-    os.makedirs(f"{local_output_path}/output", exist_ok=True)
-    os.makedirs(f"{local_output_path}/features", exist_ok=True)
-    os.makedirs(f"{local_output_path}/figures", exist_ok=True)
+    os.makedirs(f"{output_path}/.log", exist_ok=True)
+    os.makedirs(f"{output_path}/output", exist_ok=True)
+    os.makedirs(f"{output_path}/features", exist_ok=True)
+    os.makedirs(f"{output_path}/figures", exist_ok=True)
 
     non_features, normal_features, skewed_features = get_feature_names()
 
@@ -327,7 +314,7 @@ def main(local_output_path: str):
     wucaishen_data = log_transform(wucaishen_data, skewed_features)
     save_list(normal_features + skewed_features, "./features/log_transform_features.json")
     upload_file_to_s3(
-        f"{local_output_path}/features/log_transform_features.json",
+        f"{output_path}/features/log_transform_features.json",
         S3_BUCKET,
         f"{S3_OUTPUT_PATH}/features/log_transform_features.json",
     )
@@ -339,26 +326,25 @@ def main(local_output_path: str):
     data_select = wucaishen_data[kept_features + non_features]
 
     important_features = feature_selection_by_pca(
-        data_select,
-        f"s3://{S3_BUCKET}/{S3_OUTPUT_PATH}/features/important_features.json",
+        data_select, f"s3://{S3_BUCKET}/{S3_OUTPUT_PATH}/features/important_features.json"
     )
-    elbow_method(wucaishen_data, important_features, [15, 20, 25, 30, 35, 40], local_output_path)
+    elbow_method(wucaishen_data, important_features, [15, 20, 25, 30, 35, 40], output_path)
 
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True, default=f"s3://bituslabs-team-ai/wucaishen_processed_data/")
-    parser.add_argument("--local_output_path", required=True, default=".")
+    parser.add_argument("--output_path", required=True, default=".")
     args = parser.parse_args()
 
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(message)s",
         handlers=[
-            logging.FileHandler(f"{args.local_output_path}/.log/analysis_cluster_01_elbow_method.log"),
+            logging.FileHandler(f"{args.output_path}/.log/analysis_cluster_01_elbow_method.log"),
             logging.StreamHandler(),
         ],
     )
 
-    main(args.local_output_path)
+    main(args.output_path)

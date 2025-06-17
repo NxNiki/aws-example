@@ -938,14 +938,14 @@ tests = ["asttokens (>=2.1.0)", "coverage", "coverage-enable-subprocess", "ipyth
 
 [[package]]
 name = "fastapi"
-version = "0.115.12"
+version = "0.115.13"
 description = "FastAPI framework, high performance, easy to learn, fast to code, ready for production"
 optional = false
 python-versions = ">=3.8"
 groups = ["main"]
 files = [
-    {file = "fastapi-0.115.12-py3-none-any.whl", hash = "sha256:e94613d6c05e27be7ffebdd6ea5f388112e5e430c8f7d6494a9d1d88d43e814d"},
-    {file = "fastapi-0.115.12.tar.gz", hash = "sha256:1e2c2a2646905f9e83d32f04a3f86aff4a286669c6c950ca95b5fd68c2602681"},
+    {file = "fastapi-0.115.13-py3-none-any.whl", hash = "sha256:0a0cab59afa7bab22f5eb347f8c9864b681558c278395e94035a741fc10cd865"},
+    {file = "fastapi-0.115.13.tar.gz", hash = "sha256:55d1d25c2e1e0a0a50aceb1c8705cd932def273c102bff0b1c1da88b3c6eb307"},
 ]
 
 [package.dependencies]
@@ -3277,7 +3277,7 @@ version = "0.10.9.7"
 description = "Enables Python programs to dynamically access arbitrary Java objects"
 optional = false
 python-versions = "*"
-groups = ["dev"]
+groups = ["main"]
 files = [
     {file = "py4j-0.10.9.7-py2.py3-none-any.whl", hash = "sha256:85defdfd2b2376eb3abf5ca6474b51ab7e0de341c75a02f46dc9b5976f5a5c1b"},
     {file = "py4j-0.10.9.7.tar.gz", hash = "sha256:0b6e5315bb3ada5cf62ac651d107bb2ebc02def3dee9d9548e3baac644ea8dbb"},
@@ -3527,7 +3527,7 @@ version = "3.5.5"
 description = "Apache Spark Python API"
 optional = false
 python-versions = ">=3.8"
-groups = ["dev"]
+groups = ["main"]
 files = [
     {file = "pyspark-3.5.5.tar.gz", hash = "sha256:6effc9ce98edf231f4d683fd14f7270629bf8458c628d6a2620ded4bb34f3cb9"},
 ]
@@ -4093,14 +4093,14 @@ test = ["accelerate (>=0.24.1,<=0.27.0)", "apache-airflow (==2.10.4)", "apache-a
 
 [[package]]
 name = "sagemaker-core"
-version = "1.0.37"
+version = "1.0.38"
 description = "An python package for sagemaker core functionalities"
 optional = false
 python-versions = ">=3.8"
 groups = ["main"]
 files = [
-    {file = "sagemaker_core-1.0.37-py3-none-any.whl", hash = "sha256:a7028b14671766d31e9651b72adbea67521191d26dfa6811c3913a26feecae28"},
-    {file = "sagemaker_core-1.0.37.tar.gz", hash = "sha256:8a9ea24fa40df9590456983c3f96fd1835638128e3da6a6adb9684b42bc40c16"},
+    {file = "sagemaker_core-1.0.38-py3-none-any.whl", hash = "sha256:f8ca5f88ba205bd5035c8abb7332fa947662fd7ad9397e451bf78ae6ce7f6190"},
+    {file = "sagemaker_core-1.0.38.tar.gz", hash = "sha256:86c34b484b87105d225503727d3fffa41b990e6ac87af03dfbfe3a4d3ae6160c"},
 ]
 
 [package.dependencies]
@@ -4848,4 +4848,4 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.9.0"
-content-hash = "bb75a071b7e7b6963e039915b30c8d384a81cae5cff52696a0c577734645196b"
+content-hash = "8001b1d3654e259b0cf8676e52348edd3f3101fb86f5762621d8c1c58cd79f0f"

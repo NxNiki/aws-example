@@ -248,16 +248,3 @@ def read_dataset(file_path: str, region: str, data_format: str = "parquet") -> D
     logger.info("Finished reading dataset")
 
     return ds
-
-
-if __name__ == "__main__":
-
-    os.makedirs("../.log", exist_ok=True)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)s | %(message)s",
-        handlers=[logging.FileHandler("../.log/s3_utils.log"), logging.StreamHandler()],
-    )
-
-    list_s3_files("hyber-slot", "wucaishen_oringaldata/", r"\.csv.gz$")
-    # list_s3_files("xin-config", "", ".csv")

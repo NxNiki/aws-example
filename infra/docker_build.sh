@@ -12,6 +12,7 @@ echo "ECR_URL: $ECR_URL"
 
 # Login to ECR
 #aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin 246618743249.dkr.ecr.us-west-2.amazonaws.com
+aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin 338568447110.dkr.ecr.us-west-2.amazonaws.com
 
 # Build the Docker image
 docker build --platform linux/amd64 -t $IMAGE_NAME -f infra/Dockerfile ./

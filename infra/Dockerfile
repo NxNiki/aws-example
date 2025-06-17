@@ -8,7 +8,8 @@ RUN pip install poetry==1.8.2
 WORKDIR /opt/program
 
 # Copy poetry files
-COPY ./pyproject.toml poetry.lock ./
+#COPY ./pyproject.toml poetry.lock ./
+COPY ./pyproject.toml ./
 
 # Install dependencies first (excluding dev deps for SageMaker)
 RUN poetry config virtualenvs.create false && poetry install --no-dev --no-interaction
@@ -22,6 +23,7 @@ COPY ./src/bituslabs_ds ./bituslabs_ds
 # Set Python environment variables
 ENV PYTHONUNBUFFERED=TRUE
 ENV PYTHONDONTWRITEBYTECODE=TRUE
-ENV PYTHONPATH="/opt/program:${PYTHONPATH}"
+ENV PYTHONPATH="/opt/program"
+#ENV PYTHONPATH="/opt/program:${PYTHONPATH}"
 
 ENTRYPOINT ["python3"]
