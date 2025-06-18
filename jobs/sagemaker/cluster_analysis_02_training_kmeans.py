@@ -34,41 +34,28 @@ def scale_features(
     :param load_cache:
     :return:
     """
-    output_dir = output_dir.lstrip("./")
+    output_dir = output_dir.rstrip("/")
 
-    if os.path.exists(f"{output_dir}/{output_file_name}.csv") and load_cache:
+    if os.path.exists(f"{output_dir}/features/{output_file_name}.csv") and load_cache:
         logger.info(f"read existing output file {output_file_name}...")
-        df_scaled = pd.read_csv(f"{output_dir}/{output_file_name}.csv")
+        df_scaled = pd.read_csv(f"{output_dir}/features/{output_file_name}.csv")
     else:
         scaler = StandardScaler()
         x_scaled = scaler.fit_transform(data)
         df_scaled = pd.DataFrame(x_scaled, columns=data.columns)
 
-        df_scaled.to_csv(f"{output_dir}/{output_file_name}.csv", index=False)
-        df_scaled.to_json(f"{output_dir}/{output_file_name}.json", orient="records", indent=2)
+        df_scaled.to_csv(f"{output_dir}/features/{output_file_name}.csv", index=False)
+        df_scaled.to_json(f"{output_dir}/features/{output_file_name}.json", orient="records", indent=2)
 
         mean_std_df = pd.DataFrame({"Mean": scaler.mean_, "Std": scaler.scale_}, index=data.columns)
-        mean_std_df.to_csv(f"{output_dir}/{output_file_name}_parameters.csv")
+        mean_std_df.to_csv(f"{output_dir}/features/{output_file_name}_parameters.csv")
         print("\n 每个特征的标准化参数（均值与标准差）：")
         print(mean_std_df)
-
-        logger.info(f"update standardized_features.csv to s3: {S3_OUTPUT_PATH}/{output_file_name}/")
-        upload_file_to_s3(
-            f"{output_dir}/{output_file_name}.csv", S3_BUCKET, f"{S3_OUTPUT_PATH}/{output_dir}/{output_file_name}.csv"
-        )
-        upload_file_to_s3(
-            f"{output_dir}/{output_file_name}.json", S3_BUCKET, f"{S3_OUTPUT_PATH}/{output_dir}/{output_file_name}.json"
-        )
-        upload_file_to_s3(
-            f"{output_dir}/{output_file_name}_parameters.csv",
-            S3_BUCKET,
-            f"{S3_OUTPUT_PATH}/{output_dir}/{output_file_name}_parameters.csv",
-        )
 
     return df_scaled
 
 
-def run_cluster_analysis(data: pd.DataFrame, n_clusters: int, output_dir: str = "models") -> np.ndarray:
+def run_cluster_analysis(data: pd.DataFrame, n_clusters: int, output_dir: str = ".") -> np.ndarray:
     """
     run cluster analysis and return the cluster index.
     :param data:
@@ -76,33 +63,29 @@ def run_cluster_analysis(data: pd.DataFrame, n_clusters: int, output_dir: str = 
     :param output_dir:
     :return:
     """
-    output_dir = output_dir.lstrip("./")
+    output_dir = output_dir.rstrip("/")
     kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
     data_cluster = kmeans.fit_predict(data)
 
     # ===== 每个聚类中心在标准化空间的特征值 =====
     centroids_df = pd.DataFrame(kmeans.cluster_centers_, columns=data.columns)
     logger.info(f"\n 各聚类中心的标准化特征值：\n {centroids_df}")
-    centroids_df.to_csv(f"./{output_dir}/cluster_centers_standardized_{len(data.columns)}.csv", index=False)
+    centroids_df.to_csv(f"{output_dir}/models/cluster_centers_standardized_{len(data.columns)}.csv", index=False)
 
     # ===== 模型保存 =====
-    joblib.dump(kmeans, f"./{output_dir}/kmeans_model.pkl")
+    joblib.dump(kmeans, f"{output_dir}/models/kmeans_model.pkl")
     n_features = data.shape[1]
     initial_type = [("float_input", FloatTensorType([None, n_features]))]
     onnx_model = convert_sklearn(kmeans, initial_types=initial_type)
-    with open(f"./{output_dir}/kmeans_model.onnx", "wb") as f:
+    with open(f"{output_dir}/models/kmeans_model.onnx", "wb") as f:
         f.write(onnx_model.SerializeToString())
 
-    upload_file_to_s3(f"./{output_dir}/kmeans_model.pkl", S3_BUCKET, f"{S3_OUTPUT_PATH}/{output_dir}/kmeans_model.pkl")
-    upload_file_to_s3(
-        f"./{output_dir}/kmeans_model.onnx", S3_BUCKET, f"{S3_OUTPUT_PATH}/{output_dir}/kmeans_model.onnx"
-    )
-    logger.info(f"save cluster model to s3：{S3_OUTPUT_PATH}/{output_dir}/")
+    logger.info(f"save cluster model to s3：{output_dir}/models")
     return data_cluster
 
 
 def plot_pca_2(
-    data: pd.DataFrame, data_cluster: np.ndarray, output_dir: str = "./figures", output_file_name: str = "PCA_Clusters"
+    data: pd.DataFrame, data_cluster: np.ndarray, output_dir: str = ".", output_file_name: str = "PCA_Clusters"
 ) -> None:
     """
     run pca and plot the first 2 components
@@ -122,7 +105,7 @@ def plot_pca_2(
     plt.title("PCA Visualization of KMeans Clusters")
     plt.legend(title="Cluster")
     plt.grid(True)
-    plt.savefig(f"{output_dir}/{output_file_name}.png")
+    plt.savefig(f"{output_dir}/figures/{output_file_name}.png")
     plt.show()
 
     unique_values, counts = np.unique(data_cluster, return_counts=True)
@@ -130,13 +113,14 @@ def plot_pca_2(
     print(f"\n 每个聚类的样本数量：{cluster_counts}")
 
 
-def plot_radar_chart(data: pd.DataFrame, data_cluster: np.ndarray) -> None:
+def plot_radar_chart(data: pd.DataFrame, data_cluster: np.ndarray, output_dir: str = ".") -> None:
     """
 
     :param data:
     :param data_cluster:
     :return:
     """
+    output_dir = output_dir.rstrip("/")
     data["_cluster"] = data_cluster
     cluster_means = data.groupby("_cluster").mean().T
     categories = cluster_means.index
@@ -155,7 +139,7 @@ def plot_radar_chart(data: pd.DataFrame, data_cluster: np.ndarray) -> None:
     plt.title("Cluster Feature Means (Standardized) - Radar Chart")
     plt.legend(loc="upper right")
     plt.subplots_adjust(left=0.1, bottom=0.1)
-    plt.savefig("./figures/Radar_Clusters.png")
+    plt.savefig(f"{output_dir}/figures/Radar_Clusters.png")
     plt.show()
 
 
@@ -165,7 +149,7 @@ def save_cluster_data(
     merge_columns: List[str],
     cluster_column: str = "Cluster",
     feature_columns: Optional[List[str]] = None,
-    output_dir: str = "output",
+    output_dir: str = ".",
 ) -> None:
     """
     merge cluster index with original data and save data for each cluster.
@@ -178,14 +162,11 @@ def save_cluster_data(
     :return:
     """
 
-    output_dir.lstrip("./")
-
+    output_dir.rstrip("/")
     data_merged = data_original.merge(data_cluster, on=merge_columns, how="inner")
     for cluster, group_df in data_merged.groupby(cluster_column):
         file_name = f"original_data_cluster_{cluster}.csv"
-        group_df.drop(columns=[cluster_column]).to_csv(f"./{output_dir}/{file_name}", index=False)
-        upload_file_to_s3(f"./{output_dir}/{file_name}", S3_BUCKET, f"{S3_OUTPUT_PATH}/{output_dir}/{file_name}")
-
+        group_df.drop(columns=[cluster_column]).to_csv(f"{output_dir}/output/{file_name}", index=False)
         if feature_columns is not None:
             stats = group_df[feature_columns].describe().T  # include: count, mean, std, min, 25%, 50%, 75%, max
             print(f"\n 原始特征分布 - cluster {cluster}:")
@@ -193,43 +174,43 @@ def save_cluster_data(
 
 
 if __name__ == "__main__":
-
-    os.makedirs("../.log", exist_ok=True)
-    os.makedirs("../figures", exist_ok=True)
-    os.makedirs("../models", exist_ok=True)
-    os.makedirs("../features", exist_ok=True)
-    os.makedirs("../output", exist_ok=True)
+    output_dir = "."
+    os.makedirs(f"{output_dir}/.log", exist_ok=True)
+    os.makedirs(f"{output_dir}/figures", exist_ok=True)
+    os.makedirs(f"{output_dir}/models", exist_ok=True)
+    os.makedirs(f"{output_dir}/features", exist_ok=True)
+    os.makedirs(f"{output_dir}/output", exist_ok=True)
 
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(message)s",
-        handlers=[logging.FileHandler("../.log/analysis_cluster_02_kmeans.log"), logging.StreamHandler()],
+        handlers=[logging.FileHandler(f"{output_dir}/.log/analysis_cluster_02_kmeans.log"), logging.StreamHandler()],
     )
 
     n_clusters = 3
     top_n_features = 25
     non_feature_col = ["group_id", "loginname", "start_time"]
 
-    with open("../features/important_features.json", "r") as f:
+    with open(f"{output_dir}/features/important_features.json", "r") as f:
         features = json.load(f)
-    with open("../features/log_transform_features.json", "r") as f:
+    with open(f"{output_dir}/features/log_transform_features.json", "r") as f:
         features_log = json.load(f)
 
     wucaishen_files = list_s3_files(S3_BUCKET, "wucaishen_processed_data", r"wucaishen_grouped_stat_output_24.*\.csv$")
-    wucaishen_data = read_files(wucaishen_files, "../output/wucaishen_grouped_stat_output_24.csv")
+    wucaishen_data = read_files(wucaishen_files, f"{output_dir}/output/wucaishen_grouped_stat_output_24.csv")
 
     wucaishen_data = log_transform(wucaishen_data, features_log)
 
     data = scale_features(
-        wucaishen_data[features[:top_n_features]], "../features", f"standardized_features_top_{top_n_features}"
+        wucaishen_data[features[:top_n_features]], output_dir, f"standardized_features_top_{top_n_features}"
     )
     data, row_index = remove_outliers(data)
     data_reference = wucaishen_data.loc[row_index, non_feature_col]
 
-    cluster_index = run_cluster_analysis(data, 3)
+    cluster_index = run_cluster_analysis(data, 3, output_dir)
 
-    plot_pca_2(data, cluster_index)
-    plot_radar_chart(data, cluster_index)
+    plot_pca_2(data, cluster_index, output_dir)
+    plot_radar_chart(data, cluster_index, output_dir)
 
     data_reference["Cluster"] = cluster_index
-    save_cluster_data(wucaishen_data, data_reference, non_feature_col, "Cluster")
+    save_cluster_data(wucaishen_data, data_reference, non_feature_col, "Cluster", output_dir=output_dir)
