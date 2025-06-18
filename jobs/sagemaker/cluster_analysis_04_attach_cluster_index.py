@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 
-def main(input_dir, output_dir):
+def main(input_dir: str, output_dir: str):
     start_time = time.time()
     columns_to_read = [
         "loginname",
@@ -56,7 +56,13 @@ def main(input_dir, output_dir):
 
 if __name__ == "__main__":
 
-    log_file_path = f".log/processing_attach_cluster_index.log"
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input", required=True)
+    parser.add_argument("--output", required=True, default="./output")
+    args = parser.parse_args()
+
+    os.makedirs(f"{args.output}/.log/")
+    log_file_path = f"{args.output}/.log/processing_attach_cluster_index.log"
 
     logging.basicConfig(
         level=logging.INFO,
@@ -66,10 +72,5 @@ if __name__ == "__main__":
             logging.StreamHandler(sys.stdout),
         ],
     )
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--input", required=True, default=f"s3://bituslabs-team-ai/wucaishen_processed_data/")
-    parser.add_argument("--output", required=True, default="./output")
-    args = parser.parse_args()
 
     main(args.input, args.output)
