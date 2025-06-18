@@ -17,7 +17,7 @@ processor = ScriptProcessor(
     role=role,
     instance_type="ml.m5.12xlarge",
     instance_count=1,
-    base_job_name="attach-cluster-index",
+    base_job_name="elbow-method",
     sagemaker_session=session,
 )
 
