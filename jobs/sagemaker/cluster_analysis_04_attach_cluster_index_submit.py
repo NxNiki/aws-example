@@ -46,12 +46,12 @@ inputs = [
 outputs = [
     ProcessingOutput(
         source=f"{output_dir}",
-        destination=f"s3://{S3_BUCKET}/ds-data-kmeans/test",
+        destination=f"s3://{S3_BUCKET}/ds-data-kmeans/2025",
     )
 ]
 
 processor.run(
-    code="processing_cluster_analysis_03_attach_cluster_index.py",
+    code="cluster_analysis_04_attach_cluster_index.py",
     inputs=inputs,
     outputs=outputs,
     arguments=[

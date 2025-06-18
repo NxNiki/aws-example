@@ -34,7 +34,7 @@ def main(input_dir, output_dir):
         "group_id",
     ]
 
-    files = glob.glob(f"{input_dir}/wucaishen_processed_data/wucaishen_enriched_output_24??/*.csv")
+    files = glob.glob(f"{input_dir}/wucaishen_processed_data/wucaishen_enriched_output_25??/*.csv")
     data = read_csv_cols(files, columns=columns_to_read, max_workers=12)
 
     print(data.head(10))
@@ -42,13 +42,13 @@ def main(input_dir, output_dir):
 
     os.makedirs(output_dir, exist_ok=True)
     for i in range(3):
-        cluster_file = f"{input_dir}/kmeans_output/original_data_cluster_{i}.csv"
+        cluster_file = f"{input_dir}/kmeans_output/grouped_data_2025_cluster_{i}.csv"
         cluster_data = pd.read_csv(cluster_file, usecols=["group_id"])
         cluster_data["cluster"] = i
         cluster_data = pd.merge(data, cluster_data, how="inner", on="group_id")
         # cluster_data.drop("group_id", axis=1, inplace=True)
 
-        f_name = f"wucaishen_with_cluster_2024_{i}.csv"
+        f_name = f"wucaishen_with_cluster_2025_{i}.csv"
         cluster_data.to_csv(f"{output_dir}/{f_name}", index=False)
 
     logger.info(f"job took {time.time() - start_time} seconds")
