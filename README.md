@@ -4,7 +4,7 @@
 
 Use conda to create and activate the virtual environment, run in the project root directory:
 ```
-conda env create -f environments.yml --prune
+conda env create -f environment.yml --prune
 conda activate aws-example
 ```
 Use peotry within a conda environment, make sure to aovid creating virtual environment with peotry:
