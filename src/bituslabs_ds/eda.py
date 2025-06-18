@@ -10,6 +10,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from pandas import DataFrame, Series
 
+from bituslabs_ds.config import MAX_JOBS
+
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
@@ -19,7 +21,7 @@ def read_csv_cols(
     columns: List[str],
     filters: Optional[Dict[str, Any]] = None,
     sampling: Optional[Union[int, float]] = None,
-    max_workers: int = 8,
+    max_workers: int = MAX_JOBS,
 ) -> pd.DataFrame:
     """
     Reads specific columns from multiple CSV files, filters rows based on criteria,
@@ -69,11 +71,6 @@ def read_csv_cols(
             return pd.DataFrame(columns=columns)
 
     df_list = []
-    num_cores = os.cpu_count()
-    if num_cores is None:
-        max_workers = min(max_workers, len(files))
-    else:
-        max_workers = min(max_workers, len(files), num_cores - 1)
     logger.info(f"run jobs on {max_workers} threads")
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(process_file, file): file for file in files}
