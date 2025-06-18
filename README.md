@@ -2,9 +2,15 @@
 
 ## how to use:
 
-If you use peotry within a conda environment, make sure to aovid creating virtual environment with peotry:
+Use conda to create and activate the virtual environment, run in the project root directory:
+```
+conda env create -f environments.yml --prune
+conda activate aws-example
+```
+Use peotry within a conda environment, make sure to aovid creating virtual environment with peotry:
 ```
 poetry config virtualenvs.create false --local
+poetry install
 ```
 Otherwise, conda and peotry will use different virtual environments!
 
