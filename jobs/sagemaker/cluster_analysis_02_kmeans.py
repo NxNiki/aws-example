@@ -1,26 +1,26 @@
 import json
 import logging
 import os
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import joblib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from cluster_analysis_01_elbow_method import get_feature_names, load_data
 from skl2onnx import convert_sklearn
 from skl2onnx.common.data_types import FloatTensorType
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
-from bituslabs_ds.config import S3_BUCKET
+from bituslabs_ds.config import S3_BUCKET, setup_logging
 from bituslabs_ds.s3_utils import list_s3_files, read_files, upload_file_to_s3
 from bituslabs_ds.utils import log_transform, remove_outliers
-from jobs.sagemaker.cluster_analysis_01_processing_elbow_method import S3_OUTPUT_PATH
 
 logger = logging.getLogger(__name__)
-logger.addHandler(logging.NullHandler())  # Safe for import; silent if no config
+logger.addHandler(logging.NullHandler())
 
 
 def scale_features(
@@ -53,6 +53,19 @@ def scale_features(
         print(mean_std_df)
 
     return df_scaled
+
+
+def load_features(feature_path: str, top_features: int) -> Tuple[List[str], List[str]]:
+
+    important_features = json.load(open(f"{feature_path}/important_features.json", "r"))
+    important_features = important_features[:top_features]
+    print(important_features)
+
+    features_log = json.load(open(f"{feature_path}/log_transform_features.json", "r"))
+    features_log = [f for f in features_log if f in important_features]
+    print(features_log)
+
+    return important_features, features_log
 
 
 def run_cluster_analysis(data: pd.DataFrame, n_clusters: int, output_dir: str = ".") -> np.ndarray:
@@ -118,6 +131,7 @@ def plot_radar_chart(data: pd.DataFrame, data_cluster: np.ndarray, output_dir: s
 
     :param data:
     :param data_cluster:
+    :param output_dir:
     :return:
     """
     output_dir = output_dir.rstrip("/")
@@ -174,43 +188,35 @@ def save_cluster_data(
 
 
 if __name__ == "__main__":
-    output_dir = "."
-    os.makedirs(f"{output_dir}/.log", exist_ok=True)
-    os.makedirs(f"{output_dir}/figures", exist_ok=True)
-    os.makedirs(f"{output_dir}/models", exist_ok=True)
-    os.makedirs(f"{output_dir}/features", exist_ok=True)
-    os.makedirs(f"{output_dir}/output", exist_ok=True)
+    output_path = "."
+    os.makedirs(f"{output_path}/figures", exist_ok=True)
+    os.makedirs(f"{output_path}/models", exist_ok=True)
+    os.makedirs(f"{output_path}/features", exist_ok=True)
+    os.makedirs(f"{output_path}/output", exist_ok=True)
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)s | %(message)s",
-        handlers=[logging.FileHandler(f"{output_dir}/.log/analysis_cluster_02_kmeans.log"), logging.StreamHandler()],
-    )
+    setup_logging(output_path, "analysis_cluster_02_kmeans.log")
 
     n_clusters = 3
-    top_n_features = 25
-    non_feature_col = ["group_id", "loginname", "start_time"]
+    top_features = 25
+    non_features, _, _ = get_feature_names()
+    important_features, features_log = load_features(f"{output_path}/features", top_features)
 
-    with open(f"{output_dir}/features/important_features.json", "r") as f:
-        features = json.load(f)
-    with open(f"{output_dir}/features/log_transform_features.json", "r") as f:
-        features_log = json.load(f)
-
-    wucaishen_files = list_s3_files(S3_BUCKET, "wucaishen_processed_data", r"wucaishen_grouped_stat_output_24.*\.csv$")
-    wucaishen_data = read_files(wucaishen_files, f"{output_dir}/output/wucaishen_grouped_stat_output_24.csv")
-
-    wucaishen_data = log_transform(wucaishen_data, features_log)
-
-    data = scale_features(
-        wucaishen_data[features[:top_n_features]], output_dir, f"standardized_features_top_{top_n_features}"
+    wucaishen_data = load_data(
+        f"{output_path}/output/wucaishen_grouped_stat_output_24.csv",
+        columns=[*non_features, *important_features],
+        pattern=r"wucaishen_grouped_stat_output_24.*\.csv$",
     )
+
+    wucaishen_data = log_transform(wucaishen_data, col_names=features_log)
+
+    data = scale_features(wucaishen_data[important_features], output_path, f"standardized_features_top_{top_features}")
     data, row_index = remove_outliers(data)
-    data_reference = wucaishen_data.loc[row_index, non_feature_col]
+    data_reference = wucaishen_data.loc[row_index, non_features]
 
-    cluster_index = run_cluster_analysis(data, 3, output_dir)
+    cluster_index = run_cluster_analysis(data, n_clusters, output_path)
 
-    plot_pca_2(data, cluster_index, output_dir)
-    plot_radar_chart(data, cluster_index, output_dir)
+    plot_pca_2(data, cluster_index, output_path)
+    plot_radar_chart(data, cluster_index, output_path)
 
     data_reference["Cluster"] = cluster_index
-    save_cluster_data(wucaishen_data, data_reference, non_feature_col, "Cluster", output_dir=output_dir)
+    save_cluster_data(wucaishen_data, data_reference, non_features, "Cluster", output_dir=output_path)

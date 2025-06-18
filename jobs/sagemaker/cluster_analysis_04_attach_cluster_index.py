@@ -2,11 +2,11 @@ import argparse
 import glob
 import logging
 import os
-import sys
 import time
 
 import pandas as pd
 
+from bituslabs_ds.config import get_cpu_cores, setup_logging
 from bituslabs_ds.eda import read_csv_cols
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ def main(input_dir: str, output_dir: str):
     ]
 
     files = glob.glob(f"{input_dir}/wucaishen_processed_data/wucaishen_enriched_output_25??/*.csv")
-    data = read_csv_cols(files, columns=columns_to_read, max_workers=12)
+    data = read_csv_cols(files, columns=columns_to_read, max_workers=get_cpu_cores() - 1)
 
     print(data.head(10))
     print(data.shape)
@@ -61,16 +61,6 @@ if __name__ == "__main__":
     parser.add_argument("--output", required=True, default="./output")
     args = parser.parse_args()
 
-    os.makedirs(f"{args.output}/.log/")
-    log_file_path = f"{args.output}/.log/processing_attach_cluster_index.log"
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)s | %(message)s",
-        handlers=[
-            logging.FileHandler(log_file_path),
-            logging.StreamHandler(sys.stdout),
-        ],
-    )
+    setup_logging(args.output_path, "analysis_cluster_04_attach_cluster_index.log")
 
     main(args.input, args.output)

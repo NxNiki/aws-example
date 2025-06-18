@@ -1,28 +1,23 @@
-from pathlib import Path
+"""
+the final step of cluster analysis on wucaishen data:
+the cluster index is identified with grouped data (stats on 40 consecutive trials) in previous steps.
+this script merges cluster index to enriched data (original metrics for single trials).
+"""
 
 import sagemaker
-from sagemaker import image_uris
 from sagemaker.processing import ProcessingInput, ProcessingOutput, ScriptProcessor
 
 from bituslabs_ds.config import S3_BUCKET
 
+# directories on sagemaker to hold data:
 input_dir = "/opt/ml/processing/input"
 output_dir = "/opt/ml/processing/output"
 
 role = "arn:aws:iam::338568447110:role/SageMakerExecutionRole"
+image_uri = "338568447110.dkr.ecr.us-west-2.amazonaws.com/bituslabs-ds-sagemaker:latest"
 session = sagemaker.Session()
 
-# image_uri = image_uris.retrieve(
-#     framework="sklearn",           # or "pytorch", "xgboost", "tensorflow", etc.
-#     region="us-west-2",            # your region
-#     version="1.0-1",               # framework version
-#     instance_type="ml.m5.xlarge",  # optional; helps select CPU vs GPU image
-# )
-
-image_uri = "338568447110.dkr.ecr.us-west-2.amazonaws.com/bituslabs-ds-sagemaker:latest"
-
 print(f"image_uri: {image_uri}")
-
 processor = ScriptProcessor(
     image_uri=image_uri,
     command=["python3"],

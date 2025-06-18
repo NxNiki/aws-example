@@ -1,4 +1,13 @@
+import logging
+import os
+from datetime import datetime
 from pathlib import Path
+
+REGION = "us-west-2"
+S3_BUCKET = "bituslabs-team-ai"
+DEFAULT_MAX_JOBS = 4
+ATHENA_OUTPUT = f"s3://{S3_BUCKET}/athena-results/"
+LOCAL_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def get_cpu_cores(logical=True, default=1):
@@ -34,8 +43,17 @@ def get_cpu_cores(logical=True, default=1):
     return default
 
 
-REGION = "us-west-2"
-S3_BUCKET = "bituslabs-team-ai"
-ATHENA_OUTPUT = f"s3://{S3_BUCKET}/athena-results/"
-LOCAL_ROOT = Path(__file__).resolve().parent.parent.parent
-MAX_JOBS = get_cpu_cores()
+def setup_logging(output_path: str, log_filename: str = ""):
+    log_dir = os.path.join(output_path, ".log")
+    os.makedirs(log_dir, exist_ok=True)
+
+    if len(log_filename) == 0:
+        time_tag = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        log_filename = f"job_{time_tag}.log"
+    log_path = os.path.join(log_dir, log_filename)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(message)s",
+        handlers=[logging.FileHandler(log_path), logging.StreamHandler()],
+    )

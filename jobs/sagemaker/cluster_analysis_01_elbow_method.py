@@ -24,7 +24,7 @@ from sklearn.feature_selection import VarianceThreshold
 from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
 
-from bituslabs_ds.config import REGION, S3_BUCKET
+from bituslabs_ds.config import REGION, S3_BUCKET, setup_logging
 from bituslabs_ds.s3_utils import list_s3_files, parse_s3_path, read_dataset, read_files, upload_file_to_s3
 from bituslabs_ds.utils import (
     column_iterator,
@@ -34,9 +34,6 @@ from bituslabs_ds.utils import (
     remove_outliers,
     save_list,
 )
-
-S3_OUTPUT_PATH = "wucaishen_analysis_kmeans"
-s3 = boto3.client("s3")
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())  # Safe for import; silent if no config
@@ -290,6 +287,24 @@ def get_feature_names() -> Tuple[List[str], List[str], List[str]]:
     return non_features, normal_features, skewed_features
 
 
+def load_data(output_file: str, columns: Optional[List[str]] = None, pattern: str = ".*") -> pd.DataFrame:
+
+    files = list_s3_files(S3_BUCKET, "wucaishen_processed_data", pattern)
+    data = read_files(
+        files,
+        local_cache_path=output_file,
+        columns=columns,
+        reload=False,
+    )
+
+    # dataset = read_dataset(f"{S3_BUCKET}/wucaishen_process_grouped", REGION)
+    # # table = dataset.to_table(filter=(ds.field("month") == "01"))
+    # table = dataset.to_table(columns=columns, use_threads=True)
+    # data = table.to_pandas(use_threads=True)
+
+    return data
+
+
 def main(output_path: str):
 
     os.makedirs(f"{output_path}/output", exist_ok=True)
@@ -297,16 +312,11 @@ def main(output_path: str):
     os.makedirs(f"{output_path}/figures", exist_ok=True)
 
     non_features, normal_features, skewed_features = get_feature_names()
-
-    wucaishen_files = list_s3_files(S3_BUCKET, "wucaishen_processed_data", r"wucaishen_grouped_stat_output_24.*\.csv$")
-    wucaishen_data = read_files(
-        wucaishen_files, local_cache_path=f"{output_path}/output/wucaishen_grouped_stat_output_24.csv", reload=False
+    wucaishen_data = load_data(
+        f"{output_path}/output/wucaishen_grouped_stat_output_24.csv",
+        columns=[*non_features, *normal_features, *skewed_features],
+        pattern=r"wucaishen_grouped_stat_output_24.*\.csv$",
     )
-
-    # dataset = read_dataset(f"{S3_BUCKET}/wucaishen_process_grouped", REGION)
-    # # table = dataset.to_table(filter=(ds.field("month") == "01"))
-    # table = dataset.to_table(columns=non_features + normal_features + skewed_features, use_threads=True)
-    # wucaishen_data = table.to_pandas(use_threads=True)
 
     count_missing_columns(wucaishen_data)
     wucaishen_data.fillna(0, inplace=True)
@@ -329,14 +339,6 @@ if __name__ == "__main__":
     parser.add_argument("--output_path", required=False, default=".")
     args = parser.parse_args()
 
-    os.makedirs(f"{args.output_path}/.log", exist_ok=True)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)s | %(message)s",
-        handlers=[
-            logging.FileHandler(f"{args.output_path}/.log/analysis_cluster_01_elbow_method.log"),
-            logging.StreamHandler(),
-        ],
-    )
+    setup_logging(args.output_path, "analysis_cluster_01_elbow_method.log")
 
     main(args.output_path)

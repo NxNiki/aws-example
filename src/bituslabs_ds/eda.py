@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from pandas import DataFrame, Series
 
-from bituslabs_ds.config import MAX_JOBS
+from bituslabs_ds.config import DEFAULT_MAX_JOBS
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -21,7 +21,7 @@ def read_csv_cols(
     columns: List[str],
     filters: Optional[Dict[str, Any]] = None,
     sampling: Optional[Union[int, float]] = None,
-    max_workers: int = MAX_JOBS,
+    max_workers: int = DEFAULT_MAX_JOBS,
 ) -> pd.DataFrame:
     """
     Reads specific columns from multiple CSV files, filters rows based on criteria,

@@ -1,8 +1,12 @@
+from datetime import datetime
+
 import sagemaker
 from sagemaker.processing import ProcessingInput, ProcessingOutput, ScriptProcessor
 
 from bituslabs_ds.config import S3_BUCKET
 
+# directory to save output data locally on sagemaker instance. it will be uploaded to s3.
+# input data is directly read from s3 bucket, so we do not define it here.
 output_dir = "/opt/ml/processing/output"
 
 role = "arn:aws:iam::338568447110:role/SageMakerExecutionRole"
@@ -21,10 +25,11 @@ processor = ScriptProcessor(
     sagemaker_session=session,
 )
 
+time_tag = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 outputs = [
     ProcessingOutput(
         source=f"{output_dir}",
-        destination=f"s3://{S3_BUCKET}/ds-data-kmeans/elbow_method",
+        destination=f"s3://{S3_BUCKET}/ds-data-kmeans/elbow_method_{time_tag}",
     )
 ]
 
