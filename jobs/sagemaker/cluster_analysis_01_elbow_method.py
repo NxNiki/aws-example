@@ -10,11 +10,9 @@ import logging
 import os
 from typing import List, Optional, Tuple, Union
 
-import boto3
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import pyarrow.fs as fs
 import seaborn as sns
 from joblib import parallel_backend
 from sklearn.base import ClusterMixin
@@ -24,8 +22,8 @@ from sklearn.feature_selection import VarianceThreshold
 from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
 
-from bituslabs_ds.config import REGION, S3_BUCKET, setup_logging
-from bituslabs_ds.s3_utils import list_s3_files, parse_s3_path, read_dataset, read_files, upload_file_to_s3
+from bituslabs_ds.config import S3_BUCKET, setup_logging
+from bituslabs_ds.s3_utils import list_s3_files, read_dataset, read_files
 from bituslabs_ds.utils import (
     column_iterator,
     count_missing_columns,
@@ -330,7 +328,7 @@ def main(output_path: str):
     data_select = wucaishen_data[kept_features + non_features]
 
     important_features = feature_selection_by_pca(data_select, output_path)
-    elbow_method(wucaishen_data, important_features, [15, 20, 25, 30, 35, 40], output_path)
+    elbow_method(wucaishen_data, important_features, [15, 20, 25], output_path)
 
 
 if __name__ == "__main__":

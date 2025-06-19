@@ -1,24 +1,20 @@
 from datetime import datetime
 
 import sagemaker
-from sagemaker.processing import ProcessingInput, ProcessingOutput, ScriptProcessor
+from sagemaker.processing import ProcessingOutput, ScriptProcessor
 
-from bituslabs_ds.config import S3_BUCKET
+from bituslabs_ds.config import IMAGE_URI, S3_BUCKET, SAGEMAKER_ROLE
 
 # directory to save output data locally on sagemaker instance. it will be uploaded to s3.
-# input data is directly read from s3 bucket, so we do not define it here.
+# input data is directly read from s3 bucket, we do not define it here as that will make all data in s3 prefix
+# downloaded to sagemaker
 output_dir = "/opt/ml/processing/output"
 
-role = "arn:aws:iam::338568447110:role/SageMakerExecutionRole"
 session = sagemaker.Session()
-
-image_uri = "338568447110.dkr.ecr.us-west-2.amazonaws.com/bituslabs-ds-sagemaker:latest"
-print(f"image_uri: {image_uri}")
-
 processor = ScriptProcessor(
-    image_uri=image_uri,
+    image_uri=IMAGE_URI,
     command=["python3"],
-    role=role,
+    role=SAGEMAKER_ROLE,
     instance_type="ml.m5.12xlarge",
     instance_count=1,
     base_job_name="elbow-method",
@@ -34,7 +30,7 @@ outputs = [
 ]
 
 processor.run(
-    code="processing_cluster_analysis_01_elbow_method.py",
+    code="cluster_analysis_01_elbow_method.py",
     outputs=outputs,
     arguments=[
         "--output",

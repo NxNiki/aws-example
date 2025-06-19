@@ -1,22 +1,61 @@
+"""
+WIP...
+"""
+
 from datetime import datetime
 
-from sagemaker.estimator import Estimator
+import sagemaker
+from sagemaker.processing import ProcessingInput, ProcessingOutput, ScriptProcessor
 
-from bituslabs_ds.config import S3_BUCKET
+from bituslabs_ds.config import IMAGE_URI, S3_BUCKET, SAGEMAKER_ROLE
 
-role = "arn:aws:iam::338568447110:role/SageMakerExecutionRole"
-image_uri = "338568447110.dkr.ecr.us-west-2.amazonaws.com/bituslabs-ds-sagemaker:latest"
-print(f"image_uri: {image_uri}")
+# directory to save output data locally on sagemaker instance. it will be uploaded to s3.
+# the input data is read and saved to s3 in the previous step, so we can read it directly.
+input_path_data = "/opt/ml/processing/input/output"
+input_path_features = "/opt/ml/processing/input/features"
+output_dir = "/opt/ml/processing/output"
 
-time_tag = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-estimator = Estimator(
-    image_uri=image_uri,
-    role=role,
-    entry_point="cluster_analysis_02_kmeans.py",  # <-- this is a local path to your script
-    source_dir=".",  # optional: directory containing train.py
+session = sagemaker.Session()
+processor = ScriptProcessor(
+    image_uri=IMAGE_URI,
+    command=["python3"],
+    role=SAGEMAKER_ROLE,
+    instance_type="ml.m5.4xlarge",
     instance_count=1,
-    instance_type="ml.m5.xlarge",
-    output_path=f"s3://{S3_BUCKET}/ds-data-kmeans/kmeans_{time_tag}",
+    base_job_name="elbow-method",
+    sagemaker_session=session,
 )
 
-estimator.fit({"train": "s3://your-bucket/train/"})
+time_tag = "_2025-06-18_17-17-08"
+inputs = [
+    ProcessingInput(
+        source=f"s3://{S3_BUCKET}/ds-data-kmeans/elbow_method{time_tag}/output/wucaishen_grouped_stat_output_24.csv",
+        destination="/opt/ml/processing/input/output",
+    ),
+    ProcessingInput(
+        source=f"s3://{S3_BUCKET}/ds-data-kmeans/elbow_method{time_tag}/features/",
+        destination="/opt/ml/processing/input/features",
+    ),
+]
+
+time_tag = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+outputs = [
+    ProcessingOutput(
+        source=f"{output_dir}",
+        destination=f"s3://{S3_BUCKET}/ds-data-kmeans/kmeans_{time_tag}",
+    )
+]
+
+processor.run(
+    code="cluster_analysis_02_kmeans.py",
+    inputs=inputs,
+    outputs=outputs,
+    arguments=[
+        "--input_path_data",
+        input_path_data,
+        "--input_path_features",
+        input_path_features,
+        "--output",
+        output_dir,
+    ],
+)
