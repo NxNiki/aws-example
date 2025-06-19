@@ -4,6 +4,8 @@ the cluster index is identified with grouped data (stats on 40 consecutive trial
 this script merges cluster index to enriched data (original metrics for single trials).
 """
 
+from datetime import datetime
+
 import sagemaker
 from sagemaker.processing import ProcessingInput, ProcessingOutput, ScriptProcessor
 
@@ -30,18 +32,19 @@ processor = ScriptProcessor(
 
 inputs = [
     ProcessingInput(
-        source=f"s3://bituslabs-team-ai/wucaishen_processed_data/",
+        source=f"s3://{S3_BUCKET}/wucaishen_processed_data/",
         destination=f"{input_dir}/wucaishen_processed_data/",
     ),
     ProcessingInput(
-        source="s3://bituslabs-team-ai/wucaishen_analysis_kmeans/output/", destination=f"{input_dir}/kmeans_output/"
+        source=f"s3://{S3_BUCKET}/wucaishen_analysis_kmeans/output/", destination=f"{input_dir}/kmeans_output/"
     ),
 ]
 
+time_tag = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 outputs = [
     ProcessingOutput(
         source=f"{output_dir}",
-        destination=f"s3://{S3_BUCKET}/ds-data-kmeans/2025",
+        destination=f"s3://{S3_BUCKET}/ds-data-kmeans/2025_{time_tag}/",
     )
 ]
 

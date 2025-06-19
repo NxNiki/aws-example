@@ -31,6 +31,7 @@ def main(input_dir: str, output_dir: str):
         "streak",
         "win_streak",
         "lose_streak",
+        "result_clean",
         "group_id",
     ]
 
@@ -61,6 +62,6 @@ if __name__ == "__main__":
     parser.add_argument("--output", required=True, default="./output")
     args = parser.parse_args()
 
-    setup_logging(args.output_path, "analysis_cluster_04_attach_cluster_index.log")
+    setup_logging(args.output, "analysis_cluster_04_attach_cluster_index.log")
 
     main(args.input, args.output)
