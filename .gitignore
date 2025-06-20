@@ -6,6 +6,7 @@
 **/figures/
 **/models/
 **/output/
+**/eda_output/
 **/.ipynb_checkpoints/*
 __pycache__
 dist/*
