@@ -18,7 +18,7 @@ boto3 = "1.38.22"
 pyarrow = "^14.0.1"
 matplotlib = "^3.9.0"
 seaborn = "^0.13.2"
-pyspark = "3.5.5" # do not build package with pyspark when submit job to AWS EMR
+pyspark = "3.0.0" # do not build package with pyspark when submit job to AWS EMR
 openpyxl = "^3.1.5"
 
 [tool.poetry.group.dev.dependencies]
@@ -31,6 +31,7 @@ flake8 = "^7.0"
 pre-commit = "^4.2.0"
 pyjanitor = "^0.31.0"
 ydata-profiling = "^4.16.1"
+pyspark-stubs = "^3.0.0.post3"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
