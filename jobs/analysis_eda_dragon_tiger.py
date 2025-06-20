@@ -3,7 +3,6 @@ EDA on dragon-tiger game user data.
 """
 
 import os
-from typing import List
 
 import pandas as pd
 from ydata_profiling import ProfileReport
@@ -11,7 +10,7 @@ from ydata_profiling.config import Settings
 
 from bituslabs_ds.config import S3_BUCKET, setup_logging
 from bituslabs_ds.eda import plot_df_distribution, read_excel_sheets
-from bituslabs_ds.s3_utils import write_pandas_to_s3
+from bituslabs_ds.s3_utils import upload_file_to_s3, write_pandas_to_s3
 from bituslabs_ds.utils import log_transform
 
 config = Settings()
@@ -119,7 +118,7 @@ def read_and_preprocess(file_name: str) -> pd.DataFrame:
     return df
 
 
-def create_profile_report(df: pd.DataFrame, out_file: str) -> None:
+def create_profile_report(df: pd.DataFrame, out_file: str, s3_key: str = "") -> None:
 
     file_path = os.path.dirname(out_file)
     file_name = os.path.basename(out_file)
@@ -127,17 +126,23 @@ def create_profile_report(df: pd.DataFrame, out_file: str) -> None:
     profile = ProfileReport(df, title=file_name, config=config)
     profile.to_file(out_file)
 
+    if s3_key:
+        upload_file_to_s3(out_file, S3_BUCKET, f"{s3_key}/{file_name}")
+
 
 if __name__ == "__main__":
 
     setup_logging("./eda_output/", "dragon_tiger.log")
     data = read_and_preprocess("/Users/niuxin/Downloads/N020_BetOrders.xlsx")
-    write_pandas_to_s3(data, S3_BUCKET, "dragon_tiger/processed_data/N020_BetOrders.csv")
+
+    s3_path = "dragon_tiger/processed_data"
+    write_pandas_to_s3(data, S3_BUCKET, f"{s3_path}/N020_BetOrders.csv")
 
     data.drop(
         columns=["year_month", "BILL_NO", "BET_DEVICE", "GAME_TYPE", "BET_DEVICE_CUTOFF", "GM_CODE"], inplace=True
     )
-    create_profile_report(data, "./eda_output/eda_dragon_tiger.html")
+    s3_path = "dragon_tiger/eda_output"
+    create_profile_report(data, "./eda_output/eda_dragon_tiger.html", s3_path)
 
     data = log_transform(data[COLUMNS_TO_LOG_TRANSFORM])
-    create_profile_report(data, "./eda_output/eda_dragon_tiger_log.html")
+    create_profile_report(data, "./eda_output/eda_dragon_tiger_log.html", s3_path)

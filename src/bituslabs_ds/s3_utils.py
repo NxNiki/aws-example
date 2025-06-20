@@ -121,6 +121,7 @@ def upload_file_to_s3(local_path: Union[str, Path], s3_bucket: str, s3_key: str)
         ".log": "text/plain",
         ".txt": "text/plain",
         ".parquet": "application/x-parquet",
+        ".html": "text/html",
     }
     extra_args = {"ContentType": "application/octet-stream"}
     for ext, content_type in content_type_map.items():
