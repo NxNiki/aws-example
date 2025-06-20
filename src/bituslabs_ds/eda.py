@@ -85,6 +85,29 @@ def read_csv_cols(
     return pd.concat(df_list, ignore_index=True)
 
 
+def read_excel_sheets(file_path: str, sheet_name_col: str = "sheet_name"):
+    all_sheets = pd.read_excel(file_path, sheet_name=None)
+    sheet_names = list(all_sheets.keys())
+
+    if len(sheet_names) == 1:
+        df = all_sheets[sheet_names[0]]
+        print(f"Only one sheet '{sheet_names[0]}' shape: {df.shape}")
+    else:
+        df = pd.concat(all_sheets.values(), keys=sheet_names)
+        df = df.reset_index(level=0).rename(columns={"level_0": sheet_name_col})
+
+        for sheet_name, sheet_df in all_sheets.items():
+            print(f"Sheet '{sheet_name}' shape: {sheet_df.shape}")
+
+        print(f"Combined data shape: {df.shape}")
+
+    cols_to_drop = df.columns[df.isna().all()].tolist()
+    if len(cols_to_drop) > 0:
+        print("Drop Columns with all NaNs:", cols_to_drop)
+        df = df.drop(columns=cols_to_drop)
+    return df
+
+
 def plot_df_distribution(
     data: Union[pd.DataFrame, pd.Series], bins: int = 30, alpha: float = 0.5, log: bool = False
 ) -> None:
