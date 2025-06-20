@@ -5,6 +5,7 @@ import logging
 import os
 import re
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from functools import partial
 from pathlib import Path
 from typing import Callable, List, Literal, Optional, Tuple, Union
 from urllib.parse import urlparse
@@ -12,9 +13,11 @@ from urllib.parse import urlparse
 import boto3
 import pandas as pd
 from botocore.exceptions import NoCredentialsError
+from pyarrow import fs
+from pyarrow.dataset import Dataset, dataset
 from pyspark.sql import DataFrame as SparkDataFrame
 
-from bituslabs_ds.config import MAX_JOBS
+from bituslabs_ds.config import DEFAULT_MAX_JOBS
 
 s3_client = boto3.client("s3")
 
@@ -57,11 +60,11 @@ def parse_s3_path(s3_path: str) -> Tuple[str, str]:
     return bucket, key
 
 
-def read_to_pandas_df(bucket: str, key: str) -> pd.DataFrame:
+def read_to_pandas_df(bucket: str, key: str, columns: Optional[List[str]] = None) -> pd.DataFrame:
     """Read a CSV file from S3 and return it as a Pandas DataFrame."""
     bucket = parse_bucket_name(bucket)
     response = s3_client.get_object(Bucket=bucket, Key=key)
-    return pd.read_csv(response["Body"])
+    return pd.read_csv(response["Body"], usecols=columns)
 
 
 def write_df_to_s3(data: Union[pd.DataFrame, SparkDataFrame], bucket: str, key: str) -> None:
@@ -102,7 +105,7 @@ def write_spark_to_s3(data: SparkDataFrame, bucket: str, key: str, file_format: 
 
 def upload_file_to_s3(local_path: Union[str, Path], s3_bucket: str, s3_key: str) -> Optional[str]:
     """
-    Uploads a local file to an S3 bucket.
+    Uploads a local file to an S3 bucket. Add content type so we can open uploaded files directly on aws.
 
     :param local_path: Path to the local Python file.
     :param s3_bucket: Name of the S3 bucket.
@@ -118,6 +121,7 @@ def upload_file_to_s3(local_path: Union[str, Path], s3_bucket: str, s3_key: str)
         ".log": "text/plain",
         ".txt": "text/plain",
         ".parquet": "application/x-parquet",
+        ".html": "text/html",
     }
     extra_args = {"ContentType": "application/octet-stream"}
     for ext, content_type in content_type_map.items():
@@ -167,26 +171,17 @@ def list_s3_files(bucket: str, prefix: str, pattern: Optional[str] = None) -> Li
     return matching_keys
 
 
-# def read_files(bucket: str, files: List[str]) -> pd.DataFrame:
-#     """
-#     Read a CSV file from S3 and return it as a Pandas DataFrame.
-#     :param bucket: S3 bucket name
-#     :param files: s3 Path to the CSV file.
-#     """
-#
-#     dfs = []
-#     for file in files:
-#         logger.info(f"Reading {file}")
-#         dfs.append(read_to_pandas_df(bucket, file))
-#
-#     df = pd.concat(dfs)
-#     return df
+def _read_file(file: str, columns: Optional[List[str]]) -> pd.DataFrame:
+    logger.info(f"Reading {file}")
+    bucket, file = parse_s3_path(file)
+    return read_to_pandas_df(bucket, file, columns)
 
 
 def read_files(
     files: List[str],
     local_cache_path: Optional[str] = None,
-    max_workers: int = MAX_JOBS,
+    columns: Optional[List[str]] = None,
+    max_workers: int = DEFAULT_MAX_JOBS,
     parallel_mode: Literal["thread", "process", "none"] = "thread",
     reload: bool = False,
 ) -> pd.DataFrame:
@@ -195,6 +190,7 @@ def read_files(
 
     :param files: List of S3 paths to CSV files.
     :param local_cache_path: Local cache path.
+    :param columns: List of column names to read from each file.
     :param max_workers: Number of workers to use in parallel execution.
     :param parallel_mode: Parallel execution strategy: 'thread', 'process', or 'none'.
     :param reload: Whether to reload files from S3 or not.
@@ -206,20 +202,17 @@ def read_files(
         data = pd.read_csv(local_cache_path)
         return data
 
-    def read_file(file: str) -> pd.DataFrame:
-        logger.info(f"Reading {file}")
-        bucket, file = parse_s3_path(file)
-        return read_to_pandas_df(bucket, file)
+    read_func = partial(_read_file, columns=columns)
 
     if parallel_mode == "none" or max_workers <= 1:
-        dfs = [read_file(file) for file in files]
-
+        dfs = [read_func(file) for file in files]
     else:
+        logger.info(f"read files using {max_workers} workers")
         executor_cls: Callable = ThreadPoolExecutor if parallel_mode == "thread" else ProcessPoolExecutor
         dfs = []
 
         with executor_cls(max_workers=max_workers) as executor:
-            future_to_file = {executor.submit(read_file, file): file for file in files}
+            future_to_file = {executor.submit(read_func, file): file for file in files}
             for future in as_completed(future_to_file):
                 file = future_to_file[future]
                 try:
@@ -233,14 +226,11 @@ def read_files(
     return data
 
 
-if __name__ == "__main__":
+def read_dataset(file_path: str, region: str, data_format: str = "parquet") -> Dataset:
+    file_path = parse_bucket_name(file_path)
+    logger.info(f"Read data from: {file_path}")
+    s3 = fs.S3FileSystem(region=region)
+    ds = dataset(file_path, format=data_format, partitioning="hive", filesystem=s3)  # recognizes year=, month=, etc.
+    logger.info("Finished reading dataset")
 
-    os.makedirs("../.log", exist_ok=True)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)s | %(message)s",
-        handlers=[logging.FileHandler("../.log/s3_utils.log"), logging.StreamHandler()],
-    )
-
-    list_s3_files("hyber-slot", "wucaishen_oringaldata/", r"\.csv.gz$")
-    # list_s3_files("xin-config", "", ".csv")
+    return ds

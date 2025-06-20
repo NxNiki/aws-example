@@ -45,7 +45,7 @@ if __name__ == "__main__":
         handlers=[logging.FileHandler(".log/data_process_wucaishen_submit.log"), logging.StreamHandler()],
     )
 
-    package_file_uri = build_package()
+    package_file_uri, _ = build_package()
     bootstrap_script_uri = upload_bootstrap_script()
     cluster_id, status = start_emr_cluster(
         cluster_name="xin-spark-cluster",

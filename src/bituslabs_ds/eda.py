@@ -1,4 +1,6 @@
+import logging
 import math
+import os
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -6,16 +8,20 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import pandas as pd
-import seaborn as sns
 from pandas import DataFrame, Series
+
+from bituslabs_ds.config import DEFAULT_MAX_JOBS
+
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
 
 
 def read_csv_cols(
     files: List[str],
     columns: List[str],
     filters: Optional[Dict[str, Any]] = None,
-    sampling: Optional[int | float] = None,
-    max_workers: int = 8,
+    sampling: Optional[Union[int, float]] = None,
+    max_workers: int = DEFAULT_MAX_JOBS,
 ) -> pd.DataFrame:
     """
     Reads specific columns from multiple CSV files, filters rows based on criteria,
@@ -65,6 +71,7 @@ def read_csv_cols(
             return pd.DataFrame(columns=columns)
 
     df_list = []
+    logger.info(f"run jobs on {max_workers} threads")
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(process_file, file): file for file in files}
         for future in as_completed(futures):
@@ -76,6 +83,29 @@ def read_csv_cols(
         return pd.DataFrame(columns=columns)
 
     return pd.concat(df_list, ignore_index=True)
+
+
+def read_excel_sheets(file_path: str, sheet_name_col: str = "sheet_name"):
+    all_sheets = pd.read_excel(file_path, sheet_name=None)
+    sheet_names = list(all_sheets.keys())
+
+    if len(sheet_names) == 1:
+        df = all_sheets[sheet_names[0]]
+        print(f"Only one sheet '{sheet_names[0]}' shape: {df.shape}")
+    else:
+        df = pd.concat(all_sheets.values(), keys=sheet_names)
+        df = df.reset_index(level=0).rename(columns={"level_0": sheet_name_col})
+
+        for sheet_name, sheet_df in all_sheets.items():
+            print(f"Sheet '{sheet_name}' shape: {sheet_df.shape}")
+
+        print(f"Combined data shape: {df.shape}")
+
+    cols_to_drop = df.columns[df.isna().all()].tolist()
+    if len(cols_to_drop) > 0:
+        print("Drop Columns with all NaNs:", cols_to_drop)
+        df = df.drop(columns=cols_to_drop)
+    return df
 
 
 def plot_df_distribution(

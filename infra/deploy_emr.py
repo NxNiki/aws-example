@@ -23,14 +23,14 @@ def upload_bootstrap_script() -> Optional[str]:
     return bootstrap_script_uri
 
 
-def build_package() -> Optional[str]:
+def build_package() -> Tuple[str, str]:
     print("Building package with poetry...")
     subprocess.run(["poetry", "build"], check=True)
     dist_files = os.listdir(rootdir / "dist")
     wheel = next(f for f in dist_files if f.endswith(".whl"))
     package_file = rootdir / os.path.join("dist", wheel)
     package_file_uri = upload_file_to_s3(package_file, S3_BUCKET, f"package/{package_file.name}")
-    return package_file_uri
+    return package_file_uri, package_file.name
 
 
 def start_emr_cluster(

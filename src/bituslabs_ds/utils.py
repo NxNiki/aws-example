@@ -11,26 +11,26 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 
-def save_list(items: List[Any], filepath: str, format: Literal["json", "python"] = "json") -> None:
+def save_list(items: List[Any], filepath: str, output_format: Literal["json", "python"] = "json") -> None:
     """
     Saves a list of strings to a file in either JSON or Python list format.
 
     Parameters:
         items (List[BasicType]): The list of strings, ints, floats, or bools to save.
         filepath (str): The output file path.
-        format (str): Format to save: "json" or "python". Default is "json".
+        output_format (str): Format to save: "json" or "python". Default is "json".
     """
-    if format == "json":
+    if output_format == "json":
         with open(filepath, "w") as f:
             json.dump(items, f, indent=4)
-    elif format == "python":
+    elif output_format == "python":
         with open(filepath, "w") as f:
             f.write("my_list = [\n")
             for item in items:
                 f.write(f"    {repr(item)},\n")
             f.write("]\n")
     else:
-        message = f"Unsupported format: '{format}' in save_string_list. Expected 'json' or 'python'."
+        message = f"Unsupported format: '{output_format}' in save_string_list. Expected 'json' or 'python'."
         logger.error(message)
         raise ValueError(message)
 
