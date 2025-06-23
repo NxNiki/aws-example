@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import pandas as pd
+import seaborn as sns
 from pandas import DataFrame, Series
 
 from bituslabs_ds.config import DEFAULT_MAX_JOBS
@@ -168,11 +169,116 @@ def plot_df_distribution(
     plt.show()
 
 
+def plot_multiple_box_swarm(
+    data: pd.DataFrame,
+    x_cols: List[str],
+    y_cols: List[str],
+    group_col: Optional[str] = None,
+    n_cols: int = 3,
+    fig_size: Tuple[float, float] = (8, 6),
+    fig_title: Optional[str] = None,
+):
+    """
+    For each combination of y_col and x_col, plot a box + swarm plot. All x_cols and group_col will be plotted in one
+    subplot.
+
+    Parameters:
+        data (pd.DataFrame): Original DataFrame.
+        x_cols (List[str]): Columns to use as x-axis groupings (categorical).
+        y_cols (List[str]): Numeric value columns to visualize.
+        group_col (Optional[str]): Column to use as hue (optional).
+        n_cols (int): Subplots per row.
+        fig_size (Tuple[float, float]): Figure size per plot.
+        fig_title (Optional[str]): Optional figure title.
+    """
+    n_plots = len(y_cols) * len(x_cols)
+    n_rows = (n_plots + n_cols - 1) // n_cols
+
+    subplot_width = data[x_cols].nunique().max() / 4
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(fig_size[0] * n_cols * subplot_width, fig_size[1] * n_rows))
+    axes = axes.flatten()
+
+    palette = sns.color_palette("pastel", n_colors=len(data[group_col].unique()))
+    plot_idx = 0
+    for x_col in x_cols:
+        for y_col in y_cols:
+            cols_to_keep = [x_col, y_col] + ([group_col] if group_col else [])
+            df_long = data[cols_to_keep].copy()
+            df_long = df_long.melt(
+                id_vars=[x_col] + ([group_col] if group_col else []),
+                value_vars=[y_col],
+                var_name="variable",
+                value_name="value",
+            )
+
+            hue_order = df_long[group_col].unique()
+            hue_colors = dict(zip(hue_order, palette))
+
+            ax = axes[plot_idx]
+            sns.boxplot(
+                data=df_long,
+                x=x_col,
+                y="value",
+                hue=group_col if group_col else None,
+                ax=ax,
+                palette=palette,
+                boxprops=dict(linewidth=1.5),
+                medianprops=dict(linewidth=2),
+                whis=1.5,
+            )
+
+            # Manually update each box color to match hue-edge color
+            # (Seaborn doesn't apply hue color to edge color when face color is None)
+            for i, artist in enumerate(ax.artists):
+                # Boxes are ordered by variable, then hue — calculate color accordingly
+                hue_idx = i % len(hue_order)
+                color = palette[hue_idx]
+                artist.set_edgecolor(color)
+
+            sns.stripplot(
+                data=df_long,
+                x=x_col,
+                y="value",
+                hue=group_col if group_col else None,
+                dodge=True if group_col else False,
+                ax=ax,
+                palette="dark:black",
+                size=2.5,
+                legend=False,
+                jitter=True,
+            )
+
+            ax.set_yscale("symlog", linthresh=1)
+            ax.set_xlabel(x_col)
+            ax.set_ylabel(y_col)
+            ax.tick_params(axis="x", rotation=30)
+
+            if group_col and ax.get_legend():
+                ax.legend_.remove()
+
+            plot_idx += 1
+
+    # Clean up unused axes
+    for j in range(plot_idx, len(axes)):
+        fig.delaxes(axes[j])
+
+    if group_col:
+        handles, labels = ax.get_legend_handles_labels()
+        fig.legend(handles, labels, loc="upper right")
+
+    plt.tight_layout(pad=1)
+    fig.subplots_adjust(top=0.92, hspace=0.4, wspace=0.2)
+
+    if fig_title:
+        fig.suptitle(fig_title, fontsize=16, y=0.98)
+    plt.show()
+
+
 def plot_scatter_pairs(
     data: pd.DataFrame,
     pairs: Optional[List[Tuple[str, str, bool, bool]]] = None,
     max_per_row: int = 5,
-    figsize_per_plot: Tuple[int, int] = (4, 4),
+    fig_size_per_plot: Tuple[int, int] = (4, 4),
     alpha: float = 0.7,
 ) -> None:
     """
@@ -182,7 +288,7 @@ def plot_scatter_pairs(
     - data (pd.DataFrame): DataFrame containing numeric columns.
     - pairs (List[Tuple[str, str]]): List of pairs of numeric column names.
     - max_per_row (int): Maximum number of plots per row.
-    - figsize_per_plot (Tuple[int, int]): Size of each subplot (width, height).
+    - fig_size_per_plot (Tuple[int, int]): Size of each subplot (width, height).
     - alpha (float): Marker transparency.
 
     Returns:
@@ -207,7 +313,7 @@ def plot_scatter_pairs(
     ncols = min(num_plots, max_per_row)
 
     fig, axes = plt.subplots(
-        nrows=nrows, ncols=ncols, figsize=(figsize_per_plot[0] * ncols, figsize_per_plot[1] * nrows)
+        nrows=nrows, ncols=ncols, figsize=(fig_size_per_plot[0] * ncols, fig_size_per_plot[1] * nrows)
     )
     axes = axes.flatten() if num_plots > 1 else [axes]
 
