@@ -3,15 +3,26 @@ EDA on dragon-tiger game user data.
 """
 
 import os
+from datetime import datetime, timedelta
+from typing import List
 
 import pandas as pd
 from ydata_profiling import ProfileReport
 from ydata_profiling.config import Settings
 
 from bituslabs_ds.config import S3_BUCKET, setup_logging
-from bituslabs_ds.eda import plot_df_distribution, plot_multiple_box_swarm, plot_scatter_pairs, read_excel_sheets
+from bituslabs_ds.eda import (
+    plot_by_time,
+    plot_df_distribution,
+    plot_dual_axis_sorted_swarm,
+    plot_heatmap,
+    plot_multiple_box_swarm,
+    plot_scatter_pairs,
+    read_excel_sheets,
+    split_column_by_multiple_separators,
+    split_column_by_threshold,
+)
 from bituslabs_ds.s3_utils import upload_file_to_s3, write_pandas_to_s3
-from bituslabs_ds.utils import log_transform
 
 config = Settings()
 config.plot.histogram.bins = 200
@@ -117,6 +128,9 @@ def read_and_preprocess(file_name: str) -> pd.DataFrame:
     for k, v in REPLACEMENTS.items():
         df = df.map(lambda x: x.replace(k, v) if isinstance(x, str) else x)
 
+    df["TIGER_CARD_NUMBER"] = df["TIGER_CARD_NUMBER"].astype(str)
+    df["DRAGON_CARD_NUMBER"] = df["DRAGON_CARD_NUMBER"].astype(str)
+
     return df
 
 
@@ -130,6 +144,32 @@ def create_profile_report(df: pd.DataFrame, out_file: str, s3_key: str = "") -> 
 
     if s3_key:
         upload_file_to_s3(out_file, S3_BUCKET, f"{s3_key}/{file_name}")
+
+
+def create_heatmap_by_group(data: pd.DataFrame, group_by_cols: List[str], var_columns: List[str]) -> None:
+
+    grouped_data = data.groupby(group_by_cols)[var_columns[0]].count()
+    pivot_table = grouped_data.unstack(level=1)
+    plot_heatmap(pivot_table, x_label="Dragon Card", y_label="Tiger Card", title="Bet count")
+
+    for col in var_columns:
+        grouped_data = data.groupby(group_by_cols)[col].mean()
+        pivot_table = grouped_data.unstack(level=1)
+        plot_heatmap(pivot_table, x_label="Dragon Card", y_label="Tiger Card", title=f"Avg {col}")
+
+
+def create_swam_plot_by_card(data: pd.DataFrame, card_columns: List[str], card_col_name: str) -> None:
+    plot_data = data.loc[
+        data["LOGIN_NAME"] == "EW3u96150agent_136361155", [*card_columns, "CUS_ACCOUNT", "card_change"]
+    ]
+
+    plot_data = plot_data.melt(
+        id_vars=["CUS_ACCOUNT", "card_change"],
+        value_vars=card_columns,
+        value_name=card_col_name,
+    )
+
+    plot_dual_axis_sorted_swarm(plot_data, y_col_left=card_col_name, hue_col="card_change", value_cols=["CUS_ACCOUNT"])
 
 
 if __name__ == "__main__":
@@ -150,14 +190,56 @@ if __name__ == "__main__":
     # plot_df_distribution(data)
     # plot_scatter_pairs(data)
 
-    for x_col in ["TABLE_ID", "GAME_NAME", "PLATFORM_TYPE"]:
-        plot_multiple_box_swarm(
-            data,
-            x_cols=[x_col],
-            y_cols=COLUMNS_TO_LOG_TRANSFORM,
-            group_col="year_month",
-            fig_title=x_col,
-        )
+    print(data.groupby(["LOGIN_NAME", "year_month"]).count())
+
+    # data = split_column_by_threshold(data, columns=["CUS_ACCOUNT", "CUS_ACCOUNT_TURN"])
+    # plot_by_time(
+    #     data[data["LOGIN_NAME"] == "EW3u96150agent_136361155"],
+    #     time_col="BILL_TIME",
+    #     var_columns=[
+    #         "Pre-TRANSACTION_BALANCE",
+    #         "VALID_ACCOUNT",
+    #         "BET_INTERVAL"
+    #     ],
+    #     time_window=timedelta(hours=1),
+    #     title="user: EW3u96150agent_136361155",
+    #     vline_time=datetime(year=2025, month=6, day=6, hour=21, minute=6),
+    #     vline_label="change card",
+    #     vars_in_logscale={"BET_INTERVAL"},
+    # )
+
+    data["card_change"] = data["BILL_TIME"] > datetime(year=2025, month=6, day=6, hour=21, minute=6)
+    data = split_column_by_multiple_separators(data, column="CARD_RESULT")
+    # create_swam_plot_by_card(data, card_columns=["CARD_RESULT_1", "CARD_RESULT_2"], card_col_name="CARD_RESULT")
+    # create_swam_plot_by_card(data, card_columns=["DRAGON_CARD_NUMBER", "TIGER_CARD_NUMBER"], card_col_name="CARD_NUMBER")
+    plot_dual_axis_sorted_swarm(
+        data,
+        y_col_right="DRAGON_CARD_NUMBER",
+        y_col_left="TIGER_CARD_NUMBER",
+        hue_col="card_change",
+        value_cols=["CUS_ACCOUNT"],
+    )
+
+    # create_heatmap_by_group(
+    #     data[data["LOGIN_NAME"] == "EW3u96150agent_136361155"],
+    #     group_by_cols=["CARD_RESULT_1", "CARD_RESULT_2"],
+    #     var_columns=["CUS_ACCOUNT", "PAYOUT_RATIO"]
+    # )
+    #
+    # create_heatmap_by_group(
+    #     data[data["LOGIN_NAME"] != "EW3u96150agent_136361155"],
+    #     group_by_cols=["CARD_RESULT_1", "CARD_RESULT_2"],
+    #     var_columns=["CUS_ACCOUNT", "PAYOUT_RATIO"]
+    # )
+
+    # for x_col in ["TABLE_ID", "GAME_NAME", "PLATFORM_TYPE"]:
+    #     plot_multiple_box_swarm(
+    #         data[data["LOGIN_NAME"] == "EW3u96150agent_136361155"],
+    #         x_cols=[x_col],
+    #         y_cols=COLUMNS_TO_LOG_TRANSFORM,
+    #         group_col="year_month",
+    #         fig_title=x_col,
+    #     )
 
     # for login_name, df in data.groupby("LOGIN_NAME"):
     #     plot_multiple_box_swarm(
