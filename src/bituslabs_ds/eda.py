@@ -3,11 +3,14 @@ import math
 import os
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Optional, Tuple, Union
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import pandas as pd
+import seaborn as sns
+from matplotlib.ticker import MaxNLocator
 from pandas import DataFrame, Series
 
 from bituslabs_ds.config import DEFAULT_MAX_JOBS
@@ -108,6 +111,312 @@ def read_excel_sheets(file_path: str, sheet_name_col: str = "sheet_name"):
     return df
 
 
+def split_column_by_threshold(
+    data: pd.DataFrame, columns: List[str], threshold: Union[float, List[float]] = 0.0
+) -> pd.DataFrame:
+
+    for col in columns:
+        data[f"{col}_below_{threshold}"] = data[col]
+        data.loc[data[col] > threshold, f"{col}_below_{threshold}"] = pd.NA
+
+        data[f"{col}_above_{threshold}"] = data[col]
+        data.loc[data[col] <= threshold, f"{col}_above_{threshold}"] = pd.NA
+
+    return data
+
+
+def split_column_by_multiple_separators(data: pd.DataFrame, column: str, sep: str = ";") -> pd.DataFrame:
+    """
+    Splits a DataFrame column into multiple new columns based on a separator.
+
+    This function handles entries with a variable number of separators. It creates
+    as many new columns as needed based on the maximum number of parts found in
+    any single entry. The new columns are named by appending '_1', '_2', '_3',
+    etc., to the original column name. The original column is kept.
+
+    Args:
+        data (pd.DataFrame): The input DataFrame.
+        column (str): The name of the column to split.
+        sep (str): The separator string to split on. Defaults to ";".
+
+    Returns:
+        pd.DataFrame: The DataFrame with the new split columns added.
+    """
+    # Make a copy to avoid modifying the original DataFrame unexpectedly
+    data_out = data.copy()
+
+    # Split the column into a new temporary DataFrame.
+    # `expand=True` automatically creates the necessary number of columns
+    # and fills missing parts with None.
+    split_df = data_out[column].str.split(sep, expand=True)
+
+    # Dynamically create the new column names, e.g., 'pattern_1', 'pattern_2', etc.
+    new_col_names = [f"{column}_{i+1}" for i in range(split_df.shape[1])]
+
+    # Assign these new names to the columns of our temporary DataFrame
+    split_df.columns = new_col_names
+
+    # Join the new split columns back to the original DataFrame
+    result_df = pd.concat([data_out, split_df], axis=1)
+
+    return result_df
+
+
+def plot_by_time(
+    data: pd.DataFrame,
+    time_col: str,
+    var_columns: List[str],
+    time_window: timedelta,
+    title: str = "Time Series Plot (Gaps Removed)",
+    vline_time: Union[str, datetime, pd.Timestamp] = None,
+    vline_label: str = "Event",
+    vars_in_logscale: Set[str] = set(),
+):
+    """
+    Plots time series data, visually removing time gaps where no data exists,
+    while still allowing an accurately placed vertical line.
+
+    Parameters:
+    - data (pd.DataFrame): The input dataframe.
+    - time_col (str): The name of the time column.
+    - var_columns (List[str]): List of variable columns to plot.
+    - time_window (timedelta): The time window for resampling.
+    - title (str): Title of the entire plot.
+    - vline_time (Union[str, datetime, pd.Timestamp], optional): A timestamp for the vertical line.
+    - vline_label (str, optional): The label for the vertical line.
+    - vars_in_logscale (Set[str]): Set of variables to log scale.
+    """
+    data = data.copy()
+    data[time_col] = pd.to_datetime(data[time_col])
+    data.set_index(time_col, inplace=True)
+    resampled = data[var_columns].resample(time_window).mean()
+    resampled = resampled.dropna(how="all")
+
+    # Create a string version of the timestamp for labeling later
+    resampled["time_str"] = resampled.index.strftime("%Y-%m-%d %H:%M")
+    # Reset the index to get a simple integer index (0, 1, 2...) for plotting
+    resampled = resampled.reset_index()
+
+    n_vars = len(var_columns)
+    fig, axes = plt.subplots(n_vars, 1, figsize=(12, 3 * n_vars), sharex=True)
+    if n_vars == 1:
+        axes = [axes]
+
+    # --- Plotting against the integer index to remove gaps ---
+    for i, col in enumerate(var_columns):
+        # We plot against `resampled.index`, which is now 0, 1, 2...
+        axes[i].plot(resampled.index, resampled[col], marker="o", linestyle="-")
+        axes[i].set_ylabel(col)
+        if col in vars_in_logscale:
+            axes[i].set_yscale("symlog", linthresh=1)
+        axes[i].grid(False)
+
+    # --- Calculate and plot the vertical line's fractional position ---
+    if vline_time:
+        vline_dt = pd.to_datetime(vline_time)
+
+        # Find where the vline timestamp would fit in our data's real timestamps
+        # 'left' side gives us the index of the point just before our vline time
+        insert_idx = resampled[time_col].searchsorted(vline_dt, side="left")
+
+        # Handle edge cases
+        if insert_idx == 0:
+            vline_pos = 0.0
+        elif insert_idx == len(resampled):
+            vline_pos = len(resampled) - 1.0
+        else:
+            # Interpolate to find the fractional index position
+            time_before = resampled.loc[insert_idx - 1, time_col]
+            time_after = resampled.loc[insert_idx, time_col]
+
+            time_span = time_after - time_before
+            time_progress = vline_dt - time_before
+
+            fraction = time_progress / time_span
+            vline_pos = (insert_idx - 1) + fraction
+
+        for ax in axes:
+            ax.axvline(x=vline_pos, color="r", linestyle="--", linewidth=2, label=vline_label)
+        axes[0].legend()
+
+    # --- Customize X-axis to show readable time labels instead of integers ---
+    # Use MaxNLocator to select a reasonable number of ticks to label
+    ax = axes[-1]
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=15, integer=True))
+
+    # Get the positions of the ticks chosen by the locator
+    tick_positions = ax.get_xticks()
+
+    # Filter out positions that are out of bounds of our data
+    valid_ticks = [int(p) for p in tick_positions if 0 <= p < len(resampled)]
+
+    # Set the tick positions and their corresponding time string labels
+    ax.set_xticks(valid_ticks)
+    ax.set_xticklabels(resampled.loc[valid_ticks, "time_str"], rotation=45, ha="right")
+
+    ax.set_xlabel("Time")
+    fig.suptitle(title, fontsize=16)
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    plt.show()
+
+
+def plot_heatmap(data: pd.DataFrame, x_label: str, y_label: str, title: str):
+
+    plt.figure(figsize=(12, 8))
+    heatmap = sns.heatmap(
+        data,
+        # annot=True,  # Display the average values in each cell
+        # fmt=".2f",  # Format the annotations to two decimal places
+        cmap="viridis",  # Use a visually appealing color map (e.g., 'viridis', 'coolwarm', 'YlGnBu')
+        linewidths=0.5,  # Add thin lines between cells for clarity
+    )
+
+    plt.title(title, fontsize=16, pad=20)
+    plt.xlabel(x_label, fontsize=12)
+    plt.ylabel(y_label, fontsize=12)
+    plt.xticks(rotation=45, ha="right")
+    plt.yticks(rotation=0)
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_dual_axis_sorted_swarm(
+    data: pd.DataFrame,
+    y_col_left: str,
+    hue_col: str,
+    value_cols: List[str],
+    y_col_right: Optional[str] = None,
+) -> None:
+    """
+    Creates a horizontal swarm plot with dual y-axis labels and detailed annotations.
+
+    For each category and hue, it calculates and displays the count and percentage
+    of data points >= 0 (on the right) and < 0 (on the left).
+
+    If y_col_left == y_col_right, only y_col_left is used to group data.
+
+    Args:
+        data (pd.DataFrame): The input DataFrame.
+        y_col_left (str): Column for the left y-axis labels.
+        hue_col (str): Column for coloring the points (hue).
+        value_cols (List[str]): Numerical columns for the x-axis.
+        y_col_right (str): Column for the right y-axis labels.
+    """
+    # prevent index error in swarm plot
+    plot_data = data.copy().reset_index(drop=True)
+
+    if y_col_right is not None and y_col_left != y_col_right:
+        interaction_col = f"{y_col_left}__{y_col_right}"
+        plot_data[interaction_col] = plot_data[y_col_left].astype(str) + " / " + plot_data[y_col_right].astype(str)
+        label_map = plot_data[[interaction_col, y_col_left, y_col_right]].drop_duplicates().set_index(interaction_col)
+    else:
+        interaction_col = y_col_left
+
+    hue_order = sorted(plot_data[hue_col].unique())
+
+    # Loop through each value column to create a separate plot
+    for value_col in value_cols:
+        # --- Step 1: Pre-calculate all statistics for annotation ---
+        def calculate_stats(group):
+            total = len(group)
+            pos_count = (group >= 0).sum()
+            neg_count = (group < 0).sum()
+            pos_pct = 100 * pos_count / total if total > 0 else 0
+            neg_pct = 100 * neg_count / total if total > 0 else 0
+            return pd.Series({"text_pos": f"{pos_count} ({pos_pct:.0f}%)", "text_neg": f"{neg_count} ({neg_pct:.0f}%)"})
+
+        stats_df = plot_data.groupby([interaction_col, hue_col])[value_col].apply(calculate_stats).unstack()
+
+        y_order = plot_data.groupby(interaction_col)[value_col].mean().sort_values(ascending=False).index
+        fig, ax1 = plt.subplots(figsize=(12, min(len(y_order) * 0.8 + 1, 300)))
+        sns.set_theme(style="whitegrid")
+
+        sns.swarmplot(
+            y=interaction_col,
+            x=value_col,
+            hue=hue_col,
+            data=plot_data,
+            order=y_order,
+            hue_order=hue_order,
+            palette="viridis",
+            s=2,
+            dodge=True,
+            ax=ax1,
+        )
+
+        # --- Step 2: Add annotations ---
+        # Get the integer position for each y-axis category
+        y_positions = {label: i for i, label in enumerate(y_order)}
+        num_hues = len(hue_order)
+        # Calculate vertical dodge amount for text (to match swarmplot's dodge)
+        dodge_amount = 0.4 if num_hues > 1 else 0
+
+        for category in y_order:
+            for i, hue in enumerate(hue_order):
+                # Calculate the vertical position for this specific hue's text
+                base_y = y_positions[category]
+                y_offset = (i - (num_hues - 1) / 2) * dodge_amount
+                text_y_pos = base_y + y_offset
+
+                # Get the pre-calculated text strings
+                try:
+                    text_neg = stats_df.loc[(category, hue), "text_neg"]
+                    text_pos = stats_df.loc[(category, hue), "text_pos"]
+                except KeyError:
+                    continue  # Skip if a category/hue combination has no data
+
+                # Annotate on the left side (< 0)
+                ax1.annotate(
+                    text_neg,
+                    xy=(0, text_y_pos),
+                    xycoords=("axes fraction", "data"),
+                    xytext=(-10, 0),
+                    textcoords="offset points",
+                    ha="right",
+                    va="center",
+                    fontsize=8,
+                    color="crimson",
+                )
+
+                # Annotate on the right side (>= 0)
+                ax1.annotate(
+                    text_pos,
+                    xy=(1, text_y_pos),
+                    xycoords=("axes fraction", "data"),
+                    xytext=(10, 0),
+                    textcoords="offset points",
+                    ha="left",
+                    va="center",
+                    fontsize=8,
+                    color="darkgreen",
+                )
+
+        # --- Step 3: Set up dual-axis labels (as before) ---
+        if y_col_left != y_col_right:
+            original_labels = [label.get_text() for label in ax1.get_yticklabels()]
+            left_labels = label_map.loc[original_labels, y_col_left]
+            right_labels = label_map.loc[original_labels, y_col_right]
+
+            ax1.set_yticklabels(left_labels)
+            ax2 = ax1.twinx()
+            ax2.set_ylim(ax1.get_ylim())
+            ax2.set_yticks(ax1.get_yticks())
+            ax2.set_yticklabels(right_labels)
+            ax2.set_ylabel(y_col_right, fontsize=12)
+
+        ax1.axvline(x=0, color="black", linestyle="--", linewidth=1.5, zorder=0)
+
+        ax1.set_title(f'"{value_col}" by Group with Counts and Percentages', fontsize=16, pad=20)
+        ax1.set_xlabel(value_col, fontsize=12)
+        ax1.set_ylabel(y_col_left, fontsize=12)
+        handles, labels = ax1.get_legend_handles_labels()
+        if handles:
+            ax1.legend(handles[:num_hues], labels[:num_hues], title=hue_col, bbox_to_anchor=(1.2, 1), loc="upper left")
+
+        fig.tight_layout()
+        plt.show()
+
+
 def plot_df_distribution(
     data: Union[pd.DataFrame, pd.Series], bins: int = 30, alpha: float = 0.5, log: bool = False
 ) -> None:
@@ -168,11 +477,116 @@ def plot_df_distribution(
     plt.show()
 
 
+def plot_multiple_box_swarm(
+    data: pd.DataFrame,
+    x_cols: List[str],
+    y_cols: List[str],
+    group_col: Optional[str] = None,
+    n_cols: int = 3,
+    fig_size: Tuple[float, float] = (8, 6),
+    fig_title: Optional[str] = None,
+):
+    """
+    For each combination of y_col and x_col, plot a box + swarm plot. All x_cols and group_col will be plotted in one
+    subplot.
+
+    Parameters:
+        data (pd.DataFrame): Original DataFrame.
+        x_cols (List[str]): Columns to use as x-axis groupings (categorical).
+        y_cols (List[str]): Numeric value columns to visualize.
+        group_col (Optional[str]): Column to use as hue (optional).
+        n_cols (int): Subplots per row.
+        fig_size (Tuple[float, float]): Figure size per plot.
+        fig_title (Optional[str]): Optional figure title.
+    """
+    n_plots = len(y_cols) * len(x_cols)
+    n_rows = (n_plots + n_cols - 1) // n_cols
+
+    subplot_width = data[x_cols].nunique().max() / 4
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(fig_size[0] * n_cols * subplot_width, fig_size[1] * n_rows))
+    axes = axes.flatten()
+
+    palette = sns.color_palette("pastel", n_colors=len(data[group_col].unique()))
+    plot_idx = 0
+    for x_col in x_cols:
+        for y_col in y_cols:
+            cols_to_keep = [x_col, y_col] + ([group_col] if group_col else [])
+            df_long = data[cols_to_keep].copy()
+            df_long = df_long.melt(
+                id_vars=[x_col] + ([group_col] if group_col else []),
+                value_vars=[y_col],
+                var_name="variable",
+                value_name="value",
+            )
+
+            hue_order = df_long[group_col].unique()
+            hue_colors = dict(zip(hue_order, palette))
+
+            ax = axes[plot_idx]
+            sns.boxplot(
+                data=df_long,
+                x=x_col,
+                y="value",
+                hue=group_col if group_col else None,
+                ax=ax,
+                palette=palette,
+                boxprops=dict(linewidth=1.5),
+                medianprops=dict(linewidth=2),
+                whis=1.5,
+            )
+
+            # Manually update each box color to match hue-edge color
+            # (Seaborn doesn't apply hue color to edge color when face color is None)
+            for i, artist in enumerate(ax.artists):
+                # Boxes are ordered by variable, then hue — calculate color accordingly
+                hue_idx = i % len(hue_order)
+                color = palette[hue_idx]
+                artist.set_edgecolor(color)
+
+            sns.stripplot(
+                data=df_long,
+                x=x_col,
+                y="value",
+                hue=group_col if group_col else None,
+                dodge=True if group_col else False,
+                ax=ax,
+                palette="dark:black",
+                size=2.5,
+                legend=False,
+                jitter=True,
+            )
+
+            ax.set_yscale("symlog", linthresh=1)
+            ax.set_xlabel(x_col)
+            ax.set_ylabel(y_col)
+            ax.tick_params(axis="x", rotation=30)
+
+            if group_col and ax.get_legend():
+                ax.legend_.remove()
+
+            plot_idx += 1
+
+    # Clean up unused axes
+    for j in range(plot_idx, len(axes)):
+        fig.delaxes(axes[j])
+
+    if group_col:
+        handles, labels = ax.get_legend_handles_labels()
+        fig.legend(handles, labels, loc="upper right")
+
+    plt.tight_layout(pad=1)
+    fig.subplots_adjust(top=0.92, hspace=0.4, wspace=0.2)
+
+    if fig_title:
+        fig.suptitle(fig_title, fontsize=16, y=0.98)
+    plt.show()
+
+
 def plot_scatter_pairs(
     data: pd.DataFrame,
     pairs: Optional[List[Tuple[str, str, bool, bool]]] = None,
     max_per_row: int = 5,
-    figsize_per_plot: Tuple[int, int] = (4, 4),
+    fig_size_per_plot: Tuple[int, int] = (4, 4),
     alpha: float = 0.7,
 ) -> None:
     """
@@ -182,7 +596,7 @@ def plot_scatter_pairs(
     - data (pd.DataFrame): DataFrame containing numeric columns.
     - pairs (List[Tuple[str, str]]): List of pairs of numeric column names.
     - max_per_row (int): Maximum number of plots per row.
-    - figsize_per_plot (Tuple[int, int]): Size of each subplot (width, height).
+    - fig_size_per_plot (Tuple[int, int]): Size of each subplot (width, height).
     - alpha (float): Marker transparency.
 
     Returns:
@@ -207,7 +621,7 @@ def plot_scatter_pairs(
     ncols = min(num_plots, max_per_row)
 
     fig, axes = plt.subplots(
-        nrows=nrows, ncols=ncols, figsize=(figsize_per_plot[0] * ncols, figsize_per_plot[1] * nrows)
+        nrows=nrows, ncols=ncols, figsize=(fig_size_per_plot[0] * ncols, fig_size_per_plot[1] * nrows)
     )
     axes = axes.flatten() if num_plots > 1 else [axes]
 
