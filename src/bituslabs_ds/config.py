@@ -8,7 +8,7 @@ S3_BUCKET = "bituslabs-team-ai"
 SAGEMAKER_ROLE = "arn:aws:iam::338568447110:role/SageMakerExecutionRole"
 IMAGE_URI = "338568447110.dkr.ecr.us-west-2.amazonaws.com/bituslabs-ds-sagemaker:latest"
 DEFAULT_MAX_JOBS = 4
-ATHENA_OUTPUT = f"s3://{S3_BUCKET}/athena-results/"
+DEFAULT_ATHENA_OUTPUT = f"s3://{S3_BUCKET}/athena-results"
 LOCAL_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
