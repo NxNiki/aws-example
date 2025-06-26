@@ -17,10 +17,24 @@ logger.addHandler(logging.NullHandler())  # Safe for import
 
 
 def execute_query(
-    query: str, database: str, s3_file_path: Optional[str] = None, local_cache: Optional[str] = None
+    query: str,
+    database: str,
+    s3_file_path: Optional[str] = None,
+    local_cache: Optional[str] = None,
+    overwrite_cache: Optional[bool] = False,
 ) -> pd.DataFrame:
+    """
+    execute a query and return results to a pandas DataFrame.
+    :param query:
+    :param database:
+    :param s3_file_path: save results to s3_file_path; otherwise, results will be saved to the default s3 path for
+        athena outputs
+    :param local_cache: specify a local cache path to avoid repeated running queries.
+    :param overwrite_cache: whether to overwrite local cache if it exists.
+    :return:
+    """
 
-    if local_cache is not None and os.path.exists(local_cache):
+    if local_cache is not None and os.path.exists(local_cache) and not overwrite_cache:
         logger.info(f"Found local cache at {local_cache}")
         df = pd.read_csv(local_cache)
     else:
@@ -39,6 +53,7 @@ def execute_query(
             s3.delete_object(Bucket=bucket, Key=key_source)
 
         if local_cache is not None:
+            os.makedirs(os.path.dirname(local_cache), exist_ok=True)
             logger.info(f"Writing to local cache at {local_cache}")
             df.to_csv(local_cache, index=False)
 
@@ -80,7 +95,7 @@ def wait_query_finish(query_execution_id: str, interval: int = 10):
 def get_query_result(query_execution_id: str, s3_path: Optional[str] = None) -> pd.DataFrame:
     """
     :param query_execution_id:
-    :param s3_path:
+    :param s3_path: read results from s3_path which is faster.
     :return:
     """
     wait_query_finish(query_execution_id)
@@ -112,8 +127,8 @@ def get_query_result(query_execution_id: str, s3_path: Optional[str] = None) -> 
     else:
         # read directly from s3 path:
         s3_path = s3_path.rstrip("/")
-        logger.info(f"get {s3_path}")
         full_s3_path = f"{s3_path}/{query_execution_id}.csv"
+        logger.info(f"get data: {full_s3_path}")
         bucket, key = parse_s3_path(full_s3_path)
         df = read_to_pandas_df(bucket, key)
 

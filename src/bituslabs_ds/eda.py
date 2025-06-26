@@ -452,7 +452,10 @@ def plot_df_distribution(
     for i, col in enumerate(numeric_cols):
         ax = axes[i]
         values = data[col].dropna()
-        n_bins = min(bins, values.nunique())
+        if len(values) == 0:
+            print("No values found for column", col)
+            continue
+        n_bins = max(min(bins, values.nunique()), 30)
         counts, bin_edges, _ = ax.hist(values, bins=n_bins, alpha=alpha, edgecolor="black")
 
         # Annotate with column name at max bin
