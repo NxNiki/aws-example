@@ -438,14 +438,12 @@ def plot_df_distribution(
 
     # Filter only numeric columns
     numeric_cols = [col for col in data.columns if pd.api.types.is_numeric_dtype(data[col])]
-
     if not numeric_cols:
         print("No numeric columns to plot.")
         return
 
     n_cols = 5
     n_rows = math.ceil(len(numeric_cols) / n_cols)
-
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 4, n_rows * 3), squeeze=False)
     axes = axes.flatten()
 
