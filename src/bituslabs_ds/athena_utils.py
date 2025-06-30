@@ -22,7 +22,8 @@ def execute_query(
     s3_file_path: Optional[str] = None,
     local_cache: Optional[str] = None,
     overwrite_cache: Optional[bool] = False,
-) -> pd.DataFrame:
+    return_result: Optional[bool] = False,
+) -> Optional[pd.DataFrame]:
     """
     execute a query and return results to a pandas DataFrame.
     :param query:
@@ -31,6 +32,7 @@ def execute_query(
         athena outputs
     :param local_cache: specify a local cache path to avoid repeated running queries.
     :param overwrite_cache: whether to overwrite local cache if it exists.
+    :param return_result:
     :return:
     """
 
@@ -39,7 +41,15 @@ def execute_query(
         df = pd.read_csv(local_cache)
     else:
         query_execution_id = submit_query(query, database)
+
+        if not return_result:
+            return None
+
         df = get_query_result(query_execution_id, DEFAULT_ATHENA_OUTPUT)
+        if local_cache is not None:
+            os.makedirs(os.path.dirname(local_cache), exist_ok=True)
+            logger.info(f"Writing to local cache at {local_cache}")
+            df.to_csv(local_cache, index=False)
 
         if s3_file_path is not None:
             logger.info(f"copy result from {DEFAULT_ATHENA_OUTPUT}/{query_execution_id}.csv to {s3_file_path}")
@@ -51,11 +61,6 @@ def execute_query(
 
             s3.copy_object(Bucket=bucket, CopySource={"Bucket": bucket, "Key": key_source}, Key=key)
             s3.delete_object(Bucket=bucket, Key=key_source)
-
-        if local_cache is not None:
-            os.makedirs(os.path.dirname(local_cache), exist_ok=True)
-            logger.info(f"Writing to local cache at {local_cache}")
-            df.to_csv(local_cache, index=False)
 
     return df
 
