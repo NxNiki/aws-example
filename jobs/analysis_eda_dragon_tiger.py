@@ -6,6 +6,7 @@ import os
 from datetime import datetime, timedelta
 from typing import List
 
+import matplotlib.pyplot as plt
 import pandas as pd
 from ydata_profiling import ProfileReport
 from ydata_profiling.config import Settings
@@ -23,6 +24,7 @@ from bituslabs_ds.eda import (
     split_column_by_threshold,
 )
 from bituslabs_ds.s3_utils import upload_file_to_s3, write_pandas_to_s3
+from bituslabs_ds.utils import log_transform
 
 config = Settings()
 config.plot.histogram.bins = 200
@@ -172,6 +174,33 @@ def create_swam_plot_by_card(data: pd.DataFrame, card_columns: List[str], card_c
     plot_dual_axis_sorted_swarm(plot_data, y_col_left=card_col_name, hue_col="card_change", value_cols=["CUS_ACCOUNT"])
 
 
+def plot_start_end_time_by_day(df: pd.DataFrame) -> pd.DataFrame:
+
+    res = df.groupby("DATE_TEXT")["BILL_TIME"].agg(["min", "max"]).reset_index()
+    res.columns = ["DATE_TEXT", "min_BILL_TIME", "max_BILL_TIME"]
+
+    # Convert min/max BILL_TIME to time of day in hours (float)
+    res["start_time"] = res["min_BILL_TIME"].dt.hour + res["min_BILL_TIME"].dt.minute / 60
+    res["end_time"] = res["max_BILL_TIME"].dt.hour + res["max_BILL_TIME"].dt.minute / 60
+
+    res["DATE_TEXT"] = res["DATE_TEXT"].astype(str)
+
+    plt.plot(res["DATE_TEXT"], res["start_time"], marker="o", label="Start Time")
+    plt.plot(res["DATE_TEXT"], res["end_time"], marker="o", label="End Time")
+
+    plt.title("Min and Max Bill Time by Date", fontsize=16)
+    plt.xlabel("Date", fontsize=12)
+    plt.ylabel("Bill Time", fontsize=12)
+
+    plt.legend()
+    plt.grid(True)
+
+    plt.tight_layout()
+    plt.show()
+
+    return res
+
+
 if __name__ == "__main__":
 
     setup_logging("./eda_output/", "dragon_tiger.log")
@@ -193,32 +222,31 @@ if __name__ == "__main__":
     print(data.groupby(["LOGIN_NAME", "year_month"]).count())
 
     # data = split_column_by_threshold(data, columns=["CUS_ACCOUNT", "CUS_ACCOUNT_TURN"])
-    # plot_by_time(
-    #     data[data["LOGIN_NAME"] == "EW3u96150agent_136361155"],
-    #     time_col="BILL_TIME",
-    #     var_columns=[
-    #         "Pre-TRANSACTION_BALANCE",
-    #         "VALID_ACCOUNT",
-    #         "BET_INTERVAL"
-    #     ],
-    #     time_window=timedelta(hours=1),
-    #     title="user: EW3u96150agent_136361155",
-    #     vline_time=datetime(year=2025, month=6, day=6, hour=21, minute=6),
-    #     vline_label="change card",
-    #     vars_in_logscale={"BET_INTERVAL"},
-    # )
 
-    data["card_change"] = data["BILL_TIME"] > datetime(year=2025, month=6, day=6, hour=21, minute=6)
-    data = split_column_by_multiple_separators(data, column="CARD_RESULT")
+    ## plot the sliding window average for selected columns:
+    plot_by_time(
+        data[data["LOGIN_NAME"] == "EW3u96150agent_136361155"],
+        time_col="BILL_TIME",
+        var_columns=["Pre-TRANSACTION_BALANCE", "VALID_ACCOUNT", "BET_INTERVAL"],
+        time_window=timedelta(hours=1),
+        title="user: EW3u96150agent_136361155",
+        vline_time=datetime(year=2025, month=6, day=6, hour=21, minute=6),
+        vline_label="change card",
+        vars_in_logscale={"BET_INTERVAL"},
+    )
+
+    ## plot win rate for each card number:
+    # data["card_change"] = data["BILL_TIME"] > datetime(year=2025, month=6, day=6, hour=21, minute=6)
+    # data = split_column_by_multiple_separators(data, column="CARD_RESULT")
     # create_swam_plot_by_card(data, card_columns=["CARD_RESULT_1", "CARD_RESULT_2"], card_col_name="CARD_RESULT")
     # create_swam_plot_by_card(data, card_columns=["DRAGON_CARD_NUMBER", "TIGER_CARD_NUMBER"], card_col_name="CARD_NUMBER")
-    plot_dual_axis_sorted_swarm(
-        data,
-        y_col_right="DRAGON_CARD_NUMBER",
-        y_col_left="TIGER_CARD_NUMBER",
-        hue_col="card_change",
-        value_cols=["CUS_ACCOUNT"],
-    )
+    # plot_dual_axis_sorted_swarm(
+    #     data,
+    #     y_col_right="DRAGON_CARD_NUMBER",
+    #     y_col_left="TIGER_CARD_NUMBER",
+    #     hue_col="card_change",
+    #     value_cols=["CUS_ACCOUNT"],
+    # )
 
     # create_heatmap_by_group(
     #     data[data["LOGIN_NAME"] == "EW3u96150agent_136361155"],
@@ -249,3 +277,16 @@ if __name__ == "__main__":
     #         group_col="year_month",
     #         fig_title=f"LIGIN_NAME: {str(login_name)}",
     #     )
+
+    ## plot distribution of bet intervals:
+    # plot_df_distribution(data.loc[data["LOGIN_NAME"] == "EW3u96150agent_136361155", "BET_INTERVAL"], log=True)
+
+    print(data.loc[data["LOGIN_NAME"] == "EW3u96150agent_136361155", "BET_INTERVAL"].describe())
+
+    # data_log = log_transform(data, col_names="BET_INTERVAL")
+    # plot_df_distribution(data_log.loc[data_log["LOGIN_NAME"] == "EW3u96150agent_136361155", "BET_INTERVAL"], log=True)
+
+    ## plot the start and end time for each day:
+    # df_start_end_time = plot_start_end_time_by_day(
+    #     data.loc[data["LOGIN_NAME"] == "EW3u96150agent_136361155", ["BILL_TIME", "DATE_TEXT"]])
+    # print(df_start_end_time)
