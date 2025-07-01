@@ -90,7 +90,9 @@ def keep_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def log_transform(data: pd.DataFrame, col_names: Optional[List[str]] = None, base: int = 10) -> pd.DataFrame:
+def log_transform(
+    data: pd.DataFrame, col_names: Optional[Union[List[str], str]] = None, base: int = 10
+) -> pd.DataFrame:
     """
     Apply log transformation to selected numeric columns of a DataFrame.
     Handles negative values by preserving their sign: log(abs(x)) * sign(x)
@@ -105,6 +107,9 @@ def log_transform(data: pd.DataFrame, col_names: Optional[List[str]] = None, bas
 
     if col_names is None:
         col_names = data.columns.tolist()
+
+    if isinstance(col_names, str):
+        col_names = [col_names]
 
     for col in col_names:
         if col in data_transformed.columns and np.issubdtype(data_transformed[col].dtype, np.number):
