@@ -461,7 +461,7 @@ def plot_df_distribution(
             max_bin_index = counts.argmax()
             x_pos = (bin_edges[max_bin_index] + bin_edges[max_bin_index + 1]) / 2
             y_pos = counts[max_bin_index]
-            ax.text(x_pos, y_pos, col, fontsize=9, ha="center", va="bottom")
+            ax.text(x_pos, y_pos, f"{counts.max():.2e}", fontsize=9, ha="center", va="bottom")
 
         ax.set_title(col)
         ax.set_xlabel("Value")
