@@ -27,7 +27,7 @@ from bituslabs_ds.eda import (
     split_column_by_threshold,
 )
 from bituslabs_ds.s3_utils import upload_file_to_s3, write_pandas_to_s3
-from bituslabs_ds.utils import log_transform
+from bituslabs_ds.utils import add_event_group_by_gap, check_consecutive_event, group_iterator, log_transform
 
 config = Settings()
 config.plot.histogram.bins = 200
@@ -178,59 +178,11 @@ def create_swam_plot_by_card(data: pd.DataFrame, card_columns: List[str], card_c
     plot_dual_axis_sorted_swarm(plot_data, y_col_left=card_col_name, hue_col="card_change", value_cols=["CUS_ACCOUNT"])
 
 
-def check_consecutive_bet(
-    df: pd.DataFrame,
-    time_col: str = "BILL_TIME",
-    threshold: float = 40,
-    col_name: str = "is_consecutive",
-    check_gap: bool = False,
-) -> pd.DataFrame:
-    """
-    Calculates whether the time difference between the current timestamp and
-    *either* the previous or the next timestamp is less than a given threshold.
-
-    Args:
-        df (pd.DataFrame): The input DataFrame.
-        time_col (str, optional): The name of the timestamp column. Defaults to "BILL_TIME".
-        threshold (float, optional): The time difference threshold in seconds. Defaults to 40.
-        col_name (str, optional): The name of the new boolean column to be created.
-                                   Defaults to "is_consecutive".
-        check_gap (bool, optional): Whether to check the gap in time difference between current timestamp
-
-    Returns:
-        pd.DataFrame: The DataFrame with the new 'is_consecutive' column.
-    """
-
-    df = df.copy()
-    df[time_col] = pd.to_datetime(df[time_col])
-    df = df.sort_values(by=time_col).reset_index(drop=True)
-
-    # Calculate the difference from the previous timestamp in seconds
-    df["_diff_from_prev_seconds"] = df[time_col].diff().dt.total_seconds()
-
-    # Calculate the difference to the next timestamp in seconds
-    # shift(-1) brings the next row's timestamp into the current row
-    df["_diff_to_next_seconds"] = (df[time_col].shift(-1) - df[time_col]).dt.total_seconds()
-
-    # Determine if either the difference from the previous OR to the next is less than the threshold
-    # Note: NaN values (from the first and last rows' diff calculations) will evaluate to False when compared
-
-    if check_gap:
-        df[col_name] = (df["_diff_from_prev_seconds"] > threshold) | (df["_diff_to_next_seconds"] > threshold)
-    else:
-        df[col_name] = (df["_diff_from_prev_seconds"] <= threshold) | (df["_diff_to_next_seconds"] <= threshold)
-
-    # Drop the temporary difference columns
-    df = df.drop(columns=["_diff_from_prev_seconds", "_diff_to_next_seconds"])
-
-    return df
-
-
 def plot_bet_time(df: pd.DataFrame, time_col: str = "timestamp", threshold_hours: float = 12):
 
     df = df.copy()
-    df = check_consecutive_bet(df, time_col=time_col, threshold=40, col_name="is_consecutive")
-    df = check_consecutive_bet(
+    df = check_consecutive_event(df, time_col=time_col, threshold=40, col_name="is_consecutive")
+    df = check_consecutive_event(
         df, time_col=time_col, threshold=threshold_hours * 3600, col_name="is_gap", check_gap=True
     )
     df["seconds"] = df[time_col].dt.time.map(time_to_seconds)
@@ -341,10 +293,31 @@ if __name__ == "__main__":
     # s3_path = "dragon_tiger/processed_data"
     # write_pandas_to_s3(data, S3_BUCKET, f"{s3_path}/N020_BetOrders.csv")
 
-    data.drop(columns=["BILL_NO", "BET_DEVICE", "GAME_TYPE", "BET_DEVICE_CUTOFF", "GM_CODE"], inplace=True)
-    data.loc[data["BET_INTERVAL"] > 6 * 3600, "BET_INTERVAL"] = pd.NA
+    gap_thresh = 6 * 3600  # seconds
 
-    data = check_consecutive_bet(data, time_col="BILL_TIME", threshold=40, col_name="is_consecutive")
+    data.drop(columns=["BILL_NO", "BET_DEVICE", "GAME_TYPE", "BET_DEVICE_CUTOFF", "GM_CODE"], inplace=True)
+    data.loc[data["BET_INTERVAL"] > gap_thresh, "BET_INTERVAL"] = pd.NA
+
+    ## plot cus_account (bet return) for each block to bets, separately for consecutive and non-consecutive bets:
+    data_bet = add_event_group_by_gap(
+        data.loc[data["LOGIN_NAME"] == "EW3u96150agent_136361155", ["BILL_TIME", "CUS_ACCOUNT"]],
+        time_col="BILL_TIME",
+        threshold=gap_thresh,
+        col_name="gap_group",
+    )
+
+    data_bet = check_consecutive_event(data_bet, time_col="BILL_TIME", threshold=40, col_name="is_consecutive")
+    data_bet["is_consecutive"] = data_bet["is_consecutive"].map({True: "consecutive", False: "non-consecutive"})
+
+    for data_group, group, _ in group_iterator(data_bet, "gap_group", count_thresh=10):
+        plot_by_time(
+            data_group,
+            time_col="BILL_TIME",
+            var_columns=["CUS_ACCOUNT"],
+            group_col="is_consecutive",
+            time_window=timedelta(seconds=10),
+            title=f"cus account, group: {group}",
+        )
 
     # s3_path = "dragon_tiger/eda_output"
     # create_profile_report(data, "./eda_output/eda_dragon_tiger.html", s3_path)
@@ -422,8 +395,8 @@ if __name__ == "__main__":
     # plot_df_distribution(data_log.loc[data_log["LOGIN_NAME"] == "EW3u96150agent_136361155", "BET_INTERVAL"], log=True)
 
     ## plot the start and end time for each day:
-    plot_bet_time(
-        data.loc[data["LOGIN_NAME"] == "EW3u96150agent_136361155", ["BILL_TIME", "CUS_ACCOUNT"]],
-        time_col="BILL_TIME",
-        threshold_hours=6,
-    )
+    # plot_bet_time(
+    #     data.loc[data["LOGIN_NAME"] == "EW3u96150agent_136361155", ["BILL_TIME", "CUS_ACCOUNT"]],
+    #     time_col="BILL_TIME",
+    #     threshold_hours=6,
+    # )

@@ -124,6 +124,79 @@ def log_transform(
     return data_transformed
 
 
+def check_consecutive_event(
+    df: pd.DataFrame,
+    time_col: str,
+    threshold: float,
+    col_name: str = "is_consecutive",
+    check_gap: bool = False,
+    direction: Literal["before", "after", "both"] = "both",
+) -> pd.DataFrame:
+    """
+    Calculates whether the time difference between the current timestamp and *either* the previous or the next timestamp
+    is less or larger (when check_gap is True) than a given threshold.
+
+    Args:
+        df (pd.DataFrame): The input DataFrame.
+        time_col (str): The name of the timestamp column. Defaults to "BILL_TIME".
+        threshold (float): The time difference threshold in seconds. Defaults to 40.
+        col_name (str, optional): The name of the new boolean column to be created.
+                                   Defaults to "is_consecutive".
+        check_gap (bool, optional): Whether to check the gap in time difference between the current timestamp
+        direction (enumerate): check the event before or after the current one. Defaults to "both".
+
+    Returns:
+        pd.DataFrame: The DataFrame with the new 'is_consecutive' column.
+    """
+
+    df = df.copy()
+    df[time_col] = pd.to_datetime(df[time_col])
+    df = df.sort_values(by=time_col).reset_index(drop=True)
+
+    if direction == "before" or direction == "both":
+        # Calculate the difference from the previous timestamp in seconds
+        df["_diff_from_prev_seconds"] = df[time_col].diff().dt.total_seconds()
+
+    if direction == "after" or direction == "both":
+        # Calculate the difference to the next timestamp in seconds
+        # shift(-1) brings the next row's timestamp into the current row
+        df["_diff_to_next_seconds"] = (df[time_col].shift(-1) - df[time_col]).dt.total_seconds()
+
+    # Determine if either the difference from the previous OR to the next is less than the threshold
+    # Note: NaN values (from the first and last rows' diff calculations) will evaluate to False when compared
+    if direction == "both":
+        if check_gap:
+            df[col_name] = (df["_diff_from_prev_seconds"] > threshold) | (df["_diff_to_next_seconds"] > threshold)
+        else:
+            df[col_name] = (df["_diff_from_prev_seconds"] <= threshold) | (df["_diff_to_next_seconds"] <= threshold)
+        df.drop(columns=["_diff_from_prev_seconds", "_diff_to_next_seconds"], inplace=True)
+    elif direction == "before":
+        if check_gap:
+            df[col_name] = df["_diff_from_prev_seconds"] > threshold
+        else:
+            df[col_name] = df["_diff_from_prev_seconds"] <= threshold
+        df.drop(columns=["_diff_from_prev_seconds"], inplace=True)
+    elif direction == "after":
+        if check_gap:
+            df[col_name] = df["_diff_to_next_seconds"] > threshold
+        else:
+            df[col_name] = df["_diff_to_next_seconds"] <= threshold
+        df.drop(columns=["_diff_from_prev_seconds"], inplace=True)
+
+    return df
+
+
+def add_event_group_by_gap(
+    df: pd.DataFrame, time_col: str, threshold: float, col_name: str = "gap_group"
+) -> pd.DataFrame:
+
+    df = check_consecutive_event(df, time_col, threshold, col_name="_is_gap", check_gap=True, direction="before")
+    df[col_name] = df["_is_gap"].cumsum()
+    df.drop(columns=["_is_gap"], inplace=True)
+
+    return df
+
+
 def column_iterator(
     data: pd.DataFrame, ordered_column_names: List[str], n_columns: Optional[Union[List[int], int]] = None
 ) -> Iterator[Tuple[pd.DataFrame, int]]:
@@ -153,3 +226,38 @@ def column_iterator(
             break
         else:
             yield data[ordered_column_names[:n]], n
+
+
+def group_iterator(
+    data: pd.DataFrame, group_col: Optional[str] = None, count_thresh: int = 1, preserve_index: bool = False
+) -> Iterator[Tuple[pd.DataFrame, Any, int]]:
+    """
+    iterator to select rows of data according to value in group_col
+    :param data:
+    :param group_col:
+    :param count_thresh: ignore group data less than count_thresh
+    :param preserve_index: yield data with index preserved (fill NA for other groups)
+    :return:
+    """
+
+    if group_col is None or group_col not in data.columns:
+        yield data.copy(), None, 0
+        if not logger.hasHandlers():
+            warnings.warn(f"group_col: {group_col} not in data to iterate over.")
+        else:
+            logger.warning(f"group_col: {group_col} not in data to iterate over.")
+        return
+
+    group_vals = data[group_col].unique()
+    index = 0
+    for group in group_vals:
+        res = data[data[group_col] == group]
+        if len(res) < count_thresh:
+            continue
+
+        if preserve_index:
+            res = data.copy()
+            res.loc[res[group_col] != group, :] = pd.NA
+
+        yield res, group, index
+        index += 1
