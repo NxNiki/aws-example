@@ -8,5 +8,7 @@
 **/output/
 **/eda_output/
 **/.ipynb_checkpoints/*
+**.png
+**.jpg
 __pycache__
 dist/*
