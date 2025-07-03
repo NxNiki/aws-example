@@ -207,7 +207,7 @@ def plot_by_time(
 
     my_palette = sns.color_palette("deep", 7).as_hex()
     n_vars = len(var_columns)
-    fig, axes = plt.subplots(n_vars, 1, figsize=(12, 3 * n_vars), sharex=True)
+    fig, axes = plt.subplots(n_vars, 1, figsize=(12, 4 * n_vars), sharex=True)
     if n_vars == 1:
         axes = [axes]
 
@@ -220,18 +220,21 @@ def plot_by_time(
         # --- Plotting against the integer index to remove gaps ---
         data_resampled[col] = data_resampled[col].interpolate(method="nearest")
         axes[i].plot(data_resampled.index, data_resampled[col], linestyle="-", color="gray", alpha=0.5)
-        axes[i].plot(data_resampled.index, 0, linestyle="--", color="black", alpha=0.5)
+        axes[i].axhline(y=0, linestyle="--", color="black", alpha=1)
 
         for data_group, group, index in group_iterator(data_resampled, group_col, preserve_index=True):
             axes[i].plot(
                 data_resampled.index,
                 data_group[col],
                 marker="o",
-                markersize=1.5,
+                markersize=2.5,
                 color=my_palette[index % 7],
                 label=group,
                 alpha=0.9,
             )
+
+            # show data stats:
+            print(f"{group}: mean: {data_group[col].mean()}, abs mean: {data_group[col].abs().mean()}")
 
         if col in vars_in_logscale:
             axes[i].set_yscale("symlog", linthresh=1)

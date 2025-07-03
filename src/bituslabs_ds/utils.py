@@ -248,7 +248,7 @@ def group_iterator(
             logger.warning(f"group_col: {group_col} not in data to iterate over.")
         return
 
-    group_vals = data[group_col].unique()
+    group_vals = sorted(pd.Series(data[group_col].unique()).dropna())
     index = 0
     for group in group_vals:
         res = data[data[group_col] == group]
