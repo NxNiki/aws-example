@@ -376,7 +376,7 @@ def process_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
 
     df = df.withColumn("account", col("account").cast("float"))
     df = df.withColumn("cus_account", col("cus_account").cast("float"))
-    df = df.withColumn("basepoint", col("basepoint").cast("float"))
+    df = df.withColumn("basepoint", coalesce(col("basepoint").cast("float"), lit(float("nan"))))
     df = df.withColumn("payout", col("cus_account") + col("account"))
     df = df.withColumn("current_point", col("basepoint") + col("cus_account"))
 
