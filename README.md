@@ -7,7 +7,7 @@ Use conda to create and activate the virtual environment, run in the project roo
 conda env create -f environment.yml --prune
 conda activate aws-example
 ```
-Use peotry within a conda environment, make sure to aovid creating virtual environment with peotry:
+Use peotry within a conda environment, make sure to avoid creating virtual environment with peotry:
 ```
 poetry config virtualenvs.create false --local
 poetry install
