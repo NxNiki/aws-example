@@ -178,7 +178,7 @@ def _read_file(file: str, columns: Optional[List[str]]) -> pd.DataFrame:
 
 
 def read_files(
-    files: List[str],
+    files: Union[List[str], str],
     local_cache_path: Optional[str] = None,
     columns: Optional[List[str]] = None,
     max_workers: int = DEFAULT_MAX_JOBS,
@@ -203,6 +203,9 @@ def read_files(
         return data
 
     read_func = partial(_read_file, columns=columns)
+
+    if isinstance(files, str):
+        files = [files]
 
     if parallel_mode == "none" or max_workers <= 1:
         dfs = [read_func(file) for file in files]

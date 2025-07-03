@@ -10,10 +10,12 @@ import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
+from matplotlib.pyplot import legend
 from matplotlib.ticker import MaxNLocator
 from pandas import DataFrame, Series
 
 from bituslabs_ds.config import DEFAULT_MAX_JOBS
+from bituslabs_ds.utils import group_iterator
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -167,6 +169,7 @@ def plot_by_time(
     time_col: str,
     var_columns: List[str],
     time_window: timedelta,
+    group_col: Optional[str] = None,
     title: str = "Time Series Plot (Gaps Removed)",
     vline_time: Union[str, datetime, pd.Timestamp] = None,
     vline_label: str = "Event",
@@ -181,35 +184,62 @@ def plot_by_time(
     - time_col (str): The name of the time column.
     - var_columns (List[str]): List of variable columns to plot.
     - time_window (timedelta): The time window for resampling.
+    - group_col (Optional[str]): Plot separate curve for each group.
     - title (str): Title of the entire plot.
     - vline_time (Union[str, datetime, pd.Timestamp], optional): A timestamp for the vertical line.
     - vline_label (str, optional): The label for the vertical line.
-    - vars_in_logscale (Set[str]): Set of variables to log scale.
+    - vars_in_logscale (Set[str]): Set y-axis of variables to a log scale.
     """
-    data = data.copy()
-    data[time_col] = pd.to_datetime(data[time_col])
-    data.set_index(time_col, inplace=True)
-    resampled = data[var_columns].resample(time_window).mean()
-    resampled = resampled.dropna(how="all")
 
-    # Create a string version of the timestamp for labeling later
-    resampled["time_str"] = resampled.index.strftime("%Y-%m-%d %H:%M")
-    # Reset the index to get a simple integer index (0, 1, 2...) for plotting
-    resampled = resampled.reset_index()
+    def resample_data(df: pd.DataFrame) -> pd.DataFrame:
+        df = df.copy()
+        df.set_index(time_col, inplace=True)
+        resampled = df[var_columns].resample(time_window).mean()
+        if group_col is not None:
+            resampled[group_col] = (
+                df[group_col].resample(time_window).apply(lambda x: x.mode().iloc[0] if not x.empty else pd.NA)
+            )
+        # Create a string version of the timestamp for labeling later
+        resampled["time_str"] = resampled.index.strftime("%Y-%m-%d %H:%M")
+        # Reset the index to get a simple integer index (0, 1, 2...) for plotting
+        resampled = resampled.reset_index()
+        return resampled
 
+    my_palette = sns.color_palette("deep", 7).as_hex()
     n_vars = len(var_columns)
-    fig, axes = plt.subplots(n_vars, 1, figsize=(12, 3 * n_vars), sharex=True)
+    fig, axes = plt.subplots(n_vars, 1, figsize=(12, 4 * n_vars), sharex=True)
     if n_vars == 1:
         axes = [axes]
 
-    # --- Plotting against the integer index to remove gaps ---
+    data = data.copy()
+    data[time_col] = pd.to_datetime(data[time_col])
+    data_resampled = resample_data(data)
+    data_resampled.dropna(inplace=True, how="all")
+
     for i, col in enumerate(var_columns):
-        # We plot against `resampled.index`, which is now 0, 1, 2...
-        axes[i].plot(resampled.index, resampled[col], marker="o", linestyle="-")
-        axes[i].set_ylabel(col)
+        # --- Plotting against the integer index to remove gaps ---
+        data_resampled[col] = data_resampled[col].interpolate(method="nearest")
+        axes[i].plot(data_resampled.index, data_resampled[col], linestyle="-", color="gray", alpha=0.5)
+        axes[i].axhline(y=0, linestyle="--", color="black", alpha=1)
+
+        for data_group, group, index in group_iterator(data_resampled, group_col, preserve_index=True):
+            axes[i].plot(
+                data_resampled.index,
+                data_group[col],
+                marker="o",
+                markersize=2.5,
+                color=my_palette[index % 7],
+                label=group,
+                alpha=0.9,
+            )
+
+            # show data stats:
+            print(f"{group}: mean: {data_group[col].mean()}, abs mean: {data_group[col].abs().mean()}")
+
         if col in vars_in_logscale:
             axes[i].set_yscale("symlog", linthresh=1)
         axes[i].grid(False)
+        axes[i].legend(fontsize=7, frameon=False, loc="upper left")
 
     # --- Calculate and plot the vertical line's fractional position ---
     if vline_time:
@@ -217,17 +247,17 @@ def plot_by_time(
 
         # Find where the vline timestamp would fit in our data's real timestamps
         # 'left' side gives us the index of the point just before our vline time
-        insert_idx = resampled[time_col].searchsorted(vline_dt, side="left")
+        insert_idx = data_resampled[time_col].searchsorted(vline_dt, side="left")
 
         # Handle edge cases
         if insert_idx == 0:
             vline_pos = 0.0
-        elif insert_idx == len(resampled):
-            vline_pos = len(resampled) - 1.0
+        elif insert_idx == len(data_resampled):
+            vline_pos = len(data_resampled) - 1.0
         else:
             # Interpolate to find the fractional index position
-            time_before = resampled.loc[insert_idx - 1, time_col]
-            time_after = resampled.loc[insert_idx, time_col]
+            time_before = data_resampled.loc[insert_idx - 1, time_col]
+            time_after = data_resampled.loc[insert_idx, time_col]
 
             time_span = time_after - time_before
             time_progress = vline_dt - time_before
@@ -237,25 +267,17 @@ def plot_by_time(
 
         for ax in axes:
             ax.axvline(x=vline_pos, color="r", linestyle="--", linewidth=2, label=vline_label)
-        axes[0].legend()
 
     # --- Customize X-axis to show readable time labels instead of integers ---
     # Use MaxNLocator to select a reasonable number of ticks to label
     ax = axes[-1]
     ax.xaxis.set_major_locator(MaxNLocator(nbins=15, integer=True))
-
-    # Get the positions of the ticks chosen by the locator
     tick_positions = ax.get_xticks()
-
     # Filter out positions that are out of bounds of our data
-    valid_ticks = [int(p) for p in tick_positions if 0 <= p < len(resampled)]
-
-    # Set the tick positions and their corresponding time string labels
+    valid_ticks = [int(p) for p in tick_positions if 0 <= p < len(data_resampled)]
     ax.set_xticks(valid_ticks)
-    ax.set_xticklabels(resampled.loc[valid_ticks, "time_str"], rotation=45, ha="right")
-
-    ax.set_xlabel("Time")
-    fig.suptitle(title, fontsize=16)
+    ax.set_xticklabels(data_resampled.loc[valid_ticks, "time_str"], rotation=45, ha="right", fontsize=7)
+    fig.suptitle(title, fontsize=10)
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     plt.show()
 
@@ -438,21 +460,22 @@ def plot_df_distribution(
 
     # Filter only numeric columns
     numeric_cols = [col for col in data.columns if pd.api.types.is_numeric_dtype(data[col])]
-
     if not numeric_cols:
         print("No numeric columns to plot.")
         return
 
     n_cols = 5
     n_rows = math.ceil(len(numeric_cols) / n_cols)
-
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 4, n_rows * 3), squeeze=False)
     axes = axes.flatten()
 
     for i, col in enumerate(numeric_cols):
         ax = axes[i]
         values = data[col].dropna()
-        n_bins = min(bins, values.nunique())
+        if len(values) == 0:
+            print("No values found for column", col)
+            continue
+        n_bins = max(min(bins, values.nunique()), 30)
         counts, bin_edges, _ = ax.hist(values, bins=n_bins, alpha=alpha, edgecolor="black")
 
         # Annotate with column name at max bin
@@ -460,7 +483,7 @@ def plot_df_distribution(
             max_bin_index = counts.argmax()
             x_pos = (bin_edges[max_bin_index] + bin_edges[max_bin_index + 1]) / 2
             y_pos = counts[max_bin_index]
-            ax.text(x_pos, y_pos, col, fontsize=9, ha="center", va="bottom")
+            ax.text(x_pos, y_pos, f"{counts.max():.2e}", fontsize=9, ha="center", va="bottom")
 
         ax.set_title(col)
         ax.set_xlabel("Value")
