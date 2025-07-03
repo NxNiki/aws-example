@@ -7,7 +7,7 @@ from bituslabs_ds.config import IMAGE_URI, S3_BUCKET, SAGEMAKER_ROLE
 
 # directory to save output data locally on sagemaker instance. it will be uploaded to s3.
 # input data is directly read from s3 bucket, we do not define it here as that will make all data in s3 prefix
-# downloaded to sagemaker instance
+# downloaded to sagemaker
 output_dir = "/opt/ml/processing/output"
 
 session = sagemaker.Session()
