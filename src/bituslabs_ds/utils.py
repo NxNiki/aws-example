@@ -50,7 +50,7 @@ def remove_outliers(
     return data_filtered, filtered_indices
 
 
-def count_missing_columns(df: pd.DataFrame, verbose: bool = True) -> int:
+def count_missing_columns(df: pd.DataFrame, verbose: bool = True) -> Tuple[int, int]:
     """
     Count the number of columns in a DataFrame that contain missing (NaN) values.
 
@@ -61,10 +61,14 @@ def count_missing_columns(df: pd.DataFrame, verbose: bool = True) -> int:
     missing_counts = df.isnull().sum()
     cols_with_missing = missing_counts[missing_counts > 0]
 
+    zero_counts = (df == 0).sum()
+    cols_with_zeros = zero_counts[zero_counts > 0]
+
     if verbose:
         logger.info(f"Columns with missing values: \n{cols_with_missing}")
+        logger.info(f"Columns with zero values: \n{cols_with_zeros}")
 
-    return len(cols_with_missing)
+    return len(cols_with_missing), len(cols_with_zeros)
 
 
 def keep_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
