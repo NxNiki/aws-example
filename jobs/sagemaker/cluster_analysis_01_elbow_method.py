@@ -22,7 +22,7 @@ from sklearn.feature_selection import VarianceThreshold
 from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
 
-from bituslabs_ds.config import S3_BUCKET, setup_logging
+from bituslabs_ds.config import REGION, S3_BUCKET, setup_logging
 from bituslabs_ds.s3_utils import list_s3_files, read_dataset, read_files
 from bituslabs_ds.utils import (
     column_iterator,
