@@ -26,23 +26,23 @@ processor = ScriptProcessor(
     sagemaker_session=session,
 )
 
-time_tag = "_2025-06-18_17-17-08"
+input_time_tag = "_2025-06-18_17-17-08"
 inputs = [
     ProcessingInput(
-        source=f"s3://{S3_BUCKET}/ds-data-kmeans/elbow_method{time_tag}/output/wucaishen_grouped_stat_output_24.csv",
+        source=f"s3://{S3_BUCKET}/ds-data-kmeans/elbow_method{input_time_tag}/output/wucaishen_grouped_stat_output_24.csv",
         destination="/opt/ml/processing/input/output",
     ),
     ProcessingInput(
-        source=f"s3://{S3_BUCKET}/ds-data-kmeans/elbow_method{time_tag}/features/",
+        source=f"s3://{S3_BUCKET}/ds-data-kmeans/elbow_method{input_time_tag}/features/",
         destination="/opt/ml/processing/input/features",
     ),
 ]
 
-time_tag = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+output_time_tag = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 outputs = [
     ProcessingOutput(
         source=f"{output_dir}",
-        destination=f"s3://{S3_BUCKET}/ds-data-kmeans/kmeans_{time_tag}",
+        destination=f"s3://{S3_BUCKET}/ds-data-kmeans/kmeans_{output_time_tag}",
     )
 ]
 
