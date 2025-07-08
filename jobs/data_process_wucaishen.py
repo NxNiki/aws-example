@@ -376,6 +376,7 @@ def process_data(df: DataFrame) -> Tuple[DataFrame, DataFrame]:
 
     df = df.withColumn("account", col("account").cast("float"))
     df = df.withColumn("cus_account", col("cus_account").cast("float"))
+    # basepoint has values failed to convert to float for the year 2024, which needs further investigation...
     df = df.withColumn("basepoint", coalesce(col("basepoint").cast("float"), lit(float("nan"))))
     df = df.withColumn("payout", col("cus_account") + col("account"))
     df = df.withColumn("current_point", col("basepoint") + col("cus_account"))
@@ -438,6 +439,7 @@ def write_data(sdf: DataFrame, file_path: str, max_partition: int = 40, single_f
 
 
 if __name__ == "__main__":
+
     os.makedirs(".log", exist_ok=True)
     execution_time = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file_path = f".log/data_process_wucaishen{execution_time}.log"
