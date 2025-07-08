@@ -215,7 +215,7 @@ def read_files(
         logger.info(f"read files using {max_workers} workers")
         executor_cls: Callable = ThreadPoolExecutor if parallel_mode == "thread" else ProcessPoolExecutor
         dfs = []
-
+        files_read_order: List[str] = []
         with executor_cls(max_workers=max_workers) as executor:
             future_to_file = {executor.submit(read_func, file): file for file in files}
             for future in as_completed(future_to_file):
@@ -226,6 +226,7 @@ def read_files(
                     logger.error(f"Failed to read {file}: {e}")
 
     if add_file_source:
+        # the order of dfs may not be consistent with files!!!
         data = pd.concat(dfs, keys=[os.path.basename(f) for f in files])
         data = data.reset_index(level=0).rename(columns={"level_0": "source_file"})
     else:
