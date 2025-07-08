@@ -17,7 +17,7 @@ from pyarrow import fs
 from pyarrow.dataset import Dataset, dataset
 from pyspark.sql import DataFrame as SparkDataFrame
 
-from bituslabs_ds.config import DEFAULT_MAX_JOBS
+from bituslabs_ds.config import DEFAULT_MAX_JOBS, REGION
 
 s3_client = boto3.client("s3")
 
@@ -229,7 +229,7 @@ def read_files(
     return data
 
 
-def read_dataset(file_path: str, region: str, data_format: str = "parquet") -> Dataset:
+def read_dataset(file_path: str, region: str = REGION, data_format: str = "parquet") -> Dataset:
     file_path = parse_bucket_name(file_path)
     logger.info(f"Read data from: {file_path}")
     s3 = fs.S3FileSystem(region=region)
