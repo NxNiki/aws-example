@@ -23,6 +23,7 @@ from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
 
 from bituslabs_ds.config import S3_BUCKET, setup_logging
+from bituslabs_ds.eda import plot_correlation
 from bituslabs_ds.s3_utils import list_s3_files, read_dataset, read_files
 from bituslabs_ds.utils import (
     column_iterator,
@@ -135,17 +136,6 @@ def feature_selection_by_pca(data: pd.DataFrame, output_path: str = ".") -> List
     save_list(features, f"{output_path}/features/important_features.json")
 
     return features
-
-
-def plot_correlation(data: pd.DataFrame, output_path: str = ".") -> None:
-    data = keep_numeric_columns(data)
-    corr_matrix = data.corr()
-    plt.figure(figsize=(14, 10))
-    sns.heatmap(corr_matrix, annot=False, cmap="coolwarm", fmt=".2f", linewidths=0.5, vmin=-1, vmax=1)
-    title = "Feature Correlation Heatmap"
-    plt.title(title, fontsize=16)
-    plt.savefig(f"{output_path}/figures/{title}.png")
-    plt.show()
 
 
 def elbow_method(

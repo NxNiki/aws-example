@@ -4,6 +4,7 @@ import os
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
+from itertools import zip_longest
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import matplotlib.cm as cm
@@ -15,7 +16,7 @@ from matplotlib.ticker import MaxNLocator
 from pandas import DataFrame, Series
 
 from bituslabs_ds.config import DEFAULT_MAX_JOBS
-from bituslabs_ds.utils import group_iterator
+from bituslabs_ds.utils import group_iterator, keep_numeric_columns
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -114,15 +115,21 @@ def read_excel_sheets(file_path: str, sheet_name_col: str = "sheet_name"):
 
 
 def split_column_by_threshold(
-    data: pd.DataFrame, columns: List[str], threshold: Union[float, List[float]] = 0.0
+    data: pd.DataFrame, columns: Union[str, List[str]], threshold: Union[float, List[float]] = 0.0
 ) -> pd.DataFrame:
 
-    for col in columns:
-        data[f"{col}_below_{threshold}"] = data[col]
-        data.loc[data[col] > threshold, f"{col}_below_{threshold}"] = pd.NA
+    if isinstance(columns, str):
+        columns = [columns]
 
-        data[f"{col}_above_{threshold}"] = data[col]
-        data.loc[data[col] <= threshold, f"{col}_above_{threshold}"] = pd.NA
+    if not isinstance(threshold, list):
+        threshold = [threshold]
+
+    for col, thresh in zip_longest(columns, threshold, fillvalue=threshold[-1]):
+        data[f"{col}_below_{thresh}"] = data[col]
+        data.loc[data[col] > thresh, f"{col}_below_{thresh}"] = pd.NA
+
+        data[f"{col}_above_{thresh}"] = data[col]
+        data.loc[data[col] <= thresh, f"{col}_above_{thresh}"] = pd.NA
 
     return data
 
@@ -300,6 +307,18 @@ def plot_heatmap(data: pd.DataFrame, x_label: str, y_label: str, title: str):
     plt.yticks(rotation=0)
     plt.tight_layout()
     plt.show()
+
+
+def plot_correlation(data: pd.DataFrame, output_path: str = ".", title: str = "Correlation Heatmap") -> None:
+    data = keep_numeric_columns(data)
+    corr_matrix = data.corr()
+    plt.figure(figsize=(12, 8))
+    sns.heatmap(corr_matrix, annot=True, cmap="coolwarm", fmt=".2f", linewidths=0.5, vmin=-1, vmax=1)
+    plt.title(title, fontsize=16)
+    plt.xticks(rotation=45, ha="right")
+    plt.tight_layout()
+    plt.show()
+    plt.savefig(f"{output_path}/figures/{title}.png")
 
 
 def plot_dual_axis_sorted_swarm(
@@ -508,6 +527,7 @@ def plot_multiple_box_swarm(
     n_cols: int = 3,
     fig_size: Tuple[float, float] = (8, 6),
     fig_title: Optional[str] = None,
+    log_scale: bool = False,
 ):
     """
     For each combination of y_col and x_col, plot a box + swarm plot. All x_cols and group_col will be plotted in one
@@ -525,11 +545,14 @@ def plot_multiple_box_swarm(
     n_plots = len(y_cols) * len(x_cols)
     n_rows = (n_plots + n_cols - 1) // n_cols
 
-    subplot_width = data[x_cols].nunique().max() / 4
+    subplot_width = max(data[x_cols].nunique().max() / 4, 1 / 2)
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(fig_size[0] * n_cols * subplot_width, fig_size[1] * n_rows))
     axes = axes.flatten()
 
-    palette = sns.color_palette("pastel", n_colors=len(data[group_col].unique()))
+    # Determine the number of unique groups for palette creation
+    num_groups = len(data[group_col].unique()) if group_col else 1
+    palette = sns.color_palette("pastel", n_colors=num_groups)
+
     plot_idx = 0
     for x_col in x_cols:
         for y_col in y_cols:
@@ -542,29 +565,10 @@ def plot_multiple_box_swarm(
                 value_name="value",
             )
 
-            hue_order = df_long[group_col].unique()
-            hue_colors = dict(zip(hue_order, palette))
+            non_nans = df_long["value"].count()
 
             ax = axes[plot_idx]
-            sns.boxplot(
-                data=df_long,
-                x=x_col,
-                y="value",
-                hue=group_col if group_col else None,
-                ax=ax,
-                palette=palette,
-                boxprops=dict(linewidth=1.5),
-                medianprops=dict(linewidth=2),
-                whis=1.5,
-            )
-
-            # Manually update each box color to match hue-edge color
-            # (Seaborn doesn't apply hue color to edge color when face color is None)
-            for i, artist in enumerate(ax.artists):
-                # Boxes are ordered by variable, then hue — calculate color accordingly
-                hue_idx = i % len(hue_order)
-                color = palette[hue_idx]
-                artist.set_edgecolor(color)
+            plot_idx += 1
 
             sns.stripplot(
                 data=df_long,
@@ -573,29 +577,70 @@ def plot_multiple_box_swarm(
                 hue=group_col if group_col else None,
                 dodge=True if group_col else False,
                 ax=ax,
-                palette="dark:black",
-                size=2.5,
+                palette=palette,
+                size=2 if non_nans > 1e5 else 4,
                 legend=False,
-                jitter=True,
+                jitter=0.25,  # Wider distribution for swarm plot
+                alpha=0.1 if non_nans > 1e5 else 0.7,
             )
 
-            ax.set_yscale("symlog", linthresh=1)
+            if log_scale:
+                ax.set_yscale("symlog", linthresh=1)
             ax.set_xlabel(x_col)
             ax.set_ylabel(y_col)
             ax.tick_params(axis="x", rotation=30)
 
+            sns.boxplot(
+                data=df_long,
+                x=x_col,
+                y="value",
+                hue=group_col if group_col else None,
+                ax=ax,
+                palette=palette,
+                boxprops=dict(linewidth=1.5, facecolor=(0, 0, 0, 0)),  # Transparent face color
+                medianprops=dict(linewidth=2),
+                whis=1.5,
+                notch=True,
+                showfliers=False,
+            )
+
             if group_col and ax.get_legend():
                 ax.legend_.remove()
 
-            plot_idx += 1
+            # Manually update each box edge color to match hue color
+            # This is necessary because setting facecolor to transparent prevents hue from coloring the edges
+            if group_col:
+                hue_order = df_long[group_col].unique()
+                for i, artist in enumerate(ax.artists):
+                    hue_idx = i % len(hue_order)
+                    color = palette[hue_idx]
+                    artist.set_edgecolor(color)
+                    # Also set the color of the median line
+                    line = artist.get_children()[0]  # The median line is the first child
+                    line.set_color(color)
+            else:
+                # If no group_col, set edge color to the first color in palette
+                for artist in ax.artists:
+                    artist.set_edgecolor(palette[0])
+                    line = artist.get_children()[0]
+                    line.set_color(palette[0])
 
     # Clean up unused axes
     for j in range(plot_idx, len(axes)):
         fig.delaxes(axes[j])
 
     if group_col:
-        handles, labels = ax.get_legend_handles_labels()
-        fig.legend(handles, labels, loc="upper right")
+        # Create a single legend for the entire figure
+        handles, labels = [], []
+        if ax.get_legend():  # Check if the last subplot has a legend
+            handles, labels = ax.get_legend_handles_labels()
+        # If no legend on the last plot, manually create handles and labels
+        elif group_col:
+            unique_groups = data[group_col].unique()
+            for i, group in enumerate(unique_groups):
+                handles.append(plt.Line2D([0], [0], marker="o", color="w", markerfacecolor=palette[i], markersize=8))
+                labels.append(group)
+        fig.legend(handles, labels, loc="upper right", bbox_to_anchor=(1.0, 0.95), title=group_col)
 
     plt.tight_layout(pad=1)
     fig.subplots_adjust(top=0.92, hspace=0.4, wspace=0.2)
