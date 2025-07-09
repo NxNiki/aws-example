@@ -23,8 +23,8 @@ def generate_query_for_table(fishes_indices: Union[List[int], range], table_name
             else:
                 get_user_id = False
 
-            # add a blank line so that extra indent is not added to the 1st line:
             query = dedent(
+                # add a blank line so that extra indent is not added to the 1st line:
                 f"""\
                 
                 SELECT *
@@ -138,5 +138,5 @@ if __name__ == "__main__":
         range(1, 11),
         ["hunter_logs_clean_data", "hunter_logs_suspicious_clean_data", "hunter_logs_suspicious_clean_data_total"],
     )
-    # execute_query(sql_query, database="ag_share_data")
+    execute_query(sql_query, database="ag_share_data")
     print(sql_query)
