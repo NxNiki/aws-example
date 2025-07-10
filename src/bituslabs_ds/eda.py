@@ -312,13 +312,28 @@ def plot_heatmap(data: pd.DataFrame, x_label: str, y_label: str, title: str):
 def plot_correlation(data: pd.DataFrame, output_path: str = ".", title: str = "Correlation Heatmap") -> None:
     data = keep_numeric_columns(data)
     corr_matrix = data.corr()
-    plt.figure(figsize=(12, 8))
-    sns.heatmap(corr_matrix, annot=True, cmap="coolwarm", fmt=".2f", linewidths=0.5, vmin=-1, vmax=1)
-    plt.title(title, fontsize=16)
-    plt.xticks(rotation=45, ha="right")
-    plt.tight_layout()
+
+    g = sns.clustermap(
+        corr_matrix,
+        center=0,
+        cmap="vlag",
+        annot=True,
+        fmt=".2f",
+        square=True,
+        row_cluster=False,
+        col_cluster=True,
+        dendrogram_ratio=(0.1, 0.15),
+        cbar_pos=(0.02, 0.2, 0.03, 0.4),
+        linewidths=0.75,
+        figsize=(10, 8),
+    )
+
+    g.figure.suptitle(title, fontsize=16, y=0.95)
+    plt.setp(g.ax_heatmap.get_xticklabels(), rotation=45, ha="right")
+
+    os.makedirs(f"{output_path}/figures", exist_ok=True)
+    g.savefig(f"{output_path}/figures/{title}.png")
     plt.show()
-    plt.savefig(f"{output_path}/figures/{title}.png")
 
 
 def plot_dual_axis_sorted_swarm(
