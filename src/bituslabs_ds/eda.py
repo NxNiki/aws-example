@@ -603,7 +603,7 @@ def plot_multiple_box_swarm(
                 ax.set_yscale("symlog", linthresh=1)
             ax.set_xlabel(x_col)
             ax.set_ylabel(y_col)
-            ax.tick_params(axis="x", rotation=30)
+            ax.tick_params(axis="x", rotation=0)
 
             sns.boxplot(
                 data=df_long,
@@ -658,7 +658,7 @@ def plot_multiple_box_swarm(
         fig.legend(handles, labels, loc="upper right", bbox_to_anchor=(1.0, 0.95), title=group_col)
 
     plt.tight_layout(pad=1)
-    fig.subplots_adjust(top=0.92, hspace=0.4, wspace=0.2)
+    fig.subplots_adjust(top=0.92, hspace=0.2, wspace=0.2)
 
     if fig_title:
         fig.suptitle(fig_title, fontsize=16, y=0.98)
