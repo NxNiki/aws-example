@@ -601,9 +601,11 @@ def plot_multiple_box_swarm(
 
             if log_scale:
                 ax.set_yscale("symlog", linthresh=1)
-            ax.set_xlabel(x_col)
-            ax.set_ylabel(y_col)
-            ax.tick_params(axis="x", rotation=0)
+            ax.set_xlabel(x_col, fontsize=12)
+            ax.set_ylabel(y_col, fontsize=14)
+            ax.tick_params(axis="x", rotation=0, size=8)
+            for label in ax.get_xticklabels():
+                label.set_fontsize(14)
 
             sns.boxplot(
                 data=df_long,

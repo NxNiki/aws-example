@@ -117,6 +117,8 @@ def log_transform(
             with np.errstate(divide="ignore", invalid="ignore"):
                 col_data = np.sign(col_data) * np.log1p(np.abs(col_data)) / np.log(base)
             data_transformed[f"{col}{suffix}"] = col_data
+        else:
+            logger.warning(f"Column: {col} not transformed.")
 
     return data_transformed
 
