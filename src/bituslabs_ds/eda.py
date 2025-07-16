@@ -9,11 +9,12 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import seaborn as sns
-from matplotlib.pyplot import legend
 from matplotlib.ticker import MaxNLocator
 from pandas import DataFrame, Series
+from statannotations.Annotator import Annotator
 
 from bituslabs_ds.config import DEFAULT_MAX_JOBS
 from bituslabs_ds.utils import group_iterator, keep_numeric_columns
@@ -474,7 +475,11 @@ def plot_dual_axis_sorted_swarm(
 
 
 def plot_df_distribution(
-    data: Union[pd.DataFrame, pd.Series], bins: int = 30, alpha: float = 0.5, log: bool = False
+    data: Union[pd.DataFrame, pd.Series],
+    bins: int = 30,
+    alpha: float = 0.5,
+    log: bool = False,
+    figure_name: Optional[str] = None,
 ) -> None:
     """
     Plots the distribution (histogram) of each numeric column in a DataFrame in separate subplots.
@@ -489,10 +494,13 @@ def plot_df_distribution(
     Returns:
     - None: Displays a matplotlib plot.
     """
+
+    data = data.copy()
     if isinstance(data, pd.Series):
         data = data.to_frame()
 
-    # Filter only numeric columns
+    boolean_cols = [col for col in data.columns if pd.api.types.is_bool_dtype(data[col])]
+    data[boolean_cols] = data[boolean_cols].astype(int)
     numeric_cols = [col for col in data.columns if pd.api.types.is_numeric_dtype(data[col])]
     if not numeric_cols:
         print("No numeric columns to plot.")
@@ -509,6 +517,7 @@ def plot_df_distribution(
         if len(values) == 0:
             print("No values found for column", col)
             continue
+
         n_bins = max(min(bins, values.nunique()), 30)
         counts, bin_edges, _ = ax.hist(values, bins=n_bins, alpha=alpha, edgecolor="black")
 
@@ -531,6 +540,8 @@ def plot_df_distribution(
         fig.delaxes(axes[j])
 
     plt.tight_layout()
+    if figure_name is not None:
+        plt.savefig(figure_name)
     plt.show()
 
 
@@ -543,10 +554,12 @@ def plot_multiple_box_swarm(
     fig_size: Tuple[float, float] = (8, 6),
     fig_title: Optional[str] = None,
     log_scale: bool = False,
+    post_hoc_table: Optional[pd.DataFrame] = None,
 ):
     """
     For each combination of y_col and x_col, plot a box + swarm plot. All x_cols and group_col will be plotted in one
-    subplot.
+    subplot. Adds statistical test results (Tukey HSD) to the plot for pairwise comparisons within group_col
+    using statannotations for visual display.
 
     Parameters:
         data (pd.DataFrame): Original DataFrame.
@@ -556,35 +569,61 @@ def plot_multiple_box_swarm(
         n_cols (int): Subplots per row.
         fig_size (Tuple[float, float]): Figure size per plot.
         fig_title (Optional[str]): Optional figure title.
+        log_scale (bool): Whether to use logarithmic scale on y-axis.
+        post_hoc_table (Optional[pd.DataFrame]): table of the post-hoc results. should have columns: variable,
+            comparison, and p_value
     """
     n_plots = len(y_cols) * len(x_cols)
     n_rows = (n_plots + n_cols - 1) // n_cols
 
-    subplot_width = max(data[x_cols].nunique().max() / 4, 1 / 2)
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(fig_size[0] * n_cols * subplot_width, fig_size[1] * n_rows))
+    # Calculate subplot width based on unique x_cols values to ensure readability
+    # Max unique values across all x_cols
+    max_x_unique = max(data[col].nunique() for col in x_cols)
+    # Adjust subplot_width dynamically. A base of 0.75 for small number of categories,
+    # scaling up for more categories.
+    subplot_width_factor = max(max_x_unique / 4, 0.75)  # Ensure a minimum width
+
+    # If group_col is present, each x-tick will have multiple dodged groups,
+    # so we need more horizontal space.
+    if group_col:
+        num_groups = data[group_col].nunique()
+        # Increase width for more groups, 0.2 is an arbitrary scaling factor
+        subplot_width_factor *= 1 + (num_groups - 1) * 0.2
+
+    fig, axes = plt.subplots(
+        n_rows, n_cols, figsize=(fig_size[0] * n_cols * subplot_width_factor, fig_size[1] * n_rows)
+    )
+
+    # Ensure axes is always iterable, even for a single subplot
+    if n_plots == 1:
+        axes = np.array([axes])
     axes = axes.flatten()
 
     # Determine the number of unique groups for palette creation
-    num_groups = len(data[group_col].unique()) if group_col else 1
-    palette = sns.color_palette("pastel", n_colors=num_groups)
+    # This is used for both plotting and manual-edge coloring
+    num_groups_for_palette = len(data[group_col].unique()) if group_col else 1
+    palette = sns.color_palette("pastel", n_colors=num_groups_for_palette)
 
     plot_idx = 0
     for x_col in x_cols:
         for y_col in y_cols:
             cols_to_keep = [x_col, y_col] + ([group_col] if group_col else [])
-            df_long = data[cols_to_keep].copy()
+            # Drop NaNs in y_col before melting and statistical tests
+            df_long = data[cols_to_keep].copy().dropna(subset=[y_col])
+
+            # Melt the DataFrame for seaborn plotting
             df_long = df_long.melt(
                 id_vars=[x_col] + ([group_col] if group_col else []),
                 value_vars=[y_col],
-                var_name="variable",
+                var_name="variable",  # This column is not strictly needed after melt for single y_col
                 value_name="value",
             )
-
-            non_nans = df_long["value"].count()
 
             ax = axes[plot_idx]
             plot_idx += 1
 
+            # Plot strip plot
+            non_nans = df_long["value"].count()
             sns.stripplot(
                 data=df_long,
                 x=x_col,
@@ -594,19 +633,12 @@ def plot_multiple_box_swarm(
                 ax=ax,
                 palette=palette,
                 size=2 if non_nans > 1e5 else 4,
-                legend=False,
-                jitter=0.25,  # Wider distribution for swarm plot
+                legend=False,  # We will add a single global legend
+                jitter=0.25,
                 alpha=0.1 if non_nans > 1e5 else 0.7,
             )
 
-            if log_scale:
-                ax.set_yscale("symlog", linthresh=1)
-            ax.set_xlabel(x_col, fontsize=12)
-            ax.set_ylabel(y_col, fontsize=14)
-            ax.tick_params(axis="x", rotation=0, size=8)
-            for label in ax.get_xticklabels():
-                label.set_fontsize(14)
-
+            # Plot boxplot
             sns.boxplot(
                 data=df_long,
                 x=x_col,
@@ -618,52 +650,116 @@ def plot_multiple_box_swarm(
                 medianprops=dict(linewidth=2),
                 whis=1.5,
                 notch=True,
-                showfliers=False,
+                showfliers=False,  # Do not show outliers, swarm plot handles individual points
             )
+
+            if log_scale:
+                ax.set_yscale("symlog", linthresh=1)  # Use symlog for better visualization of data around zero
+
+            ax.set_xlabel(x_col, fontsize=12)
+            ax.set_ylabel(y_col, fontsize=14)
+            ax.tick_params(axis="x", rotation=0, labelsize=10)  # Use labelsize for tick labels
+            for label in ax.get_xticklabels():
+                label.set_fontsize(12)  # Ensure x-tick labels are readable
 
             if group_col and ax.get_legend():
                 ax.legend_.remove()
 
-            # Manually update each box edge color to match hue color
-            # This is necessary because setting facecolor to transparent prevents hue from coloring the edges
+            # Manually update each box-edge color to match hue color
             if group_col:
-                hue_order = df_long[group_col].unique()
+                # Get the order of hues as they appear in the plot
+                hue_order_in_plot = df_long[group_col].unique()
                 for i, artist in enumerate(ax.artists):
-                    hue_idx = i % len(hue_order)
+                    # Determine which hue color to apply based on the artist's index
+                    hue_idx = i % len(hue_order_in_plot)
                     color = palette[hue_idx]
                     artist.set_edgecolor(color)
                     # Also set the color of the median line
-                    line = artist.get_children()[0]  # The median line is the first child
-                    line.set_color(color)
+                    if len(artist.get_children()) > 0:
+                        line = artist.get_children()[0]
+                        line.set_color(color)
             else:
                 # If no group_col, set edge color to the first color in palette
                 for artist in ax.artists:
                     artist.set_edgecolor(palette[0])
-                    line = artist.get_children()[0]
-                    line.set_color(palette[0])
+                    if len(artist.get_children()) > 0:
+                        line = artist.get_children()[0]
+                        line.set_color(palette[0])
 
-    # Clean up unused axes
+            # Add statistical test results if group_col is provided using statannotations
+            if post_hoc_table is not None:
+                annotation_pairs = post_hoc_table.loc[post_hoc_table["variable"] == y_col, "comparison"].to_list()
+                p_values = post_hoc_table.loc[post_hoc_table["variable"] == y_col, "p_value"].to_list()
+                try:
+                    # Initialize Annotator
+                    # Note: x and hue parameters for Annotator should refer to the columns
+                    # that define the groups being compared. In this case, x_col is the main
+                    # grouping, and group_col is the hue within each x_col category.
+                    # For statannotations, when comparing within a single x_col category,
+                    # the 'x' parameter should be the column defining the groups being compared (group_col),
+                    # and the 'data' should be the subset for that x_col category.
+                    annotator = Annotator(
+                        ax,
+                        annotation_pairs,
+                        data=df_long,
+                        x=x_col,  # This is the column defining the groups for comparison
+                        y="value",
+                        hue=group_col if group_col else None,
+                    )
+
+                    # Set custom annotations with the p-values from Tukey HSD
+                    annotator.set_custom_annotations(p_values)
+
+                    # Configure and apply annotations
+                    annotator.configure(
+                        text_format="star",
+                        loc="inside",
+                        verbose=False,
+                        # line_offset=0.1,
+                        line_height=0.02,
+                        text_offset=1,
+                    )
+                    annotator.annotate()
+
+                except ValueError as e:
+                    print(f"Warning: Could not perform add annotation to box plot. Error: {e}")
+                    print("This might happen if there's not enough data or groups for comparison in this subset.")
+                except Exception as e:
+                    print(f"An unexpected error occurred during annotating the box plot: {e}")
+
+    # Clean up any unused axes (subplots) that were created but not plotted on
     for j in range(plot_idx, len(axes)):
         fig.delaxes(axes[j])
 
     if group_col:
         # Create a single legend for the entire figure
         handles, labels = [], []
-        if ax.get_legend():  # Check if the last subplot has a legend
-            handles, labels = ax.get_legend_handles_labels()
-        # If no legend on the last plot, manually create handles and labels
-        elif group_col:
+        # Attempt to get handles and labels from the first subplot's legend if it exists
+        # This is a robust way to get legend entries with colors
+        for ax_item in axes:
+            if ax_item and ax_item.get_legend():
+                handles, labels = ax_item.get_legend_handles_labels()
+                break
+
+        # If no legend was found (e.g., due to legend=False in strip plot/boxplot and then removed),
+        # manually create proxy artists for the global legend
+        if not handles and group_col:
             unique_groups = data[group_col].unique()
             for i, group in enumerate(unique_groups):
+                # Create a proxy artist (a line with a marker) for the legend entry
                 handles.append(plt.Line2D([0], [0], marker="o", color="w", markerfacecolor=palette[i], markersize=8))
                 labels.append(group)
-        fig.legend(handles, labels, loc="upper right", bbox_to_anchor=(1.0, 0.95), title=group_col)
 
-    plt.tight_layout(pad=1)
+        # Only add the global legend if there are handles to show
+        if handles:
+            fig.legend(handles, labels, loc="upper right", bbox_to_anchor=(1.0, 0.95), title=group_col)
+
+    plt.tight_layout(pad=1)  # Adjust subplot parameters for a tight layout
+    # Adjust top margin to make space for the suptitle
     fig.subplots_adjust(top=0.92, hspace=0.2, wspace=0.2)
 
     if fig_title:
-        fig.suptitle(fig_title, fontsize=16, y=0.98)
+        fig.suptitle(fig_title, fontsize=16, y=0.98)  # Add a main title to the figure
     plt.show()
 
 

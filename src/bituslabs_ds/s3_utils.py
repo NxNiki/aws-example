@@ -234,6 +234,8 @@ def read_files(
 
     if local_cache_path is not None:
         data.to_csv(local_cache_path, index=False)
+
+    logger.info("first 5 rows of dataframe: \n%s", data.head(5).to_markdown())
     return data
 
 

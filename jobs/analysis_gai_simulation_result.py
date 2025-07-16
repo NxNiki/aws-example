@@ -15,16 +15,17 @@ import pandas as pd
 import pingouin as pg
 
 from bituslabs_ds.config import S3_BUCKET, setup_logging
-from bituslabs_ds.eda import plot_correlation, plot_multiple_box_swarm, split_column_by_threshold
+from bituslabs_ds.eda import plot_correlation, plot_df_distribution, plot_multiple_box_swarm, split_column_by_threshold
 from bituslabs_ds.s3_utils import list_s3_files, read_files
-from bituslabs_ds.utils import group_iterator, log_transform
+from bituslabs_ds.utils import batch_iterator, group_iterator, log_transform
 
 setup_logging(".", "analysis_gai_simulation_result.log")
+pd.set_option("display.max_columns", None)
+pd.set_option("display.width", 1000)
+pd.set_option("display.expand_frame_repr", False)
 
-# Set max columns and display width
-pd.set_option("display.max_columns", None)  # Show all columns
-pd.set_option("display.width", 1000)  # Set a wide enough console width
-pd.set_option("display.expand_frame_repr", False)  # Don't wrap columns
+
+GROUP_VAR_SEP = "|"
 
 
 def run_two_way_anova(
@@ -111,7 +112,12 @@ def _perform_and_report_post_hoc(
     for _, row in sig_res.iterrows():
         report_dict["variable"].append(dv_col)
         report_dict["factor"].append(between_factor)
-        report_dict["comparison"].append(f"{row['A']} vs {row['B']}")
+        if isinstance(row["A"], str) and "_" in row["A"]:
+            report_dict["comparison"].append(
+                (tuple(row["A"].rsplit(GROUP_VAR_SEP, 1)), tuple(row["B"].rsplit(GROUP_VAR_SEP, 1)))
+            )
+        else:
+            report_dict["comparison"].append((row["A"], row["B"]))
         report_dict["method"].append(method)
         report_dict["p_value"].append(row[p_col])
         report_dict["effect_size"].append(row["hedges"])
@@ -123,6 +129,7 @@ def run_post_hoc_analysis(
     var_columns: List[str],
     p_thresh: float = 0.05,
     method: str = "Tukey",
+    effects: str = "main",
 ) -> pd.DataFrame:
 
     post_hoc_report: defaultdict = defaultdict(list)
@@ -139,25 +146,39 @@ def run_post_hoc_analysis(
 
         anova_row = anova_results[anova_results["variable"] == col].iloc[0]
 
-        # Post-hoc for machine_id if significant
-        if anova_row["machine_id-p_value"] < p_thresh:
-            print(f"\nSignificance detected for machine_id on {col} (p={anova_row['machine_id-p_value']:.4f})")
-            _perform_and_report_post_hoc(col, "machine_id", method, data, post_hoc_report, p_thresh)
+        if effects == "main":
+            # Post-hoc for machine_id if significant
+            if anova_row["machine_id-p_value"] < p_thresh:
+                print(f"\nSignificance detected for machine_id on {col} (p={anova_row['machine_id-p_value']:.4f})")
+                _perform_and_report_post_hoc(col, "machine_id", method, data, post_hoc_report, p_thresh)
 
-        # Post-hoc for cluster_index if significant
-        if anova_row["cluster_index-p_value"] < p_thresh:
-            print(f"\nSignificance detected for cluster_index on {col} (p={anova_row['cluster_index-p_value']:.4f})")
-            _perform_and_report_post_hoc(col, "cluster_index", method, data, post_hoc_report, p_thresh)
+            # Post-hoc for cluster_index if significant
+            if anova_row["cluster_index-p_value"] < p_thresh:
+                print(
+                    f"\nSignificance detected for cluster_index on {col} (p={anova_row['cluster_index-p_value']:.4f})"
+                )
+                _perform_and_report_post_hoc(col, "cluster_index", method, data, post_hoc_report, p_thresh)
 
-        # Post-hoc for interaction if significant
-        if anova_row["interaction-p_value"] < p_thresh:
-            print(
-                f"\nSignificance detected for interaction (machine_id * cluster_index) on {col} (p={anova_row['interaction-p_value']:.4f})"
-            )
-            # Create a combined interaction group temporarily
-            data["interaction_group"] = data["machine_id"].astype(str) + "_" + data["cluster_index"].astype(str)
-            _perform_and_report_post_hoc(col, "interaction_group", method, data, post_hoc_report, p_thresh)
-            data.drop(columns=["interaction_group"], inplace=True)
+        elif effects == "interaction":
+            # Post-hoc for interaction if significant
+            if anova_row["interaction-p_value"] < p_thresh:
+                print(
+                    f"\nSignificance detected for interaction (machine_id * cluster_index) on {col} (p={anova_row['interaction-p_value']:.4f})"
+                )
+
+                # run post-hoc for each cluster group separately:
+                for data_interaction, cluster_index, _ in group_iterator(data, group_col="cluster_index"):
+                    # Create a combined interaction group temporarily
+                    data_interaction["interaction_group"] = (
+                        data_interaction["cluster_index"].astype(str)
+                        + GROUP_VAR_SEP
+                        + data_interaction["machine_id"].astype(str)
+                    )
+                    _perform_and_report_post_hoc(
+                        col, "interaction_group", method, data_interaction, post_hoc_report, p_thresh
+                    )
+        else:
+            raise ValueError(f"Unknown effect: {effects}")
 
     res_post_hoc = pd.DataFrame(post_hoc_report)
     if not res_post_hoc.empty:
@@ -170,53 +191,38 @@ def run_post_hoc_analysis(
 
 if __name__ == "__main__":
 
-    # s3_files = [
-    #     f"s3://{S3_BUCKET}/gail_simulator_data_raw/temp/test_run_20250702_1e5/summary/v1_cluster0_player_carousels_sessions_summary.csv",
-    #     f"s3://{S3_BUCKET}/gail_simulator_data_raw/temp/test_run_20250702_1e5/summary/v1_cluster1_player_carousels_sessions_summary.csv",
-    #     f"s3://{S3_BUCKET}/gail_simulator_data_raw/temp/test_run_20250702_1e5/summary/v1_cluster2_player_carousels_sessions_summary.csv",
-    #     f"s3://{S3_BUCKET}/gail_simulator_data_raw/temp/test_run_20250702_1e5/summary/v1_cluster0_player_dropTower_sessions_summary.csv",
-    #     f"s3://{S3_BUCKET}/gail_simulator_data_raw/temp/test_run_20250702_1e5/summary/v1_cluster1_player_dropTower_sessions_summary.csv",
-    #     f"s3://{S3_BUCKET}/gail_simulator_data_raw/temp/test_run_20250702_1e5/summary/v1_cluster2_player_dropTower_sessions_summary.csv",
-    #     f"s3://{S3_BUCKET}/gail_simulator_data_raw/temp/test_run_20250702_1e5/summary/v1_cluster0_player_fireworkShow_sessions_summary.csv",
-    #     f"s3://{S3_BUCKET}/gail_simulator_data_raw/temp/test_run_20250702_1e5/summary/v1_cluster1_player_fireworkShow_sessions_summary.csv",
-    #     f"s3://{S3_BUCKET}/gail_simulator_data_raw/temp/test_run_20250702_1e5/summary/v1_cluster2_player_fireworkShow_sessions_summary.csv",
-    #     f"s3://{S3_BUCKET}/gail_simulator_data_raw/temp/test_run_20250702_1e5/summary/v1_cluster0_player_giftShop_sessions_summary.csv",
-    #     f"s3://{S3_BUCKET}/gail_simulator_data_raw/temp/test_run_20250702_1e5/summary/v1_cluster1_player_giftShop_sessions_summary.csv",
-    #     f"s3://{S3_BUCKET}/gail_simulator_data_raw/temp/test_run_20250702_1e5/summary/v1_cluster2_player_giftShop_sessions_summary.csv",
-    #     f"s3://{S3_BUCKET}/gail_simulator_data_raw/temp/test_run_20250702_1e5/summary/v1_cluster0_player_newBee_sessions_summary.csv",
-    #     f"s3://{S3_BUCKET}/gail_simulator_data_raw/temp/test_run_20250702_1e5/summary/v1_cluster1_player_newBee_sessions_summary.csv",
-    #     f"s3://{S3_BUCKET}/gail_simulator_data_raw/temp/test_run_20250702_1e5/summary/v1_cluster2_player_newBee_sessions_summary.csv",
-    #     f"s3://{S3_BUCKET}/gail_simulator_data_raw/temp/test_run_20250702_1e5/summary/v1_cluster0_player_rollerCoaster_sessions_summary.csv",
-    #     f"s3://{S3_BUCKET}/gail_simulator_data_raw/temp/test_run_20250702_1e5/summary/v1_cluster1_player_rollerCoaster_sessions_summary.csv",
-    #     f"s3://{S3_BUCKET}/gail_simulator_data_raw/temp/test_run_20250702_1e5/summary/v1_cluster2_player_rollerCoaster_sessions_summary.csv",
-    # ]
-
-    # new files with simulation issue fixed:
-    # s3_files = list_s3_files(S3_BUCKET, prefix="gail_simulator_data_raw/results_fixed/", pattern="sim_20250713_.*_sessions_summary.csv")
+    reload = False
+    local_output = "./output/v1_all_sessions_summary_fixed.csv"
     s3_files: List[str] = []
-    local_output = "./output/v1_all_sessions_summary.csv"
-    data = read_files(s3_files, local_cache_path=local_output, reload=False)
+    if reload:
+        s3_files = list_s3_files(
+            S3_BUCKET, prefix="gail_simulator_data_raw/results_fixed/", pattern="sim_20250713_.*_sessions_summary.csv"
+        )
+    data = read_files(s3_files, local_cache_path=local_output, reload=reload)
+    data.drop(columns=["balance_change"], inplace=True)
 
-    data["cluster_index"] = data["player_id"].str.extract(r"cluster(\d+)_", expand=False).astype(int)
+    # plot_df_distribution(data.drop(columns=["session_id"]), figure_name="./figures/gai_simulation_distribution.png")
+
+    data["cluster_index"] = data["player_id"].str.extract(r"cluster(\d+)_", expand=False).astype(str)
     data.sort_values("cluster_index", inplace=True)
     data = split_column_by_threshold(
         data, columns=["base_game_win", "free_game_win", "big_win_count", "free_spins_count"], threshold=[0, 0, 1, 10]
     )
 
-    print(data.head())
-    print(data["duration"].describe())
-    # print(data["batch_count"].describe())
-
     log_columns = [
-        "balance_change",
         "base_game_win",
+        "big_win_count",
+        "big_win_count_above_1",
+        "duration",
+        "final_balance",
+        "first_bet",
+        "free_game_win",
+        "free_game_win_above_0",
         "free_spins_count",
         "free_spins_count_above_10",
-        "big_win_count_above_1",
-        "end_balance",
-        "free_game_win_above_0",
-        "return_to_player",  # "sim_duration",
-        "start_balance",
+        "initial_balance",
+        "return_to_player",
+        "sim_duration",
         "total_bet",
         "total_profit",
         "total_spins",
@@ -226,69 +232,47 @@ if __name__ == "__main__":
     ]
     data = log_transform(data, col_names=log_columns, suffix="_log")
 
-    anova_iv = [f"{col}_log" for col in log_columns]
-    anova_res = run_two_way_anova(data, anova_iv)
-    run_post_hoc_analysis(data, anova_res, [f"{col}_log" for col in log_columns])
-
     # plot_correlation(
     #     data[
-    #         [
-    #             "balance_change",
-    #             "end_balance",
-    #             "free_game_win",
-    #             "win_rate",
-    #             "return_to_player",
-    #             "start_balance",
-    #             "total_profit",
-    #             "base_game_win",
-    #             "total_win",
-    #             "total_bet",
-    #             "sim_duration",
-    #             "big_win_count",
-    #             "free_spins_count",
-    #             "total_spins",
-    #             "win_count",
+    #         [f"{col}_log" for col in
+    #             [
+    #                 "base_game_win",
+    #                 "big_win_count",
+    #                 "duration",
+    #                 "final_balance",
+    #                 "first_bet",
+    #                 "free_game_win",
+    #                 "free_spins_count",
+    #                 "initial_balance",
+    #                 "return_to_player",
+    #                 "sim_duration",
+    #                 "total_bet",
+    #                 "total_profit",
+    #                 "total_spins",
+    #                 "total_win",
+    #                 "win_count",
+    #                 "win_rate",
+    #             ]
     #         ]
     #     ],
     #     title=f"correlation for: all group",
     # )
 
-    # for data_group, group, _ in group_iterator(data, group_col="machine_id"):
-    #     # plot correlation between selected columns:
-    #     plot_correlation(
-    #         data_group[
-    #             [
-    #                 "balance_change",
-    #                 "end_balance",
-    #                 "free_game_win",
-    #                 "win_rate",
-    #                 "return_to_player",
-    #                 "start_balance",
-    #                 "total_profit",
-    #                 "base_game_win",
-    #                 "total_win",
-    #                 "total_bet",
-    #                 "sim_duration",
-    #                 "big_win_count",
-    #                 "free_spins_count",
-    #                 "total_spins",
-    #                 "win_count",
-    #             ]
-    #         ],
-    #         title=f"correlation for: {group}",
-    #     )
-
-    plot_multiple_box_swarm(
-        data,
-        x_cols=["machine_id"],
-        y_cols=[
-            "free_spins_count_above_10",
-            "free_game_win_above_0",
-            "base_game_win_above_0",
-            "balance_change",
-            "start_balance",
-        ],
-        n_cols=1,
-        group_col="cluster_index",
-        log_scale=True,
+    anova_iv = [f"{col}_log" for col in log_columns]
+    anova_res = run_two_way_anova(data, anova_iv)
+    main_effects = run_post_hoc_analysis(data, anova_res, [f"{col}_log" for col in log_columns], effects="main")
+    interaction_effects = run_post_hoc_analysis(
+        data, anova_res, [f"{col}_log" for col in log_columns], effects="interaction"
     )
+
+    for y_cols, i in batch_iterator(anova_res["variable"], 5):
+        plot_multiple_box_swarm(
+            data,
+            x_cols=["cluster_index"],
+            y_cols=list(y_cols),
+            n_cols=1,
+            group_col="machine_id",
+            log_scale=True,
+            fig_title=f"variables with sig anova: {i}/{(len(anova_res)-1)//5+1}",
+            post_hoc_table=interaction_effects,
+        )

@@ -1,6 +1,7 @@
 import json
 import logging
-from typing import Any, Iterator, List, Literal, Optional, Tuple, Union
+from collections.abc import Sequence
+from typing import Any, Iterable, Iterator, List, Literal, Optional, Sized, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -247,7 +248,7 @@ def group_iterator(
     group_vals = sorted(pd.Series(data[group_col].unique()).dropna())
     index = 0
     for group in group_vals:
-        res = data[data[group_col] == group]
+        res = data[data[group_col] == group].copy()
         if len(res) < count_thresh:
             continue
 
@@ -257,3 +258,16 @@ def group_iterator(
 
         yield res, group, index
         index += 1
+
+
+def batch_iterator(data: Sequence[Any], chunk_size: int) -> Iterator[Sequence[Any]]:
+    """
+    iterator to select elements of data by chunk_size.
+    :param data:
+    :param chunk_size:
+    :return:
+    """
+    i = 1
+    for start in range(0, len(data), chunk_size):
+        yield data[start : start + chunk_size], i
+        i += 1
