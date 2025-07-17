@@ -203,7 +203,7 @@ if __name__ == "__main__":
 
     # plot_df_distribution(data.drop(columns=["session_id"]), figure_name="./figures/gai_simulation_distribution.png")
 
-    data["cluster_index"] = data["player_id"].str.extract(r"cluster(\d+)_", expand=False).astype(str)
+    data["cluster_index"] = data["player_id"].str.extract(r"(cluster\d+)_", expand=False).astype(str)
     data.sort_values("cluster_index", inplace=True)
     data = split_column_by_threshold(
         data, columns=["base_game_win", "free_game_win", "big_win_count", "free_spins_count"], threshold=[0, 0, 1, 10]

@@ -665,8 +665,9 @@ def plot_multiple_box_swarm(
             if log_scale:
                 ax.set_yscale("symlog", linthresh=1)  # Use symlog for better visualization of data around zero
 
-            ax.set_xlabel(x_col, fontsize=12)
-            ax.set_ylabel(y_col, fontsize=14)
+            ax.set_xlabel("", fontsize=12)
+            ax.set_ylabel("", fontsize=12)
+            ax.set_title(y_col, fontsize=14)
             ax.tick_params(axis="x", rotation=0, labelsize=10)  # Use labelsize for tick labels
             for label in ax.get_xticklabels():
                 label.set_fontsize(12)  # Ensure x-tick labels are readable
@@ -765,7 +766,7 @@ def plot_multiple_box_swarm(
 
     plt.tight_layout(pad=1)  # Adjust subplot parameters for a tight layout
     # Adjust top margin to make space for the suptitle
-    fig.subplots_adjust(top=0.92, hspace=0.2, wspace=0.2)
+    fig.subplots_adjust(top=0.94, hspace=0.25, wspace=0.2)
 
     if fig_title:
         fig.suptitle(fig_title, fontsize=16, y=0.98)  # Add a main title to the figure
