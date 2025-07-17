@@ -253,14 +253,21 @@ if __name__ == "__main__":
             "win_rate",
         ]
     ]
-    plot_correlation(data[corr_cols], title=f"correlation for: all group")
+    # plot_correlation(data[corr_cols], title=f"correlation for: all group")
 
-    anova_iv = [f"{col}_log" for col in log_columns]
+    remove_cols = {
+        "base_game_win",
+        "big_win_count",
+        "free_game_win",
+        "win_count",
+        "duration",
+        "sim_duration",
+        "final_balance",
+    }
+    anova_iv = [f"{col}_log" for col in log_columns if col not in remove_cols]
     anova_res = run_two_way_anova(data, anova_iv)
-    main_effects = run_post_hoc_analysis(data, anova_res, [f"{col}_log" for col in log_columns], effects="main")
-    interaction_effects = run_post_hoc_analysis(
-        data, anova_res, [f"{col}_log" for col in log_columns], effects="interaction"
-    )
+    main_effects = run_post_hoc_analysis(data, anova_res, anova_iv, effects="main")
+    interaction_effects = run_post_hoc_analysis(data, anova_res, anova_iv, effects="interaction")
 
     for y_cols, i in batch_iterator(anova_res["variable"], 5):
         plot_multiple_box_swarm(
