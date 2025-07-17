@@ -232,31 +232,28 @@ if __name__ == "__main__":
     ]
     data = log_transform(data, col_names=log_columns, suffix="_log")
 
-    # plot_correlation(
-    #     data[
-    #         [f"{col}_log" for col in
-    #             [
-    #                 "base_game_win",
-    #                 "big_win_count",
-    #                 "duration",
-    #                 "final_balance",
-    #                 "first_bet",
-    #                 "free_game_win",
-    #                 "free_spins_count",
-    #                 "initial_balance",
-    #                 "return_to_player",
-    #                 "sim_duration",
-    #                 "total_bet",
-    #                 "total_profit",
-    #                 "total_spins",
-    #                 "total_win",
-    #                 "win_count",
-    #                 "win_rate",
-    #             ]
-    #         ]
-    #     ],
-    #     title=f"correlation for: all group",
-    # )
+    corr_cols = [
+        f"{col}_log"
+        for col in [
+            "base_game_win",
+            "big_win_count",
+            "duration",
+            "final_balance",
+            "first_bet",
+            "free_game_win",
+            "free_spins_count",
+            "initial_balance",
+            "return_to_player",
+            "sim_duration",
+            "total_bet",
+            "total_profit",
+            "total_spins",
+            "total_win",
+            "win_count",
+            "win_rate",
+        ]
+    ]
+    plot_correlation(data[corr_cols], title=f"correlation for: all group")
 
     anova_iv = [f"{col}_log" for col in log_columns]
     anova_res = run_two_way_anova(data, anova_iv)

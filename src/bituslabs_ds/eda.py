@@ -14,6 +14,7 @@ import pandas as pd
 import seaborn as sns
 from matplotlib.ticker import MaxNLocator
 from pandas import DataFrame, Series
+from scipy.cluster.hierarchy import leaves_list, linkage
 from statannotations.Annotator import Annotator
 
 from bituslabs_ds.config import DEFAULT_MAX_JOBS
@@ -311,26 +312,34 @@ def plot_heatmap(data: pd.DataFrame, x_label: str, y_label: str, title: str):
 
 
 def plot_correlation(data: pd.DataFrame, output_path: str = ".", title: str = "Correlation Heatmap") -> None:
-    data = keep_numeric_columns(data)
-    corr_matrix = data.corr()
 
+    corr = data.corr()
+    Z = linkage(corr.values, method="average")
     g = sns.clustermap(
-        corr_matrix,
-        center=0,
+        corr,
+        row_cluster=True,
+        col_cluster=True,
+        row_linkage=Z,
+        col_linkage=Z,
         cmap="vlag",
+        center=0,
         annot=True,
         fmt=".2f",
         square=True,
-        row_cluster=False,
-        col_cluster=True,
-        dendrogram_ratio=(0.1, 0.15),
-        cbar_pos=(0.02, 0.2, 0.03, 0.4),
-        linewidths=0.75,
         figsize=(10, 8),
+        linewidths=0.75,
+        dendrogram_ratio=(0.1, 0.15),
+        cbar_pos=(0, 0.2, 0.02, 0.5),
     )
 
     g.figure.suptitle(title, fontsize=16, y=0.95)
     plt.setp(g.ax_heatmap.get_xticklabels(), rotation=45, ha="right")
+    g.ax_row_dendrogram.set_visible(False)
+    g.gs.update(left=0.05)
+
+    pos = g.cax.get_position()
+    new_pos = (pos.x0, pos.y0 - 0.5, pos.width * 0.5, pos.height * 2)
+    g.cax.set_position(new_pos)
 
     os.makedirs(f"{output_path}/figures", exist_ok=True)
     g.savefig(f"{output_path}/figures/{title}.png")
