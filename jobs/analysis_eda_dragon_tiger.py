@@ -192,7 +192,6 @@ def plot_bet_time(df: pd.DataFrame, time_col: str = "timestamp", threshold_hours
     df["y"] = df["date_str"].map(date_to_y)
 
     fig, ax = plt.subplots(figsize=(14, 8))
-
     bet_counter: dict = defaultdict(int)
 
     # Plot short vertical lines per timestamp

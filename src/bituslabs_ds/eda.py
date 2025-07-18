@@ -716,19 +716,15 @@ def plot_multiple_box_swarm(
                         y="value",
                         hue=group_col if group_col else None,
                     )
-
-                    # Set custom annotations with the p-values from Tukey HSD
-                    annotator.set_custom_annotations(p_values)
-
-                    # Configure and apply annotations
                     annotator.configure(
                         text_format="star",
                         loc="inside",
                         verbose=False,
-                        # line_offset=0.1,
+                        line_offset=0.1,
                         line_height=0.02,
                         text_offset=1,
                     )
+                    annotator.set_custom_annotations(p_values)
                     annotator.annotate()
 
                 except ValueError as e:

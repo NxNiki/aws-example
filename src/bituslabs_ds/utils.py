@@ -268,6 +268,7 @@ def batch_iterator(data: Sequence[Any], chunk_size: int) -> Iterator[Sequence[An
     :return:
     """
     i = 1
+    num_chunks = (len(data) - 1) // chunk_size + 1
     for start in range(0, len(data), chunk_size):
-        yield data[start : start + chunk_size], i
+        yield data[start : start + chunk_size], i, num_chunks
         i += 1

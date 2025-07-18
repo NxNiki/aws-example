@@ -11,6 +11,7 @@ between gamers from different clusters and using different math tables.
 from collections import defaultdict
 from typing import List
 
+import numpy as np
 import pandas as pd
 import pingouin as pg
 
@@ -33,9 +34,9 @@ def run_two_way_anova(
 ) -> pd.DataFrame:
 
     report = defaultdict(list)
-
+    between_vars = ["machine_id", "cluster_index"]
     for col in var_columns:
-        anova_output = pg.anova(dv=col, between=["machine_id", "cluster_index"], data=data, detailed=True)
+        anova_output = pg.anova(dv=col, between=between_vars, data=data, detailed=True)
         print(anova_output)
 
         if all(anova_output["p-unc"] > p_thresh):
@@ -56,6 +57,16 @@ def run_two_way_anova(
         res = pd.DataFrame(report)
 
     print(res.to_markdown(index=False))
+
+    # show mean and median for the combination of each level for the between variables:
+    for col in var_columns:
+        print(
+            data[between_vars + [col]]
+            .groupby(between_vars)
+            .agg(["mean", "median"])
+            .sort_values([(col, "median"), (col, "mean")], ascending=False)
+            .to_markdown(index=True)
+        )
     return res
 
 
@@ -66,9 +77,6 @@ def _perform_and_report_post_hoc(
     Helper function to perform a post-hoc test and append results to the report dictionary.
     """
     print(f"  Performing {method} for {between_factor} on {dv_col}")
-
-    post_hoc_res = pd.DataFrame()  # Initialize to an empty DataFrame
-
     if method == "Sidak":
         post_hoc_res = pg.pairwise_ttests(
             dv=dv_col, between=between_factor, data=data_df, padjust="sidak", effsize="hedges"
@@ -112,7 +120,7 @@ def _perform_and_report_post_hoc(
     for _, row in sig_res.iterrows():
         report_dict["variable"].append(dv_col)
         report_dict["factor"].append(between_factor)
-        if isinstance(row["A"], str) and "_" in row["A"]:
+        if isinstance(row["A"], str) and GROUP_VAR_SEP in row["A"] and GROUP_VAR_SEP in row["B"]:
             report_dict["comparison"].append(
                 (tuple(row["A"].rsplit(GROUP_VAR_SEP, 1)), tuple(row["B"].rsplit(GROUP_VAR_SEP, 1)))
             )
@@ -183,7 +191,7 @@ def run_post_hoc_analysis(
     res_post_hoc = pd.DataFrame(post_hoc_report)
     if not res_post_hoc.empty:
         print("\n--- Summary Post-Hoc Report (Significant Comparisons Only) ---")
-        print(res_post_hoc.to_markdown(index=False))
+        print(res_post_hoc.replace({"|", "_"}).sort_values(by="effect_size", key=np.abs).to_markdown(index=False))
     else:
         print("\nNo significant main effects or interactions found in ANOVA, so no post-hoc tests were performed.")
     return res_post_hoc
@@ -269,7 +277,7 @@ if __name__ == "__main__":
     main_effects = run_post_hoc_analysis(data, anova_res, anova_iv, effects="main")
     interaction_effects = run_post_hoc_analysis(data, anova_res, anova_iv, effects="interaction")
 
-    for y_cols, i in batch_iterator(anova_res["variable"], 5):
+    for y_cols, i, num_chunks in batch_iterator(interaction_effects["variable"].drop_duplicates(), 5):
         plot_multiple_box_swarm(
             data,
             x_cols=["cluster_index"],
@@ -277,6 +285,6 @@ if __name__ == "__main__":
             n_cols=1,
             group_col="machine_id",
             log_scale=True,
-            fig_title=f"variables with sig anova: {i}/{(len(anova_res)-1)//5+1}",
+            fig_title=f"variables with sig anova: {i}/{num_chunks}",
             post_hoc_table=interaction_effects,
         )
