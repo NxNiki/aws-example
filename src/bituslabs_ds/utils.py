@@ -1,7 +1,7 @@
 import json
 import logging
-import warnings
-from typing import Any, Iterator, List, Literal, Optional, Tuple, Union
+from collections.abc import Sequence
+from typing import Any, Iterable, Iterator, List, Literal, Optional, Sized, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -81,26 +81,27 @@ def keep_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
 
     if non_numeric_cols:
         message = f"Non-numeric columns removed from DataFrame: {non_numeric_cols}"
-        if not logger.hasHandlers():
-            warnings.warn(message)
-        else:
-            logger.warning(message)
+        logger.warning(message)
         df = df.drop(columns=non_numeric_cols)
 
     return df
 
 
 def log_transform(
-    data: pd.DataFrame, col_names: Optional[Union[List[str], str]] = None, base: int = 10
+    data: pd.DataFrame,
+    col_names: Optional[Union[List[str], str]] = None,
+    base: int = 10,
+    suffix="",
 ) -> pd.DataFrame:
     """
     Apply log transformation to selected numeric columns of a DataFrame.
-    Handles negative values by preserving their sign: log(abs(x)) * sign(x)
+    Handles negative values by preserving their sign: sign(x) * log(1 + abs(x))
     0 will be preserved.
 
     :param data: Input DataFrame
     :param col_names: List of column names to transform
     :param base: Log base, default is 10
+    :param suffix: Suffix to add to column names, default is "":
     :return: Transformed DataFrame
     """
     data_transformed = data.copy()
@@ -114,12 +115,11 @@ def log_transform(
     for col in col_names:
         if col in data_transformed.columns and np.issubdtype(data_transformed[col].dtype, np.number):
             col_data = data_transformed[col].astype(float).copy()
-            mask_nonzero = col_data != 0
             with np.errstate(divide="ignore", invalid="ignore"):
-                col_data[mask_nonzero] = (
-                    np.sign(col_data[mask_nonzero]) * np.log(np.abs(col_data[mask_nonzero])) / np.log(base)
-                )
-            data_transformed[col] = col_data
+                col_data = np.sign(col_data) * np.log1p(np.abs(col_data)) / np.log(base)
+            data_transformed[f"{col}{suffix}"] = col_data
+        else:
+            logger.warning(f"Column: {col} not transformed.")
 
     return data_transformed
 
@@ -236,22 +236,19 @@ def group_iterator(
     :param data:
     :param group_col:
     :param count_thresh: ignore group data less than count_thresh
-    :param preserve_index: yield data with index preserved (fill NA for other groups)
+    :param preserve_index: yield data with all index preserved (fill NA for other groups)
     :return:
     """
 
     if group_col is None or group_col not in data.columns:
         yield data.copy(), None, 0
-        if not logger.hasHandlers():
-            warnings.warn(f"group_col: {group_col} not in data to iterate over.")
-        else:
-            logger.warning(f"group_col: {group_col} not in data to iterate over.")
+        logger.warning(f"group_col: {group_col} not in data to iterate over.")
         return
 
     group_vals = sorted(pd.Series(data[group_col].unique()).dropna())
     index = 0
     for group in group_vals:
-        res = data[data[group_col] == group]
+        res = data[data[group_col] == group].copy()
         if len(res) < count_thresh:
             continue
 
@@ -261,3 +258,40 @@ def group_iterator(
 
         yield res, group, index
         index += 1
+
+
+def batch_iterator(data: Sequence[Any], chunk_size: int) -> Iterator[Sequence[Any]]:
+    """
+    iterator to select elements of data by chunk_size.
+    :param data:
+    :param chunk_size:
+    :return:
+    """
+    i = 1
+    num_chunks = (len(data) - 1) // chunk_size + 1
+    for start in range(0, len(data), chunk_size):
+        yield data[start : start + chunk_size], i, num_chunks
+        i += 1
+
+
+def convert_to_list(arg: Any) -> List[Any]:
+    """
+    Convert str, int, float, bool, or iterables (including numpy arrays) to a list. This is used to coerce input arg to
+    a type of List[Any].
+
+    :param arg: The input argument of any type.
+    :return: A list representation of the input argument.
+    """
+    if not arg:
+        logger.warning(f"empty arg: {arg}")
+        return []
+    elif isinstance(arg, (str, int, float, bool)):
+        return [arg]
+    elif isinstance(arg, np.ndarray):
+        return arg.tolist()
+    elif isinstance(arg, Iterable):
+        return list(arg)
+    elif isinstance(arg, list):
+        return arg
+    else:
+        raise TypeError(f"cannot convert {type(arg)}")

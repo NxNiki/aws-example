@@ -1,3 +1,4 @@
+from textwrap import dedent, indent
 from typing import List, Union
 
 from bituslabs_ds.athena_utils import execute_query
@@ -22,30 +23,37 @@ def generate_query_for_table(fishes_indices: Union[List[int], range], table_name
             else:
                 get_user_id = False
 
-            query = f"""
-SELECT *
-FROM (
-    SELECT
-        {generate_query_columns(fishes_index, get_user_id)}
-    FROM
-        {table_name}
-) t
-WHERE
-    fishid is NOT NULL AND fishtype is NOT NULL AND fishcost IS NOT NULL
-"""
+            query = dedent(
+                # add a blank line so that extra indent is not added to the 1st line:
+                f"""\
+                
+                SELECT *
+                FROM (
+                    SELECT
+                        {generate_query_columns(fishes_index, get_user_id, 24)}
+                    FROM
+                        {table_name}
+                ) t
+                WHERE
+                    fishid is NOT NULL AND fishtype is NOT NULL AND fishcost IS NOT NULL
+                """
+            )
+
             query_for_fish_index.append(query)
 
-    query = "\n\nUNION ALL\n\n".join(query_for_fish_index)
+    query = f"\nUNION ALL\n".join(query_for_fish_index)
 
-    query = f"""
-    CREATE OR REPLACE VIEW all_hunter_logs_merged AS
-    {query}
+    query = dedent(
+        f"""\
+        CREATE OR REPLACE VIEW all_hunter_logs_merged AS
+        {indent(query, prefix=" " * 8)}
     """
+    )
 
     return query
 
 
-def generate_query_columns(fishes_index: int, get_user_id: bool = True) -> str:
+def generate_query_columns(fishes_index: int, get_user_id: bool = True, n_indents: int = 0) -> str:
 
     columns = (
         [
@@ -117,7 +125,9 @@ def generate_query_columns(fishes_index: int, get_user_id: bool = True) -> str:
     if not get_user_id:
         columns[0] = "NULL AS loginname"
 
-    columns_str = ",\n    ".join(columns)
+    # add indents except for the 1st line:
+    indent = " " * n_indents
+    columns_str = f",\n{indent}".join(columns)
 
     return columns_str
 

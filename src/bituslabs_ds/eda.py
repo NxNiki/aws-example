@@ -1,24 +1,41 @@
+import itertools
 import logging
 import math
 import os
 import warnings
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
+from itertools import zip_longest
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import matplotlib.cm as cm
+import matplotlib.legend_handler as lh
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
+import pingouin as pg
 import seaborn as sns
-from matplotlib.pyplot import legend
+from diptest import diptest
+from matplotlib.lines import Line2D
 from matplotlib.ticker import MaxNLocator
 from pandas import DataFrame, Series
+from scipy.cluster.hierarchy import leaves_list, linkage
+from scipy.stats import skew
+from statannotations.Annotator import Annotator
 
 from bituslabs_ds.config import DEFAULT_MAX_JOBS
-from bituslabs_ds.utils import group_iterator
+from bituslabs_ds.utils import batch_iterator, convert_to_list, group_iterator, keep_numeric_columns
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
+
+
+class NoSymbolHandler(lh.HandlerBase):
+    def create_artists(self, legend, orig_handle, xdescent, ydescent, width, height, fontsize, trans):
+        # Return an invisible artist, so no symbol is drawn
+        line = Line2D([0], [0], visible=False)
+        return [line]
 
 
 def read_csv_cols(
@@ -114,15 +131,21 @@ def read_excel_sheets(file_path: str, sheet_name_col: str = "sheet_name"):
 
 
 def split_column_by_threshold(
-    data: pd.DataFrame, columns: List[str], threshold: Union[float, List[float]] = 0.0
+    data: pd.DataFrame, columns: Union[str, List[str]], threshold: Union[float, List[float]] = 0.0
 ) -> pd.DataFrame:
 
-    for col in columns:
-        data[f"{col}_below_{threshold}"] = data[col]
-        data.loc[data[col] > threshold, f"{col}_below_{threshold}"] = pd.NA
+    if isinstance(columns, str):
+        columns = [columns]
 
-        data[f"{col}_above_{threshold}"] = data[col]
-        data.loc[data[col] <= threshold, f"{col}_above_{threshold}"] = pd.NA
+    if not isinstance(threshold, list):
+        threshold = [threshold]
+
+    for col, thresh in zip_longest(columns, threshold, fillvalue=threshold[-1]):
+        data[f"{col}_below_{thresh}"] = data[col]
+        data.loc[data[col] > thresh, f"{col}_below_{thresh}"] = pd.NA
+
+        data[f"{col}_above_{thresh}"] = data[col]
+        data.loc[data[col] <= thresh, f"{col}_above_{thresh}"] = pd.NA
 
     return data
 
@@ -302,6 +325,46 @@ def plot_heatmap(data: pd.DataFrame, x_label: str, y_label: str, title: str):
     plt.show()
 
 
+def plot_correlation(data: pd.DataFrame, output_path: str = ".", title: str = "Correlation Heatmap") -> None:
+
+    data = data.copy()
+    data.dropna(axis=1, inplace=True, how="any")
+
+    corr = data.corr()
+    corr.dropna(inplace=True, how="all")
+    corr.dropna(axis=1, inplace=True, how="all")
+    Z = linkage(corr.values, method="average")
+    g = sns.clustermap(
+        corr,
+        row_cluster=True,
+        col_cluster=True,
+        row_linkage=Z,
+        col_linkage=Z,
+        cmap="vlag",
+        center=0,
+        annot=True,
+        fmt=".2f",
+        square=True,
+        figsize=(10, 8),
+        linewidths=0.75,
+        dendrogram_ratio=(0.1, 0.15),
+        cbar_pos=(0, 0.2, 0.02, 0.5),
+    )
+
+    g.figure.suptitle(title, fontsize=16, y=0.95)
+    plt.setp(g.ax_heatmap.get_xticklabels(), rotation=45, ha="right")
+    g.ax_row_dendrogram.set_visible(False)
+    g.gs.update(left=0.05)
+
+    pos = g.cax.get_position()
+    new_pos = (pos.x0, pos.y0 - 0.5, pos.width * 0.5, pos.height * 2)
+    g.cax.set_position(new_pos)
+
+    os.makedirs(f"{output_path}/figures", exist_ok=True)
+    g.savefig(f"{output_path}/figures/{title}.png")
+    plt.show()
+
+
 def plot_dual_axis_sorted_swarm(
     data: pd.DataFrame,
     y_col_left: str,
@@ -440,8 +503,13 @@ def plot_dual_axis_sorted_swarm(
 
 
 def plot_df_distribution(
-    data: Union[pd.DataFrame, pd.Series], bins: int = 30, alpha: float = 0.5, log: bool = False
-) -> None:
+    data: Union[pd.DataFrame, pd.Series],
+    bins: int = 50,
+    alpha: float = 0.5,
+    log: bool = False,
+    add_kde: bool = False,
+    figure_name: Optional[str] = None,
+) -> Tuple[List[str], List[int], List[int]]:
     """
     Plots the distribution (histogram) of each numeric column in a DataFrame in separate subplots.
     Maximum of 5 columns per row.
@@ -451,32 +519,60 @@ def plot_df_distribution(
     - bins (int): Number of histogram bins.
     - alpha (float): Transparency level for histograms.
     - log (bool): Whether to use logarithmic scale on y-axis.
+    - add_kde (bool): Whether to add a KDE plot
+    - figure_name (Optional[str]): Figure name to save
 
     Returns:
     - None: Displays a matplotlib plot.
     """
+
+    data = data.copy()
     if isinstance(data, pd.Series):
         data = data.to_frame()
 
-    # Filter only numeric columns
+    boolean_cols = [col for col in data.columns if pd.api.types.is_bool_dtype(data[col])]
+    data[boolean_cols] = data[boolean_cols].astype(int)
     numeric_cols = [col for col in data.columns if pd.api.types.is_numeric_dtype(data[col])]
     if not numeric_cols:
         print("No numeric columns to plot.")
-        return
+        return [], [], []
 
     n_cols = 5
     n_rows = math.ceil(len(numeric_cols) / n_cols)
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 4, n_rows * 3), squeeze=False)
     axes = axes.flatten()
+    feature_skewness = []
+    unimodality_p_values = []
 
     for i, col in enumerate(numeric_cols):
         ax = axes[i]
         values = data[col].dropna()
         if len(values) == 0:
             print("No values found for column", col)
+            feature_skewness.append(np.nan)
+            unimodality_p_values.append(np.nan)
             continue
-        n_bins = max(min(bins, values.nunique()), 30)
-        counts, bin_edges, _ = ax.hist(values, bins=n_bins, alpha=alpha, edgecolor="black")
+
+        if len(values.unique()) <= 2:
+            feature_skewness.append(np.nan)
+            unimodality_p_values.append(np.nan)
+            legend_label = ""
+        else:
+            skewness = skew(values, bias=False)
+            feature_skewness.append(skewness)
+            dip_statistic_unimodal, p_value_unimodal = diptest(values)
+            unimodality_p_values.append(p_value_unimodal)
+
+            if p_value_unimodal < 0.05:
+                legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_statistic_unimodal:.3f}*"
+            else:
+                legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_statistic_unimodal:.3f}"
+
+        n_bins = max(min(bins, values.nunique()), 50)
+        counts, bin_edges, patches = ax.hist(values, bins=n_bins, alpha=alpha, edgecolor="black", label=legend_label)
+
+        if add_kde:
+            sns.kdeplot(values, bw_method="silverman", color="red", linestyle="--", ax=ax)
 
         # Annotate with column name at max bin
         if len(counts) > 0:
@@ -488,6 +584,10 @@ def plot_df_distribution(
         ax.set_title(col)
         ax.set_xlabel("Value")
         ax.set_ylabel("Frequency")
+
+        custom_handler_mapping = {patches[0]: NoSymbolHandler()}
+        ax.legend(handler_map=custom_handler_mapping, frameon=False)
+
         if log:
             ax.set_yscale("log")
         ax.grid(True)
@@ -497,7 +597,11 @@ def plot_df_distribution(
         fig.delaxes(axes[j])
 
     plt.tight_layout()
+    if figure_name is not None:
+        plt.savefig(figure_name)
     plt.show()
+
+    return numeric_cols, feature_skewness, unimodality_p_values
 
 
 def plot_multiple_box_swarm(
@@ -508,10 +612,13 @@ def plot_multiple_box_swarm(
     n_cols: int = 3,
     fig_size: Tuple[float, float] = (8, 6),
     fig_title: Optional[str] = None,
+    log_scale: bool = False,
+    post_hoc_table: Optional[pd.DataFrame] = None,
 ):
     """
     For each combination of y_col and x_col, plot a box + swarm plot. All x_cols and group_col will be plotted in one
-    subplot.
+    subplot. Adds statistical test results (Tukey HSD) to the plot for pairwise comparisons within group_col
+    using statannotations for visual display.
 
     Parameters:
         data (pd.DataFrame): Original DataFrame.
@@ -521,51 +628,61 @@ def plot_multiple_box_swarm(
         n_cols (int): Subplots per row.
         fig_size (Tuple[float, float]): Figure size per plot.
         fig_title (Optional[str]): Optional figure title.
+        log_scale (bool): Whether to use logarithmic scale on y-axis.
+        post_hoc_table (Optional[pd.DataFrame]): table of the post-hoc results. should have columns: variable,
+            comparison, and p_value
     """
     n_plots = len(y_cols) * len(x_cols)
     n_rows = (n_plots + n_cols - 1) // n_cols
 
-    subplot_width = data[x_cols].nunique().max() / 4
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(fig_size[0] * n_cols * subplot_width, fig_size[1] * n_rows))
+    # Calculate subplot width based on unique x_cols values to ensure readability
+    # Max unique values across all x_cols
+    max_x_unique = max(data[col].nunique() for col in x_cols)
+    # Adjust subplot_width dynamically. A base of 0.75 for small number of categories,
+    # scaling up for more categories.
+    subplot_width_factor = max(max_x_unique / 4, 0.75)  # Ensure a minimum width
+
+    # If group_col is present, each x-tick will have multiple dodged groups,
+    # so we need more horizontal space.
+    if group_col:
+        num_groups = data[group_col].nunique()
+        # Increase width for more groups, 0.2 is an arbitrary scaling factor
+        subplot_width_factor *= 1 + (num_groups - 1) * 0.2
+
+    fig, axes = plt.subplots(
+        n_rows, n_cols, figsize=(fig_size[0] * n_cols * subplot_width_factor, fig_size[1] * n_rows)
+    )
+
+    # Ensure axes is always iterable, even for a single subplot
+    if n_plots == 1:
+        axes = np.array([axes])
     axes = axes.flatten()
 
-    palette = sns.color_palette("pastel", n_colors=len(data[group_col].unique()))
+    # Determine the number of unique groups for palette creation
+    # This is used for both plotting and manual-edge coloring
+    num_groups_for_palette = len(data[group_col].unique()) if group_col else 1
+    palette = sns.color_palette("pastel", n_colors=num_groups_for_palette)
+
     plot_idx = 0
     for x_col in x_cols:
         for y_col in y_cols:
             cols_to_keep = [x_col, y_col] + ([group_col] if group_col else [])
-            df_long = data[cols_to_keep].copy()
+            # Drop NaNs in y_col before melting and statistical tests
+            df_long = data[cols_to_keep].copy().dropna(subset=[y_col])
+
+            # Melt the DataFrame for seaborn plotting
             df_long = df_long.melt(
                 id_vars=[x_col] + ([group_col] if group_col else []),
                 value_vars=[y_col],
-                var_name="variable",
+                var_name="variable",  # This column is not strictly needed after melt for single y_col
                 value_name="value",
             )
 
-            hue_order = df_long[group_col].unique()
-            hue_colors = dict(zip(hue_order, palette))
-
             ax = axes[plot_idx]
-            sns.boxplot(
-                data=df_long,
-                x=x_col,
-                y="value",
-                hue=group_col if group_col else None,
-                ax=ax,
-                palette=palette,
-                boxprops=dict(linewidth=1.5),
-                medianprops=dict(linewidth=2),
-                whis=1.5,
-            )
+            plot_idx += 1
 
-            # Manually update each box color to match hue-edge color
-            # (Seaborn doesn't apply hue color to edge color when face color is None)
-            for i, artist in enumerate(ax.artists):
-                # Boxes are ordered by variable, then hue — calculate color accordingly
-                hue_idx = i % len(hue_order)
-                color = palette[hue_idx]
-                artist.set_edgecolor(color)
-
+            # Plot strip plot
+            non_nans = df_long["value"].count()
             sns.stripplot(
                 data=df_long,
                 x=x_col,
@@ -573,35 +690,132 @@ def plot_multiple_box_swarm(
                 hue=group_col if group_col else None,
                 dodge=True if group_col else False,
                 ax=ax,
-                palette="dark:black",
-                size=2.5,
-                legend=False,
-                jitter=True,
+                palette=palette,
+                size=2 if non_nans > 1e5 else 4,
+                legend=False,  # We will add a single global legend
+                jitter=0.25,
+                alpha=0.1 if non_nans > 1e5 else 0.7,
             )
 
-            ax.set_yscale("symlog", linthresh=1)
-            ax.set_xlabel(x_col)
-            ax.set_ylabel(y_col)
-            ax.tick_params(axis="x", rotation=30)
+            # Plot boxplot
+            sns.boxplot(
+                data=df_long,
+                x=x_col,
+                y="value",
+                hue=group_col if group_col else None,
+                ax=ax,
+                palette=palette,
+                boxprops=dict(linewidth=1.5, facecolor=(0, 0, 0, 0)),  # Transparent face color
+                medianprops=dict(linewidth=2),
+                whis=1.5,
+                notch=True,
+                showfliers=False,  # Do not show outliers, swarm plot handles individual points
+            )
+
+            if log_scale:
+                ax.set_yscale("symlog", linthresh=1)  # Use symlog for better visualization of data around zero
+
+            ax.set_xlabel("", fontsize=12)
+            ax.set_ylabel("", fontsize=12)
+            ax.set_title(y_col, fontsize=14)
+            ax.tick_params(axis="x", rotation=0, labelsize=10)  # Use labelsize for tick labels
+            for label in ax.get_xticklabels():
+                label.set_fontsize(12)  # Ensure x-tick labels are readable
 
             if group_col and ax.get_legend():
                 ax.legend_.remove()
 
-            plot_idx += 1
+            # Manually update each box-edge color to match hue color
+            if group_col:
+                # Get the order of hues as they appear in the plot
+                hue_order_in_plot = df_long[group_col].unique()
+                for i, artist in enumerate(ax.artists):
+                    # Determine which hue color to apply based on the artist's index
+                    hue_idx = i % len(hue_order_in_plot)
+                    color = palette[hue_idx]
+                    artist.set_edgecolor(color)
+                    # Also set the color of the median line
+                    if len(artist.get_children()) > 0:
+                        line = artist.get_children()[0]
+                        line.set_color(color)
+            else:
+                # If no group_col, set edge color to the first color in palette
+                for artist in ax.artists:
+                    artist.set_edgecolor(palette[0])
+                    if len(artist.get_children()) > 0:
+                        line = artist.get_children()[0]
+                        line.set_color(palette[0])
 
-    # Clean up unused axes
+            # Add statistical test results if group_col is provided using statannotations
+            if post_hoc_table is not None:
+                annotation_pairs = post_hoc_table.loc[post_hoc_table["variable"] == y_col, "comparison"].to_list()
+                p_values = post_hoc_table.loc[post_hoc_table["variable"] == y_col, "p_value"].to_list()
+                try:
+                    # Initialize Annotator
+                    # Note: x and hue parameters for Annotator should refer to the columns
+                    # that define the groups being compared. In this case, x_col is the main
+                    # grouping, and group_col is the hue within each x_col category.
+                    # For statannotations, when comparing within a single x_col category,
+                    # the 'x' parameter should be the column defining the groups being compared (group_col),
+                    # and the 'data' should be the subset for that x_col category.
+                    annotator = Annotator(
+                        ax,
+                        annotation_pairs,
+                        data=df_long,
+                        x=x_col,  # This is the column defining the groups for comparison
+                        y="value",
+                        hue=group_col if group_col else None,
+                    )
+                    annotator.configure(
+                        text_format="star",
+                        loc="inside",
+                        verbose=False,
+                        line_offset=0.1,
+                        line_height=0.02,
+                        text_offset=1,
+                    )
+                    annotator.set_custom_annotations(p_values)
+                    annotator.annotate()
+
+                except ValueError as e:
+                    print(f"Warning: Could not perform add annotation to box plot. Error: {e}")
+                    print("This might happen if there's not enough data or groups for comparison in this subset.")
+                except Exception as e:
+                    print(f"An unexpected error occurred during annotating the box plot: {e}")
+
+    # Clean up any unused axes (subplots) that were created but not plotted on
     for j in range(plot_idx, len(axes)):
         fig.delaxes(axes[j])
 
     if group_col:
-        handles, labels = ax.get_legend_handles_labels()
-        fig.legend(handles, labels, loc="upper right")
+        # Create a single legend for the entire figure
+        handles, labels = [], []
+        # Attempt to get handles and labels from the first subplot's legend if it exists
+        # This is a robust way to get legend entries with colors
+        for ax_item in axes:
+            if ax_item and ax_item.get_legend():
+                handles, labels = ax_item.get_legend_handles_labels()
+                break
 
-    plt.tight_layout(pad=1)
-    fig.subplots_adjust(top=0.92, hspace=0.4, wspace=0.2)
+        # If no legend was found (e.g., due to legend=False in strip plot/boxplot and then removed),
+        # manually create proxy artists for the global legend
+        if not handles and group_col:
+            unique_groups = data[group_col].unique()
+            for i, group in enumerate(unique_groups):
+                # Create a proxy artist (a line with a marker) for the legend entry
+                handles.append(plt.Line2D([0], [0], marker="o", color="w", markerfacecolor=palette[i], markersize=8))
+                labels.append(group)
+
+        # Only add the global legend if there are handles to show
+        if handles:
+            fig.legend(handles, labels, loc="upper right", bbox_to_anchor=(1.0, 0.95), title=group_col)
+
+    plt.tight_layout(pad=1)  # Adjust subplot parameters for a tight layout
+    # Adjust top margin to make space for the suptitle
+    fig.subplots_adjust(top=0.94, hspace=0.25, wspace=0.2)
 
     if fig_title:
-        fig.suptitle(fig_title, fontsize=16, y=0.98)
+        fig.suptitle(fig_title, fontsize=16, y=0.98)  # Add a main title to the figure
     plt.show()
 
 
@@ -777,3 +991,214 @@ def plot_seasonality(
     plt.title(f"Seasonality Plot ({freq.capitalize()})")
     plt.tight_layout()
     plt.show()
+
+
+class Anova:
+
+    def __init__(self, df: DataFrame, between_vars: Union[List[str], str], var_columns: Union[List[str], str]):
+
+        between_vars = convert_to_list(between_vars)
+        var_columns = convert_to_list(var_columns)
+
+        self.data = df[between_vars + var_columns].copy()
+        self.between_vars = between_vars
+        self.var_columns = var_columns
+        self.anova_report: Dict = defaultdict(list)
+        self.post_hoc_report: Dict = defaultdict(list)
+
+    def run_anova(self, transpose_report: bool = False, p_thresh: float = 0.05) -> pd.DataFrame:
+
+        for col in self.var_columns:
+            if (not pd.api.types.is_numeric_dtype(self.data[col])) or pd.api.types.is_bool_dtype(self.data[col]):
+                logger.info(f"skip non numeric columns: {col}.")
+                continue
+
+            anova_output = pg.anova(dv=col, between=self.between_vars, data=self.data, detailed=True)
+            logger.info(f"anova result for {col}\n{anova_output}")
+
+            if "p-unc" not in anova_output or all(anova_output["p-unc"] > p_thresh):
+                logger.info(f"skip non-significant column: {col}")
+                continue
+
+            self.anova_report["variable"].append(col)
+            for index, row in anova_output.iterrows():
+                source = row["Source"]
+                if source == "Residual":
+                    break
+                self.anova_report[f"{source}-p_value"].append(row["p-unc"])
+                self.anova_report[f"{source}-eta2"].append(row["np2"])
+
+        res = self.anova_table.copy()
+        if transpose_report:
+            res = res.transpose()
+        logger.info(f"anova result:\n{res.to_markdown(index=False)}")
+        return res
+
+    @property
+    def anova_table(self) -> pd.DataFrame:
+        if len(self.anova_report) == 0:
+            return pd.DataFrame({})
+        else:
+            return pd.DataFrame(self.anova_report)
+
+    def _perform_and_report_post_hoc(
+        self, data_df: DataFrame, dv_col: str, between_factor: str, method: str, p_thresh: float
+    ):
+        """
+        Helper function to perform a post-hoc test and append results to the report dictionary.
+        """
+
+        data_df[between_factor] = data_df[between_factor].apply(self.tuple_to_string)
+        logger.info(f"  Performing {method} for {between_factor} on {dv_col}")
+        if method == "Sidak":
+            post_hoc_res = pg.pairwise_ttests(
+                dv=dv_col, between=between_factor, data=data_df, padjust="sidak", effsize="hedges"
+            )
+            p_col = "p-sidak"
+            # Filter for significant results for printing and reporting
+            post_hoc_res.rename(columns={"p-corr": p_col}, inplace=True)
+            report_cols = ["A", "B", p_col, "hedges", "BF10"]
+        elif method == "Games-Howell":
+            # Games-Howell is only meaningful for factors with > 2 levels.
+            if len(data_df[between_factor].unique()) <= 2:
+                logger.info(f"  Skipping explicit Games-Howell for {between_factor} on {dv_col} (only 2 levels).")
+                return
+            post_hoc_res = pg.pairwise_gameshowell(dv=dv_col, between=between_factor, data=data_df, effsize="hedges")
+            p_col = "p-gameshowell"
+            post_hoc_res.rename(columns={"pval": p_col}, inplace=True)
+            report_cols = ["A", "B", p_col, "hedges"]
+        elif method == "Tukey":
+            # Tukey's HSD typically assumes equal variances (homoscedasticity) and balanced groups,
+            # though pingouin's implementation (pairwise_tukey) can handle unequal N.
+            # If Levene's test for homogeneity of variance (which pingouin runs in anova output if detailed=True)
+            # indicates heterogeneity (p < .05), Games-Howell is generally preferred.
+            if len(data_df[between_factor].unique()) <= 2:
+                logger.info(f"  Skipping Tukey's HSD for {between_factor} on {dv_col} (only 2 levels).")
+                return
+            post_hoc_res = pg.pairwise_tukey(dv=dv_col, between=between_factor, data=data_df, effsize="hedges")
+            p_col = "p-tukey"
+            post_hoc_res.rename(columns={"p-corr": p_col}, inplace=True)
+            report_cols = ["A", "B", p_col, "hedges"]
+
+        else:
+            raise ValueError(f"Unknown post-hoc method: {method}")
+
+        # Filter for significant results for printing and reporting
+        sig_res = post_hoc_res[post_hoc_res[p_col] < p_thresh]
+        logger.info(f"post hoc result for {dv_col}: \n{sig_res[report_cols].to_markdown(index=False)}")
+
+        for _, row in sig_res.iterrows():
+            self.post_hoc_report["variable"].append(dv_col)
+            self.post_hoc_report["factor"].append(between_factor)
+            self.post_hoc_report["comparison"].append((self.string_to_tuple(row["A"]), self.string_to_tuple(row["B"])))
+            self.post_hoc_report["method"].append(method)
+            self.post_hoc_report["p_value"].append(row[p_col])
+            self.post_hoc_report["effect_size"].append(row["hedges"])
+
+    @staticmethod
+    def tuple_to_string(element):
+        if isinstance(element, tuple):
+            return ",".join(map(str, element))
+        else:
+            return element
+
+    @staticmethod
+    def string_to_tuple(element):
+        return tuple(element.split(",")) if "," in element else (element,)
+
+    def run_post_hoc_analysis(
+        self,
+        var_columns: List[str],
+        p_thresh: float = 0.05,
+        method: str = "Tukey",
+        effects: str = "main",
+        group_var: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """
+        run post hoc analysis based on anova results
+        :param var_columns:
+        :param p_thresh:
+        :param method:
+        :param effects:
+        :param group_var: an element from the between_vars, for interaction effects, only compare groups in other
+            between_var for each level of group_var.
+        :return:
+        """
+
+        logger.info("--- Running Post-Hoc Analysis ---")
+        anova_table = self.anova_table
+
+        # clear previous post-hoc result:
+        self.post_hoc_report = defaultdict(list)
+
+        if len(anova_table) == 0:
+            raise Exception("Run anova before post-hoc analysis!")
+
+        for col in var_columns:
+            # Check if the variable was processed by ANOVA and if any main effect or interaction was significant
+            if col not in self.anova_report["variable"]:
+                logger.info(
+                    f"Skip post-hoc for {col} as it was not included in the ANOVA summary (likely no significant effects)."
+                )
+                continue
+
+            anova_row = anova_table[anova_table["variable"] == col].iloc[0]
+            if effects == "main":
+                for var in self.between_vars:
+                    if anova_row[f"{var}-p_value"] < p_thresh:
+                        logger.info(f"\nSignificance detected for {var} on {col} (p={anova_row[f'{var}-p_value']:.4f})")
+                        self._perform_and_report_post_hoc(self.data, col, var, method, p_thresh)
+
+            elif effects == "interaction":
+                for var1, var2 in itertools.combinations(self.between_vars, 2):
+                    interaction_label = f"{var1} * {var2}"
+                    if anova_row[f"{interaction_label}-p_value"] < p_thresh:
+                        # run post-hoc for each cluster group separately:
+                        for data_interaction, cluster_index, _ in group_iterator(self.data, group_col=group_var):
+                            data_interaction["interaction_group"] = list(
+                                zip(data_interaction[var1].astype(str), data_interaction[var2].astype(str))
+                            )
+                            self._perform_and_report_post_hoc(
+                                data_interaction, col, "interaction_group", method, p_thresh
+                            )
+            else:
+                raise ValueError(f"Unknown effect: {effects}")
+
+        res_post_hoc = pd.DataFrame(self.post_hoc_report)
+        if not res_post_hoc.empty:
+            print("\n--- Summary Post-Hoc Report (Significant Comparisons Only) ---")
+            for res_post_hoc_group, _, _ in group_iterator(res_post_hoc, group_col="variable"):
+                print(res_post_hoc_group.sort_values(by="comparison").to_markdown(index=False))
+        else:
+            print("\nNo significant main effects or interactions found in ANOVA, so no post-hoc tests were performed.")
+        return res_post_hoc
+
+    def show_box_plot(self, x_cols: str, group_col: str) -> None:
+        post_hoc_table = pd.DataFrame(self.post_hoc_report)
+        for y_cols, i, num_chunks in batch_iterator(post_hoc_table["variable"].drop_duplicates(), 5):
+            plot_multiple_box_swarm(
+                self.data,
+                x_cols=[x_cols],
+                y_cols=list(y_cols),
+                n_cols=1,
+                group_col=group_col,
+                log_scale=True,
+                fig_title=f"variables with sig anova: {i}/{num_chunks}",
+                post_hoc_table=post_hoc_table,
+            )
+
+
+if __name__ == "__main__":
+
+    data = pd.DataFrame(
+        {
+            "normal": np.random.normal(loc=0, scale=1, size=5000),
+            "positive_skewed": np.random.exponential(scale=1, size=5000),
+            "negative_skewed": -np.random.exponential(scale=1, size=5000),
+            "bimodal": np.hstack(
+                (np.random.normal(loc=-1, scale=1, size=2500), np.random.normal(loc=3, scale=1, size=2500))
+            ),
+        }
+    )
+
+    plot_df_distribution(data, add_kde=True)

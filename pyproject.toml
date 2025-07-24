@@ -12,6 +12,8 @@ numpy = "^1.26.0"
 pandas = "2.1.0"
 skl2onnx = "1.16.0"
 onnx = "^1.17.0"
+scipy = "^1.12.0"
+diptest = "^0.10.0"
 scikit-learn = "^1.5.0"
 sagemaker = "2.247.0"
 boto3 = "1.38.22"
@@ -20,6 +22,8 @@ matplotlib = "^3.9.0"
 seaborn = "^0.13.2"
 pyspark = "3.0.0" # do not build package with pyspark when submit job to AWS EMR
 openpyxl = "^3.1.5"
+pingouin = "^0.5.1"
+statannotations = "^0.7.1"
 
 [tool.poetry.group.dev.dependencies]
 jupyter = "^1.0"

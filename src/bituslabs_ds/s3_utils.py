@@ -17,7 +17,7 @@ from pyarrow import fs
 from pyarrow.dataset import Dataset, dataset
 from pyspark.sql import DataFrame as SparkDataFrame
 
-from bituslabs_ds.config import DEFAULT_MAX_JOBS
+from bituslabs_ds.config import DEFAULT_MAX_JOBS, REGION
 
 s3_client = boto3.client("s3")
 
@@ -184,6 +184,7 @@ def read_files(
     max_workers: int = DEFAULT_MAX_JOBS,
     parallel_mode: Literal["thread", "process", "none"] = "thread",
     reload: bool = False,
+    add_file_source: bool = False,
 ) -> pd.DataFrame:
     """
     Read CSV files from S3 using optional parallelization.
@@ -194,6 +195,7 @@ def read_files(
     :param max_workers: Number of workers to use in parallel execution.
     :param parallel_mode: Parallel execution strategy: 'thread', 'process', or 'none'.
     :param reload: Whether to reload files from S3 or not.
+    :param add_file_source: Whether to add file paths to result.
     :return: Concatenated DataFrame of all read files.
     """
 
@@ -213,7 +215,7 @@ def read_files(
         logger.info(f"read files using {max_workers} workers")
         executor_cls: Callable = ThreadPoolExecutor if parallel_mode == "thread" else ProcessPoolExecutor
         dfs = []
-
+        files_read_order: List[str] = []
         with executor_cls(max_workers=max_workers) as executor:
             future_to_file = {executor.submit(read_func, file): file for file in files}
             for future in as_completed(future_to_file):
@@ -223,13 +225,21 @@ def read_files(
                 except Exception as e:
                     logger.error(f"Failed to read {file}: {e}")
 
-    data = pd.concat(dfs, ignore_index=True)
+    if add_file_source:
+        # the order of dfs may not be consistent with files!!!
+        data = pd.concat(dfs, keys=[os.path.basename(f) for f in files])
+        data = data.reset_index(level=0).rename(columns={"level_0": "source_file"})
+    else:
+        data = pd.concat(dfs, ignore_index=True)
+
     if local_cache_path is not None:
         data.to_csv(local_cache_path, index=False)
+
+    logger.info("first 5 rows of dataframe: \n%s", data.head(5).to_markdown())
     return data
 
 
-def read_dataset(file_path: str, region: str, data_format: str = "parquet") -> Dataset:
+def read_dataset(file_path: str, region: str = REGION, data_format: str = "parquet") -> Dataset:
     file_path = parse_bucket_name(file_path)
     logger.info(f"Read data from: {file_path}")
     s3 = fs.S3FileSystem(region=region)
