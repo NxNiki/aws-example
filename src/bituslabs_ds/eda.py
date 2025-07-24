@@ -1131,7 +1131,7 @@ class Anova:
         # clear previous post-hoc result:
         self.post_hoc_report = defaultdict(list)
 
-        if anova_table is None:
+        if len(anova_table) == 0:
             raise Exception("Run anova before post-hoc analysis!")
 
         for col in var_columns:
