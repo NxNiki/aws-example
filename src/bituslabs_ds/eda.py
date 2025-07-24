@@ -324,7 +324,12 @@ def plot_heatmap(data: pd.DataFrame, x_label: str, y_label: str, title: str):
 
 def plot_correlation(data: pd.DataFrame, output_path: str = ".", title: str = "Correlation Heatmap") -> None:
 
+    data = data.copy()
+    data.dropna(axis=1, inplace=True, how="any")
+
     corr = data.corr()
+    corr.dropna(inplace=True, how="all")
+    corr.dropna(axis=1, inplace=True, how="all")
     Z = linkage(corr.values, method="average")
     g = sns.clustermap(
         corr,
@@ -501,7 +506,7 @@ def plot_df_distribution(
     log: bool = False,
     add_kde: bool = False,
     figure_name: Optional[str] = None,
-) -> Tuple[List[int], List[int]]:
+) -> Tuple[List[str], List[int], List[int]]:
     """
     Plots the distribution (histogram) of each numeric column in a DataFrame in separate subplots.
     Maximum of 5 columns per row.
@@ -527,7 +532,7 @@ def plot_df_distribution(
     numeric_cols = [col for col in data.columns if pd.api.types.is_numeric_dtype(data[col])]
     if not numeric_cols:
         print("No numeric columns to plot.")
-        return [], []
+        return [], [], []
 
     n_cols = 5
     n_rows = math.ceil(len(numeric_cols) / n_cols)
@@ -542,17 +547,23 @@ def plot_df_distribution(
         if len(values) == 0:
             print("No values found for column", col)
             feature_skewness.append(np.nan)
+            unimodality_p_values.append(np.nan)
             continue
 
-        skewness = skew(values, bias=False)
-        feature_skewness.append(skewness)
-        dip_statistic_unimodal, p_value_unimodal = diptest(values)
-        unimodality_p_values.append(p_value_unimodal)
-
-        if p_value_unimodal < 0.05:
-            legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_statistic_unimodal:.3f}*"
+        if len(values.unique()) <= 2:
+            feature_skewness.append(np.nan)
+            unimodality_p_values.append(np.nan)
+            legend_label = ""
         else:
-            legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_statistic_unimodal:.3f}"
+            skewness = skew(values, bias=False)
+            feature_skewness.append(skewness)
+            dip_statistic_unimodal, p_value_unimodal = diptest(values)
+            unimodality_p_values.append(p_value_unimodal)
+
+            if p_value_unimodal < 0.05:
+                legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_statistic_unimodal:.3f}*"
+            else:
+                legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_statistic_unimodal:.3f}"
 
         n_bins = max(min(bins, values.nunique()), 50)
         counts, bin_edges, patches = ax.hist(values, bins=n_bins, alpha=alpha, edgecolor="black", label=legend_label)
@@ -587,7 +598,7 @@ def plot_df_distribution(
         plt.savefig(figure_name)
     plt.show()
 
-    return feature_skewness, unimodality_p_values
+    return numeric_cols, feature_skewness, unimodality_p_values
 
 
 def plot_multiple_box_swarm(

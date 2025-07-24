@@ -264,14 +264,14 @@ if __name__ == "__main__":
     )
 
     # plot_df_distribution(data.drop(columns=["session_id"]), figure_name="./figures/gai_simulation_distribution.png", log=False)
-    feature_skewness, feature_unimodality_p = plot_df_distribution(
+    numeric_cols, feature_skewness, feature_unimodality_p = plot_df_distribution(
         data.drop(columns=["session_id"]),
         figure_name="./figures/gai_simulation_distribution_log.png",
         log=True,
         add_kde=True,
     )
-    positive_skew_columns = [f for f, s in zip(data.columns, feature_skewness) if s > 1.5]
-    print(positive_skew_columns)
+    positive_skew_columns = [f for f, s in zip(numeric_cols, feature_skewness) if s > 1.5]
+    print(f"skewed columns: \n {positive_skew_columns}")
     data = log_transform(data, col_names=positive_skew_columns, suffix="_log")
     print(data.columns)
 
@@ -284,7 +284,7 @@ if __name__ == "__main__":
         var_columns=["total_spins", "total_bet", "total_profit", "total_profit_log"],
         transpose=True,
     )
-    corr_cols = [f"{f}_log" if s > 1.5 else f for f, s in zip(data.columns, feature_skewness)]
+    corr_cols = [f"{f}_log" if s > 1.5 else f for f, s in zip(numeric_cols, feature_skewness)]
     plot_correlation(data[corr_cols], title=f"correlation for: all group")
 
     remove_cols = {
