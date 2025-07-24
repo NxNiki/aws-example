@@ -9,11 +9,13 @@ between gamers from different clusters and using different math tables.
 """
 
 from collections import defaultdict
-from typing import List
+from typing import List, Union
 
 import numpy as np
 import pandas as pd
 import pingouin as pg
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
 
 from bituslabs_ds.config import S3_BUCKET, setup_logging
 from bituslabs_ds.eda import plot_correlation, plot_df_distribution, plot_multiple_box_swarm, split_column_by_threshold
@@ -26,9 +28,6 @@ pd.set_option("display.width", 1000)
 pd.set_option("display.expand_frame_repr", False)
 
 
-GROUP_VAR_SEP = "|"
-
-
 def run_two_way_anova(
     data: pd.DataFrame, var_columns: List[str], transpose_report: bool = False, p_thresh: float = 0.05
 ) -> pd.DataFrame:
@@ -39,7 +38,7 @@ def run_two_way_anova(
         anova_output = pg.anova(dv=col, between=between_vars, data=data, detailed=True)
         print(anova_output)
 
-        if all(anova_output["p-unc"] > p_thresh):
+        if "p-unc" not in anova_output or all(anova_output["p-unc"] > p_thresh):
             print(f"skipping {col}")
             continue
 
@@ -57,17 +56,32 @@ def run_two_way_anova(
         res = pd.DataFrame(report)
 
     print(res.to_markdown(index=False))
+    return res
 
-    # show mean and median for the combination of each level for the between variables:
+
+def show_group_stats(
+    data: pd.DataFrame, group_cols: List[str], var_columns: List[str], transpose: bool = False
+) -> None:
+    """
+    show mean and median for the combination of each level for the between variables:
+    :param data:
+    :param group_cols:
+    :param var_columns:
+    :param transpose: transpose the output for each group
+    :return:
+    """
+
     for col in var_columns:
-        print(
-            data[between_vars + [col]]
-            .groupby(between_vars)
+        report = (
+            data[group_cols + [col]]
+            .groupby(group_cols)
             .agg(["mean", "median"])
             .sort_values([(col, "median"), (col, "mean")], ascending=False)
-            .to_markdown(index=True)
         )
-    return res
+        if transpose:
+            print(report.transpose().to_markdown(index=True))
+        else:
+            print(report.to_markdown(index=True))
 
 
 def _perform_and_report_post_hoc(
@@ -76,6 +90,19 @@ def _perform_and_report_post_hoc(
     """
     Helper function to perform a post-hoc test and append results to the report dictionary.
     """
+
+    def tuple_to_string(element):
+        if isinstance(element, tuple):
+            return ",".join(map(str, element))
+        else:
+            return element
+
+    def string_to_tuple(element):
+        return tuple(element.rsplit(",", 1))
+
+    data_df = data_df.copy()
+    data_df[between_factor] = data_df[between_factor].apply(tuple_to_string)
+
     print(f"  Performing {method} for {between_factor} on {dv_col}")
     if method == "Sidak":
         post_hoc_res = pg.pairwise_ttests(
@@ -120,12 +147,7 @@ def _perform_and_report_post_hoc(
     for _, row in sig_res.iterrows():
         report_dict["variable"].append(dv_col)
         report_dict["factor"].append(between_factor)
-        if isinstance(row["A"], str) and GROUP_VAR_SEP in row["A"] and GROUP_VAR_SEP in row["B"]:
-            report_dict["comparison"].append(
-                (tuple(row["A"].rsplit(GROUP_VAR_SEP, 1)), tuple(row["B"].rsplit(GROUP_VAR_SEP, 1)))
-            )
-        else:
-            report_dict["comparison"].append((row["A"], row["B"]))
+        report_dict["comparison"].append((string_to_tuple(row["A"]), string_to_tuple(row["B"])))
         report_dict["method"].append(method)
         report_dict["p_value"].append(row[p_col])
         report_dict["effect_size"].append(row["hedges"])
@@ -176,11 +198,8 @@ def run_post_hoc_analysis(
 
                 # run post-hoc for each cluster group separately:
                 for data_interaction, cluster_index, _ in group_iterator(data, group_col="cluster_index"):
-                    # Create a combined interaction group temporarily
-                    data_interaction["interaction_group"] = (
-                        data_interaction["cluster_index"].astype(str)
-                        + GROUP_VAR_SEP
-                        + data_interaction["machine_id"].astype(str)
+                    data_interaction["interaction_group"] = list(
+                        zip(data_interaction["cluster_index"].astype(str), data_interaction["machine_id"].astype(str))
                     )
                     _perform_and_report_post_hoc(
                         col, "interaction_group", method, data_interaction, post_hoc_report, p_thresh
@@ -191,10 +210,37 @@ def run_post_hoc_analysis(
     res_post_hoc = pd.DataFrame(post_hoc_report)
     if not res_post_hoc.empty:
         print("\n--- Summary Post-Hoc Report (Significant Comparisons Only) ---")
-        print(res_post_hoc.replace({"|", "_"}).sort_values(by="effect_size", key=np.abs).to_markdown(index=False))
+        for res_post_hoc_group, _, _ in group_iterator(res_post_hoc, group_col="variable"):
+            print(res_post_hoc_group.sort_values(by="comparison").to_markdown(index=False))
     else:
         print("\nNo significant main effects or interactions found in ANOVA, so no post-hoc tests were performed.")
     return res_post_hoc
+
+
+def augment_data(
+    data: pd.DataFrame, columns: List[str], col_name: str, method: Union[List[str], str] = "pca"
+) -> pd.DataFrame:
+
+    if isinstance(method, str):
+        method = [method]
+
+    scaler = StandardScaler()
+    df_scaled = scaler.fit_transform(data[columns])
+
+    if "mean" in method:
+        data[f"{col_name}_mean"] = df_scaled.mean(axis=1)
+    if "pca" in method:
+        pca = PCA(n_components=None)
+        principal_components = pca.fit_transform(df_scaled)
+        explained_variance_ratio_cumsum = np.cumsum(pca.explained_variance_ratio_)
+        print(f"Cumulative Explained Variance for '{col_name}' PCA components:")
+        for i, cum_var in enumerate(explained_variance_ratio_cumsum):
+            print(f"  PC{i + 1}: {cum_var:.4f}")
+
+        for i in range(principal_components.shape[1]):
+            data[f"{col_name}_pca{i + 1}"] = principal_components[:, i]
+
+    return data
 
 
 if __name__ == "__main__":
@@ -208,73 +254,55 @@ if __name__ == "__main__":
         )
     data = read_files(s3_files, local_cache_path=local_output, reload=reload)
     data.drop(columns=["balance_change"], inplace=True)
-
-    # plot_df_distribution(data.drop(columns=["session_id"]), figure_name="./figures/gai_simulation_distribution.png")
-
     data["cluster_index"] = data["player_id"].str.extract(r"(cluster\d+)_", expand=False).astype(str)
-    data.sort_values("cluster_index", inplace=True)
+    print(data.shape)
+    # data = data[data["total_spins"]>40]
+    print(data.shape)
+
     data = split_column_by_threshold(
         data, columns=["base_game_win", "free_game_win", "big_win_count", "free_spins_count"], threshold=[0, 0, 1, 10]
     )
 
-    log_columns = [
-        "base_game_win",
-        "big_win_count",
-        "big_win_count_above_1",
-        "duration",
-        "final_balance",
-        "first_bet",
-        "free_game_win",
-        "free_game_win_above_0",
-        "free_spins_count",
-        "free_spins_count_above_10",
-        "initial_balance",
-        "return_to_player",
-        "sim_duration",
-        "total_bet",
-        "total_profit",
-        "total_spins",
-        "total_win",
-        "win_count",
-        "win_rate",
-    ]
-    data = log_transform(data, col_names=log_columns, suffix="_log")
+    # plot_df_distribution(data.drop(columns=["session_id"]), figure_name="./figures/gai_simulation_distribution.png", log=False)
+    feature_skewness, feature_unimodality_p = plot_df_distribution(
+        data.drop(columns=["session_id"]),
+        figure_name="./figures/gai_simulation_distribution_log.png",
+        log=True,
+        add_kde=True,
+    )
+    positive_skew_columns = [f for f, s in zip(data.columns, feature_skewness) if s > 1.5]
+    print(positive_skew_columns)
+    data = log_transform(data, col_names=positive_skew_columns, suffix="_log")
+    print(data.columns)
 
-    corr_cols = [
-        f"{col}_log"
-        for col in [
-            "base_game_win",
-            "big_win_count",
-            "duration",
-            "final_balance",
-            "first_bet",
-            "free_game_win",
-            "free_spins_count",
-            "initial_balance",
-            "return_to_player",
-            "sim_duration",
-            "total_bet",
-            "total_profit",
-            "total_spins",
-            "total_win",
-            "win_count",
-            "win_rate",
-        ]
-    ]
-    # plot_correlation(data[corr_cols], title=f"correlation for: all group")
+    data = augment_data(
+        data, columns=["total_bet_log", "total_profit_log"], col_name="compound_metric", method=["mean", "pca"]
+    )
+    show_group_stats(
+        data,
+        group_cols=["machine_id", "cluster_index"],
+        var_columns=["total_spins", "total_bet", "total_profit", "total_profit_log"],
+        transpose=True,
+    )
+    corr_cols = [f"{f}_log" if s > 1.5 else f for f, s in zip(data.columns, feature_skewness)]
+    plot_correlation(data[corr_cols], title=f"correlation for: all group")
 
     remove_cols = {
-        "base_game_win",
-        "big_win_count",
-        "free_game_win",
-        "win_count",
-        "duration",
-        "sim_duration",
-        "final_balance",
+        "base_game_win_log",
+        "big_win_count_log",
+        "free_game_win_log",
+        "win_count_log",
+        "duration_log",
+        "sim_duration_log",
+        "final_balance_log",
     }
-    anova_iv = [f"{col}_log" for col in log_columns if col not in remove_cols]
+    anova_iv = [col for col in corr_cols if col not in remove_cols] + [
+        "compound_metric_mean",
+        "compound_metric_pca1",
+        "compound_metric_pca2",
+    ]
     anova_res = run_two_way_anova(data, anova_iv)
-    main_effects = run_post_hoc_analysis(data, anova_res, anova_iv, effects="main")
+    # main_effects = run_post_hoc_analysis(data, anova_res, anova_iv, effects="main")
     interaction_effects = run_post_hoc_analysis(data, anova_res, anova_iv, effects="interaction")
 
     for y_cols, i, num_chunks in batch_iterator(interaction_effects["variable"].drop_duplicates(), 5):

@@ -236,7 +236,7 @@ def group_iterator(
     :param data:
     :param group_col:
     :param count_thresh: ignore group data less than count_thresh
-    :param preserve_index: yield data with index preserved (fill NA for other groups)
+    :param preserve_index: yield data with all index preserved (fill NA for other groups)
     :return:
     """
 

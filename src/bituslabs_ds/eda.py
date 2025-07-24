@@ -8,13 +8,17 @@ from itertools import zip_longest
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import matplotlib.cm as cm
+import matplotlib.legend_handler as lh
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from diptest import diptest
+from matplotlib.lines import Line2D
 from matplotlib.ticker import MaxNLocator
 from pandas import DataFrame, Series
 from scipy.cluster.hierarchy import leaves_list, linkage
+from scipy.stats import skew
 from statannotations.Annotator import Annotator
 
 from bituslabs_ds.config import DEFAULT_MAX_JOBS
@@ -22,6 +26,13 @@ from bituslabs_ds.utils import group_iterator, keep_numeric_columns
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
+
+
+class NoSymbolHandler(lh.HandlerBase):
+    def create_artists(self, legend, orig_handle, xdescent, ydescent, width, height, fontsize, trans):
+        # Return an invisible artist, so no symbol is drawn
+        line = Line2D([0], [0], visible=False)
+        return [line]
 
 
 def read_csv_cols(
@@ -485,11 +496,12 @@ def plot_dual_axis_sorted_swarm(
 
 def plot_df_distribution(
     data: Union[pd.DataFrame, pd.Series],
-    bins: int = 30,
+    bins: int = 50,
     alpha: float = 0.5,
     log: bool = False,
+    add_kde: bool = False,
     figure_name: Optional[str] = None,
-) -> None:
+) -> Tuple[List[int], List[int]]:
     """
     Plots the distribution (histogram) of each numeric column in a DataFrame in separate subplots.
     Maximum of 5 columns per row.
@@ -499,6 +511,8 @@ def plot_df_distribution(
     - bins (int): Number of histogram bins.
     - alpha (float): Transparency level for histograms.
     - log (bool): Whether to use logarithmic scale on y-axis.
+    - add_kde (bool): Whether to add a KDE plot
+    - figure_name (Optional[str]): Figure name to save
 
     Returns:
     - None: Displays a matplotlib plot.
@@ -513,22 +527,38 @@ def plot_df_distribution(
     numeric_cols = [col for col in data.columns if pd.api.types.is_numeric_dtype(data[col])]
     if not numeric_cols:
         print("No numeric columns to plot.")
-        return
+        return [], []
 
     n_cols = 5
     n_rows = math.ceil(len(numeric_cols) / n_cols)
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 4, n_rows * 3), squeeze=False)
     axes = axes.flatten()
+    feature_skewness = []
+    unimodality_p_values = []
 
     for i, col in enumerate(numeric_cols):
         ax = axes[i]
         values = data[col].dropna()
         if len(values) == 0:
             print("No values found for column", col)
+            feature_skewness.append(np.nan)
             continue
 
-        n_bins = max(min(bins, values.nunique()), 30)
-        counts, bin_edges, _ = ax.hist(values, bins=n_bins, alpha=alpha, edgecolor="black")
+        skewness = skew(values, bias=False)
+        feature_skewness.append(skewness)
+        dip_statistic_unimodal, p_value_unimodal = diptest(values)
+        unimodality_p_values.append(p_value_unimodal)
+
+        if p_value_unimodal < 0.05:
+            legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_statistic_unimodal:.3f}*"
+        else:
+            legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_statistic_unimodal:.3f}"
+
+        n_bins = max(min(bins, values.nunique()), 50)
+        counts, bin_edges, patches = ax.hist(values, bins=n_bins, alpha=alpha, edgecolor="black", label=legend_label)
+
+        if add_kde:
+            sns.kdeplot(values, bw_method="silverman", color="red", linestyle="--", ax=ax)
 
         # Annotate with column name at max bin
         if len(counts) > 0:
@@ -540,6 +570,10 @@ def plot_df_distribution(
         ax.set_title(col)
         ax.set_xlabel("Value")
         ax.set_ylabel("Frequency")
+
+        custom_handler_mapping = {patches[0]: NoSymbolHandler()}
+        ax.legend(handler_map=custom_handler_mapping, frameon=False)
+
         if log:
             ax.set_yscale("log")
         ax.grid(True)
@@ -552,6 +586,8 @@ def plot_df_distribution(
     if figure_name is not None:
         plt.savefig(figure_name)
     plt.show()
+
+    return feature_skewness, unimodality_p_values
 
 
 def plot_multiple_box_swarm(
@@ -941,3 +977,19 @@ def plot_seasonality(
     plt.title(f"Seasonality Plot ({freq.capitalize()})")
     plt.tight_layout()
     plt.show()
+
+
+if __name__ == "__main__":
+
+    data = pd.DataFrame(
+        {
+            "normal": np.random.normal(loc=0, scale=1, size=5000),
+            "positive_skewed": np.random.exponential(scale=1, size=5000),
+            "negative_skewed": -np.random.exponential(scale=1, size=5000),
+            "bimodal": np.hstack(
+                (np.random.normal(loc=-1, scale=1, size=2500), np.random.normal(loc=3, scale=1, size=2500))
+            ),
+        }
+    )
+
+    plot_df_distribution(data, add_kde=True)
