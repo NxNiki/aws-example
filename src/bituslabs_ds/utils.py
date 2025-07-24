@@ -272,3 +272,26 @@ def batch_iterator(data: Sequence[Any], chunk_size: int) -> Iterator[Sequence[An
     for start in range(0, len(data), chunk_size):
         yield data[start : start + chunk_size], i, num_chunks
         i += 1
+
+
+def convert_to_list(arg: Any) -> List[Any]:
+    """
+    Convert str, int, float, bool, or iterables (including numpy arrays) to a list. This is used to coerce input arg to
+    a type of List[Any].
+
+    :param arg: The input argument of any type.
+    :return: A list representation of the input argument.
+    """
+    if not arg:
+        logger.warning(f"empty arg: {arg}")
+        return []
+    elif isinstance(arg, (str, int, float, bool)):
+        return [arg]
+    elif isinstance(arg, np.ndarray):
+        return arg.tolist()
+    elif isinstance(arg, Iterable):
+        return list(arg)
+    elif isinstance(arg, list):
+        return arg
+    else:
+        raise TypeError(f"cannot convert {type(arg)}")

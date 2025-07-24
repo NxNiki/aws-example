@@ -18,9 +18,9 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
 from bituslabs_ds.config import S3_BUCKET, setup_logging
-from bituslabs_ds.eda import plot_correlation, plot_df_distribution, plot_multiple_box_swarm, split_column_by_threshold
+from bituslabs_ds.eda import Anova, plot_correlation, plot_df_distribution, split_column_by_threshold
 from bituslabs_ds.s3_utils import list_s3_files, read_files
-from bituslabs_ds.utils import batch_iterator, group_iterator, log_transform
+from bituslabs_ds.utils import group_iterator, log_transform
 
 setup_logging(".", "analysis_gai_simulation_result.log")
 pd.set_option("display.max_columns", None)
@@ -289,9 +289,11 @@ if __name__ == "__main__":
         transpose=True,
     )
     corr_cols = [f"{f}_log" if s > 1.5 else f for f, s in zip(numeric_cols, feature_skewness)]
-    plot_correlation(data[corr_cols], title=f"correlation for: all group")
+    # plot_correlation(data[corr_cols], title=f"correlation for: all group")
 
     remove_cols = {
+        "active",
+        "bonus_triggered",
         "base_game_win_log",
         "big_win_count_log",
         "free_game_win_log",
@@ -299,24 +301,18 @@ if __name__ == "__main__":
         "duration_log",
         "sim_duration_log",
         "final_balance_log",
+        "base_game_win_below_0",
+        "free_game_win_below_0",
     }
-    anova_iv = [col for col in corr_cols if col not in remove_cols] + [
+    anova_dv = [col for col in corr_cols if col not in remove_cols] + [
         "compound_metric_mean",
         "compound_metric_pca1",
         "compound_metric_pca2",
     ]
-    anova_res = run_two_way_anova(data, anova_iv)
-    # main_effects = run_post_hoc_analysis(data, anova_res, anova_iv, effects="main")
-    interaction_effects = run_post_hoc_analysis(data, anova_res, anova_iv, effects="interaction")
 
-    for y_cols, i, num_chunks in batch_iterator(interaction_effects["variable"].drop_duplicates(), 5):
-        plot_multiple_box_swarm(
-            data,
-            x_cols=["cluster_index"],
-            y_cols=list(y_cols),
-            n_cols=1,
-            group_col="machine_id",
-            log_scale=True,
-            fig_title=f"variables with sig anova: {i}/{num_chunks}",
-            post_hoc_table=interaction_effects,
-        )
+    # two-way ANOVA:
+    anova = Anova(data, between_vars=["machine_id", "cluster_index"], var_columns=anova_dv)
+    anova.run_anova()
+    anova.run_post_hoc_analysis(anova_dv, effects="main")
+    anova.run_post_hoc_analysis(anova_dv, effects="interaction", group_var="cluster_index")
+    anova.show_box_plot("cluster_index", "machine_id")

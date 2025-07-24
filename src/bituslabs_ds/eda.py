@@ -1,7 +1,9 @@
+import itertools
 import logging
 import math
 import os
 import warnings
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from itertools import zip_longest
@@ -12,6 +14,7 @@ import matplotlib.legend_handler as lh
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import pingouin as pg
 import seaborn as sns
 from diptest import diptest
 from matplotlib.lines import Line2D
@@ -22,7 +25,7 @@ from scipy.stats import skew
 from statannotations.Annotator import Annotator
 
 from bituslabs_ds.config import DEFAULT_MAX_JOBS
-from bituslabs_ds.utils import group_iterator, keep_numeric_columns
+from bituslabs_ds.utils import batch_iterator, convert_to_list, group_iterator, keep_numeric_columns
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -988,6 +991,201 @@ def plot_seasonality(
     plt.title(f"Seasonality Plot ({freq.capitalize()})")
     plt.tight_layout()
     plt.show()
+
+
+class Anova:
+
+    def __init__(self, df: DataFrame, between_vars: Union[List[str], str], var_columns: Union[List[str], str]):
+
+        between_vars = convert_to_list(between_vars)
+        var_columns = convert_to_list(var_columns)
+
+        self.data = df[between_vars + var_columns].copy()
+        self.between_vars = between_vars
+        self.var_columns = var_columns
+        self.anova_report: Dict = defaultdict(list)
+        self.post_hoc_report: Dict = defaultdict(list)
+
+    def run_anova(self, transpose_report: bool = False, p_thresh: float = 0.05) -> pd.DataFrame:
+
+        for col in self.var_columns:
+            if (not pd.api.types.is_numeric_dtype(self.data[col])) or pd.api.types.is_bool_dtype(self.data[col]):
+                logger.info(f"skip non numeric columns: {col}.")
+                continue
+
+            anova_output = pg.anova(dv=col, between=self.between_vars, data=self.data, detailed=True)
+            logger.info(f"anova result for {col}\n{anova_output}")
+
+            if "p-unc" not in anova_output or all(anova_output["p-unc"] > p_thresh):
+                logger.info(f"skip non-significant column: {col}")
+                continue
+
+            self.anova_report["variable"].append(col)
+            for index, row in anova_output.iterrows():
+                source = row["Source"]
+                if source == "Residual":
+                    break
+                self.anova_report[f"{source}-p_value"].append(row["p-unc"])
+                self.anova_report[f"{source}-eta2"].append(row["np2"])
+
+        res = self.anova_table.copy()
+        if transpose_report:
+            res = res.transpose()
+        logger.info(f"anova result:\n{res.to_markdown(index=False)}")
+        return res
+
+    @property
+    def anova_table(self) -> pd.DataFrame:
+        if len(self.anova_report) == 0:
+            return pd.DataFrame({})
+        else:
+            return pd.DataFrame(self.anova_report)
+
+    def _perform_and_report_post_hoc(
+        self, data_df: DataFrame, dv_col: str, between_factor: str, method: str, p_thresh: float
+    ):
+        """
+        Helper function to perform a post-hoc test and append results to the report dictionary.
+        """
+
+        data_df[between_factor] = data_df[between_factor].apply(self.tuple_to_string)
+        logger.info(f"  Performing {method} for {between_factor} on {dv_col}")
+        if method == "Sidak":
+            post_hoc_res = pg.pairwise_ttests(
+                dv=dv_col, between=between_factor, data=data_df, padjust="sidak", effsize="hedges"
+            )
+            p_col = "p-sidak"
+            # Filter for significant results for printing and reporting
+            post_hoc_res.rename(columns={"p-corr": p_col}, inplace=True)
+            report_cols = ["A", "B", p_col, "hedges", "BF10"]
+        elif method == "Games-Howell":
+            # Games-Howell is only meaningful for factors with > 2 levels.
+            if len(data_df[between_factor].unique()) <= 2:
+                logger.info(f"  Skipping explicit Games-Howell for {between_factor} on {dv_col} (only 2 levels).")
+                return
+            post_hoc_res = pg.pairwise_gameshowell(dv=dv_col, between=between_factor, data=data_df, effsize="hedges")
+            p_col = "p-gameshowell"
+            post_hoc_res.rename(columns={"pval": p_col}, inplace=True)
+            report_cols = ["A", "B", p_col, "hedges"]
+        elif method == "Tukey":
+            # Tukey's HSD typically assumes equal variances (homoscedasticity) and balanced groups,
+            # though pingouin's implementation (pairwise_tukey) can handle unequal N.
+            # If Levene's test for homogeneity of variance (which pingouin runs in anova output if detailed=True)
+            # indicates heterogeneity (p < .05), Games-Howell is generally preferred.
+            if len(data_df[between_factor].unique()) <= 2:
+                logger.info(f"  Skipping Tukey's HSD for {between_factor} on {dv_col} (only 2 levels).")
+                return
+            post_hoc_res = pg.pairwise_tukey(dv=dv_col, between=between_factor, data=data_df, effsize="hedges")
+            p_col = "p-tukey"
+            post_hoc_res.rename(columns={"p-corr": p_col}, inplace=True)
+            report_cols = ["A", "B", p_col, "hedges"]
+
+        else:
+            raise ValueError(f"Unknown post-hoc method: {method}")
+
+        # Filter for significant results for printing and reporting
+        sig_res = post_hoc_res[post_hoc_res[p_col] < p_thresh]
+        logger.info(f"post hoc result for {dv_col}: \n{sig_res[report_cols].to_markdown(index=False)}")
+
+        for _, row in sig_res.iterrows():
+            self.post_hoc_report["variable"].append(dv_col)
+            self.post_hoc_report["factor"].append(between_factor)
+            self.post_hoc_report["comparison"].append((self.string_to_tuple(row["A"]), self.string_to_tuple(row["B"])))
+            self.post_hoc_report["method"].append(method)
+            self.post_hoc_report["p_value"].append(row[p_col])
+            self.post_hoc_report["effect_size"].append(row["hedges"])
+
+    @staticmethod
+    def tuple_to_string(element):
+        if isinstance(element, tuple):
+            return ",".join(map(str, element))
+        else:
+            return element
+
+    @staticmethod
+    def string_to_tuple(element):
+        return tuple(element.split(",")) if "," in element else (element,)
+
+    def run_post_hoc_analysis(
+        self,
+        var_columns: List[str],
+        p_thresh: float = 0.05,
+        method: str = "Tukey",
+        effects: str = "main",
+        group_var: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """
+        run post hoc analysis based on anova results
+        :param var_columns:
+        :param p_thresh:
+        :param method:
+        :param effects:
+        :param group_var: an element from the between_vars, for interaction effects, only compare groups in other
+            between_var for each level of group_var.
+        :return:
+        """
+
+        logger.info("--- Running Post-Hoc Analysis ---")
+        anova_table = self.anova_table
+
+        # clear previous post-hoc result:
+        self.post_hoc_report = defaultdict(list)
+
+        if anova_table is None:
+            raise Exception("Run anova before post-hoc analysis!")
+
+        for col in var_columns:
+            # Check if the variable was processed by ANOVA and if any main effect or interaction was significant
+            if col not in self.anova_report["variable"]:
+                logger.info(
+                    f"Skip post-hoc for {col} as it was not included in the ANOVA summary (likely no significant effects)."
+                )
+                continue
+
+            anova_row = anova_table[anova_table["variable"] == col].iloc[0]
+            if effects == "main":
+                for var in self.between_vars:
+                    if anova_row[f"{var}-p_value"] < p_thresh:
+                        logger.info(f"\nSignificance detected for {var} on {col} (p={anova_row[f'{var}-p_value']:.4f})")
+                        self._perform_and_report_post_hoc(self.data, col, var, method, p_thresh)
+
+            elif effects == "interaction":
+                for var1, var2 in itertools.combinations(self.between_vars, 2):
+                    interaction_label = f"{var1} * {var2}"
+                    if anova_row[f"{interaction_label}-p_value"] < p_thresh:
+                        # run post-hoc for each cluster group separately:
+                        for data_interaction, cluster_index, _ in group_iterator(self.data, group_col=group_var):
+                            data_interaction["interaction_group"] = list(
+                                zip(data_interaction[var1].astype(str), data_interaction[var2].astype(str))
+                            )
+                            self._perform_and_report_post_hoc(
+                                data_interaction, col, "interaction_group", method, p_thresh
+                            )
+            else:
+                raise ValueError(f"Unknown effect: {effects}")
+
+        res_post_hoc = pd.DataFrame(self.post_hoc_report)
+        if not res_post_hoc.empty:
+            print("\n--- Summary Post-Hoc Report (Significant Comparisons Only) ---")
+            for res_post_hoc_group, _, _ in group_iterator(res_post_hoc, group_col="variable"):
+                print(res_post_hoc_group.sort_values(by="comparison").to_markdown(index=False))
+        else:
+            print("\nNo significant main effects or interactions found in ANOVA, so no post-hoc tests were performed.")
+        return res_post_hoc
+
+    def show_box_plot(self, x_cols: str, group_col: str) -> None:
+        post_hoc_table = pd.DataFrame(self.post_hoc_report)
+        for y_cols, i, num_chunks in batch_iterator(post_hoc_table["variable"].drop_duplicates(), 5):
+            plot_multiple_box_swarm(
+                self.data,
+                x_cols=[x_cols],
+                y_cols=list(y_cols),
+                n_cols=1,
+                group_col=group_col,
+                log_scale=True,
+                fig_title=f"variables with sig anova: {i}/{num_chunks}",
+                post_hoc_table=post_hoc_table,
+            )
 
 
 if __name__ == "__main__":
