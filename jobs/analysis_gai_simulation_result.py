@@ -35,11 +35,15 @@ def run_two_way_anova(
     report = defaultdict(list)
     between_vars = ["machine_id", "cluster_index"]
     for col in var_columns:
+        if (not pd.api.types.is_numeric_dtype(data[col])) or pd.api.types.is_bool_dtype(data[col]):
+            print(f"skip non numeric columns: {col}.")
+            continue
+
         anova_output = pg.anova(dv=col, between=between_vars, data=data, detailed=True)
         print(anova_output)
 
         if "p-unc" not in anova_output or all(anova_output["p-unc"] > p_thresh):
-            print(f"skipping {col}")
+            print(f"skip non-significant column: {col}")
             continue
 
         report["variable"].append(col)
