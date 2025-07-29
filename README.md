@@ -45,7 +45,7 @@ scripts under `jobs/examples` can run locally or directly be submitted to MER/sa
 
 Ensure your IAM role has `AmazonS3FullAccess` permission.
 
-run script [s3_utils.py](https://github.com/NxNiki/aws-example/blob/main/src/bituslabs_ds/s3_utils.py) to upload and download data from s3.
+run script [data_loader_s3_example.py](https://github.com/NxNiki/aws-example/blob/788559a678e5e0fbd451b77ee6d9e74533f4c595/jobs/examples/data_loader_s3_example.py) to upload and download data from s3.
 
 Check data in result folder on s3 to verify code run sucessfully.
 
