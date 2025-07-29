@@ -53,8 +53,8 @@ if __name__ == "__main__":
     LOCAL_SCRIPT = "data_loader_pyspark_example.py"
     BUCKET = "bituslabs-team-ai"
     S3_KEY = "data_loader_pyspark_example.py"
-    DATA_SOURCE = f"s3://{BUCKET}/xin-config/food_establishment_data.csv"
-    OUTPUT_URI = f"s3://{BUCKET}/xin-config/restaurant_violation_results"
+    DATA_SOURCE = f"s3://{BUCKET}/test/food_establishment_data.csv"
+    OUTPUT_URI = f"s3://{BUCKET}/test/restaurant_violation_results"
     CLUSTER_ID = "j-WD67QQS5JW2Z"  # Your EMR Cluster ID
     REGION = "us-west-2"
 
