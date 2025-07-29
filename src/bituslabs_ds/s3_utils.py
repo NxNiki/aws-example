@@ -162,7 +162,7 @@ def list_s3_files(bucket: str, prefix: str, pattern: Optional[str] = None) -> Li
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
         for obj in page.get("Contents", []):
             key = obj["Key"]
-            if pattern is None or re.search(pattern, key):  # Changed from match to search
+            if pattern is None or re.search(pattern, key):
                 s3_uri = f"s3://{bucket}/{key}"
                 matching_keys.append(s3_uri)
                 logging.info(f"Found {s3_uri}")

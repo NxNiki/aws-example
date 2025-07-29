@@ -125,7 +125,7 @@ def _transform_helper(
     col_names: Optional[Union[List[str], str]] = None,
     base: Union[int, float] = 10,
     suffix="",
-    method: str = "log",
+    method: Literal["log", "exp"] = "log",
 ) -> pd.DataFrame:
     """
     Apply log/exp transformation to selected numeric columns of a DataFrame.
@@ -155,8 +155,11 @@ def _transform_helper(
                     col_data = np.sign(col_data) * np.log1p(np.abs(col_data)) / np.log(base)
                 elif method == "exp":
                     col_data = np.sign(col_data) * (np.power(base, np.abs(col_data)) - 1)
+                else:
+                    logger.error("Invalid method for log/exp transformation")
 
             data_transformed[f"{col}{suffix}"] = col_data
+            logger.info(f"Column: {col} transformed with method {method} to: {col}{suffix}.")
         else:
             logger.warning(f"Column: {col} not transformed.")
 

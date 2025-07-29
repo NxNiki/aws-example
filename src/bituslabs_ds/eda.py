@@ -22,6 +22,8 @@ from matplotlib.ticker import MaxNLocator
 from pandas import DataFrame, Series
 from scipy.cluster.hierarchy import leaves_list, linkage
 from scipy.stats import skew
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
 from statannotations.Annotator import Annotator
 
 from bituslabs_ds.config import DEFAULT_MAX_JOBS
@@ -972,7 +974,7 @@ class DataProfiler:
         numeric_cols = self.check_numeric_columns()
         feature_stats = []
         for col in numeric_cols:
-            values = data[col].dropna()
+            values = self.df[col].dropna()
             stats: Dict = defaultdict()
             stats["name"] = col
             if len(values) == 0:
@@ -1009,16 +1011,18 @@ class DataProfiler:
     def transform_skewed_columns(self, pos_suffix: str = "_log", neg_suffix: str = "_exp") -> None:
 
         positive_skew_cols, negative_skew_cols = self.get_skewed_columns()
-
         if len(positive_skew_cols) > 0:
             self.df = log_transform(self.df, col_names=positive_skew_cols, suffix=pos_suffix)
             self._positive_skew_suffix = pos_suffix
         if len(negative_skew_cols) > 0:
             self.df = exp_transform(self.df, col_names=negative_skew_cols, suffix=neg_suffix)
             self._negative_skew_suffix = neg_suffix
+        # reset _numeric_columns so that added columns will be updated in plot_distribution.
+        self._numeric_columns = None
 
     def plot_correlation_heatmap(self, title: str, method: str = "pearson"):
         """Calculates the correlation matrix for numerical columns."""
+
         numerical_df = self.df.select_dtypes(include=["number"])
         correlation_matrix = numerical_df.corr(method=method)
         return correlation_matrix
@@ -1153,6 +1157,66 @@ class DataProfiler:
         if figure_name is not None:
             plt.savefig(figure_name)
         plt.show()
+
+    def augment_columns(self, columns: List[str], col_name: str, method: Union[List[str], str] = "pca"):
+        self.df = self.augment_df_columns(self.df, columns, col_name, method)
+
+    @staticmethod
+    def augment_df_columns(
+        data: pd.DataFrame, columns: List[str], col_name: str, method: Union[List[str], str] = "pca"
+    ) -> pd.DataFrame:
+
+        if isinstance(method, str):
+            method = [method]
+
+        if len(columns) == 1:
+            logger.warning("Only one columns is selected to augment data")
+
+        scaler = StandardScaler()
+        df_scaled = scaler.fit_transform(data[columns])
+
+        if "mean" in method:
+            data[f"{col_name}_mean"] = df_scaled.mean(axis=1)
+        if "pca" in method:
+            pca = PCA(n_components=None)
+            principal_components = pca.fit_transform(df_scaled)
+            explained_variance_ratio_cumsum = np.cumsum(pca.explained_variance_ratio_)
+            print(f"Cumulative Explained Variance for '{col_name}' PCA components:")
+            for i, cum_var in enumerate(explained_variance_ratio_cumsum):
+                print(f"  PC{i + 1}: {cum_var:.4f}")
+
+            for i in range(principal_components.shape[1]):
+                data[f"{col_name}_pca{i + 1}"] = principal_components[:, i]
+
+        return data
+
+    def show_group_stats(self, group_cols: List[str], var_columns: List[str], transpose: bool = False):
+        self.show_df_group_stats(self.df, group_cols, var_columns, transpose)
+
+    @staticmethod
+    def show_df_group_stats(
+        data: pd.DataFrame, group_cols: List[str], var_columns: List[str], transpose: bool = False
+    ) -> None:
+        """
+        show mean and median for the combination of each level for the between variables:
+        :param data:
+        :param group_cols:
+        :param var_columns:
+        :param transpose: transpose the output for each group
+        :return:
+        """
+
+        for col in var_columns:
+            report = (
+                data[group_cols + [col]]
+                .groupby(group_cols)
+                .agg(["mean", "median"])
+                .sort_values([(col, "median"), (col, "mean")], ascending=False)
+            )
+            if transpose:
+                print(report.transpose().to_markdown(index=True))
+            else:
+                print(report.to_markdown(index=True))
 
 
 class Anova:
