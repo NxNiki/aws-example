@@ -36,6 +36,10 @@ The jobs folder contains scripts with following patterns:
 - `data_process_*.py`: to process data and upload result to s3
 - `analysis_*.py`: run statistic analysis and make plots.
 
+### examples:
+
+scripts under jobs/examples can run locally or directly be submitted to MER/sagemaker without configuring environments. Use these example to ensure you have aws account configured correctly.
+
 
 ### connect to s3 from local:
 
