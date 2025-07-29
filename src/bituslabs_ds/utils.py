@@ -1,7 +1,7 @@
 import json
 import logging
 from collections.abc import Sequence
-from typing import Any, Iterable, Iterator, List, Literal, Optional, Sized, Tuple, Union
+from typing import Any, Iterable, Iterator, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -104,6 +104,41 @@ def log_transform(
     :param suffix: Suffix to add to column names, default is "":
     :return: Transformed DataFrame
     """
+
+    data_transformed = _transform_helper(data, col_names=col_names, base=base, suffix=suffix, method="log")
+    return data_transformed
+
+
+def exp_transform(
+    data: pd.DataFrame,
+    col_names: Optional[Union[List[str], str]] = None,
+    base: float = np.exp(1),
+    suffix="",
+) -> pd.DataFrame:
+
+    data_transformed = _transform_helper(data, col_names=col_names, base=base, suffix=suffix, method="exp")
+    return data_transformed
+
+
+def _transform_helper(
+    data: pd.DataFrame,
+    col_names: Optional[Union[List[str], str]] = None,
+    base: Union[int, float] = 10,
+    suffix="",
+    method: str = "log",
+) -> pd.DataFrame:
+    """
+    Apply log/exp transformation to selected numeric columns of a DataFrame.
+    Handles negative values by preserving their sign: sign(x) * log(1 + abs(x))
+    For exponential transformations: sign(x) * (base ^ abs(x) - 1)
+    0 will be preserved.
+
+    :param data: Input DataFrame
+    :param col_names: List of column names to transform
+    :param base: Log base, default is 10
+    :param suffix: Suffix to add to column names, default is "":
+    :return: Transformed DataFrame
+    """
     data_transformed = data.copy()
 
     if col_names is None:
@@ -116,7 +151,11 @@ def log_transform(
         if col in data_transformed.columns and np.issubdtype(data_transformed[col].dtype, np.number):
             col_data = data_transformed[col].astype(float).copy()
             with np.errstate(divide="ignore", invalid="ignore"):
-                col_data = np.sign(col_data) * np.log1p(np.abs(col_data)) / np.log(base)
+                if method == "log":
+                    col_data = np.sign(col_data) * np.log1p(np.abs(col_data)) / np.log(base)
+                elif method == "exp":
+                    col_data = np.sign(col_data) * (np.power(base, np.abs(col_data)) - 1)
+
             data_transformed[f"{col}{suffix}"] = col_data
         else:
             logger.warning(f"Column: {col} not transformed.")

@@ -25,13 +25,24 @@ from scipy.stats import skew
 from statannotations.Annotator import Annotator
 
 from bituslabs_ds.config import DEFAULT_MAX_JOBS
-from bituslabs_ds.utils import batch_iterator, convert_to_list, group_iterator, keep_numeric_columns
+from bituslabs_ds.utils import (
+    batch_iterator,
+    convert_to_list,
+    exp_transform,
+    group_iterator,
+    keep_numeric_columns,
+    log_transform,
+)
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 
 class NoSymbolHandler(lh.HandlerBase):
+    """
+    this is used to remove legend label in plots
+    """
+
     def create_artists(self, legend, orig_handle, xdescent, ydescent, width, height, fontsize, trans):
         # Return an invisible artist, so no symbol is drawn
         line = Line2D([0], [0], visible=False)
@@ -48,9 +59,10 @@ def read_csv_cols(
     """
     Reads specific columns from multiple CSV files, filters rows based on criteria,
     and concatenates the result into a single DataFrame using parallel processing.
+    To read files on s3, see: read_files in s3_utils.py
 
     Parameters:
-    - files (List[str]): List of CSV file paths.
+    - files (List[str]): List of local CSV file paths.
     - columns (List[str]): Columns to include in final output.
     - filters (Optional[Dict[str, Any]]): Optional {column: value} filter conditions.
     - sampling (Optional[int | float]): Optional row sampling (count or fraction).
@@ -433,7 +445,7 @@ def plot_dual_axis_sorted_swarm(
         # Get the integer position for each y-axis category
         y_positions = {label: i for i, label in enumerate(y_order)}
         num_hues = len(hue_order)
-        # Calculate vertical dodge amount for text (to match swarmplot's dodge)
+        # Calculate vertical dodge amount for text (to match swarm plot's dodge)
         dodge_amount = 0.4 if num_hues > 1 else 0
 
         for category in y_order:
@@ -500,108 +512,6 @@ def plot_dual_axis_sorted_swarm(
 
         fig.tight_layout()
         plt.show()
-
-
-def plot_df_distribution(
-    data: Union[pd.DataFrame, pd.Series],
-    bins: int = 50,
-    alpha: float = 0.5,
-    log: bool = False,
-    add_kde: bool = False,
-    figure_name: Optional[str] = None,
-) -> Tuple[List[str], List[int], List[int]]:
-    """
-    Plots the distribution (histogram) of each numeric column in a DataFrame in separate subplots.
-    Maximum of 5 columns per row.
-
-    Parameters:
-    - data (Union[pd.DataFrame, pd.Series]): Data to plot.
-    - bins (int): Number of histogram bins.
-    - alpha (float): Transparency level for histograms.
-    - log (bool): Whether to use logarithmic scale on y-axis.
-    - add_kde (bool): Whether to add a KDE plot
-    - figure_name (Optional[str]): Figure name to save
-
-    Returns:
-    - None: Displays a matplotlib plot.
-    """
-
-    data = data.copy()
-    if isinstance(data, pd.Series):
-        data = data.to_frame()
-
-    boolean_cols = [col for col in data.columns if pd.api.types.is_bool_dtype(data[col])]
-    data[boolean_cols] = data[boolean_cols].astype(int)
-    numeric_cols = [col for col in data.columns if pd.api.types.is_numeric_dtype(data[col])]
-    if not numeric_cols:
-        print("No numeric columns to plot.")
-        return [], [], []
-
-    n_cols = 5
-    n_rows = math.ceil(len(numeric_cols) / n_cols)
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 4, n_rows * 3), squeeze=False)
-    axes = axes.flatten()
-    feature_skewness = []
-    unimodality_p_values = []
-
-    for i, col in enumerate(numeric_cols):
-        ax = axes[i]
-        values = data[col].dropna()
-        if len(values) == 0:
-            print("No values found for column", col)
-            feature_skewness.append(np.nan)
-            unimodality_p_values.append(np.nan)
-            continue
-
-        if len(values.unique()) <= 2:
-            feature_skewness.append(np.nan)
-            unimodality_p_values.append(np.nan)
-            legend_label = ""
-        else:
-            skewness = skew(values, bias=False)
-            feature_skewness.append(skewness)
-            dip_statistic_unimodal, p_value_unimodal = diptest(values)
-            unimodality_p_values.append(p_value_unimodal)
-
-            if p_value_unimodal < 0.05:
-                legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_statistic_unimodal:.3f}*"
-            else:
-                legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_statistic_unimodal:.3f}"
-
-        n_bins = max(min(bins, values.nunique()), 50)
-        counts, bin_edges, patches = ax.hist(values, bins=n_bins, alpha=alpha, edgecolor="black", label=legend_label)
-
-        if add_kde:
-            sns.kdeplot(values, bw_method="silverman", color="red", linestyle="--", ax=ax)
-
-        # Annotate with column name at max bin
-        if len(counts) > 0:
-            max_bin_index = counts.argmax()
-            x_pos = (bin_edges[max_bin_index] + bin_edges[max_bin_index + 1]) / 2
-            y_pos = counts[max_bin_index]
-            ax.text(x_pos, y_pos, f"{counts.max():.2e}", fontsize=9, ha="center", va="bottom")
-
-        ax.set_title(col)
-        ax.set_xlabel("Value")
-        ax.set_ylabel("Frequency")
-
-        custom_handler_mapping = {patches[0]: NoSymbolHandler()}
-        ax.legend(handler_map=custom_handler_mapping, frameon=False)
-
-        if log:
-            ax.set_yscale("log")
-        ax.grid(True)
-
-    # Hide any unused subplots
-    for j in range(len(numeric_cols), len(axes)):
-        fig.delaxes(axes[j])
-
-    plt.tight_layout()
-    if figure_name is not None:
-        plt.savefig(figure_name)
-    plt.show()
-
-    return numeric_cols, feature_skewness, unimodality_p_values
 
 
 def plot_multiple_box_swarm(
@@ -993,6 +903,264 @@ def plot_seasonality(
     plt.show()
 
 
+class DataProfiler:
+
+    def __init__(self, df: Union[pd.DataFrame, pd.Series], skewness_threshold: float = 1.5) -> None:
+
+        if isinstance(df, pd.Series):
+            df = df.to_frame()
+
+        if not isinstance(df, pd.DataFrame):
+            raise TypeError("Input must be a pandas DataFrame or Series.")
+
+        self.df = df
+        self.skewness_threshold = skewness_threshold
+        self._numeric_columns: Optional[List[str]] = None
+        self._feature_stats: Optional[List[Dict]] = None
+        self._positive_skew_columns: Optional[List[str]] = None
+        self._negative_skew_columns: Optional[List[str]] = None
+        self._positive_skew_suffix: Optional[str] = None
+        self._negative_skew_suffix: Optional[str] = None
+
+    @property
+    def processed_numerical_columns(self):
+        numeric_columns = self.check_numeric_columns()
+
+        if self._positive_skew_suffix:
+            numeric_columns = [
+                f + self._positive_skew_suffix if f in self._positive_skew_columns else f for f in numeric_columns
+            ]
+
+        if self._negative_skew_suffix:
+            numeric_columns = [
+                f + self._negative_skew_suffix if f in self._negative_skew_columns else f for f in numeric_columns
+            ]
+
+        return numeric_columns
+
+    def check_numeric_columns(self, include_boolean: bool = True, refresh: bool = False) -> List[str]:
+        """Identifies numerical columns in the DataFrame."""
+        if self._numeric_columns is not None and not refresh:
+            return self._numeric_columns
+
+        self._numeric_columns = self.check_df_numerical_columns(self.df, include_boolean=include_boolean)
+        return self._numeric_columns
+
+    @staticmethod
+    def check_df_numerical_columns(data: Union[pd.DataFrame, pd.Series], include_boolean: bool = True) -> List[str]:
+        """
+        iterator to select numerical columns of dataframe.
+        :param data:
+        :param include_boolean:
+        :return:
+        """
+
+        if isinstance(data, pd.Series):
+            data = data.to_frame()
+
+        if include_boolean:
+            # convert boolean columns to int:
+            boolean_cols = data.select_dtypes(include="bool").columns.tolist()
+            data[boolean_cols] = data[boolean_cols].astype(int)
+
+        return data.select_dtypes(include=["number"]).columns.tolist()
+
+    def check_distribution_stats(self, refresh: bool = False) -> List[Dict]:
+        """
+        calculate skewness and unimodal statistics for numerical columns of data frame.
+        :param refresh: recalculate skewness and unimodal statistics.
+        :return:
+        """
+
+        if self._feature_stats is not None and not refresh:
+            return self._feature_stats
+
+        numeric_cols = self.check_numeric_columns()
+        feature_stats = []
+        for col in numeric_cols:
+            values = data[col].dropna()
+            stats: Dict = defaultdict()
+            stats["name"] = col
+            if len(values) == 0:
+                print("No values found for column", col)
+                stats["skewness"] = np.nan
+                stats["unimodality_p_values"] = np.nan
+                continue
+
+            if len(values.unique()) <= 2:
+                stats["skewness"] = np.nan
+                stats["unimodality_p_values"] = np.nan
+            else:
+                skewness = skew(values, bias=False)
+                dip_statistic_unimodal, p_value_unimodal = diptest(values)
+                stats["skewness"] = skewness
+                stats["dip_stat"] = dip_statistic_unimodal
+                stats["dip_p_values"] = p_value_unimodal
+
+            feature_stats.append(stats)
+        self._feature_stats = feature_stats
+        return feature_stats
+
+    def get_skewed_columns(self, refresh: bool = False) -> Tuple[List[str], List[str]]:
+
+        if self._positive_skew_columns is not None and self._negative_skew_columns is not None and not refresh:
+            return self._positive_skew_columns, self._negative_skew_columns
+
+        feature_stats = self.check_distribution_stats()
+        self._positive_skew_columns = [f["name"] for f in feature_stats if f["skewness"] > self.skewness_threshold]
+        self._negative_skew_columns = [f["name"] for f in feature_stats if f["skewness"] < -self.skewness_threshold]
+
+        return self._positive_skew_columns, self._negative_skew_columns
+
+    def transform_skewed_columns(self, pos_suffix: str = "_log", neg_suffix: str = "_exp") -> None:
+
+        positive_skew_cols, negative_skew_cols = self.get_skewed_columns()
+
+        if len(positive_skew_cols) > 0:
+            self.df = log_transform(self.df, col_names=positive_skew_cols, suffix=pos_suffix)
+            self._positive_skew_suffix = pos_suffix
+        if len(negative_skew_cols) > 0:
+            self.df = exp_transform(self.df, col_names=negative_skew_cols, suffix=neg_suffix)
+            self._negative_skew_suffix = neg_suffix
+
+    def plot_correlation_heatmap(self, title: str, method: str = "pearson"):
+        """Calculates the correlation matrix for numerical columns."""
+        numerical_df = self.df.select_dtypes(include=["number"])
+        correlation_matrix = numerical_df.corr(method=method)
+        return correlation_matrix
+
+    def plot_distribution(
+        self,
+        bins: int = 50,
+        alpha: float = 0.5,
+        log: bool = False,
+        add_kde: bool = False,
+        figure_name: Optional[str] = None,
+    ) -> None:
+        """
+        Plots the distribution (histogram) of each numeric column in a DataFrame in separate subplots.
+
+        Parameters:
+        - data (Union[pd.DataFrame, pd.Series]): Data to plot.
+        - bins (int): Number of histogram bins.
+        - alpha (float): Transparency level for histograms.
+        - log (bool): Whether to use logarithmic scale on y-axis.
+        - add_kde (bool): Whether to add a KDE plot
+        - figure_name (Optional[str]): Figure name to save
+
+        Returns:
+        - None: Displays a matplotlib plot.
+        """
+
+        # refresh to include potentially log/exp transformed columns:
+        feature_stats = self.check_distribution_stats(refresh=True)
+        self.plot_df_distribution(
+            self.df,
+            bins=bins,
+            alpha=alpha,
+            feature_stats=feature_stats,
+            log=log,
+            add_kde=add_kde,
+            figure_name=figure_name,
+        )
+
+    @staticmethod
+    def plot_df_distribution(
+        data: Union[pd.DataFrame, pd.Series],
+        bins: int = 50,
+        alpha: float = 0.5,
+        log: bool = False,
+        add_kde: bool = False,
+        feature_stats: Optional[List[Dict]] = None,
+        figure_name: Optional[str] = None,
+    ) -> None:
+        """
+        Plots the distribution (histogram) of each numeric column in a DataFrame in separate subplots.
+        Maximum of 5 columns per row.
+
+        Parameters:
+        - data (Union[pd.DataFrame, pd.Series]): Data to plot.
+        - bins (int): Number of histogram bins.
+        - alpha (float): Transparency level for histograms.
+        - log (bool): Whether to use logarithmic scale on y-axis.
+        - add_kde (bool): Whether to add a KDE plot
+        - feature_stats (List[Dict]): List of statistics to plot.
+        - figure_name (Optional[str]): Figure name to save
+
+        Returns:
+        - None: Displays a matplotlib plot.
+        """
+
+        n_cols = 5
+        if feature_stats is not None:
+            columns = [f["name"] for f in feature_stats]
+        else:
+            columns = data.select_dtypes(include=["number"]).columns
+
+        n_rows = math.ceil(len(columns) / n_cols)
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 4, n_rows * 3), squeeze=False)
+        axes = axes.flatten()
+
+        for i, col in enumerate(columns):
+            ax = axes[i]
+            values = data[col].dropna()
+            if len(values) == 0:
+                print("No values found for column", col)
+                continue
+
+            if len(values.unique()) <= 2:
+                legend_label = ""
+            else:
+
+                if feature_stats is not None:
+                    skewness = feature_stats[i]["skewness"]
+                    dip_statistic_unimodal = feature_stats[i]["dip_stat"]
+                    p_value_unimodal = feature_stats[i]["dip_p_values"]
+                else:
+                    skewness = skew(values, bias=False)
+                    dip_statistic_unimodal, p_value_unimodal = diptest(values)
+
+                if p_value_unimodal < 0.05:
+                    legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_statistic_unimodal:.3f}*"
+                else:
+                    legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_statistic_unimodal:.3f}"
+
+            n_bins = max(min(bins, values.nunique()), 50)
+            counts, bin_edges, patches = ax.hist(
+                values, bins=n_bins, alpha=alpha, edgecolor="black", label=legend_label
+            )
+
+            if add_kde:
+                sns.kdeplot(values, bw_method="silverman", color="red", linestyle="--", ax=ax)
+
+            # Annotate with column name at max bin
+            if len(counts) > 0:
+                max_bin_index = counts.argmax()
+                x_pos = (bin_edges[max_bin_index] + bin_edges[max_bin_index + 1]) / 2
+                y_pos = counts[max_bin_index]
+                ax.text(x_pos, y_pos, f"{counts.max():.2e}", fontsize=9, ha="center", va="bottom")
+
+            ax.set_title(col)
+            ax.set_xlabel("Value")
+            ax.set_ylabel("Frequency")
+
+            custom_handler_mapping = {patches[0]: NoSymbolHandler()}
+            ax.legend(handler_map=custom_handler_mapping, frameon=False)
+
+            if log:
+                ax.set_yscale("log")
+            ax.grid(True)
+
+        # Hide any unused subplots
+        for j in range(len(columns), len(axes)):
+            fig.delaxes(axes[j])
+
+        plt.tight_layout()
+        if figure_name is not None:
+            plt.savefig(figure_name)
+        plt.show()
+
+
 class Anova:
 
     def __init__(self, df: DataFrame, between_vars: Union[List[str], str], var_columns: Union[List[str], str]):
@@ -1201,4 +1369,4 @@ if __name__ == "__main__":
         }
     )
 
-    plot_df_distribution(data, add_kde=True)
+    DataProfiler.plot_df_distribution(data, add_kde=True)
