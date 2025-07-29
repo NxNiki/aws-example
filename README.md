@@ -61,7 +61,7 @@ Create an EMR cluster on AWS.
 
 Add `AmazonEMRFullAccessPolicy_v2` to your IAM role.
 
-run script [submit_data_loader_pyspark_example.py](https://github.com/NxNiki/aws-example/blob/main/jobs/submit_data_loader_pyspark_example.py) to ensure you can submit EMR jobs.
+run script [data_loader_pyspark_example_submit.py](https://github.com/NxNiki/aws-example/blob/b434e9c2e819772b6df87d5e17876353764dbbbf/jobs/examples/data_loader_pyspark_example_submit.py) to ensure you can submit EMR jobs.
 
 Check data in result folder on s3 to verify code run sucessfully.
 
