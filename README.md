@@ -38,7 +38,7 @@ The jobs folder contains scripts with following patterns:
 
 ### examples:
 
-scripts under jobs/examples can run locally or directly be submitted to MER/sagemaker without configuring environments. Use these example to ensure you have aws account configured correctly.
+scripts under `jobs/examples` can run locally or directly be submitted to MER/sagemaker without configuring environments. Use these example to ensure you have aws account configured correctly.
 
 
 ### connect to s3 from local:
