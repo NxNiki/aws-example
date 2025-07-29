@@ -14,6 +14,12 @@ poetry install
 ```
 Otherwise, conda and peotry will use different virtual environments!
 
+Setup pre-commit:
+```
+pre-commit install
+```
+This command will install the pre-commit hook into your .git/hooks directory. From now on, pre-commit will automatically run the defined hooks every time you try to git commit.
+
 ## install aws-cli:
 
 https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
@@ -45,7 +51,7 @@ Add `AmazonAthenaFullAccess` to your IAM role.
 
 run script [athena_utils.py](https://github.com/NxNiki/aws-example/blob/main/src/bituslabs_ds/athena_utils.py)
 
-### submit script two AWS EMR:
+### submit script to AWS EMR:
 
 Create an EMR cluster on AWS.
 
@@ -56,6 +62,12 @@ run script [submit_data_loader_pyspark_example.py](https://github.com/NxNiki/aws
 Check data in result folder on s3 to verify code run sucessfully.
 
 https://docs.aws.amazon.com/emr/latest/ManagementGuide/emr-gs.html
+
+### submit script to AWS sagemaker:
+
+the sagemaker jobs are saved to: ([jobs/sagemaker](https://github.com/NxNiki/aws-example/tree/419b3a9d1483d5050e6af26fd3b86ffc9df0cd10/jobs/sagemaker))
+
+
 
 
 
