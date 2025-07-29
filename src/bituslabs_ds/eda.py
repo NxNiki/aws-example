@@ -179,22 +179,16 @@ def split_column_by_multiple_separators(data: pd.DataFrame, column: str, sep: st
     Returns:
         pd.DataFrame: The DataFrame with the new split columns added.
     """
-    # Make a copy to avoid modifying the original DataFrame unexpectedly
-    data_out = data.copy()
+    data = data.copy()
 
     # Split the column into a new temporary DataFrame.
     # `expand=True` automatically creates the necessary number of columns
     # and fills missing parts with None.
-    split_df = data_out[column].str.split(sep, expand=True)
+    split_df = data[column].str.split(sep, expand=True)
 
-    # Dynamically create the new column names, e.g., 'pattern_1', 'pattern_2', etc.
     new_col_names = [f"{column}_{i+1}" for i in range(split_df.shape[1])]
-
-    # Assign these new names to the columns of our temporary DataFrame
     split_df.columns = new_col_names
-
-    # Join the new split columns back to the original DataFrame
-    result_df = pd.concat([data_out, split_df], axis=1)
+    result_df = pd.concat([data, split_df], axis=1)
 
     return result_df
 
