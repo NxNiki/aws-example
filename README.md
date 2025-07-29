@@ -65,7 +65,7 @@ https://docs.aws.amazon.com/emr/latest/ManagementGuide/emr-gs.html
 
 ### submit script to AWS sagemaker:
 
-the sagemaker jobs are saved to: ([jobs/sagemaker](https://github.com/NxNiki/aws-example/tree/419b3a9d1483d5050e6af26fd3b86ffc9df0cd10/jobs/sagemaker))
+the sagemaker jobs are saved to: [jobs/sagemaker](https://github.com/NxNiki/aws-example/tree/419b3a9d1483d5050e6af26fd3b86ffc9df0cd10/jobs/sagemaker)
 
 
 
