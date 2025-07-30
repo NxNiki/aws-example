@@ -80,7 +80,6 @@ def train(model, train_loader, epochs, criterion, optimizer, hook=None):
             target = target.to(device)
             optimizer.zero_grad()
             output = model(data)
-            # loss = F.nll_loss(output, target)
             loss = criterion(output, target)
             loss.backward()
             optimizer.step()
@@ -205,7 +204,7 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=0.01, metavar="LR", help="learning rate (default: 0.01)")
     parser.add_argument("--momentum", type=float, default=0.5, metavar="M", help="SGD momentum (default: 0.5)")
 
-    parser.add_argument("--hosts", type=list, default=json.loads(os.environ["SM_HOSTS"]))
+    parser.add_argument("--hosts", type=str, default=json.loads(os.environ["SM_HOSTS"]))
     parser.add_argument("--current-host", type=str, default=os.environ["SM_CURRENT_HOST"])
     parser.add_argument("--model-dir", type=str, default=os.environ["SM_MODEL_DIR"])
     parser.add_argument("--data-train", type=str, default=os.environ["SM_CHANNEL_TRAIN"])

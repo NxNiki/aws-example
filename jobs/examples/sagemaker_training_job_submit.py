@@ -37,7 +37,7 @@ rules = [
     ProfilerRule.sagemaker(rule_configs.ProfilerReport()),
 ]
 
-hook_config = DebuggerHookConfig(hook_parameters={"train.save_interval": "100", "eval.save_interval": "10"})
+hook_config = DebuggerHookConfig(hook_parameters={"train.save_interval": "500", "eval.save_interval": "50"})
 
 profiler_config = ProfilerConfig(
     system_monitor_interval_millis=500, framework_profile_params=FrameworkProfile(num_steps=10)
