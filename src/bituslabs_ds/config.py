@@ -46,7 +46,10 @@ def get_cpu_cores(logical=True, default=1):
 
 
 def setup_logging(output_path: str, log_filename: str = ""):
-    log_dir = os.path.join(output_path, ".log")
+    if output_path == ".":
+        log_dir = os.path.join(output_path, ".log")
+    else:
+        log_dir = output_path
     os.makedirs(log_dir, exist_ok=True)
 
     if len(log_filename) == 0:

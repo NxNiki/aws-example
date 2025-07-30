@@ -1,5 +1,8 @@
 import json
 import logging
+import os
+import shutil
+import subprocess
 from collections.abc import Sequence
 from typing import Any, Iterable, Iterator, List, Literal, Optional, Tuple, Union
 
@@ -9,6 +12,95 @@ from scipy.stats import zscore
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
+
+
+def get_data_from_url(url: str, output_filename: str, extraction_dir: str, overwrite=False):
+    """
+    Downloads a zip file from a given URL and unzips its contents locally.
+
+    Args:
+        url (str): The URL of the zip file to download.
+        output_filename (str): The name to save the downloaded zip file as.
+        extraction_dir (str): The directory to extract the contents into.
+        overwrite (bool): If True, delete the extraction directory
+                                   and the zip file before downloading and unzipping.
+                                   If False, and the extraction_dir already exists
+                                   and is not empty, the download/unzip is skipped.
+    Returns:
+        bool: True if the download and extraction were successful or skipped, False otherwise.
+    """
+
+    if not overwrite:
+        if os.path.exists(extraction_dir) and os.path.isdir(extraction_dir):
+            if os.listdir(extraction_dir):
+                print(
+                    f"Directory '{extraction_dir}' already exists and is not empty. Skipping download and extraction."
+                )
+                return True
+            else:
+                print(f"Directory '{extraction_dir}' exists but is empty. Proceeding with download.")
+        elif os.path.exists(output_filename):
+            print(
+                f"Zip file '{output_filename}' exists. Consider running with overwrite_existing=True if you want to re-extract or delete it."
+            )
+            # We'll still try to unzip if the dir is empty or doesn't exist,
+            # but won't re-download the zip if it's already there and not overwriting.
+
+    if overwrite:
+        print(f"'{overwrite}' is True. Cleaning up '{extraction_dir}' and '{output_filename}' before proceeding...")
+        if os.path.exists(extraction_dir) and os.path.isdir(extraction_dir):
+            try:
+                shutil.rmtree(extraction_dir)
+                print(f"Removed existing directory: {extraction_dir}")
+            except OSError as e:
+                print(f"Error removing directory {extraction_dir}: {e}")
+                return False
+        if os.path.exists(output_filename):
+            try:
+                os.remove(output_filename)
+                print(f"Removed existing file: {output_filename}")
+            except OSError as e:
+                print(f"Error removing file {output_filename}: {e}")
+                return False
+
+    # 1. Download the file using wget
+    # Only download if the output_filename doesn't exist OR if overwrite is True
+    if not os.path.exists(output_filename) or overwrite:
+        try:
+            print(f"Downloading {url}...")
+            subprocess.run(["wget", url, "-O", output_filename], check=True)
+            print(f"Downloaded {output_filename}")
+        except FileNotFoundError:
+            print("Error: 'wget' command not found. Please ensure wget is installed and in your system's PATH.")
+            return False
+        except subprocess.CalledProcessError as e:
+            print(f"Error downloading the file: {e}")
+            return False
+        except Exception as e:
+            print(f"An unexpected error occurred during download: {e}")
+            return False
+    else:
+        print(f"Skipping download: '{output_filename}' already exists (overwrite_existing is False).")
+
+    # 2. Unzip the file
+    try:
+        print(f"Unzipping {output_filename}...")
+        # Ensure extraction_dir exists or will be created by unzip
+        # If the directory exists but is empty, unzip will populate it.
+        # If we are not overwriting and the directory is already populated, we would have skipped earlier.
+        # So at this point, if extraction_dir exists, it's either empty or we're overwriting it.
+        subprocess.run(["unzip", output_filename, "-d", extraction_dir], check=True)
+        print(f"Unzipped {output_filename} into {extraction_dir}")
+        return True
+    except FileNotFoundError:
+        print("Error: 'unzip' command not found. Please ensure unzip is installed and in your system's PATH.")
+        return False
+    except subprocess.CalledProcessError as e:
+        print(f"Error unzipping the file: {e}")
+        return False
+    except Exception as e:
+        print(f"An unexpected error occurred during unzipping: {e}")
+        return False
 
 
 def save_list(items: List[Any], filepath: str, output_format: Literal["json", "python"] = "json") -> None:
