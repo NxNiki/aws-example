@@ -43,12 +43,13 @@ if __name__ == "__main__":
     s3_path = "s3://bituslabs-team-ai/Project-pytorch-dogImages-20250729-180144/dogImages"
     prepare_data(s3_path)
 
+    # adding too many rules may result in file size error (<2GB)
     rules = [
         Rule.sagemaker(rule_configs.vanishing_gradient()),
         Rule.sagemaker(rule_configs.overfit()),
-        Rule.sagemaker(rule_configs.overtraining()),
-        Rule.sagemaker(rule_configs.poor_weight_initialization()),
-        Rule.sagemaker(rule_configs.loss_not_decreasing()),
+        # Rule.sagemaker(rule_configs.overtraining()),
+        # Rule.sagemaker(rule_configs.poor_weight_initialization()),
+        # Rule.sagemaker(rule_configs.loss_not_decreasing()),
         ProfilerRule.sagemaker(rule_configs.LowGPUUtilization()),
         ProfilerRule.sagemaker(rule_configs.ProfilerReport()),
     ]
@@ -95,10 +96,11 @@ if __name__ == "__main__":
         framework_version="2.0",
         py_version="py310",
         hyperparameters=hyperparameters,
-        debugger_hook_config=None,  # hook_config,
+        debugger_hook_config=hook_config,
         profiler_config=profiler_config,
         rules=rules,
-        keep_alive_period_in_seconds=3600,
+        max_run=3600,  # 1 hour (in seconds)
+        keep_alive_period_in_seconds=1800,
     )
 
     estimator.fit(
