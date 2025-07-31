@@ -16,7 +16,7 @@ if __name__ == "__main__":
         py_version="py310",
         framework_version="2.0",
         instance_count=1,
-        instance_type="ml.g5.xlarge",
+        instance_type="ml.g4dn.xlarge",
         max_run=3600 * 10,
         keep_alive_period_in_seconds=1800,
     )
