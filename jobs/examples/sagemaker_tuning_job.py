@@ -23,7 +23,6 @@ def test(model, test_loader, criterion, hook=None):
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
-    print(f"Using device: {device}")
 
     model.eval()
     # ===================================================#
@@ -73,6 +72,7 @@ def train(model, train_loader, epochs, criterion, optimizer, hook=None):
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
+    print(f"Using device: {device}")
     scaler = amp.GradScaler()
 
     for epoch in range(epochs):
