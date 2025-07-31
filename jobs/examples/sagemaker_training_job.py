@@ -8,6 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from PIL import ImageFile
+from torch.cuda import amp
 from torch.utils.data import DataLoader
 from torchvision import datasets, models, transforms
 
@@ -73,25 +74,28 @@ def train(model, train_loader, epochs, criterion, optimizer, hook=None):
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
+    scaler = amp.GradScaler()
 
     for epoch in range(epochs):
+        samples_processed = 0
         for batch_idx, (data, target) in enumerate(train_loader):
             data = data.to(device)
             target = target.to(device)
             optimizer.zero_grad()
-            output = model(data)
-            loss = criterion(output, target)
-            loss.backward()
-            optimizer.step()
-            if batch_idx % 100 == 0:
+
+            # Autocast enables mixed precision for the forward pass
+            with amp.autocast():
+                output = model(data)
+                loss = criterion(output, target)
+
+            scaler.scale(loss).backward()  # Scale loss before backward()
+            scaler.step(optimizer)  # Unscale gradients and call optimizer.step()
+            scaler.update()  # Update the scaler for the next iteration
+
+            samples_processed += len(data)
+            if batch_idx % 100 == 0 or batch_idx == len(train_loader) - 1:
                 print(
-                    "Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}".format(
-                        epoch,
-                        batch_idx * len(data),
-                        len(train_loader.dataset),
-                        100.0 * batch_idx / len(train_loader),
-                        loss.item(),
-                    )
+                    f"Train Epoch: {epoch} [{samples_processed}/{len(train_loader.dataset)} ({100.0 * (batch_idx+1) / len(train_loader):.0f}%)]\tLoss: {loss.item():.6f}"
                 )
 
 
@@ -125,11 +129,16 @@ def create_data_loaders(data_train, data_test, batch_size_train, batch_size_test
         ]
     )
 
+    num_workers = min(os.cpu_count(), 8)
     train_dataset = datasets.ImageFolder(root=data_train, transform=transform)
     test_dataset = datasets.ImageFolder(root=data_test, transform=transform)
 
-    train_loader = DataLoader(train_dataset, batch_size=int(batch_size_train.strip('"')), shuffle=True, num_workers=2)
-    test_loader = DataLoader(test_dataset, batch_size=int(batch_size_test.strip('"')), shuffle=False, num_workers=2)
+    train_loader = DataLoader(
+        train_dataset, batch_size=batch_size_train, shuffle=True, num_workers=num_workers, pin_memory=True
+    )
+    test_loader = DataLoader(
+        test_dataset, batch_size=batch_size_test, shuffle=False, num_workers=num_workers, pin_memory=True
+    )
 
     return train_loader, test_loader
 
@@ -140,12 +149,12 @@ def main(args):
     )
 
     """
-    TODO: Initialize a model by calling the net function
+    Initialize a model by calling the net function
     """
     model = net()
 
     """
-    TODO: Create your loss and optimizer
+    Create loss and optimizer
     """
     loss_criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.fc.parameters(), lr=args.lr)
@@ -157,40 +166,40 @@ def main(args):
         hook = None
 
     """
-    TODO: Call the train function to start training your model
+    Call the train function to start training your model
     Remember that you will need to set up a way to get training data from S3
     """
     train(model, train_loader, args.epochs, loss_criterion, optimizer, hook)
 
     """
-    TODO: Test the model to see its accuracy
+    Test the model to see its accuracy
     """
     test(model, test_loader, loss_criterion, hook)
 
     """
-    TODO: Save the trained model
+    Save the trained model
     """
     torch.save(model.state_dict(), os.path.join(args.model_dir, "model.pth"))
 
 
 if __name__ == "__main__":
     """
-    TODO: Specify any training args that you might need
+    Specify any training args that you might need
     """
     parser = argparse.ArgumentParser()
 
     # Data and model checkpoints directories
     parser.add_argument(
         "--batch-size",
-        type=str,
-        default="64",
+        type=int,
+        default=256,
         metavar="N",
         help="input batch size for training (default: 64)",
     )
     parser.add_argument(
         "--test-batch-size",
-        type=str,
-        default="1000",
+        type=int,
+        default=1000,
         metavar="N",
         help="input batch size for testing (default: 1000)",
     )
