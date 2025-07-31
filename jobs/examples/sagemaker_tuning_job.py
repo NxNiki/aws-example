@@ -1,4 +1,4 @@
-import json
+import argparse
 import os
 
 import numpy as np
@@ -13,8 +13,6 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, models, transforms
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
-
-import argparse
 
 
 def test(model, test_loader, criterion, hook=None):
@@ -184,12 +182,12 @@ def main(args):
 
 
 if __name__ == "__main__":
-    """
-    Specify any training args that you might need
-    """
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="PyTorch dogImages model tuning")
 
-    # Data and model checkpoints directories
+    """
+    Specify all the hyperparameters you need to use to train your model.
+    """
+
     parser.add_argument(
         "--batch-size",
         type=int,
@@ -207,19 +205,16 @@ if __name__ == "__main__":
     parser.add_argument(
         "--epochs",
         type=int,
-        default=20,
+        default=15,
         metavar="N",
-        help="number of epochs to train (default: 10)",
+        help="number of epochs to train (default: 14)",
     )
-    parser.add_argument("--lr", type=float, default=0.01, metavar="LR", help="learning rate (default: 0.01)")
-    parser.add_argument("--momentum", type=float, default=0.5, metavar="M", help="SGD momentum (default: 0.5)")
+    parser.add_argument("--lr", type=float, default=1.0, metavar="LR", help="learning rate (default: 1.0)")
 
-    parser.add_argument("--hosts", type=str, default=json.loads(os.environ["SM_HOSTS"]))
-    parser.add_argument("--current-host", type=str, default=os.environ["SM_CURRENT_HOST"])
-    parser.add_argument("--model-dir", type=str, default=os.environ["SM_MODEL_DIR"])
     parser.add_argument("--data-train", type=str, default=os.environ["SM_CHANNEL_TRAIN"])
-    parser.add_argument("--data-test", type=str, default=os.environ["SM_CHANNEL_TEST"])
-    parser.add_argument("--num-gpus", type=int, default=os.environ["SM_NUM_GPUS"])
+    # for hyperparameter tuning, we set valid as the test set:
+    parser.add_argument("--data-test", type=str, default=os.environ["SM_CHANNEL_VALID"])
+    parser.add_argument("--model-dir", type=str, default=os.environ["SM_MODEL_DIR"])
 
     args = parser.parse_args()
 
