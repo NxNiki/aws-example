@@ -9,6 +9,7 @@ from typing import Any, Iterable, Iterator, List, Literal, Optional, Tuple, Unio
 import numpy as np
 import pandas as pd
 from scipy.stats import zscore
+from sklearn.preprocessing import power_transform
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -179,55 +180,19 @@ def keep_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def log_transform(
+def df_power_transform(
     data: pd.DataFrame,
     col_names: Optional[Union[List[str], str]] = None,
-    base: int = 10,
     suffix="",
-) -> pd.DataFrame:
-    """
-    Apply log transformation to selected numeric columns of a DataFrame.
-    Handles negative values by preserving their sign: sign(x) * log(1 + abs(x))
-    0 will be preserved.
-
-    :param data: Input DataFrame
-    :param col_names: List of column names to transform
-    :param base: Log base, default is 10
-    :param suffix: Suffix to add to column names, default is "":
-    :return: Transformed DataFrame
-    """
-
-    data_transformed = _transform_helper(data, col_names=col_names, base=base, suffix=suffix, method="log")
-    return data_transformed
-
-
-def exp_transform(
-    data: pd.DataFrame,
-    col_names: Optional[Union[List[str], str]] = None,
-    base: float = np.exp(1),
-    suffix="",
-) -> pd.DataFrame:
-
-    data_transformed = _transform_helper(data, col_names=col_names, base=base, suffix=suffix, method="exp")
-    return data_transformed
-
-
-def _transform_helper(
-    data: pd.DataFrame,
-    col_names: Optional[Union[List[str], str]] = None,
-    base: Union[int, float] = 10,
-    suffix="",
-    method: Literal["log", "exp"] = "log",
 ) -> pd.DataFrame:
     """
     Apply log/exp transformation to selected numeric columns of a DataFrame.
     Handles negative values by preserving their sign: sign(x) * log(1 + abs(x))
-    For exponential transformations: sign(x) * (base ^ abs(x) - 1)
+    For details, see: https://github.com/scikit-learn/scikit-learn/blob/c5497b7f7eacfaff061cf68e09bcd48aa93d4d6b/sklearn/preprocessing/_data.py#L3187
     0 will be preserved.
 
     :param data: Input DataFrame
     :param col_names: List of column names to transform
-    :param base: Log base, default is 10
     :param suffix: Suffix to add to column names, default is "":
     :return: Transformed DataFrame
     """
@@ -242,16 +207,9 @@ def _transform_helper(
     for col in col_names:
         if col in data_transformed.columns and np.issubdtype(data_transformed[col].dtype, np.number):
             col_data = data_transformed[col].astype(float).copy()
-            with np.errstate(divide="ignore", invalid="ignore"):
-                if method == "log":
-                    col_data = np.sign(col_data) * np.log1p(np.abs(col_data)) / np.log(base)
-                elif method == "exp":
-                    col_data = np.sign(col_data) * (np.power(base, np.abs(col_data)) - 1)
-                else:
-                    logger.error("Invalid method for log/exp transformation")
-
+            col_data = power_transform(col_data.to_frame())
             data_transformed[f"{col}{suffix}"] = col_data
-            logger.info(f"Column: {col} transformed with method {method} to: {col}{suffix}.")
+            logger.info(f"Column: {col} transformed to: {col}{suffix}.")
         else:
             logger.warning(f"Column: {col} not transformed.")
 

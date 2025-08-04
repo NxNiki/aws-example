@@ -8,7 +8,7 @@ from cluster_analysis_01_elbow_method import get_feature_names, load_data
 from joblib import load
 
 from bituslabs_ds.config import setup_logging
-from bituslabs_ds.utils import log_transform
+from bituslabs_ds.utils import df_power_transform
 from jobs.sagemaker.cluster_analysis_02_kmeans import load_features
 
 
@@ -41,7 +41,7 @@ if __name__ == "__main__":
         pattern=r"wucaishen_grouped_stat_output_25.*\.csv$",
     )
 
-    wucaishen_data = log_transform(wucaishen_data, col_names=features_log)
+    wucaishen_data = df_power_transform(wucaishen_data, col_names=features_log)
 
     scale_params = pd.read_csv(
         f"{output_path}/features/standardized_features_top_{top_features}_parameters.csv", index_col=0

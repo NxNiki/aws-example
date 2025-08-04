@@ -8,6 +8,7 @@ This script gets simulation data from the GAI model (slot machine) and compares 
 between gamers from different clusters and using different math tables.
 """
 
+import os
 from typing import List, Union
 
 import pandas as pd
@@ -23,21 +24,33 @@ pd.set_option("display.expand_frame_repr", False)
 
 
 def load_process_data(reload: bool = False) -> pd.DataFrame:
-    local_output = "./output/v1_all_sessions_summary_fixed.csv"
+    local_output = "./output/v1_all_sessions_summary_20250729.csv"
     s3_files: List[str] = []
-    if reload:
-        s3_files = list_s3_files(
-            S3_BUCKET, prefix="gail_simulator_data_raw/results_fixed/", pattern="sim_20250713_.*_sessions_summary.csv"
+    if reload or not os.path.exists(local_output):
+        s3_files += list_s3_files(
+            S3_BUCKET,
+            prefix="gail_simulator_data_raw/results_v20250725/sim_20250729_0009/",
+            pattern=".*_sessions_summary.csv",
+        )
+        s3_files += list_s3_files(
+            S3_BUCKET,
+            prefix="gail_simulator_data_raw/results_v20250725/sim_20250728_1706/",
+            pattern=".*_sessions_summary.csv",
+        )
+        s3_files += list_s3_files(
+            S3_BUCKET,
+            prefix="gail_simulator_data_raw/results_v20250725/sim_20250725_1947/",
+            pattern=".*_sessions_summary.csv",
         )
     data = read_files(s3_files, local_cache_path=local_output, reload=reload)
-    data.drop(columns=["session_id", "balance_change"], inplace=True)
+    data.drop(columns=["active", "session_id", "balance_change"], inplace=True)
     data["cluster_index"] = data["player_id"].str.extract(r"(cluster\d+)_", expand=False).astype(str)
     print(data.shape)
     # data = data[data["total_spins"]>40]
     print(data.shape)
 
     data = split_column_by_threshold(
-        data, columns=["base_game_win", "free_game_win", "big_win_count", "free_spins_count"], threshold=[0, 0, 1, 10]
+        data, columns=["base_game_win", "free_game_win", "big_win_count", "free_spins_count"], threshold=[0, 0, 0, 9]
     )
 
     return data
@@ -53,11 +66,11 @@ if __name__ == "__main__":
         figure_name="./figures/gai_simulation_distribution_log.png", log=False, add_kde=True
     )
     data_profiler.augment_columns(
-        columns=["total_bet_log", "total_profit_log"], col_name="compound_metric", method=["mean", "pca"]
+        columns=["total_bet_log", "total_profit"], col_name="compound_metric", method=["mean", "pca"]
     )
     data_profiler.show_group_stats(
         group_cols=["machine_id", "cluster_index"],
-        var_columns=["total_spins", "total_bet", "total_profit", "total_profit_log"],
+        var_columns=["total_spins", "total_bet", "total_profit"],
         transpose=True,
     )
     data_profiler.plot_correlation_heatmap(title=f"correlation for: all group")

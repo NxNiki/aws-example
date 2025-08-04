@@ -27,14 +27,7 @@ from sklearn.preprocessing import StandardScaler
 from statannotations.Annotator import Annotator
 
 from bituslabs_ds.config import DEFAULT_MAX_JOBS
-from bituslabs_ds.utils import (
-    batch_iterator,
-    convert_to_list,
-    exp_transform,
-    group_iterator,
-    keep_numeric_columns,
-    log_transform,
-)
+from bituslabs_ds.utils import batch_iterator, convert_to_list, df_power_transform, group_iterator, keep_numeric_columns
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -918,9 +911,16 @@ class DataProfiler:
         self._positive_skew_suffix: Optional[str] = None
         self._negative_skew_suffix: Optional[str] = None
 
+        self._original_numeric_columns: List[str] = self.check_numeric_columns(include_boolean=True)
+
     @property
     def processed_numerical_columns(self):
-        numeric_columns = self.check_numeric_columns()
+        """
+        return all processed numerical columns, if the column is power transformed, add the corresponding suffix, the
+        original column will not be returned.
+        :return:
+        """
+        numeric_columns = self._original_numeric_columns
 
         if self._positive_skew_suffix:
             numeric_columns = [
@@ -1012,10 +1012,10 @@ class DataProfiler:
 
         positive_skew_cols, negative_skew_cols = self.get_skewed_columns()
         if len(positive_skew_cols) > 0:
-            self.df = log_transform(self.df, col_names=positive_skew_cols, suffix=pos_suffix)
+            self.df = df_power_transform(self.df, col_names=positive_skew_cols, suffix=pos_suffix)
             self._positive_skew_suffix = pos_suffix
         if len(negative_skew_cols) > 0:
-            self.df = exp_transform(self.df, col_names=negative_skew_cols, suffix=neg_suffix)
+            self.df = df_power_transform(self.df, col_names=negative_skew_cols, suffix=neg_suffix)
             self._negative_skew_suffix = neg_suffix
         # reset _numeric_columns so that added columns will be updated in plot_distribution.
         self._numeric_columns = None
@@ -1091,9 +1091,11 @@ class DataProfiler:
 
         n_cols = 5
         if feature_stats is not None:
+            feature_stats.sort(key=lambda f: f["name"])
             columns = [f["name"] for f in feature_stats]
         else:
             columns = data.select_dtypes(include=["number"]).columns
+            columns.sort()
 
         n_rows = math.ceil(len(columns) / n_cols)
         fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 4, n_rows * 3), squeeze=False)
@@ -1109,7 +1111,6 @@ class DataProfiler:
             if len(values.unique()) <= 2:
                 legend_label = ""
             else:
-
                 if feature_stats is not None:
                     skewness = feature_stats[i]["skewness"]
                     dip_statistic_unimodal = feature_stats[i]["dip_stat"]
@@ -1129,7 +1130,10 @@ class DataProfiler:
             )
 
             if add_kde:
-                sns.kdeplot(values, bw_method="silverman", color="red", linestyle="--", ax=ax)
+                ax2 = ax.twinx()
+                sns.kdeplot(values, bw_method="silverman", color="red", linestyle="--", ax=ax2)
+                ax2.set_ylabel("Density")
+                ax2.grid(False)
 
             # Annotate with column name at max bin
             if len(counts) > 0:
@@ -1155,7 +1159,7 @@ class DataProfiler:
 
         plt.tight_layout()
         if figure_name is not None:
-            plt.savefig(figure_name)
+            plt.savefig(figure_name, dpi=300, bbox_inches="tight")
         plt.show()
 
     def augment_columns(self, columns: List[str], col_name: str, method: Union[List[str], str] = "pca"):
@@ -1231,6 +1235,15 @@ class Anova:
         self.var_columns = var_columns
         self.anova_report: Dict = defaultdict(list)
         self.post_hoc_report: Dict = defaultdict(list)
+
+        self._check_between_var_levels()
+
+    def _check_between_var_levels(self) -> None:
+        unique_counts = self.data[self.between_vars].nunique()
+        for col in self.between_vars:
+            if unique_counts[col] <= 1:
+                logger.warning(f"Remove between variable '{col}' which has only {unique_counts[col]} unique values")
+                self.between_vars.remove(col)
 
     def run_anova(self, transpose_report: bool = False, p_thresh: float = 0.05) -> pd.DataFrame:
 

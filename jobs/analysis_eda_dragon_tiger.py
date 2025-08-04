@@ -27,7 +27,7 @@ from bituslabs_ds.eda import (
     split_column_by_threshold,
 )
 from bituslabs_ds.s3_utils import upload_file_to_s3, write_pandas_to_s3
-from bituslabs_ds.utils import add_event_group_by_gap, check_consecutive_event, group_iterator, log_transform
+from bituslabs_ds.utils import add_event_group_by_gap, check_consecutive_event, df_power_transform, group_iterator
 
 config = Settings()
 config.plot.histogram.bins = 200
