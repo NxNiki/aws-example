@@ -35,13 +35,13 @@ logger.addHandler(logging.NullHandler())
 
 class NoSymbolHandler(lh.HandlerBase):
     """
-    this is used to remove legend label in plots
+    Custom legend handler to suppress the symbol for a legend entry.
+    Useful for adding text-only entries or spacing in matplotlib legends.
     """
 
     def create_artists(self, legend, orig_handle, xdescent, ydescent, width, height, fontsize, trans):
-        # Return an invisible artist, so no symbol is drawn
-        line = Line2D([0], [0], visible=False)
-        return [line]
+        # Return an invisible Line2D artist so that no symbol appears in the legend.
+        return [Line2D([], [], visible=False)]
 
 
 def read_csv_cols(
@@ -52,19 +52,18 @@ def read_csv_cols(
     max_workers: int = DEFAULT_MAX_JOBS,
 ) -> pd.DataFrame:
     """
-    Reads specific columns from multiple CSV files, filters rows based on criteria,
-    and concatenates the result into a single DataFrame using parallel processing.
-    To read files on s3, see: read_files in s3_utils.py
+    Efficiently reads specified columns from multiple CSV files, applies optional row filters,
+    and concatenates the results into a single DataFrame using parallel threads.
 
     Parameters:
-    - files (List[str]): List of local CSV file paths.
-    - columns (List[str]): Columns to include in final output.
-    - filters (Optional[Dict[str, Any]]): Optional {column: value} filter conditions.
-    - sampling (Optional[int | float]): Optional row sampling (count or fraction).
-    - max_workers (int): Number of threads to use for parallelism.
+        files (List[str]): List of local CSV file paths.
+        columns (List[str]): Columns to include in the final output.
+        filters (Optional[Dict[str, Any]]): Optional {column: value} filter conditions.
+        sampling (Optional[int | float]): Optional row sampling (count or fraction).
+        max_workers (int): Number of threads to use for parallelism.
 
     Returns:
-    - pd.DataFrame: Concatenated DataFrame with selected columns and filtered rows.
+        pd.DataFrame: Concatenated DataFrame with selected columns and filtered rows.
     """
 
     def process_file(file: str) -> pd.DataFrame:
@@ -73,18 +72,25 @@ def read_csv_cols(
             if filters:
                 needed_cols.update(filters.keys())
 
+            # Read only the necessary columns
             df = pd.read_csv(file, usecols=list(needed_cols))
 
             if filters:
                 for col, val in filters.items():
                     if col not in df.columns:
                         warnings.warn(
-                            f"Filter column '{col}' not found in '{file}'; skipping this filter.", UserWarning
+                            f"Filter column '{col}' not found in '{file}'; skipping this filter.",
+                            UserWarning,
                         )
                         continue
                     df = df[df[col] == val]
 
-            df = df[columns]  # Ensure final column order
+            # Ensure final column order and presence
+            missing_cols = [col for col in columns if col not in df.columns]
+            if missing_cols:
+                for col in missing_cols:
+                    df[col] = pd.NA
+            df = df[columns]
 
             if sampling:
                 n = sampling
@@ -114,25 +120,42 @@ def read_csv_cols(
     return pd.concat(df_list, ignore_index=True)
 
 
-def read_excel_sheets(file_path: str, sheet_name_col: str = "sheet_name"):
+def read_excel(file_path: str, sheet_name_col: str = "sheet_name") -> pd.DataFrame:
+    """
+    Reads all sheets from an Excel file and combines them into a single DataFrame.
+
+    If the Excel file contains only one sheet, returns that sheet as a DataFrame.
+    If there are multiple sheets, concatenates them into a single DataFrame, adding a column
+    to indicate the sheet name for each row.
+
+    Drops columns that contain only NaN values.
+
+    Args:
+        file_path (str): Path to the Excel file.
+        sheet_name_col (str): Name of the column to store sheet names when combining multiple sheets.
+                              Defaults to "sheet_name".
+
+    Returns:
+        pd.DataFrame: Combined DataFrame containing data from all sheets, with a sheet name column if applicable.
+    """
     all_sheets = pd.read_excel(file_path, sheet_name=None)
     sheet_names = list(all_sheets.keys())
 
     if len(sheet_names) == 1:
         df = all_sheets[sheet_names[0]]
-        print(f"Only one sheet '{sheet_names[0]}' shape: {df.shape}")
+        logger.info(f"Only one sheet '{sheet_names[0]}' shape: {df.shape}")
     else:
         df = pd.concat(all_sheets.values(), keys=sheet_names)
         df = df.reset_index(level=0).rename(columns={"level_0": sheet_name_col})
 
         for sheet_name, sheet_df in all_sheets.items():
-            print(f"Sheet '{sheet_name}' shape: {sheet_df.shape}")
+            logger.info(f"Sheet '{sheet_name}' shape: {sheet_df.shape}")
 
-        print(f"Combined data shape: {df.shape}")
+        logger.info(f"Combined data shape: {df.shape}")
 
     cols_to_drop = df.columns[df.isna().all()].tolist()
     if len(cols_to_drop) > 0:
-        print("Drop Columns with all NaNs:", cols_to_drop)
+        logger.info(f"Drop Columns with all NaNs: {cols_to_drop}")
         df = df.drop(columns=cols_to_drop)
     return df
 

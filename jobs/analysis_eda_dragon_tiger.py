@@ -22,7 +22,7 @@ from bituslabs_ds.eda import (
     plot_heatmap,
     plot_multiple_box_swarm,
     plot_scatter_pairs,
-    read_excel_sheets,
+    read_excel,
     split_column_by_multiple_separators,
     split_column_by_threshold,
 )
@@ -118,7 +118,7 @@ def time_to_seconds(t):
 
 def read_and_preprocess(file_name: str) -> pd.DataFrame:
 
-    df = read_excel_sheets(file_name, sheet_name_col="year_month")
+    df = read_excel(file_name, sheet_name_col="year_month")
     print(df.columns)
 
     df.drop(columns=COLUMNS_TO_DROP, inplace=True)
