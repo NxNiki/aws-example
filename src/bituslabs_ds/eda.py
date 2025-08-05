@@ -984,14 +984,16 @@ class DataProfiler:
         # reset _numeric_columns so that added columns will be updated in plot_distribution.
         self._numeric_columns = None
 
-    def plot_correlation_heatmap(self, title: str, method: str = "pearson"):
+    def plot_correlation(self, title: str, method: str = "pearson"):
         """Calculates the correlation matrix for numerical columns."""
 
         numerical_df = self.df[self.processed_numerical_columns]
-        self.plot_correlation(numerical_df, self.output_path, method, title)
+        self.plot_df_correlation(numerical_df, self.output_path, method, title)
 
     @staticmethod
-    def plot_correlation(data: pd.DataFrame, output_path, method, title: str = "Correlation Heatmap") -> None:
+    def plot_df_correlation(
+        data: pd.DataFrame, output_path: str, method: str = "pearson", title: str = "Correlation Heatmap"
+    ) -> None:
 
         data = data.copy()
         data.dropna(axis=1, inplace=True, how="any")

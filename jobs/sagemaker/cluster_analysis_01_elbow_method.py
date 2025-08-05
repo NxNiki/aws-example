@@ -23,7 +23,7 @@ from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
 
 from bituslabs_ds.config import S3_BUCKET, setup_logging
-from bituslabs_ds.eda import plot_correlation
+from bituslabs_ds.eda import DataProfiler
 from bituslabs_ds.s3_utils import list_s3_files, read_dataset, read_files
 from bituslabs_ds.utils import (
     column_iterator,
@@ -310,7 +310,7 @@ def main(output_path: str):
     wucaishen_data.fillna(0, inplace=True)
     wucaishen_data = df_power_transform(wucaishen_data, skewed_features)
     save_list(normal_features + skewed_features, f"{output_path}/features/log_transform_features.json")
-    plot_correlation(wucaishen_data[normal_features + skewed_features], output_path)
+    DataProfiler.plot_df_correlation(wucaishen_data[normal_features + skewed_features], output_path)
 
     # remove highly correlated features:
     _, kept_features = smart_feature_selection(wucaishen_data[normal_features + skewed_features], threshold=0.9)
