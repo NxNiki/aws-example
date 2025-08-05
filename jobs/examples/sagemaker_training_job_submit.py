@@ -90,7 +90,7 @@ if __name__ == "__main__":
 
     estimator = PyTorch(
         role=SAGEMAKER_ROLE,
-        instance_count=5,  # make sure this does not exceed the instance quota
+        instance_count=1,  # make sure this does not exceed the instance quota, and the job script needs to config distributed training.
         instance_type="ml.g4dn.xlarge",
         entry_point="sagemaker_training_job.py",
         framework_version="2.0",
