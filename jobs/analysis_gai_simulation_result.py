@@ -32,16 +32,16 @@ def load_process_data(reload: bool = False) -> pd.DataFrame:
             prefix="gail_simulator_data_raw/results_v20250725/sim_20250729_0009/",
             pattern=".*_sessions_summary.csv",
         )
-        s3_files += list_s3_files(
-            S3_BUCKET,
-            prefix="gail_simulator_data_raw/results_v20250725/sim_20250728_1706/",
-            pattern=".*_sessions_summary.csv",
-        )
-        s3_files += list_s3_files(
-            S3_BUCKET,
-            prefix="gail_simulator_data_raw/results_v20250725/sim_20250725_1947/",
-            pattern=".*_sessions_summary.csv",
-        )
+        # s3_files += list_s3_files(
+        #     S3_BUCKET,
+        #     prefix="gail_simulator_data_raw/results_v20250725/sim_20250728_1706/",
+        #     pattern=".*_sessions_summary.csv",
+        # )
+        # s3_files += list_s3_files(
+        #     S3_BUCKET,
+        #     prefix="gail_simulator_data_raw/results_v20250725/sim_20250725_1947/",
+        #     pattern=".*_sessions_summary.csv",
+        # )
     data = read_files(s3_files, local_cache_path=local_output, reload=reload)
     data.drop(columns=["active", "session_id", "balance_change"], inplace=True)
     data["cluster_index"] = data["player_id"].str.extract(r"(cluster\d+)_", expand=False).astype(str)
@@ -60,43 +60,39 @@ if __name__ == "__main__":
 
     data = load_process_data(reload=False)
     data_profiler = DataProfiler(data)
-    data_profiler.plot_distribution(figure_name="./figures/gai_simulation_distribution.png", log=True, add_kde=True)
+    # data_profiler.plot_distribution(figure_name="./figures/gai_simulation_distribution.png", log=True, add_kde=True)
     data_profiler.transform_skewed_columns(pos_suffix="_log", neg_suffix="_exp")
-    data_profiler.plot_distribution(
-        figure_name="./figures/gai_simulation_distribution_log.png", log=False, add_kde=True
-    )
+    # data_profiler.plot_distribution(
+    #     figure_name="./figures/gai_simulation_distribution_log.png", log=False, add_kde=True
+    # )
+    # data_profiler.plot_correlation_heatmap(title=f"correlation for: all group")
+
+    # two-way ANOVA:
     data_profiler.augment_columns(
-        columns=["total_bet_log", "total_profit"], col_name="compound_metric", method=["mean", "pca"]
+        columns=data_profiler.processed_numerical_columns, col_name="compound_metric", method=["pca"]
     )
+
+    remove_cols: set = set([])
+    anova_dv = [col for col in data_profiler.processed_numerical_columns if col not in remove_cols] + [
+        "compound_metric_pca1",
+        "compound_metric_pca2",
+        "compound_metric_pca3",
+    ]
+
     data_profiler.show_group_stats(
         group_cols=["machine_id", "cluster_index"],
         var_columns=["total_spins", "total_bet", "total_profit"],
-        transpose=True,
+        transpose=False,
     )
-    data_profiler.plot_correlation_heatmap(title=f"correlation for: all group")
 
-    # two-way ANOVA:
-    remove_cols = {
-        "active",
-        "bonus_triggered",
-        "base_game_win_log",
-        "big_win_count_log",
-        "free_game_win_log",
-        "win_count_log",
-        "duration_log",
-        "sim_duration_log",
-        "final_balance_log",
-        "base_game_win_below_0",
-        "free_game_win_below_0",
-    }
-    anova_dv = [col for col in data_profiler.processed_numerical_columns if col not in remove_cols] + [
-        "compound_metric_mean",
-        "compound_metric_pca1",
-        "compound_metric_pca2",
-    ]
+    data_profiler.show_group_stats(
+        group_cols=["machine_id", "cluster_index"],
+        var_columns=anova_dv,
+        transpose=False,
+    )
 
     anova = Anova(data_profiler.df, between_vars=["machine_id", "cluster_index"], var_columns=anova_dv)
     anova.run_anova()
     anova.run_post_hoc_analysis(anova_dv, effects="main")
-    anova.run_post_hoc_analysis(anova_dv, effects="interaction", group_var="cluster_index")
+    anova.run_post_hoc_analysis(anova_dv, effects="interaction", group_var="cluster_index", p_thresh=0.05)
     anova.show_box_plot("cluster_index", "machine_id")

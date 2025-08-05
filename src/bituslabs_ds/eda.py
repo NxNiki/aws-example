@@ -326,46 +326,6 @@ def plot_heatmap(data: pd.DataFrame, x_label: str, y_label: str, title: str):
     plt.show()
 
 
-def plot_correlation(data: pd.DataFrame, output_path: str = ".", title: str = "Correlation Heatmap") -> None:
-
-    data = data.copy()
-    data.dropna(axis=1, inplace=True, how="any")
-
-    corr = data.corr()
-    corr.dropna(inplace=True, how="all")
-    corr.dropna(axis=1, inplace=True, how="all")
-    Z = linkage(corr.values, method="average")
-    g = sns.clustermap(
-        corr,
-        row_cluster=True,
-        col_cluster=True,
-        row_linkage=Z,
-        col_linkage=Z,
-        cmap="vlag",
-        center=0,
-        annot=True,
-        fmt=".2f",
-        square=True,
-        figsize=(10, 8),
-        linewidths=0.75,
-        dendrogram_ratio=(0.1, 0.15),
-        cbar_pos=(0, 0.2, 0.02, 0.5),
-    )
-
-    g.figure.suptitle(title, fontsize=16, y=0.95)
-    plt.setp(g.ax_heatmap.get_xticklabels(), rotation=45, ha="right")
-    g.ax_row_dendrogram.set_visible(False)
-    g.gs.update(left=0.05)
-
-    pos = g.cax.get_position()
-    new_pos = (pos.x0, pos.y0 - 0.5, pos.width * 0.5, pos.height * 2)
-    g.cax.set_position(new_pos)
-
-    os.makedirs(f"{output_path}/figures", exist_ok=True)
-    g.savefig(f"{output_path}/figures/{title}.png")
-    plt.show()
-
-
 def plot_dual_axis_sorted_swarm(
     data: pd.DataFrame,
     y_col_left: str,
@@ -894,7 +854,9 @@ def plot_seasonality(
 
 class DataProfiler:
 
-    def __init__(self, df: Union[pd.DataFrame, pd.Series], skewness_threshold: float = 1.5) -> None:
+    def __init__(
+        self, df: Union[pd.DataFrame, pd.Series], skewness_threshold: float = 1.5, output_path: str = "."
+    ) -> None:
 
         if isinstance(df, pd.Series):
             df = df.to_frame()
@@ -904,6 +866,8 @@ class DataProfiler:
 
         self.df = df
         self.skewness_threshold = skewness_threshold
+        self.output_path = output_path
+
         self._numeric_columns: Optional[List[str]] = None
         self._feature_stats: Optional[List[Dict]] = None
         self._positive_skew_columns: Optional[List[str]] = None
@@ -1023,9 +987,47 @@ class DataProfiler:
     def plot_correlation_heatmap(self, title: str, method: str = "pearson"):
         """Calculates the correlation matrix for numerical columns."""
 
-        numerical_df = self.df.select_dtypes(include=["number"])
-        correlation_matrix = numerical_df.corr(method=method)
-        return correlation_matrix
+        numerical_df = self.df[self.processed_numerical_columns]
+        self.plot_correlation(numerical_df, self.output_path, method, title)
+
+    @staticmethod
+    def plot_correlation(data: pd.DataFrame, output_path, method, title: str = "Correlation Heatmap") -> None:
+
+        data = data.copy()
+        data.dropna(axis=1, inplace=True, how="any")
+        corr = data.corr(method=method)
+        corr.dropna(inplace=True, how="all")
+        corr.dropna(axis=1, inplace=True, how="all")
+        Z = linkage(corr.values, method="average")
+        g = sns.clustermap(
+            corr,
+            row_cluster=True,
+            col_cluster=True,
+            row_linkage=Z,
+            col_linkage=Z,
+            cmap="vlag",
+            center=0,
+            annot=True,
+            fmt=".2f",
+            square=True,
+            figsize=(10, 8),
+            linewidths=0.75,
+            dendrogram_ratio=(0.1, 0.15),
+            cbar_pos=(0, 0.2, 0.015, 0.5),
+        )
+
+        g.figure.suptitle(title, fontsize=16, y=0.95)
+        plt.setp(g.ax_heatmap.get_xticklabels(), rotation=45, ha="right")
+        g.ax_row_dendrogram.set_visible(False)
+        g.gs.update(left=0.05)
+
+        pos = g.cax.get_position()
+        new_pos = (pos.x0, pos.y0 - 0.5, pos.width * 0.5, pos.height * 2)
+        g.cax.set_position(new_pos)
+
+        os.makedirs(f"{output_path}/figures", exist_ok=True)
+        g.savefig(f"{output_path}/figures/{title}.png", dpi=300, bbox_inches="tight")
+        plt.show()
 
     def plot_distribution(
         self,
@@ -1177,7 +1179,7 @@ class DataProfiler:
             logger.warning("Only one columns is selected to augment data")
 
         scaler = StandardScaler()
-        df_scaled = scaler.fit_transform(data[columns])
+        df_scaled = scaler.fit_transform(data[columns].dropna(axis=1, how="any"))
 
         if "mean" in method:
             data[f"{col_name}_mean"] = df_scaled.mean(axis=1)
@@ -1195,7 +1197,9 @@ class DataProfiler:
         return data
 
     def show_group_stats(self, group_cols: List[str], var_columns: List[str], transpose: bool = False):
-        self.show_df_group_stats(self.df, group_cols, var_columns, transpose)
+
+        for var_cols_batch, _, _ in batch_iterator(var_columns, 3):
+            self.show_df_group_stats(self.df, group_cols, var_cols_batch, transpose)
 
     @staticmethod
     def show_df_group_stats(
@@ -1210,6 +1214,8 @@ class DataProfiler:
         :return:
         """
 
+        reports = []
+
         for col in var_columns:
             report = (
                 data[group_cols + [col]]
@@ -1217,10 +1223,16 @@ class DataProfiler:
                 .agg(["mean", "median"])
                 .sort_values([(col, "median"), (col, "mean")], ascending=False)
             )
-            if transpose:
-                print(report.transpose().to_markdown(index=True))
-            else:
-                print(report.to_markdown(index=True))
+
+            report.insert(0, "group", report.index.to_series())
+            reports.append(report.reset_index(drop=True))
+            print(report.to_markdown(index=True))
+
+        reports_df = pd.concat(reports, axis=1)
+        if transpose:
+            print(reports_df.transpose().to_markdown(index=True))
+        else:
+            print(reports_df.to_markdown(index=True))
 
 
 class Anova:
@@ -1276,9 +1288,12 @@ class Anova:
     @property
     def anova_table(self) -> pd.DataFrame:
         if len(self.anova_report) == 0:
-            return pd.DataFrame({})
+            res = pd.DataFrame({})
         else:
-            return pd.DataFrame(self.anova_report)
+            res = pd.DataFrame(self.anova_report)
+            interaction_eta_label = f"{self.between_vars[0]} * {self.between_vars[1]}-eta2"
+            res.sort_values(by=interaction_eta_label, inplace=True, ascending=False)
+        return res
 
     def _perform_and_report_post_hoc(
         self, data_df: DataFrame, dv_col: str, between_factor: str, method: str, p_thresh: float
@@ -1316,7 +1331,6 @@ class Anova:
                 return
             post_hoc_res = pg.pairwise_tukey(dv=dv_col, between=between_factor, data=data_df, effsize="hedges")
             p_col = "p-tukey"
-            post_hoc_res.rename(columns={"p-corr": p_col}, inplace=True)
             report_cols = ["A", "B", p_col, "hedges"]
 
         else:
@@ -1324,7 +1338,10 @@ class Anova:
 
         # Filter for significant results for printing and reporting
         sig_res = post_hoc_res[post_hoc_res[p_col] < p_thresh]
-        logger.info(f"post hoc result for {dv_col}: \n{sig_res[report_cols].to_markdown(index=False)}")
+        if sig_res.empty:
+            logger.info(f"no significant results found on post hoc analysis for {dv_col}")
+        else:
+            logger.info(f"post hoc result for {dv_col}: \n{sig_res[report_cols].to_markdown(index=False)}")
 
         for _, row in sig_res.iterrows():
             self.post_hoc_report["variable"].append(dv_col)
@@ -1409,7 +1426,7 @@ class Anova:
             for res_post_hoc_group, _, _ in group_iterator(res_post_hoc, group_col="variable"):
                 print(res_post_hoc_group.sort_values(by="comparison").to_markdown(index=False))
         else:
-            print("\nNo significant main effects or interactions found in ANOVA, so no post-hoc tests were performed.")
+            print("\nNo significant post-hoc effects were found.")
         return res_post_hoc
 
     def show_box_plot(self, x_cols: str, group_col: str) -> None:
