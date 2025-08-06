@@ -143,23 +143,6 @@ def remove_outliers(
     return data_filtered, filtered_indices
 
 
-def count_missing_columns(df: pd.DataFrame, verbose: bool = True) -> int:
-    """
-    Count the number of columns in a DataFrame that contain missing (NaN) values.
-
-    :param df: Input DataFrame
-    :param verbose: If True, print columns with their missing counts
-    :return: Number of columns with missing values
-    """
-    missing_counts = df.isnull().sum()
-    cols_with_missing = missing_counts[missing_counts > 0]
-
-    if verbose:
-        logger.info(f"Columns with missing values: \n{cols_with_missing}")
-
-    return len(cols_with_missing)
-
-
 def keep_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
     Removes non-numeric columns from a pandas DataFrame and logs a warning.

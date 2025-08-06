@@ -875,6 +875,571 @@ def plot_seasonality(
     plt.show()
 
 
+class DataVisualizer:
+    """
+    A comprehensive class for data visualization that organizes all plotting functions
+    and allows sharing of data and configuration across methods.
+    """
+    
+    def __init__(
+        self,
+        data: pd.DataFrame,
+        x_cols: Optional[List[str]] = None,
+        y_cols: Optional[List[str]] = None,
+        group_col: Optional[str] = None,
+        time_col: Optional[str] = None,
+        fig_size: Tuple[float, float] = (8, 6),
+        palette: str = "pastel",
+    ):
+        """
+        Initialize the DataVisualizer with data and configuration.
+        
+        Parameters:
+            data: The main DataFrame for visualization
+            x_cols: Columns to use as x-axis groupings (categorical)
+            y_cols: Numeric value columns to visualize
+            group_col: Column to use as hue/grouping
+            time_col: Column containing time information
+            fig_size: Default figure size
+            palette: Color palette for plots
+        """
+        self.data = data.copy()
+        self.x_cols = x_cols or []
+        self.y_cols = y_cols or []
+        self.group_col = group_col
+        self.time_col = time_col
+        self.fig_size = fig_size
+        self.palette = palette
+        
+        # Store plot configurations and results
+        self.current_figure = None
+        self.current_axes = None
+        self.plot_configs = []
+        self.current_plot_data = None
+        
+    def set_columns(self, x_cols: Optional[List[str]] = None, y_cols: Optional[List[str]] = None, 
+                   group_col: Optional[str] = None, time_col: Optional[str] = None):
+        """Update column configuration."""
+        if x_cols is not None:
+            self.x_cols = x_cols
+        if y_cols is not None:
+            self.y_cols = y_cols
+        if group_col is not None:
+            self.group_col = group_col
+        if time_col is not None:
+            self.time_col = time_col
+    
+    def _prepare_data_for_plotting(self, x_col: str, y_col: str) -> pd.DataFrame:
+        """
+        Prepare data in long format for plotting.
+        
+        Parameters:
+            x_col: Column to use as x-axis grouping
+            y_col: Column to visualize on y-axis
+            
+        Returns:
+            DataFrame in long format ready for plotting
+        """
+        cols_to_keep = [x_col, y_col] + ([self.group_col] if self.group_col else [])
+        df_long = self.data[cols_to_keep].copy().dropna(subset=[y_col])
+
+        df_long = df_long.melt(
+            id_vars=[x_col] + ([self.group_col] if self.group_col else []),
+            value_vars=[y_col],
+            var_name="variable",
+            value_name="value",
+        )
+        
+        return df_long
+    
+    def create_figure(self, x_cols: Optional[List[str]] = None, y_cols: Optional[List[str]] = None, 
+                     n_cols: int = 3, fig_title: Optional[str] = None, log_scale: bool = False) -> Tuple[plt.Figure, np.ndarray]:
+        """
+        Create figure and subplots for visualization.
+        
+        Parameters:
+            x_cols: List of columns to use as x-axis groupings (if None, uses self.x_cols)
+            y_cols: List of columns to visualize on y-axis (if None, uses self.y_cols)
+            n_cols: Number of subplots per row
+            fig_title: Optional figure title
+            log_scale: Whether to use logarithmic scale on y-axis
+            
+        Returns:
+            Tuple of (figure, axes) for further customization
+        """
+        # Use instance variables if not provided
+        x_cols = x_cols or self.x_cols
+        y_cols = y_cols or self.y_cols
+        
+        if not x_cols or not y_cols:
+            raise ValueError("x_cols and y_cols must be provided or set in __init__")
+        
+        n_plots = len(y_cols) * len(x_cols)
+        n_rows = (n_plots + n_cols - 1) // n_cols
+
+        # Calculate subplot width based on unique x_cols values
+        max_x_unique = max(self.data[col].nunique() for col in x_cols)
+        subplot_width_factor = max(max_x_unique / 4, 0.75)
+
+        if self.group_col:
+            num_groups = self.data[self.group_col].nunique()
+            subplot_width_factor *= 1 + (num_groups - 1) * 0.2
+
+        fig, axes = plt.subplots(
+            n_rows, n_cols, 
+            figsize=(self.fig_size[0] * n_cols * subplot_width_factor, self.fig_size[1] * n_rows)
+        )
+
+        if n_plots == 1:
+            axes = np.array([axes])
+        axes = axes.flatten()
+
+        # Set up basic plot properties for all axes
+        for ax in axes:
+            if log_scale:
+                ax.set_yscale("symlog", linthresh=1)
+            ax.set_xlabel("", fontsize=12)
+            ax.set_ylabel("", fontsize=12)
+            ax.tick_params(axis="x", rotation=0, labelsize=10)
+            for label in ax.get_xticklabels():
+                label.set_fontsize(12)
+
+        if fig_title:
+            fig.suptitle(fig_title, fontsize=16, y=0.98)
+
+        self.current_figure = fig
+        self.current_axes = axes
+        
+        return fig, axes
+    
+    def add_boxplot(self, axes: Optional[np.ndarray] = None, x_col: Optional[str] = None, 
+                   y_col: Optional[str] = None, alpha: float = 0.7) -> np.ndarray:
+        """
+        Add box plot to the specified axes or all current axes.
+        
+        Parameters:
+            axes: The axes to add box plots to (if None, uses all current axes)
+            x_col: Column to use as x-axis grouping (if None, uses current plot data)
+            y_col: Column to visualize on y-axis (if None, uses current plot data)
+            alpha: Transparency level
+            
+        Returns:
+            The axes with box plots added
+        """
+        if axes is None:
+            if self.current_axes is None:
+                raise ValueError("No axes available. Create figure first.")
+            axes = self.current_axes
+        
+        # Prepare data if x_col and y_col provided
+        if x_col is not None and y_col is not None:
+            df_long = self._prepare_data_for_plotting(x_col, y_col)
+        elif self.current_plot_data is not None:
+            df_long = self.current_plot_data['df_long']
+            x_col = self.current_plot_data['x_col']
+        else:
+            raise ValueError("No plot data available. Provide x_col and y_col or set plot data first.")
+        
+        group_col = self.group_col
+        
+        # Create palette
+        num_groups_for_palette = len(self.data[group_col].unique()) if group_col else 1
+        palette = sns.color_palette(self.palette, n_colors=num_groups_for_palette)
+        
+        for ax in axes:
+            if ax is None:
+                continue
+                
+            # Plot boxplot
+            sns.boxplot(
+                data=df_long,
+                x=x_col,
+                y="value",
+                hue=group_col if group_col else None,
+                ax=ax,
+                palette=palette,
+                boxprops=dict(linewidth=1.5, facecolor=(0, 0, 0, 0)),
+                medianprops=dict(linewidth=2),
+                whis=1.5,
+                notch=True,
+                showfliers=False,
+            )
+            
+            # Update box-edge colors
+            if group_col:
+                hue_order_in_plot = df_long[group_col].unique()
+                for i, artist in enumerate(ax.artists):
+                    hue_idx = i % len(hue_order_in_plot)
+                    color = palette[hue_idx]
+                    artist.set_edgecolor(color)
+                    if len(artist.get_children()) > 0:
+                        line = artist.get_children()[0]
+                        line.set_color(color)
+            else:
+                for artist in ax.artists:
+                    artist.set_edgecolor(palette[0])
+                    if len(artist.get_children()) > 0:
+                        line = artist.get_children()[0]
+                        line.set_color(palette[0])
+        
+        return axes
+    
+    def add_stripplot(self, axes: Optional[np.ndarray] = None, x_col: Optional[str] = None,
+                     y_col: Optional[str] = None, size: int = 4, alpha: float = 0.7, 
+                     jitter: float = 0.25) -> np.ndarray:
+        """
+        Add strip plot to the specified axes or all current axes.
+        
+        Parameters:
+            axes: The axes to add strip plots to (if None, uses all current axes)
+            x_col: Column to use as x-axis grouping (if None, uses current plot data)
+            y_col: Column to visualize on y-axis (if None, uses current plot data)
+            size: Size of the points
+            alpha: Transparency level
+            jitter: Amount of jitter for the points
+            
+        Returns:
+            The axes with strip plots added
+        """
+        if axes is None:
+            if self.current_axes is None:
+                raise ValueError("No axes available. Create figure first.")
+            axes = self.current_axes
+        
+        # Prepare data if x_col and y_col provided
+        if x_col is not None and y_col is not None:
+            df_long = self._prepare_data_for_plotting(x_col, y_col)
+        elif self.current_plot_data is not None:
+            df_long = self.current_plot_data['df_long']
+            x_col = self.current_plot_data['x_col']
+        else:
+            raise ValueError("No plot data available. Provide x_col and y_col or set plot data first.")
+        
+        group_col = self.group_col
+        
+        # Create palette
+        num_groups_for_palette = len(self.data[group_col].unique()) if group_col else 1
+        palette = sns.color_palette(self.palette, n_colors=num_groups_for_palette)
+        
+        for ax in axes:
+            if ax is None:
+                continue
+                
+            # Plot strip plot
+            non_nans = df_long["value"].count()
+            sns.stripplot(
+                data=df_long,
+                x=x_col,
+                y="value",
+                hue=group_col if group_col else None,
+                dodge=True if group_col else False,
+                ax=ax,
+                palette=palette,
+                size=2 if non_nans > 1e5 else size,
+                legend=False,
+                jitter=jitter,
+                alpha=0.1 if non_nans > 1e5 else alpha,
+            )
+        
+        return axes
+    
+    def add_histogram(self, axes: Optional[np.ndarray] = None, y_col: Optional[str] = None,
+                     bins: int = 50, alpha: float = 0.5, add_kde: bool = False) -> np.ndarray:
+        """
+        Add histogram to the specified axes or all current axes.
+        
+        Parameters:
+            axes: The axes to add histograms to (if None, uses all current axes)
+            y_col: Column to visualize (if None, uses current plot data)
+            bins: Number of histogram bins
+            alpha: Transparency level
+            add_kde: Whether to add KDE plot
+            
+        Returns:
+            The axes with histograms added
+        """
+        if axes is None:
+            if self.current_axes is None:
+                raise ValueError("No axes available. Create figure first.")
+            axes = self.current_axes
+        
+        # Get data
+        if y_col is not None:
+            values = self.data[y_col].dropna()
+        elif self.current_plot_data is not None:
+            values = self.current_plot_data['df_long']['value'].dropna()
+        else:
+            raise ValueError("No plot data available. Provide y_col or set plot data first.")
+        
+        for ax in axes:
+            if ax is None:
+                continue
+                
+            if len(values) == 0:
+                print("No values found for column", y_col)
+                continue
+
+            if len(values.unique()) <= 2:
+                legend_label = ""
+            else:
+                skewness = skew(values, bias=False)
+                dip_statistic_unimodal, p_value_unimodal = diptest(values)
+
+                if p_value_unimodal < 0.05:
+                    legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_statistic_unimodal:.3f}*"
+                else:
+                    legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_statistic_unimodal:.3f}"
+
+            n_bins = max(min(bins, values.nunique()), 50)
+            counts, bin_edges, patches = ax.hist(
+                values, bins=n_bins, alpha=alpha, edgecolor="black", label=legend_label
+            )
+
+            if add_kde:
+                ax2 = ax.twinx()
+                sns.kdeplot(values, bw_method="silverman", color="red", linestyle="--", ax=ax2)
+                ax2.set_ylabel("Density")
+                ax2.grid(False)
+
+            # Annotate with column name at max bin
+            if len(counts) > 0:
+                max_bin_index = counts.argmax()
+                x_pos = (bin_edges[max_bin_index] + bin_edges[max_bin_index + 1]) / 2
+                y_pos = counts[max_bin_index]
+                ax.text(x_pos, y_pos, f"{counts.max():.2e}", fontsize=9, ha="center", va="bottom")
+
+            ax.set_title(y_col if y_col else "Distribution")
+            ax.set_xlabel("Value")
+            ax.set_ylabel("Frequency")
+
+            custom_handler_mapping = {patches[0]: NoSymbolHandler()}
+            ax.legend(handler_map=custom_handler_mapping, frameon=False)
+            ax.grid(True)
+        
+        return axes
+    
+    def add_heatmap(self, axes: Optional[np.ndarray] = None, method: str = "pearson",
+                   title: str = "Correlation Heatmap") -> np.ndarray:
+        """
+        Add correlation heatmap to the specified axes or all current axes.
+        
+        Parameters:
+            axes: The axes to add heatmaps to (if None, uses all current axes)
+            method: Correlation method ('pearson', 'spearman', 'kendall')
+            title: Plot title
+            
+        Returns:
+            The axes with heatmaps added
+        """
+        if axes is None:
+            if self.current_axes is None:
+                raise ValueError("No axes available. Create figure first.")
+            axes = self.current_axes
+        
+        numeric_data = self.data.select_dtypes(include=["number"])
+        correlation_matrix = numeric_data.corr(method=method)
+        
+        for ax in axes:
+            if ax is None:
+                continue
+                
+            heatmap = sns.heatmap(
+                correlation_matrix,
+                cmap="viridis",
+                linewidths=0.5,
+                ax=ax,
+            )
+
+            ax.set_title(title, fontsize=16, pad=20)
+            ax.set_xlabel("Variables", fontsize=12)
+            ax.set_ylabel("Variables", fontsize=12)
+            plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
+            plt.setp(ax.get_yticklabels(), rotation=0)
+        
+        return axes
+    
+    def add_scatter(self, axes: Optional[np.ndarray] = None, x_col: Optional[str] = None,
+                   y_col: Optional[str] = None, alpha: float = 0.7, s: int = 2) -> np.ndarray:
+        """
+        Add scatter plot to the specified axes or all current axes.
+        
+        Parameters:
+            axes: The axes to add scatter plots to (if None, uses all current axes)
+            x_col: Column for x-axis (if None, uses current plot data)
+            y_col: Column for y-axis (if None, uses current plot data)
+            alpha: Transparency level
+            s: Point size
+            
+        Returns:
+            The axes with scatter plots added
+        """
+        if axes is None:
+            if self.current_axes is None:
+                raise ValueError("No axes available. Create figure first.")
+            axes = self.current_axes
+        
+        # Get data
+        if x_col is not None and y_col is not None:
+            x_data = self.data[x_col]
+            y_data = self.data[y_col]
+        elif self.current_plot_data is not None:
+            df_long = self.current_plot_data['df_long']
+            x_col = self.current_plot_data['x_col']
+            x_data = df_long[x_col]
+            y_data = df_long['value']
+        else:
+            raise ValueError("No plot data available. Provide x_col and y_col or set plot data first.")
+        
+        for ax in axes:
+            if ax is None:
+                continue
+                
+            ax.scatter(x_data, y_data, alpha=alpha, s=s)
+            ax.set_xlabel(x_col)
+            ax.set_ylabel(y_col)
+            ax.set_title(f"{x_col} vs {y_col}")
+        
+        return axes
+    
+    def add_statistical_annotations(self, axes: Optional[np.ndarray] = None, 
+                                  post_hoc_table: pd.DataFrame = None,
+                                  x_col: Optional[str] = None, y_col: Optional[str] = None) -> np.ndarray:
+        """
+        Add statistical annotations to box plots or strip plots.
+        
+        Parameters:
+            axes: The axes to add annotations to (if None, uses all current axes)
+            post_hoc_table: DataFrame with columns ['variable', 'comparison', 'p_value']
+            x_col: Column used for x-axis grouping (if None, uses current plot data)
+            y_col: Column used for y-axis (if None, uses current plot data)
+            
+        Returns:
+            The axes with annotations added
+        """
+        if axes is None:
+            if self.current_axes is None:
+                raise ValueError("No axes available. Create figure first.")
+            axes = self.current_axes
+        
+        if post_hoc_table is None:
+            print("Warning: No post_hoc_table provided. Skipping annotations.")
+            return axes
+        
+        # Prepare data if x_col and y_col provided
+        if x_col is not None and y_col is not None:
+            df_long = self._prepare_data_for_plotting(x_col, y_col)
+        elif self.current_plot_data is not None:
+            df_long = self.current_plot_data['df_long']
+            x_col = self.current_plot_data['x_col']
+            y_col = self.current_plot_data['y_col']
+        else:
+            raise ValueError("No plot data available. Provide x_col and y_col or set plot data first.")
+        
+        group_col = self.group_col
+        
+        # Get annotation pairs and p_values for this y_col
+        annotation_pairs = post_hoc_table.loc[post_hoc_table["variable"] == y_col, "comparison"].to_list()
+        p_values = post_hoc_table.loc[post_hoc_table["variable"] == y_col, "p_value"].to_list()
+        
+        if not annotation_pairs:
+            return axes
+            
+        for ax in axes:
+            if ax is None:
+                continue
+                
+            try:
+                annotator = Annotator(
+                    ax,
+                    annotation_pairs,
+                    data=df_long,
+                    x=x_col,
+                    y="value",
+                    hue=group_col if group_col else None,
+                )
+                annotator.configure(
+                    text_format="star",
+                    loc="inside",
+                    verbose=False,
+                    line_offset=0.1,
+                    line_height=0.02,
+                    text_offset=1,
+                )
+                annotator.set_custom_annotations(p_values)
+                annotator.annotate()
+
+            except ValueError as e:
+                print(f"Warning: Could not add annotation to plot for {y_col}. Error: {e}")
+            except Exception as e:
+                print(f"An unexpected error occurred during annotating the plot for {y_col}: {e}")
+        
+        return axes
+    
+    def add_legend(self, fig: Optional[plt.Figure] = None, axes: Optional[np.ndarray] = None) -> plt.Figure:
+        """
+        Add legend to the figure.
+        
+        Parameters:
+            fig: The figure to add legend to (if None, uses current figure)
+            axes: The axes to get legend handles from (if None, uses all current axes)
+            
+        Returns:
+            The figure with legend added
+        """
+        if fig is None:
+            if self.current_figure is None:
+                raise ValueError("No figure available. Create a plot first.")
+            fig = self.current_figure
+            
+        if axes is None:
+            if self.current_axes is None:
+                raise ValueError("No axes available. Create a plot first.")
+            axes = self.current_axes
+        
+        if not self.group_col:
+            return fig
+            
+        # Create palette
+        num_groups_for_palette = len(self.data[self.group_col].unique())
+        palette = sns.color_palette(self.palette, n_colors=num_groups_for_palette)
+        
+        handles, labels = [], []
+        
+        # Try to get handles and labels from any axis
+        for ax in axes:
+            if ax is not None and ax.get_legend():
+                handles, labels = ax.get_legend_handles_labels()
+                break
+
+        # If no legend was found, manually create proxy artists
+        if not handles and self.group_col:
+            unique_groups = self.data[self.group_col].unique()
+            for i, group in enumerate(unique_groups):
+                handles.append(plt.Line2D([0], [0], marker="o", color="w", 
+                                        markerfacecolor=palette[i], markersize=8))
+                labels.append(group)
+
+        if handles:
+            fig.legend(handles, labels, loc="upper right", bbox_to_anchor=(1.0, 0.95), 
+                      title=self.group_col)
+        
+        return fig
+    
+    def display(self):
+        """Display the current figure."""
+        if self.current_figure:
+            plt.show()
+        else:
+            print("No figure to display. Create a plot first.")
+    
+    def save(self, filename: str, dpi: int = 300, bbox_inches: str = "tight"):
+        """Save the current figure."""
+        if self.current_figure:
+            self.current_figure.savefig(filename, dpi=dpi, bbox_inches=bbox_inches)
+        else:
+            print("No figure to save. Create a plot first.")
+
+
 class DataProfiler:
 
     def __init__(
@@ -899,6 +1464,10 @@ class DataProfiler:
         self._negative_skew_suffix: Optional[str] = None
 
         self._original_numeric_columns: List[str] = self.check_numeric_columns(include_boolean=True)
+        self.count_missing_columns(verbose=True)
+        
+        # Initialize DataVisualizer for plotting
+        self.visualizer = DataVisualizer(df)
 
     @property
     def processed_numerical_columns(self):
@@ -974,56 +1543,73 @@ class DataProfiler:
                 stats["skewness"] = np.nan
                 stats["unimodality_p_values"] = np.nan
             else:
-                skewness = skew(values, bias=False)
-                dip_statistic_unimodal, p_value_unimodal = diptest(values)
-                stats["skewness"] = skewness
-                stats["dip_stat"] = dip_statistic_unimodal
-                stats["dip_p_values"] = p_value_unimodal
+                stats["skewness"] = skew(values, bias=False)
+                stats["dip_stat"], stats["dip_p_values"] = diptest(values)
 
             feature_stats.append(stats)
+
         self._feature_stats = feature_stats
         return feature_stats
 
     def get_skewed_columns(self, refresh: bool = False) -> Tuple[List[str], List[str]]:
-
+        """
+        Get columns that are skewed based on the skewness threshold.
+        :param refresh: recalculate skewness statistics.
+        :return: tuple of (positive_skewed_columns, negative_skewed_columns)
+        """
         if self._positive_skew_columns is not None and self._negative_skew_columns is not None and not refresh:
             return self._positive_skew_columns, self._negative_skew_columns
 
-        feature_stats = self.check_distribution_stats()
-        self._positive_skew_columns = [f["name"] for f in feature_stats if f["skewness"] > self.skewness_threshold]
-        self._negative_skew_columns = [f["name"] for f in feature_stats if f["skewness"] < -self.skewness_threshold]
+        feature_stats = self.check_distribution_stats(refresh=refresh)
+        positive_skewed = []
+        negative_skewed = []
 
-        return self._positive_skew_columns, self._negative_skew_columns
+        for stat in feature_stats:
+            if not pd.isna(stat["skewness"]):
+                if stat["skewness"] > self.skewness_threshold:
+                    positive_skewed.append(stat["name"])
+                elif stat["skewness"] < -self.skewness_threshold:
+                    negative_skewed.append(stat["name"])
+
+        self._positive_skew_columns = positive_skewed
+        self._negative_skew_columns = negative_skewed
+
+        return positive_skewed, negative_skewed
 
     def transform_skewed_columns(self, pos_suffix: str = "_log", neg_suffix: str = "_exp") -> None:
+        """
+        Transform skewed columns using power transforms.
+        :param pos_suffix: suffix for positively skewed columns
+        :param neg_suffix: suffix for negatively skewed columns
+        """
+        positive_skewed, negative_skewed = self.get_skewed_columns()
 
-        positive_skew_cols, negative_skew_cols = self.get_skewed_columns()
-        if len(positive_skew_cols) > 0:
-            self.df = df_power_transform(self.df, col_names=positive_skew_cols, suffix=pos_suffix)
+        if positive_skewed:
+            self.df = df_power_transform(self.df, positive_skewed, pos_suffix)
             self._positive_skew_suffix = pos_suffix
-        if len(negative_skew_cols) > 0:
-            self.df = df_power_transform(self.df, col_names=negative_skew_cols, suffix=neg_suffix)
+            self._positive_skew_columns = positive_skewed
+
+        if negative_skewed:
+            self.df = df_power_transform(self.df, negative_skewed, neg_suffix)
             self._negative_skew_suffix = neg_suffix
-        # reset _numeric_columns so that added columns will be updated in plot_distribution.
-        self._numeric_columns = None
+            self._negative_skew_columns = negative_skewed
 
     def plot_correlation(self, title: str, method: str = "pearson"):
-        """Calculates the correlation matrix for numerical columns."""
-
+        """
+        Plot correlation heatmap with hierarchical clustering and save to file.
+        Uses DataVisualizer internally for the actual plotting.
+        """
         numerical_df = self.df[self.processed_numerical_columns]
-        self.plot_df_correlation(numerical_df, self.output_path, method, title)
-
-    @staticmethod
-    def plot_df_correlation(
-        data: pd.DataFrame, output_path: str, method: str = "pearson", title: str = "Correlation Heatmap"
-    ) -> None:
-
-        data = data.copy()
-        data.dropna(axis=1, inplace=True, how="any")
-        corr = data.corr(method=method)
-        corr.dropna(inplace=True, how="all")
-        corr.dropna(axis=1, inplace=True, how="all")
+        
+        # Use DataVisualizer for the basic plotting
+        self.visualizer.data = numerical_df
+        fig, ax = self.visualizer.plot_correlation_heatmap(method=method, title=title)
+        
+        # Add hierarchical clustering (DataProfiler-specific enhancement)
+        corr = numerical_df.corr(method=method)
         Z = linkage(corr.values, method="average")
+        
+        # Create clustermap
         g = sns.clustermap(
             corr,
             row_cluster=True,
@@ -1050,8 +1636,9 @@ class DataProfiler:
         new_pos = (pos.x0, pos.y0 - 0.5, pos.width * 0.5, pos.height * 2)
         g.cax.set_position(new_pos)
 
-        os.makedirs(f"{output_path}/figures", exist_ok=True)
-        g.savefig(f"{output_path}/figures/{title}.png", dpi=300, bbox_inches="tight")
+        # Save to file (DataProfiler-specific behavior)
+        os.makedirs(f"{self.output_path}/figures", exist_ok=True)
+        g.savefig(f"{self.output_path}/figures/{title}.png", dpi=300, bbox_inches="tight")
         plt.show()
 
     def plot_distribution(
@@ -1063,131 +1650,47 @@ class DataProfiler:
         figure_name: Optional[str] = None,
     ) -> None:
         """
-        Plots the distribution (histogram) of each numeric column in a DataFrame in separate subplots.
-
-        Parameters:
-        - data (Union[pd.DataFrame, pd.Series]): Data to plot.
-        - bins (int): Number of histogram bins.
-        - alpha (float): Transparency level for histograms.
-        - log (bool): Whether to use logarithmic scale on y-axis.
-        - add_kde (bool): Whether to add a KDE plot
-        - figure_name (Optional[str]): Figure name to save
-
-        Returns:
-        - None: Displays a matplotlib plot.
+        Plot distributions with feature statistics and save to file.
+        Uses DataVisualizer internally for the actual plotting.
         """
-
-        # refresh to include potentially log/exp transformed columns:
+        # Get feature stats for enhanced plotting
         feature_stats = self.check_distribution_stats(refresh=True)
-        self.plot_df_distribution(
-            self.df,
-            bins=bins,
-            alpha=alpha,
-            feature_stats=feature_stats,
-            log=log,
-            add_kde=add_kde,
-            figure_name=figure_name,
+        
+        # Use DataVisualizer for basic plotting
+        self.visualizer.data = self.df
+        fig, axes = self.visualizer.plot_distributions(
+            bins=bins, alpha=alpha, log=log, add_kde=add_kde
         )
-
-    @staticmethod
-    def plot_df_distribution(
-        data: Union[pd.DataFrame, pd.Series],
-        bins: int = 50,
-        alpha: float = 0.5,
-        log: bool = False,
-        add_kde: bool = False,
-        feature_stats: Optional[List[Dict]] = None,
-        figure_name: Optional[str] = None,
-    ) -> None:
-        """
-        Plots the distribution (histogram) of each numeric column in a DataFrame in separate subplots.
-        Maximum of 5 columns per row.
-
-        Parameters:
-        - data (Union[pd.DataFrame, pd.Series]): Data to plot.
-        - bins (int): Number of histogram bins.
-        - alpha (float): Transparency level for histograms.
-        - log (bool): Whether to use logarithmic scale on y-axis.
-        - add_kde (bool): Whether to add a KDE plot
-        - feature_stats (List[Dict]): List of statistics to plot.
-        - figure_name (Optional[str]): Figure name to save
-
-        Returns:
-        - None: Displays a matplotlib plot.
-        """
-
-        n_cols = 5
-        if feature_stats is not None:
-            feature_stats.sort(key=lambda f: f["name"])
-            columns = [f["name"] for f in feature_stats]
-        else:
-            columns = data.select_dtypes(include=["number"]).columns
-            columns.sort()
-
-        n_rows = math.ceil(len(columns) / n_cols)
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 4, n_rows * 3), squeeze=False)
-        axes = axes.flatten()
-
-        for i, col in enumerate(columns):
-            ax = axes[i]
-            values = data[col].dropna()
-            if len(values) == 0:
-                print("No values found for column", col)
-                continue
-
-            if len(values.unique()) <= 2:
-                legend_label = ""
-            else:
-                if feature_stats is not None:
-                    skewness = feature_stats[i]["skewness"]
-                    dip_statistic_unimodal = feature_stats[i]["dip_stat"]
-                    p_value_unimodal = feature_stats[i]["dip_p_values"]
-                else:
-                    skewness = skew(values, bias=False)
-                    dip_statistic_unimodal, p_value_unimodal = diptest(values)
-
-                if p_value_unimodal < 0.05:
-                    legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_statistic_unimodal:.3f}*"
-                else:
-                    legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_statistic_unimodal:.3f}"
-
-            n_bins = max(min(bins, values.nunique()), 50)
-            counts, bin_edges, patches = ax.hist(
-                values, bins=n_bins, alpha=alpha, edgecolor="black", label=legend_label
-            )
-
-            if add_kde:
-                ax2 = ax.twinx()
-                sns.kdeplot(values, bw_method="silverman", color="red", linestyle="--", ax=ax2)
-                ax2.set_ylabel("Density")
-                ax2.grid(False)
-
-            # Annotate with column name at max bin
-            if len(counts) > 0:
-                max_bin_index = counts.argmax()
-                x_pos = (bin_edges[max_bin_index] + bin_edges[max_bin_index + 1]) / 2
-                y_pos = counts[max_bin_index]
-                ax.text(x_pos, y_pos, f"{counts.max():.2e}", fontsize=9, ha="center", va="bottom")
-
-            ax.set_title(col)
-            ax.set_xlabel("Value")
-            ax.set_ylabel("Frequency")
-
-            custom_handler_mapping = {patches[0]: NoSymbolHandler()}
-            ax.legend(handler_map=custom_handler_mapping, frameon=False)
-
-            if log:
-                ax.set_yscale("log")
-            ax.grid(True)
-
-        # Hide any unused subplots
-        for j in range(len(columns), len(axes)):
-            fig.delaxes(axes[j])
-
-        plt.tight_layout()
-        if figure_name is not None:
-            plt.savefig(figure_name, dpi=300, bbox_inches="tight")
+        
+        # Add DataProfiler-specific enhancements (feature stats annotations)
+        if feature_stats:
+            self._add_feature_stats_to_plots(axes, feature_stats)
+        
+        # Save to file (DataProfiler-specific behavior)
+        if figure_name:
+            os.makedirs(f"{self.output_path}/figures", exist_ok=True)
+            fig.savefig(f"{self.output_path}/figures/{figure_name}.png", dpi=300, bbox_inches="tight")
+        
         plt.show()
+    
+    def _add_feature_stats_to_plots(self, axes: np.ndarray, feature_stats: List[Dict]) -> None:
+        """Add feature statistics annotations to distribution plots."""
+        for i, (ax, stat) in enumerate(zip(axes, feature_stats)):
+            if i >= len(feature_stats):
+                break
+                
+            if not pd.isna(stat["skewness"]):
+                skewness = stat["skewness"]
+                dip_stat = stat["dip_stat"]
+                p_value = stat["dip_p_values"]
+                
+                if p_value < 0.05:
+                    legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_stat:.3f}*"
+                else:
+                    legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_stat:.3f}"
+                
+                # Add legend with feature stats
+                ax.legend([legend_label], frameon=False, loc='upper right')
 
     def augment_columns(self, columns: List[str], col_name: str, method: Union[List[str], str] = "pca"):
         self.df = self.augment_df_columns(self.df, columns, col_name, method)
@@ -1222,42 +1725,58 @@ class DataProfiler:
         return data
 
     def show_group_stats(self, group_cols: List[str], var_columns: List[str], transpose: bool = False):
-
-        for var_cols_batch, _, _ in batch_iterator(var_columns, 3):
-            self.show_df_group_stats(self.df, group_cols, var_cols_batch, transpose)
+        self.show_df_group_stats(self.df, group_cols, var_columns, transpose)
 
     @staticmethod
     def show_df_group_stats(
         data: pd.DataFrame, group_cols: List[str], var_columns: List[str], transpose: bool = False
     ) -> None:
         """
-        show mean and median for the combination of each level for the between variables:
-        :param data:
-        :param group_cols:
-        :param var_columns:
-        :param transpose: transpose the output for each group
-        :return:
+        Display group statistics for specified columns.
         """
+        if not group_cols or not var_columns:
+            print("Please provide both group_cols and var_columns.")
+            return
 
-        reports = []
+        # Create groupby object
+        grouped = data.groupby(group_cols)[var_columns]
 
-        for col in var_columns:
-            report = (
-                data[group_cols + [col]]
-                .groupby(group_cols)
-                .agg(["mean", "median"])
-                .sort_values([(col, "median"), (col, "mean")], ascending=False)
-            )
+        # Calculate statistics
+        stats = grouped.agg(["count", "mean", "std", "min", "max"])
 
-            report.insert(0, "group", report.index.to_series())
-            reports.append(report.reset_index(drop=True))
-            print(report.to_markdown(index=True))
-
-        reports_df = pd.concat(reports, axis=1)
         if transpose:
-            print(reports_df.transpose().to_markdown(index=True))
-        else:
-            print(reports_df.to_markdown(index=True))
+            stats = stats.T
+
+        print("Group Statistics:")
+        print(stats)
+        print("\n" + "=" * 50 + "\n")
+
+    def count_missing_columns(self, verbose: bool = True) -> dict:
+        return self.count_df_missing_columns(self.df, verbose)
+
+    @staticmethod
+    def count_df_missing_columns(df: pd.DataFrame, verbose: bool = True) -> dict:
+        """
+        Count missing values in each column of the DataFrame.
+        """
+        missing_counts = df.isnull().sum()
+        missing_percentages = (missing_counts / len(df)) * 100
+
+        missing_info = {
+            "column": missing_counts.index.tolist(),
+            "missing_count": missing_counts.values.tolist(),
+            "missing_percentage": missing_percentages.values.tolist(),
+        }
+
+        if verbose:
+            print("Missing Values Summary:")
+            for col, count, pct in zip(
+                missing_info["column"], missing_info["missing_count"], missing_info["missing_percentage"]
+            ):
+                if count > 0:
+                    print(f"{col}: {count} ({pct:.2f}%)")
+
+        return missing_info
 
 
 class Anova:

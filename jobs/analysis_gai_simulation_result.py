@@ -22,9 +22,11 @@ pd.set_option("display.max_columns", None)
 pd.set_option("display.width", 1000)
 pd.set_option("display.expand_frame_repr", False)
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 
 def load_process_data(reload: bool = False) -> pd.DataFrame:
-    local_output = "./output/v1_all_sessions_summary_20250729.csv"
+    local_output = f"{SCRIPT_DIR}/output/v1_all_sessions_summary_20250729.csv"
     s3_files: List[str] = []
     if reload or not os.path.exists(local_output):
         s3_files += list_s3_files(

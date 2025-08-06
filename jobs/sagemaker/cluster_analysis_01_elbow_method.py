@@ -27,7 +27,6 @@ from bituslabs_ds.eda import DataProfiler
 from bituslabs_ds.s3_utils import list_s3_files, read_dataset, read_files
 from bituslabs_ds.utils import (
     column_iterator,
-    count_missing_columns,
     df_power_transform,
     keep_numeric_columns,
     remove_outliers,
@@ -306,7 +305,7 @@ def main(output_path: str):
         pattern=r"wucaishen_grouped_stat_output_24.*\.csv$",
     )
 
-    count_missing_columns(wucaishen_data)
+    DataProfiler.count_df_missing_columns(wucaishen_data)
     wucaishen_data.fillna(0, inplace=True)
     wucaishen_data = df_power_transform(wucaishen_data, skewed_features)
     save_list(normal_features + skewed_features, f"{output_path}/features/log_transform_features.json")
