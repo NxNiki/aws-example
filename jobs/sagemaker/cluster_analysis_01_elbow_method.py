@@ -25,13 +25,7 @@ from sklearn.preprocessing import StandardScaler
 from bituslabs_ds.config import S3_BUCKET, setup_logging
 from bituslabs_ds.eda import DataProfiler
 from bituslabs_ds.s3_utils import list_s3_files, read_dataset, read_files
-from bituslabs_ds.utils import (
-    column_iterator,
-    df_power_transform,
-    keep_numeric_columns,
-    remove_outliers,
-    save_list,
-)
+from bituslabs_ds.utils import column_iterator, df_power_transform, keep_numeric_columns, remove_outliers, save_list
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())  # Safe for import; silent if no config
