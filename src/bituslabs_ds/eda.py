@@ -883,7 +883,7 @@ class DataVisualizer:
 
     def __init__(
         self,
-        data: pd.DataFrame,
+        data: Union[pd.DataFrame, "DataProfiler"],
         x_cols: Optional[List[str]] = None,
         y_cols: Optional[List[str]] = None,
         group_col: Optional[str] = None,
@@ -895,7 +895,7 @@ class DataVisualizer:
         Initialize the DataVisualizer with data and configuration.
 
         Parameters:
-            data: The main DataFrame for visualization
+            data: The main DataFrame or DataProfiler instance
             x_cols: Columns to use as x-axis groupings (categorical)
             y_cols: Numeric value columns to visualize
             group_col: Column to use as hue/grouping
@@ -903,7 +903,12 @@ class DataVisualizer:
             fig_size: Default figure size
             palette: Color palette for plots
         """
-        self.data = data.copy()
+        # Always create a DataProfiler for consistent analytics access
+        if isinstance(data, DataProfiler):
+            self.profiler = data
+        else:
+            self.profiler = DataProfiler(data)
+
         self.x_cols = x_cols or []
         self.y_cols = y_cols or []
         self.group_col = group_col
@@ -914,8 +919,13 @@ class DataVisualizer:
         # Store plot configurations and results
         self.current_figure = None
         self.current_axes = None
-        self.plot_configs = []
+        self.plot_configs: List[Dict[str, Any]] = []
         self.current_plot_data = None
+
+    @property
+    def data(self) -> pd.DataFrame:
+        """Access the DataFrame through the profiler."""
+        return self.profiler.df
 
     def set_columns(
         self,
@@ -934,9 +944,9 @@ class DataVisualizer:
         if time_col is not None:
             self.time_col = time_col
 
-    def _prepare_data_for_plotting(self, x_col: str, y_col: str) -> pd.DataFrame:
+    def _convert_to_long_format(self, x_col: str, y_col: str) -> pd.DataFrame:
         """
-        Prepare data in long format for plotting.
+        Convert data to long format for plotting.
 
         Parameters:
             x_col: Column to use as x-axis grouping
@@ -1048,7 +1058,7 @@ class DataVisualizer:
 
         # Prepare data if x_col and y_col provided
         if x_col is not None and y_col is not None:
-            df_long = self._prepare_data_for_plotting(x_col, y_col)
+            df_long = self._convert_to_long_format(x_col, y_col)
         elif self.current_plot_data is not None:
             df_long = self.current_plot_data["df_long"]
             x_col = self.current_plot_data["x_col"]
@@ -1129,7 +1139,7 @@ class DataVisualizer:
 
         # Prepare data if x_col and y_col provided
         if x_col is not None and y_col is not None:
-            df_long = self._prepare_data_for_plotting(x_col, y_col)
+            df_long = self._convert_to_long_format(x_col, y_col)
         elif self.current_plot_data is not None:
             df_long = self.current_plot_data["df_long"]
             x_col = self.current_plot_data["x_col"]
@@ -1171,6 +1181,7 @@ class DataVisualizer:
         bins: int = 50,
         alpha: float = 0.5,
         add_kde: bool = False,
+        show_distribution_stats: bool = False,
     ) -> np.ndarray:
         """
         Add histogram to the specified axes or all current axes.
@@ -1181,6 +1192,7 @@ class DataVisualizer:
             bins: Number of histogram bins
             alpha: Transparency level
             add_kde: Whether to add KDE plot
+            distribution_stats: Whether to add distribution statistics (uses profiler analytics)
 
         Returns:
             The axes with histograms added
@@ -1206,16 +1218,32 @@ class DataVisualizer:
                 print("No values found for column", y_col)
                 continue
 
-            if len(values.unique()) <= 2:
-                legend_label = ""
-            else:
-                skewness = skew(values, bias=False)
-                dip_statistic_unimodal, p_value_unimodal = diptest(values)
+            # Distribution statistics using profiler analytics
+            if show_distribution_stats and y_col:
+                feature_stats = self.profiler.check_distribution_stats(refresh=True)
+                stat = next((s for s in feature_stats if s.get("column") == y_col), None)
+                if stat and not pd.isna(stat.get("skewness")):
+                    skewness = stat["skewness"]
+                    dip_stat = stat["dip_stat"]
+                    p_value = stat["dip_p_values"]
 
-                if p_value_unimodal < 0.05:
-                    legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_statistic_unimodal:.3f}*"
+                    if p_value < 0.05:
+                        legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_stat:.3f}*"
+                    else:
+                        legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_stat:.3f}"
                 else:
-                    legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_statistic_unimodal:.3f}"
+                    legend_label = ""
+            else:
+                if len(values.unique()) <= 2:
+                    legend_label = ""
+                else:
+                    skewness = skew(values, bias=False)
+                    dip_statistic_unimodal, p_value_unimodal = diptest(values)
+
+                    if p_value_unimodal < 0.05:
+                        legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_statistic_unimodal:.3f}*"
+                    else:
+                        legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_statistic_unimodal:.3f}"
 
             n_bins = max(min(bins, values.nunique()), 50)
             counts, bin_edges, patches = ax.hist(
@@ -1365,7 +1393,7 @@ class DataVisualizer:
 
         # Prepare data if x_col and y_col provided
         if x_col is not None and y_col is not None:
-            df_long = self._prepare_data_for_plotting(x_col, y_col)
+            df_long = self._convert_to_long_format(x_col, y_col)
         elif self.current_plot_data is not None:
             df_long = self.current_plot_data["df_long"]
             x_col = self.current_plot_data["x_col"]
@@ -1477,254 +1505,110 @@ class DataVisualizer:
 
 
 class DataProfiler:
+    """
+    A comprehensive data profiling class that analyzes data distributions,
+    correlations, and provides analytical insights.
+    """
 
     def __init__(
         self, df: Union[pd.DataFrame, pd.Series], skewness_threshold: float = 1.5, output_path: str = "."
     ) -> None:
+        """
+        Initialize the DataProfiler with data and configuration.
 
-        if isinstance(df, pd.Series):
-            df = df.to_frame()
-
-        if not isinstance(df, pd.DataFrame):
-            raise TypeError("Input must be a pandas DataFrame or Series.")
-
-        self.df = df
+        Parameters:
+            df: The DataFrame or Series to profile
+            skewness_threshold: Threshold for determining skewed distributions
+            output_path: Path to save output files
+        """
+        self.df = df.copy() if isinstance(df, pd.DataFrame) else df.to_frame()
         self.skewness_threshold = skewness_threshold
         self.output_path = output_path
 
-        self._numeric_columns: Optional[List[str]] = None
-        self._feature_stats: Optional[List[Dict]] = None
-        self._positive_skew_columns: Optional[List[str]] = None
-        self._negative_skew_columns: Optional[List[str]] = None
-        self._positive_skew_suffix: Optional[str] = None
-        self._negative_skew_suffix: Optional[str] = None
-
+        # Initialize profiling results
         self._original_numeric_columns: List[str] = self.check_numeric_columns(include_boolean=True)
         self.count_missing_columns(verbose=True)
 
-        # Initialize DataVisualizer for plotting
-        self.visualizer = DataVisualizer(df)
-
     @property
     def processed_numerical_columns(self):
-        """
-        return all processed numerical columns, if the column is power transformed, add the corresponding suffix, the
-        original column will not be returned.
-        :return:
-        """
-        numeric_columns = self._original_numeric_columns
-
-        if self._positive_skew_suffix:
-            numeric_columns = [
-                f + self._positive_skew_suffix if f in self._positive_skew_columns else f for f in numeric_columns
-            ]
-
-        if self._negative_skew_suffix:
-            numeric_columns = [
-                f + self._negative_skew_suffix if f in self._negative_skew_columns else f for f in numeric_columns
-            ]
-
-        return numeric_columns
+        """Get processed numerical columns for analysis."""
+        return self.check_numeric_columns(include_boolean=True, refresh=True)
 
     def check_numeric_columns(self, include_boolean: bool = True, refresh: bool = False) -> List[str]:
-        """Identifies numerical columns in the DataFrame."""
-        if self._numeric_columns is not None and not refresh:
-            return self._numeric_columns
-
-        self._numeric_columns = self.check_df_numerical_columns(self.df, include_boolean=include_boolean)
-        return self._numeric_columns
+        """Check and return numeric columns in the DataFrame."""
+        if not hasattr(self, "_processed_numerical_columns") or refresh:
+            self._processed_numerical_columns = self.check_df_numerical_columns(self.df, include_boolean)
+        return self._processed_numerical_columns
 
     @staticmethod
     def check_df_numerical_columns(data: Union[pd.DataFrame, pd.Series], include_boolean: bool = True) -> List[str]:
-        """
-        iterator to select numerical columns of dataframe.
-        :param data:
-        :param include_boolean:
-        :return:
-        """
-
+        """Check which columns are numerical in a DataFrame."""
         if isinstance(data, pd.Series):
             data = data.to_frame()
 
-        if include_boolean:
-            # convert boolean columns to int:
-            boolean_cols = data.select_dtypes(include="bool").columns.tolist()
-            data[boolean_cols] = data[boolean_cols].astype(int)
+        numeric_cols = data.select_dtypes(include=["number"]).columns.tolist()
 
-        return data.select_dtypes(include=["number"]).columns.tolist()
+        if not include_boolean:
+            numeric_cols = [col for col in numeric_cols if data[col].dtype != "bool"]
+
+        return numeric_cols
 
     def check_distribution_stats(self, refresh: bool = False) -> List[Dict]:
-        """
-        calculate skewness and unimodal statistics for numerical columns of data frame.
-        :param refresh: recalculate skewness and unimodal statistics.
-        :return:
-        """
+        """Check distribution statistics for numerical columns."""
+        if not hasattr(self, "_distribution_stats") or refresh:
+            numerical_cols = self.check_numeric_columns(include_boolean=True)
+            self._distribution_stats = []
 
-        if self._feature_stats is not None and not refresh:
-            return self._feature_stats
+            for col in numerical_cols:
+                values = self.df[col].dropna()
+                if len(values) == 0:
+                    continue
 
-        numeric_cols = self.check_numeric_columns()
-        feature_stats = []
-        for col in numeric_cols:
-            values = self.df[col].dropna()
-            stats: Dict = defaultdict()
-            stats["name"] = col
-            if len(values) == 0:
-                print("No values found for column", col)
-                stats["skewness"] = np.nan
-                stats["unimodality_p_values"] = np.nan
-                continue
+                skewness = skew(values, bias=False)
+                dip_statistic_unimodal, p_value_unimodal = diptest(values)
 
-            if len(values.unique()) <= 2:
-                stats["skewness"] = np.nan
-                stats["unimodality_p_values"] = np.nan
-            else:
-                stats["skewness"] = skew(values, bias=False)
-                stats["dip_stat"], stats["dip_p_values"] = diptest(values)
+                self._distribution_stats.append(
+                    {
+                        "column": col,
+                        "skewness": skewness,
+                        "dip_stat": dip_statistic_unimodal,
+                        "dip_p_values": p_value_unimodal,
+                        "is_skewed": abs(skewness) > self.skewness_threshold,
+                        "is_unimodal": p_value_unimodal >= 0.05,
+                    }
+                )
 
-            feature_stats.append(stats)
-
-        self._feature_stats = feature_stats
-        return feature_stats
+        return self._distribution_stats
 
     def get_skewed_columns(self, refresh: bool = False) -> Tuple[List[str], List[str]]:
-        """
-        Get columns that are skewed based on the skewness threshold.
-        :param refresh: recalculate skewness statistics.
-        :return: tuple of (positive_skewed_columns, negative_skewed_columns)
-        """
-        if self._positive_skew_columns is not None and self._negative_skew_columns is not None and not refresh:
-            return self._positive_skew_columns, self._negative_skew_columns
+        """Get positively and negatively skewed columns."""
+        stats = self.check_distribution_stats(refresh=refresh)
 
-        feature_stats = self.check_distribution_stats(refresh=refresh)
-        positive_skewed = []
-        negative_skewed = []
+        pos_skewed = [stat["column"] for stat in stats if stat["is_skewed"] and stat["skewness"] > 0]
+        neg_skewed = [stat["column"] for stat in stats if stat["is_skewed"] and stat["skewness"] < 0]
 
-        for stat in feature_stats:
-            if not pd.isna(stat["skewness"]):
-                if stat["skewness"] > self.skewness_threshold:
-                    positive_skewed.append(stat["name"])
-                elif stat["skewness"] < -self.skewness_threshold:
-                    negative_skewed.append(stat["name"])
-
-        self._positive_skew_columns = positive_skewed
-        self._negative_skew_columns = negative_skewed
-
-        return positive_skewed, negative_skewed
+        return pos_skewed, neg_skewed
 
     def transform_skewed_columns(self, pos_suffix: str = "_log", neg_suffix: str = "_exp") -> None:
-        """
-        Transform skewed columns using power transforms.
-        :param pos_suffix: suffix for positively skewed columns
-        :param neg_suffix: suffix for negatively skewed columns
-        """
-        positive_skewed, negative_skewed = self.get_skewed_columns()
+        """Transform skewed columns using log or exponential transformations."""
+        pos_skewed, neg_skewed = self.get_skewed_columns()
 
-        if positive_skewed:
-            self.df = df_power_transform(self.df, positive_skewed, pos_suffix)
-            self._positive_skew_suffix = pos_suffix
-            self._positive_skew_columns = positive_skewed
+        # Transform positively skewed columns (log transformation)
+        for col in pos_skewed:
+            self.df[f"{col}{pos_suffix}"] = np.log1p(self.df[col])
 
-        if negative_skewed:
-            self.df = df_power_transform(self.df, negative_skewed, neg_suffix)
-            self._negative_skew_suffix = neg_suffix
-            self._negative_skew_columns = negative_skewed
+        # Transform negatively skewed columns (exponential transformation)
+        for col in neg_skewed:
+            self.df[f"{col}{neg_suffix}"] = np.exp(self.df[col])
 
-    def plot_correlation(self, title: str, method: str = "pearson"):
-        """
-        Plot correlation heatmap with hierarchical clustering and save to file.
-        Uses DataVisualizer internally for the actual plotting.
-        """
+    def get_correlation_matrix(self, method: str = "pearson") -> pd.DataFrame:
+        """Get correlation matrix for numerical columns."""
         numerical_df = self.df[self.processed_numerical_columns]
+        return numerical_df.corr(method=method)
 
-        # Use DataVisualizer for the basic plotting
-        self.visualizer.data = numerical_df
-        fig, ax = self.visualizer.plot_correlation_heatmap(method=method, title=title)
-
-        # Add hierarchical clustering (DataProfiler-specific enhancement)
-        corr = numerical_df.corr(method=method)
-        Z = linkage(corr.values, method="average")
-
-        # Create clustermap
-        g = sns.clustermap(
-            corr,
-            row_cluster=True,
-            col_cluster=True,
-            row_linkage=Z,
-            col_linkage=Z,
-            cmap="vlag",
-            center=0,
-            annot=True,
-            fmt=".2f",
-            square=True,
-            figsize=(10, 8),
-            linewidths=0.75,
-            dendrogram_ratio=(0.1, 0.15),
-            cbar_pos=(0, 0.2, 0.015, 0.5),
-        )
-
-        g.figure.suptitle(title, fontsize=16, y=0.95)
-        plt.setp(g.ax_heatmap.get_xticklabels(), rotation=45, ha="right")
-        g.ax_row_dendrogram.set_visible(False)
-        g.gs.update(left=0.05)
-
-        pos = g.cax.get_position()
-        new_pos = (pos.x0, pos.y0 - 0.5, pos.width * 0.5, pos.height * 2)
-        g.cax.set_position(new_pos)
-
-        # Save to file (DataProfiler-specific behavior)
-        os.makedirs(f"{self.output_path}/figures", exist_ok=True)
-        g.savefig(f"{self.output_path}/figures/{title}.png", dpi=300, bbox_inches="tight")
-        plt.show()
-
-    def plot_distribution(
-        self,
-        bins: int = 50,
-        alpha: float = 0.5,
-        log: bool = False,
-        add_kde: bool = False,
-        figure_name: Optional[str] = None,
-    ) -> None:
-        """
-        Plot distributions with feature statistics and save to file.
-        Uses DataVisualizer internally for the actual plotting.
-        """
-        # Get feature stats for enhanced plotting
-        feature_stats = self.check_distribution_stats(refresh=True)
-
-        # Use DataVisualizer for basic plotting
-        self.visualizer.data = self.df
-        fig, axes = self.visualizer.plot_distributions(bins=bins, alpha=alpha, log=log, add_kde=add_kde)
-
-        # Add DataProfiler-specific enhancements (feature stats annotations)
-        if feature_stats:
-            self._add_feature_stats_to_plots(axes, feature_stats)
-
-        # Save to file (DataProfiler-specific behavior)
-        if figure_name:
-            os.makedirs(f"{self.output_path}/figures", exist_ok=True)
-            fig.savefig(f"{self.output_path}/figures/{figure_name}.png", dpi=300, bbox_inches="tight")
-
-        plt.show()
-
-    def _add_feature_stats_to_plots(self, axes: np.ndarray, feature_stats: List[Dict]) -> None:
-        """Add feature statistics annotations to distribution plots."""
-        for i, (ax, stat) in enumerate(zip(axes, feature_stats)):
-            if i >= len(feature_stats):
-                break
-
-            if not pd.isna(stat["skewness"]):
-                skewness = stat["skewness"]
-                dip_stat = stat["dip_stat"]
-                p_value = stat["dip_p_values"]
-
-                if p_value < 0.05:
-                    legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_stat:.3f}*"
-                else:
-                    legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_stat:.3f}"
-
-                # Add legend with feature stats
-                ax.legend([legend_label], frameon=False, loc="upper right")
+    def get_feature_statistics(self, refresh: bool = False) -> List[Dict]:
+        """Get comprehensive feature statistics."""
+        return self.check_distribution_stats(refresh=refresh)
 
     def augment_columns(self, columns: List[str], col_name: str, method: Union[List[str], str] = "pca"):
         self.df = self.augment_df_columns(self.df, columns, col_name, method)
@@ -2035,4 +1919,6 @@ if __name__ == "__main__":
         }
     )
 
-    DataProfiler.plot_df_distribution(data, add_kde=True)
+    viz = DataVisualizer(data, y_cols=["normal", "positive_skewed", "negative_skewed", "bimodal"])
+    viz.add_histogram(y_col="normal", show_distribution_stats=True)
+    viz.display()
