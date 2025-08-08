@@ -253,7 +253,7 @@ def read_files(
     if isinstance(files, str):
         files = [files]
 
-    if parallel_mode == "none" or max_workers <= 1:
+    if parallel_mode == "none" or max_workers <= 1 or len(files) == 1:
         dfs = [read_func(file) for file in files]
     else:
         logger.info(f"read files using {max_workers} workers")
