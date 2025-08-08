@@ -56,8 +56,8 @@ for cluster_index in range(3):
     }
     cluster_stats[f"cluster_{cluster_index}"] = stats
 
-json.dump(cluster_stats, open("./output/cluster_stats.json", "w"), indent=4)
+json.dump(cluster_stats, open(f"{SCRIPT_DIR}/output/cluster_stats.json", "w"), indent=4)
 
 time_tag = datetime.datetime.now().strftime("%Y-%m-%d_%H")
 output_key = f"ds-data-kmeans/wucaishen_cluster_stats_{year}_{time_tag}.json"
-upload_file_to_s3("./output/cluster_stats.json", S3_BUCKET, output_key)
+upload_file_to_s3(f"{SCRIPT_DIR}/output/cluster_stats.json", S3_BUCKET, output_key)
