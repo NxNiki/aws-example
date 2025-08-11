@@ -886,7 +886,6 @@ class DataVisualizer:
 
     x_cols = ListProperty("x_cols", immutable=False)
     y_cols = ListProperty("y_cols", immutable=False)
-    plot_func_params = ["x_col", "y_col", "group_col"]
 
     def __init__(
         self,
@@ -1007,15 +1006,15 @@ class DataVisualizer:
         axes_map = {}
         if self.x_cols and self.y_cols:
             combos = list(itertools.product(self.x_cols, self.y_cols))
-            combo_iter: Union[
-                Iterator[Tuple[int, Optional[str], Optional[str]]], List[Tuple[int, Optional[str], Optional[str]]]
-            ] = ((idx, x_col, y_col) for idx, (x_col, y_col) in enumerate(combos))
+            combo_iter: List[Tuple[int, Optional[str], Optional[str]]] = [
+                (idx, x_col, y_col) for idx, (x_col, y_col) in enumerate(combos)
+            ]
             key_func = lambda idx, x_col, y_col: (x_col, y_col)
         elif self.y_cols:
-            combo_iter = ((idx, None, y_col) for idx, y_col in enumerate(self.y_cols))
+            combo_iter = [(idx, None, y_col) for idx, y_col in enumerate(self.y_cols)]
             key_func = lambda idx, x_col, y_col: (None, y_col)
         elif self.x_cols:
-            combo_iter = ((idx, x_col, None) for idx, x_col in enumerate(self.x_cols))
+            combo_iter = [(idx, x_col, None) for idx, x_col in enumerate(self.x_cols)]
             key_func = lambda idx, x_col, y_col: (x_col, None)
         else:
             combo_iter = [(0, None, None)]
@@ -1039,18 +1038,6 @@ class DataVisualizer:
 
         return fig, axes_map
 
-    def _get_plot_func_params(
-        self,
-        plot_func: Callable[[], Axes],
-    ) -> List[str]:
-        sig = inspect.signature(plot_func)
-        func_params = set(sig.parameters.keys())
-        args = []
-        for param in self.plot_func_params:
-            if param in func_params:
-                args.append(param)
-        return args
-
     def _add_plot_to_axes(
         self,
         plot_func: Callable[..., Any],
@@ -1063,9 +1050,6 @@ class DataVisualizer:
         x_cols = kwargs.pop("x_cols", None)
         y_cols = kwargs.pop("y_cols", None)
         group_col = kwargs.pop("group_col", None)
-
-        args_name = self._get_plot_func_params(plot_func)
-        logger.info(f"apply {plot_func.__name__} to axis with args_name: {args_name}")
 
         x_cols = convert_to_list(x_cols) if x_cols is not None else self.x_cols
         y_cols = convert_to_list(y_cols) if y_cols is not None else self.y_cols
@@ -1095,12 +1079,7 @@ class DataVisualizer:
                 elif plot_func.__name__ == "add_histogram_to_axis":
                     plot_func(data_subset, ax, y_col, **kwargs)
                 else:
-                    # Generic fallback
-                    args = [data_subset, ax]
-                    for var_name in args_name:
-                        if var_name in locals():
-                            args.append(locals()[var_name])
-                    plot_func(*args, **kwargs)
+                    raise NotImplementedError(f"Plot function {plot_func.__name__} not implemented")
 
     def add_boxplot(self, **kwargs) -> None:
 
