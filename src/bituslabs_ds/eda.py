@@ -12,6 +12,8 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple, Un
 
 import matplotlib.cm as cm
 import matplotlib.legend_handler as lh
+import matplotlib.lines as mlines
+import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -398,7 +400,6 @@ def plot_dual_axis_sorted_swarm(
             return pd.Series({"text_pos": f"{pos_count} ({pos_pct:.0f}%)", "text_neg": f"{neg_count} ({neg_pct:.0f}%)"})
 
         stats_df = plot_data.groupby([interaction_col, hue_col])[value_col].apply(calculate_stats).unstack()
-
         y_order = plot_data.groupby(interaction_col)[value_col].mean().sort_values(ascending=False).index
         fig, ax1 = plt.subplots(figsize=(12, min(len(y_order) * 0.8 + 1, 300)))
         sns.set_theme(style="whitegrid")
@@ -989,7 +990,10 @@ class DataVisualizer:
                 subplot_width_factor *= 1 + (num_groups - 1) * 0.2
 
         fig, axes = plt.subplots(
-            n_rows, n_cols, figsize=(fig_size[0] * n_cols * subplot_width_factor, fig_size[1] * n_rows)
+            n_rows,
+            n_cols,
+            figsize=(fig_size[0] * n_cols * subplot_width_factor, fig_size[1] * n_rows),
+            gridspec_kw={"wspace": 0.3, "hspace": 0.25, "left": 0.05, "right": 0.95, "top": 0.95, "bottom": 0.08},
         )
 
         # Flatten axes and trim to n_plots
@@ -1082,7 +1086,6 @@ class DataVisualizer:
                     raise NotImplementedError(f"Plot function {plot_func.__name__} not implemented")
 
     def add_boxplot(self, **kwargs) -> None:
-
         self._add_plot_to_axes(self.add_boxplot_to_axis, **kwargs)
 
     @staticmethod
@@ -1093,7 +1096,7 @@ class DataVisualizer:
         y_col: str,
         group_col: str,
         palette: List[Tuple[float, float, float]],
-        alpha: float = 0.7,
+        **kwargs,
     ) -> Axes:
         """
         Add box plot to the specified axes or all current axes.
@@ -1107,9 +1110,6 @@ class DataVisualizer:
         Returns:
             The axes with box plots added
         """
-        if axis is None:
-            logger.warning("Specified axis should not be None")
-            return
 
         df_long = data.melt(
             id_vars=[x_col] + ([group_col] if group_col else []),
@@ -1130,25 +1130,34 @@ class DataVisualizer:
             whis=1.5,
             notch=True,
             showfliers=False,
-            alpha=alpha,
+            **kwargs,
         )
 
-        # Update box-edge colors
+        # Get the list of boxes and median lines
+        boxes = [child for child in axis.get_children() if isinstance(child, mpatches.PathPatch)]
+        medians = [
+            child
+            for child in axis.get_children()
+            if isinstance(child, mlines.Line2D) and child.get_label() == "_nolegend_"
+        ]
+
         if group_col:
-            hue_order_in_plot = df_long[group_col].unique()
-            for i, artist in enumerate(axis.artists):
-                hue_idx = i % len(hue_order_in_plot)
-                color = palette[hue_idx]
-                artist.set_edgecolor(color)
-                if len(artist.get_children()) > 0:
-                    line = artist.get_children()[0]
-                    line.set_color(color)
+            group_length = len(df_long[group_col].unique())
         else:
-            for artist in axis.artists:
-                artist.set_edgecolor(palette[0])
-                if len(artist.get_children()) > 0:
-                    line = artist.get_children()[0]
-                    line.set_color(palette[0])
+            group_length = 1
+        x_col_length = len(df_long[x_col].unique())
+
+        for i, box in enumerate(boxes):
+            hue_idx = i // x_col_length % group_length
+            color = palette[hue_idx]
+            box.set_edgecolor(color)
+
+        # Set median line color to match box edge
+        for i, median in enumerate(medians):
+            hue_idx = i // (x_col_length * 5) % group_length
+            color = palette[hue_idx]
+            median.set_color(color)
+            median.set_linewidth(2)
 
         return axis
 
@@ -1170,6 +1179,7 @@ class DataVisualizer:
         size: int = 4,
         alpha: float = 0.7,
         jitter: float = 0.25,
+        **kwargs,
     ) -> Axes:
         """
         Add strip plot to the specified axes or all current axes.
@@ -1185,9 +1195,6 @@ class DataVisualizer:
         Returns:
             The axes with strip plots added
         """
-        if axis is None:
-            logger.warning("Specified axis should not be None")
-            return
 
         df_long = data.melt(
             id_vars=[x_col] + ([group_col] if group_col else []),
@@ -1209,17 +1216,17 @@ class DataVisualizer:
             legend=False,
             jitter=jitter,
             alpha=0.1 if non_nans > 1e5 else alpha,
+            **kwargs,
         )
 
         return axis
 
     def add_histogram(
         self,
-        *args,
         **kwargs,
     ):
 
-        self._add_plot_to_axes(self.add_histogram_to_axis, *args, **kwargs)
+        self._add_plot_to_axes(self.add_histogram_to_axis, **kwargs)
 
     def add_histogram_to_axis(
         self,
@@ -1242,14 +1249,10 @@ class DataVisualizer:
             The axes with histograms added
         """
 
-        bins = kwargs.get("bins", 50)
-        alpha = kwargs.get("alpha", 0.5)
-        add_kde = kwargs.get("add_kde", False)
-        show_distribution_stats = kwargs.get("show_distribution_stats", False)
-
-        if axis is None:
-            logger.warning("Specified axis should not be None")
-            return
+        bins = kwargs.pop("bins", 50)
+        alpha = kwargs.pop("alpha", 0.5)
+        add_kde = kwargs.pop("add_kde", False)
+        show_distribution_stats = kwargs.pop("show_distribution_stats", False)
 
         if show_distribution_stats:
             feature_stats = self.data_profiler.check_distribution_stats(refresh=True)
@@ -1279,7 +1282,9 @@ class DataVisualizer:
                 legend_label = ""
 
         n_bins = max(min(bins, values.nunique()), 50)
-        counts, bin_edges, patches = axis.hist(values, bins=n_bins, alpha=alpha, edgecolor="black", label=legend_label)
+        counts, bin_edges, patches = axis.hist(
+            values, bins=n_bins, alpha=alpha, edgecolor="black", label=legend_label, **kwargs
+        )
 
         if add_kde:
             ax2 = axis.twinx()
@@ -1937,11 +1942,11 @@ if __name__ == "__main__":
     fig, axes_map = viz.create_figure(
         x_cols=["group1"],
         y_cols=["normal", "positive_skewed", "negative_skewed", "bimodal"],
+        group_col="group2",
         n_cols=2,
         fig_title="Boxplot by group1",
     )
-    viz.add_boxplot(x_cols="group2")
-    viz.display()
+    viz.add_boxplot()
     # Test add_stripplot
-    viz.add_stripplot(x_cols="group2")
+    viz.add_stripplot()
     viz.display()
