@@ -14,7 +14,7 @@ from typing import List, Union
 import pandas as pd
 
 from bituslabs_ds.config import S3_BUCKET, setup_logging
-from bituslabs_ds.eda import Anova, DataProfiler, split_column_by_threshold
+from bituslabs_ds.eda import Anova, DataProfiler, DataVisualizer, split_column_by_threshold
 from bituslabs_ds.s3_utils import list_s3_files, read_files
 
 setup_logging(".", "analysis_gai_simulation_result.log")
@@ -62,12 +62,26 @@ if __name__ == "__main__":
 
     data = load_process_data(reload=False)
     data_profiler = DataProfiler(data)
-    # data_profiler.plot_distribution(figure_name="./figures/gai_simulation_distribution.png", log=True, add_kde=True)
-    data_profiler.transform_skewed_columns(pos_suffix="_log", neg_suffix="_exp")
-    # data_profiler.plot_distribution(
-    #     figure_name="./figures/gai_simulation_distribution_log.png", log=False, add_kde=True
-    # )
-    # data_profiler.plot_correlation_heatmap(title=f"correlation for: all group")
+    viz = DataVisualizer(data_profiler)
+
+    # Plot distributions with distribution statistics
+    viz.create_figure(y_cols=data_profiler.processed_numerical_columns, n_cols=5)
+    viz.add_histogram(show_distribution_stats=True, add_kde=True)
+    viz.display()
+    viz.save(f"{SCRIPT_DIR}/figures/gai_simulation_distribution.png")
+
+    # Transform skewed columns
+    viz.data_profiler.transform_skewed_columns(pos_suffix="_log", neg_suffix="_exp")
+    viz.create_figure(y_cols=data_profiler.processed_numerical_columns, n_cols=5)
+    viz.add_histogram(show_distribution_stats=True, add_kde=True)
+    viz.display()
+    viz.save(f"{SCRIPT_DIR}/figures/gai_simulation_distribution_log.png")
+
+    # Plot correlation heatmap
+    viz.create_figure()
+    viz.add_heatmap(title="Correlation for: all group")
+    # viz.save("./figures/gai_simulation_correlation.png")
+    viz.display()
 
     # two-way ANOVA:
     data_profiler.augment_columns(

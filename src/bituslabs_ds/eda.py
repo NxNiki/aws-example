@@ -490,221 +490,6 @@ def plot_dual_axis_sorted_swarm(
         plt.show()
 
 
-def plot_multiple_box_swarm(
-    data: pd.DataFrame,
-    x_cols: List[str],
-    y_cols: List[str],
-    group_col: Optional[str] = None,
-    n_cols: int = 3,
-    fig_size: Tuple[float, float] = (8, 6),
-    fig_title: Optional[str] = None,
-    log_scale: bool = False,
-    post_hoc_table: Optional[pd.DataFrame] = None,
-):
-    """
-    For each combination of y_col and x_col, plot a box + swarm plot. All x_cols and group_col will be plotted in one
-    subplot. Adds statistical test results (Tukey HSD) to the plot for pairwise comparisons within group_col
-    using statannotations for visual display.
-
-    Parameters:
-        data (pd.DataFrame): Original DataFrame.
-        x_cols (List[str]): Columns to use as x-axis groupings (categorical).
-        y_cols (List[str]): Numeric value columns to visualize.
-        group_col (Optional[str]): Column to use as hue (optional).
-        n_cols (int): Subplots per row.
-        fig_size (Tuple[float, float]): Figure size per plot.
-        fig_title (Optional[str]): Optional figure title.
-        log_scale (bool): Whether to use logarithmic scale on y-axis.
-        post_hoc_table (Optional[pd.DataFrame]): table of the post-hoc results. should have columns: variable,
-            comparison, and p_value
-    """
-    n_plots = len(y_cols) * len(x_cols)
-    n_rows = (n_plots + n_cols - 1) // n_cols
-
-    # Calculate subplot width based on unique x_cols values to ensure readability
-    # Max unique values across all x_cols
-    max_x_unique = max(data[col].nunique() for col in x_cols)
-    # Adjust subplot_width dynamically. A base of 0.75 for small number of categories,
-    # scaling up for more categories.
-    subplot_width_factor = max(max_x_unique / 4, 0.75)  # Ensure a minimum width
-
-    # If group_col is present, each x-tick will have multiple dodged groups,
-    # so we need more horizontal space.
-    if group_col:
-        num_groups = data[group_col].nunique()
-        # Increase width for more groups, 0.2 is an arbitrary scaling factor
-        subplot_width_factor *= 1 + (num_groups - 1) * 0.2
-
-    fig, axes = plt.subplots(
-        n_rows, n_cols, figsize=(fig_size[0] * n_cols * subplot_width_factor, fig_size[1] * n_rows)
-    )
-
-    # Ensure axes is always iterable, even for a single subplot
-    if n_plots == 1:
-        axes = np.array([axes])
-    axes = axes.flatten()
-
-    # Determine the number of unique groups for palette creation
-    # This is used for both plotting and manual-edge coloring
-    num_groups_for_palette = len(data[group_col].unique()) if group_col else 1
-    palette = sns.color_palette("pastel", n_colors=num_groups_for_palette)
-
-    plot_idx = 0
-    for x_col in x_cols:
-        for y_col in y_cols:
-            cols_to_keep = [x_col, y_col] + ([group_col] if group_col else [])
-            # Drop NaNs in y_col before melting and statistical tests
-            df_long = data[cols_to_keep].copy().dropna(subset=[y_col])
-
-            # Melt the DataFrame for seaborn plotting
-            df_long = df_long.melt(
-                id_vars=[x_col] + ([group_col] if group_col else []),
-                value_vars=[y_col],
-                var_name="variable",  # This column is not strictly needed after melt for single y_col
-                value_name="value",
-            )
-
-            ax = axes[plot_idx]
-            plot_idx += 1
-
-            # Plot strip plot
-            non_nans = df_long["value"].count()
-            sns.stripplot(
-                data=df_long,
-                x=x_col,
-                y="value",
-                hue=group_col if group_col else None,
-                dodge=True if group_col else False,
-                ax=ax,
-                palette=palette,
-                size=2 if non_nans > 1e5 else 4,
-                legend=False,  # We will add a single global legend
-                jitter=0.25,
-                alpha=0.1 if non_nans > 1e5 else 0.7,
-            )
-
-            # Plot boxplot
-            sns.boxplot(
-                data=df_long,
-                x=x_col,
-                y="value",
-                hue=group_col if group_col else None,
-                ax=ax,
-                palette=palette,
-                boxprops=dict(linewidth=1.5, facecolor=(0, 0, 0, 0)),  # Transparent face color
-                medianprops=dict(linewidth=2),
-                whis=1.5,
-                notch=True,
-                showfliers=False,  # Do not show outliers, swarm plot handles individual points
-            )
-
-            if log_scale:
-                ax.set_yscale("symlog", linthresh=1)  # Use symlog for better visualization of data around zero
-
-            ax.set_xlabel("", fontsize=12)
-            ax.set_ylabel("", fontsize=12)
-            ax.set_title(y_col, fontsize=14)
-            ax.tick_params(axis="x", rotation=0, labelsize=10)  # Use labelsize for tick labels
-            for label in ax.get_xticklabels():
-                label.set_fontsize(12)  # Ensure x-tick labels are readable
-
-            if group_col and ax.get_legend():
-                ax.legend_.remove()
-
-            # Manually update each box-edge color to match hue color
-            if group_col:
-                # Get the order of hues as they appear in the plot
-                hue_order_in_plot = df_long[group_col].unique()
-                for i, artist in enumerate(ax.artists):
-                    # Determine which hue color to apply based on the artist's index
-                    hue_idx = i % len(hue_order_in_plot)
-                    color = palette[hue_idx]
-                    artist.set_edgecolor(color)
-                    # Also set the color of the median line
-                    if len(artist.get_children()) > 0:
-                        line = artist.get_children()[0]
-                        line.set_color(color)
-            else:
-                # If no group_col, set edge color to the first color in palette
-                for artist in ax.artists:
-                    artist.set_edgecolor(palette[0])
-                    if len(artist.get_children()) > 0:
-                        line = artist.get_children()[0]
-                        line.set_color(palette[0])
-
-            # Add statistical test results if group_col is provided using statannotations
-            if post_hoc_table is not None:
-                annotation_pairs = post_hoc_table.loc[post_hoc_table["variable"] == y_col, "comparison"].to_list()
-                p_values = post_hoc_table.loc[post_hoc_table["variable"] == y_col, "p_value"].to_list()
-                try:
-                    # Initialize Annotator
-                    # Note: x and hue parameters for Annotator should refer to the columns
-                    # that define the groups being compared. In this case, x_col is the main
-                    # grouping, and group_col is the hue within each x_col category.
-                    # For statannotations, when comparing within a single x_col category,
-                    # the 'x' parameter should be the column defining the groups being compared (group_col),
-                    # and the 'data' should be the subset for that x_col category.
-                    annotator = Annotator(
-                        ax,
-                        annotation_pairs,
-                        data=df_long,
-                        x=x_col,  # This is the column defining the groups for comparison
-                        y="value",
-                        hue=group_col if group_col else None,
-                    )
-                    annotator.configure(
-                        text_format="star",
-                        loc="inside",
-                        verbose=False,
-                        line_offset=0.1,
-                        line_height=0.02,
-                        text_offset=1,
-                    )
-                    annotator.set_custom_annotations(p_values)
-                    annotator.annotate()
-
-                except ValueError as e:
-                    print(f"Warning: Could not perform add annotation to box plot. Error: {e}")
-                    print("This might happen if there's not enough data or groups for comparison in this subset.")
-                except Exception as e:
-                    print(f"An unexpected error occurred during annotating the box plot: {e}")
-
-    # Clean up any unused axes (subplots) that were created but not plotted on
-    for j in range(plot_idx, len(axes)):
-        fig.delaxes(axes[j])
-
-    if group_col:
-        # Create a single legend for the entire figure
-        handles, labels = [], []
-        # Attempt to get handles and labels from the first subplot's legend if it exists
-        # This is a robust way to get legend entries with colors
-        for ax_item in axes:
-            if ax_item and ax_item.get_legend():
-                handles, labels = ax_item.get_legend_handles_labels()
-                break
-
-        # If no legend was found (e.g., due to legend=False in strip plot/boxplot and then removed),
-        # manually create proxy artists for the global legend
-        if not handles and group_col:
-            unique_groups = data[group_col].unique()
-            for i, group in enumerate(unique_groups):
-                # Create a proxy artist (a line with a marker) for the legend entry
-                handles.append(plt.Line2D([0], [0], marker="o", color="w", markerfacecolor=palette[i], markersize=8))
-                labels.append(group)
-
-        # Only add the global legend if there are handles to show
-        if handles:
-            fig.legend(handles, labels, loc="upper right", bbox_to_anchor=(1.0, 0.95), title=group_col)
-
-    plt.tight_layout(pad=1)  # Adjust subplot parameters for a tight layout
-    # Adjust top margin to make space for the suptitle
-    fig.subplots_adjust(top=0.94, hspace=0.25, wspace=0.2)
-
-    if fig_title:
-        fig.suptitle(fig_title, fontsize=16, y=0.98)  # Add a main title to the figure
-    plt.show()
-
-
 def plot_scatter_pairs(
     data: pd.DataFrame,
     pairs: Optional[List[Tuple[str, str, bool, bool]]] = None,
@@ -1008,8 +793,8 @@ class DataVisualizer:
 
         # Build axes_map: (x_col, y_col) -> axis
         axes_map = {}
-        if self.x_cols and self.y_cols:
-            combos = list(itertools.product(self.x_cols, self.y_cols))
+        if len(self.x_cols) > 0 and len(self.y_cols) > 0:  # type: ignore[arg-type]
+            combos = list(itertools.product(self.x_cols, self.y_cols))  # type: ignore[arg-type]
             combo_iter: List[Tuple[int, Optional[str], Optional[str]]] = [
                 (idx, x_col, y_col) for idx, (x_col, y_col) in enumerate(combos)
             ]
@@ -1060,11 +845,11 @@ class DataVisualizer:
         group_col = group_col if group_col is not None else self.group_col
 
         # Determine all (x_col, y_col) pairs to plot
-        if not x_cols and not y_cols:
+        if len(x_cols) == 0 and len(y_cols) == 0:
             pairs = [(None, None)]
-        elif not x_cols:
+        elif len(x_cols) == 0:
             pairs = [(None, y_col) for y_col in y_cols]
-        elif not y_cols:
+        elif len(y_cols) == 0:
             pairs = [(x_col, None) for x_col in x_cols]
         else:
             pairs = list(itertools.product(x_cols, y_cols))
@@ -1135,7 +920,7 @@ class DataVisualizer:
 
         # Get the list of boxes and median lines
         boxes = [child for child in axis.get_children() if isinstance(child, mpatches.PathPatch)]
-        medians = [
+        box_lines = [
             child
             for child in axis.get_children()
             if isinstance(child, mlines.Line2D) and child.get_label() == "_nolegend_"
@@ -1153,7 +938,7 @@ class DataVisualizer:
             box.set_edgecolor(color)
 
         # Set median line color to match box edge
-        for i, median in enumerate(medians):
+        for i, median in enumerate(box_lines):
             hue_idx = i // (x_col_length * 5) % group_length
             color = palette[hue_idx]
             median.set_color(color)
@@ -1899,19 +1684,19 @@ class Anova:
             print("\nNo significant post-hoc effects were found.")
         return res_post_hoc
 
-    def show_box_plot(self, x_cols: str, group_col: str) -> None:
+    def show_box_plot(
+        self, x_cols: str, group_col: str, plots_per_figure: int = 5, output_path: str = ".", fig_title: str = "boxplot"
+    ) -> None:
         post_hoc_table = pd.DataFrame(self.post_hoc_report)
-        for y_cols, i, num_chunks in batch_iterator(post_hoc_table["variable"].drop_duplicates(), 5):
-            plot_multiple_box_swarm(
-                self.data,
-                x_cols=[x_cols],
-                y_cols=list(y_cols),
-                n_cols=1,
-                group_col=group_col,
-                log_scale=True,
-                fig_title=f"variables with sig anova: {i}/{num_chunks}",
-                post_hoc_table=post_hoc_table,
+        for y_cols, i, num_chunks in batch_iterator(post_hoc_table["variable"].drop_duplicates(), plots_per_figure):
+            viz = DataVisualizer(self.data)
+            viz.create_figure(
+                x_cols=x_cols, y_cols=y_cols, group_col=group_col, n_cols=1, fig_title=f"{fig_title}: {i}/{num_chunks}"
             )
+            viz.add_boxplot()
+            viz.add_stripplot()
+            viz.display()
+            viz.save(f"{output_path}/{fig_title}_{i}.png")
 
 
 if __name__ == "__main__":
