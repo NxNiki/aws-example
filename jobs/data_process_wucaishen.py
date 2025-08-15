@@ -86,7 +86,7 @@ def create_compute_streak_udf() -> Callable:
         streaks = []
         streak = 0
         for dt in data["delta_t"]:
-            if pd.isna(dt) or dt > 200:
+            if pd.isna(dt) or dt > 200:  # in seconds.
                 streak = 0
             else:
                 streak += 1

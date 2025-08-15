@@ -1,9 +1,7 @@
-import inspect
 import itertools
 import logging
 import math
 import os
-import warnings
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
@@ -25,7 +23,7 @@ from matplotlib.lines import Line2D
 from matplotlib.ticker import MaxNLocator
 from pandas import DataFrame, Series
 from scipy.cluster.hierarchy import leaves_list, linkage
-from scipy.stats import skew
+from scipy.stats import energy_distance, skew
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from statannotations.Annotator import Annotator
@@ -83,7 +81,7 @@ def read_csv_cols(
             if filters:
                 for col, val in filters.items():
                     if col not in df.columns:
-                        warnings.warn(
+                        logger.warning(
                             f"Filter column '{col}' not found in '{file}'; skipping this filter.",
                             UserWarning,
                         )
@@ -107,7 +105,7 @@ def read_csv_cols(
             return df
 
         except Exception as e:
-            warnings.warn(f"Error processing '{file}': {e}", UserWarning)
+            logger.warning(f"Error processing '{file}': {e}", UserWarning)
             return pd.DataFrame(columns=columns)
 
     df_list = []
@@ -670,9 +668,6 @@ class DataVisualizer:
     and allows sharing of data and configuration across methods.
     """
 
-    x_cols = ListProperty("x_cols", immutable=False)
-    y_cols = ListProperty("y_cols", immutable=False)
-
     def __init__(
         self,
         data: Union[pd.DataFrame, "DataProfiler"],
@@ -688,6 +683,19 @@ class DataVisualizer:
             self.data_profiler = data
         else:
             self.data_profiler = DataProfiler(data)
+
+        self.layout_cols = ListProperty("layout_cols", immutable=False)
+
+        # attributes defined in create_figure:
+        self.figure = None
+        self.figure_size: Optional[Tuple[float, float]] = None
+        self.group_col: Optional[str] = None
+        self.axes_keys: List[Tuple[str, str, Any]] = []
+        self.axes: List[Axes] = []
+        self.n_cols: Optional[int] = None
+        self.n_rows: Optional[int] = None
+        self.plot_numeric_cols: List[str] = []
+        self.plot_non_numeric_cols: List[str] = []
 
     @property
     def data(self) -> pd.DataFrame:
@@ -722,10 +730,104 @@ class DataVisualizer:
         num_groups_for_palette = len(self.data[group_col].unique()) if group_col else 1
         self.palette = sns.color_palette(palette, n_colors=num_groups_for_palette)
 
+    def _adjust_figure_size(self, x_col: str) -> None:
+        """
+        Adjust the figure size based on the number of layout columns and the number of rows and columns.
+        """
+
+        max_x_unique = self.data[x_col].nunique()
+        subplot_width_factor = max(max_x_unique / 4, 0.75)
+        if self.group_col:
+            num_groups = self.data[self.group_col].nunique()
+            subplot_width_factor *= 1 + (num_groups - 1) * 0.2
+
+        if self.figure is not None:
+            self.figure.set_size_inches(
+                self.figure_size[0] * self.n_cols * subplot_width_factor, self.figure_size[1] * self.n_rows
+            )
+
+    def _check_layout_cols(self, layout_cols: Optional[Union[str, List[str]]]) -> Tuple[List[str], List[str]]:
+        """
+        get numeric and non-numeric columns from layout_cols.
+        """
+        if layout_cols is None or len(layout_cols) == 0:
+            return [], []
+
+        numeric_cols = self.data_profiler.check_numeric_columns(include_boolean=False, subset_cols=layout_cols)
+        non_numeric_cols = [col for col in layout_cols if col not in numeric_cols]
+        return numeric_cols, non_numeric_cols
+
+    def _get_n_plots(
+        self, layout_cols: Optional[Union[str, List[str]]], numeric_cols: List[str], non_numeric_cols: List[str]
+    ) -> int:
+        """
+        Get the number of sub plots in the figure.
+        """
+        if not layout_cols:
+            return 1
+        else:
+            unique_counts = []
+            for col in non_numeric_cols:
+                n_unique = self.data[col].nunique(dropna=True)
+                unique_counts.append(n_unique)
+                if n_unique > 10:
+                    logger.warning(
+                        f"Column '{col}' has {n_unique} unique values, which may result in too many subplots."
+                    )
+
+            n_numeric = len(numeric_cols)
+            n_plots = max(n_numeric, 1)
+            if unique_counts:
+                for n_unique in unique_counts:
+                    n_plots *= n_unique
+            return n_plots
+
+    def _get_axes_keys(self, non_numeric_cols: List[str], numeric_cols: List[str]) -> List[Tuple[str, str, Any]]:
+        """
+        Get the keys for the axes.
+        """
+        if len(non_numeric_cols) == 0:
+            non_numeric_cols = [""]
+
+        if len(numeric_cols) == 0:
+            numeric_cols = [""]
+
+        axes_keys = []
+        for col in non_numeric_cols:
+            if col == "":
+                unique_values = [""]
+            else:
+                unique_values = self.data[col].unique()
+            for value in unique_values:
+                for n_col in numeric_cols:
+                    axes_keys.append((col, n_col, value))
+
+        return axes_keys
+
+    def _get_axes_data(self, axes_key: Tuple[str, str, Any], extra_cols: Optional[List[str]] = None) -> pd.DataFrame:
+        """
+        Get the data for the axes.
+        """
+        non_numeric_col, numeric_col, value = axes_key
+        cols = (
+            ([numeric_col] if numeric_col else [])
+            + ([self.group_col] if self.group_col else [])
+            + (extra_cols if extra_cols else [])
+        )
+        if non_numeric_col == "":
+            return self.data[cols]
+        else:
+            return self.data[self.data[non_numeric_col] == value][cols]
+
+    def _get_n_rows(self, n_plots: int, n_cols: int) -> int:
+        """
+        Get the number of rows in the figure.
+        """
+        return (n_plots + n_cols - 1) // n_cols
+
     def create_figure(
         self,
-        x_cols: Optional[Union[str, List[str]]] = None,
-        y_cols: Optional[Union[str, List[str]]] = None,
+        layout_cols: Optional[Union[str, List[str]]] = None,
         group_col: Optional[str] = None,
         n_cols: int = 3,
         fig_title: Optional[str] = None,
@@ -749,126 +851,94 @@ class DataVisualizer:
             Tuple of (figure, axes, axes_map) for further customization.
             axes_map is a dict mapping (x_col, y_col) to the corresponding axis.
         """
-        self.x_cols = x_cols
-        self.y_cols = y_cols
+        self.layout_cols = layout_cols
         self.group_col = group_col
         self._update_palette(group_col, palette)
 
-        # Handle the case where both x_cols and y_cols are None or empty: single axes
-        if not self.x_cols and not self.y_cols:
-            n_plots = 1
-            n_rows = 1
-            n_cols = 1
-        else:
-            n_x = max(1, len(self.x_cols))  # type: ignore[arg-type]
-            n_y = max(1, len(self.y_cols))  # type: ignore[arg-type]
-            n_plots = n_x * n_y
-            n_rows = (n_plots + n_cols - 1) // n_cols
-
-        if not self.x_cols:
-            subplot_width_factor = 1.0
-        else:
-            max_x_unique = max(self.data[col].nunique() for col in self.x_cols)
-            subplot_width_factor = max(max_x_unique / 4, 0.75)
-            if group_col:
-                num_groups = self.data[group_col].nunique()
-                subplot_width_factor *= 1 + (num_groups - 1) * 0.2
+        numeric_cols, non_numeric_cols = self._check_layout_cols(layout_cols)
+        n_plots = self._get_n_plots(layout_cols, numeric_cols, non_numeric_cols)
+        n_cols = min(n_cols, n_plots)
+        n_rows = self._get_n_rows(n_plots, n_cols)
+        axes_keys = self._get_axes_keys(non_numeric_cols, numeric_cols)
 
         fig, axes = plt.subplots(
             n_rows,
             n_cols,
-            figsize=(fig_size[0] * n_cols * subplot_width_factor, fig_size[1] * n_rows),
+            figsize=(fig_size[0] * n_cols, fig_size[1] * n_rows),
             gridspec_kw={"wspace": 0.3, "hspace": 0.25, "left": 0.05, "right": 0.95, "top": 0.95, "bottom": 0.08},
         )
 
-        # Flatten axes and trim to n_plots
         if n_plots == 1:
             axes = np.array([axes])
         else:
             axes = np.array(axes).flatten()
-        if len(axes) > n_plots:
-            for ax in axes[n_plots:]:
-                ax.set_visible(False)
-            axes = axes[:n_plots]
 
-        # Build axes_map: (x_col, y_col) -> axis
-        axes_map = {}
-        if len(self.x_cols) > 0 and len(self.y_cols) > 0:  # type: ignore[arg-type]
-            combos = list(itertools.product(self.x_cols, self.y_cols))  # type: ignore[arg-type]
-            combo_iter: List[Tuple[int, Optional[str], Optional[str]]] = [
-                (idx, x_col, y_col) for idx, (x_col, y_col) in enumerate(combos)
-            ]
-            key_func = lambda idx, x_col, y_col: (x_col, y_col)
-        elif self.y_cols:
-            combo_iter = [(idx, None, y_col) for idx, y_col in enumerate(self.y_cols)]
-            key_func = lambda idx, x_col, y_col: (None, y_col)
-        elif self.x_cols:
-            combo_iter = [(idx, x_col, None) for idx, x_col in enumerate(self.x_cols)]
-            key_func = lambda idx, x_col, y_col: (x_col, None)
-        else:
-            combo_iter = [(0, None, None)]
-            key_func = lambda idx, x_col, y_col: (None, None)
-
-        for idx, x_col, y_col in combo_iter:
+        for idx in range(n_plots):
+            ax = axes[idx]
             if idx < len(axes):
-                ax = axes[idx]
-                axes_map[key_func(idx, x_col, y_col)] = ax
                 ax.set_xlabel("", fontsize=12)
                 ax.set_ylabel("", fontsize=12)
                 ax.tick_params(axis="x", rotation=0, labelsize=10)
                 for label in ax.get_xticklabels():
                     label.set_fontsize(12)
+            else:
+                ax.set_visible(False)
+
+        if len(axes) > n_plots:
+            axes = axes[:n_plots]
 
         if fig_title:
             fig.suptitle(fig_title, fontsize=16, y=0.98)
 
         self.figure = fig
-        self.axes_map = axes_map
+        self.figure_size = fig_size
+        self.axes_keys = axes_keys
+        self.axes = axes
+        self.n_cols = n_cols
+        self.n_rows = n_rows
+        self.plot_numeric_cols = numeric_cols
+        self.plot_non_numeric_cols = non_numeric_cols
 
-        return fig, axes_map
+        return fig, axes
 
     def _add_plot_to_axes(
         self,
         plot_func: Callable[..., Any],
+        share_legend: bool = True,
         **kwargs,
     ) -> None:
         """
         Apply plot_fun to all axes in axes_map for the specified x_cols and y_cols.
         If x_cols or y_cols is None, use self.x_cols or self.y_cols.
         """
-        x_cols = kwargs.pop("x_cols", None)
-        y_cols = kwargs.pop("y_cols", None)
-        group_col = kwargs.pop("group_col", None)
+        x_col = kwargs.pop("x_col", None)
+        # value_cols is used for correlation heatmap
+        value_cols = kwargs.pop("value_cols", [])
+        if x_col:
+            self._adjust_figure_size(x_col)
 
-        x_cols = convert_to_list(x_cols) if x_cols is not None else self.x_cols
-        y_cols = convert_to_list(y_cols) if y_cols is not None else self.y_cols
-        group_col = group_col if group_col is not None else self.group_col
+        extra_cols = ([x_col] if x_col else []) + value_cols
+        for i, key in enumerate(self.axes_keys):
+            if i > 0 and share_legend:
+                show_legend = False
+            else:
+                show_legend = True
 
-        # Determine all (x_col, y_col) pairs to plot
-        if len(x_cols) == 0 and len(y_cols) == 0:
-            pairs = [(None, None)]
-        elif len(x_cols) == 0:
-            pairs = [(None, y_col) for y_col in y_cols]
-        elif len(y_cols) == 0:
-            pairs = [(x_col, None) for x_col in x_cols]
-        else:
-            pairs = list(itertools.product(x_cols, y_cols))
+            ax = self.axes[i]
+            data_subset = self._get_axes_data(key, extra_cols)
+            y_col = key[1]
 
-        for x_col, y_col in pairs:
-            key = (x_col, y_col)
-            ax = self.axes_map.get(key)
-            if ax is not None:
-                cols = [col for col in [x_col, y_col, group_col] if col is not None]
-                data_subset = self.data[cols] if cols else self.data
-                # Call the plot function with the correct arguments
-                if plot_func.__name__ == "add_boxplot_to_axis":
-                    plot_func(data_subset, ax, x_col, y_col, group_col, self.palette, **kwargs)
-                elif plot_func.__name__ == "add_stripplot_to_axis":
-                    plot_func(data_subset, ax, x_col, y_col, group_col, self.palette, **kwargs)
-                elif plot_func.__name__ == "add_histogram_to_axis":
-                    plot_func(data_subset, ax, y_col, **kwargs)
-                else:
-                    raise NotImplementedError(f"Plot function {plot_func.__name__} not implemented")
+            # Call the plot function with the correct arguments
+            if plot_func.__name__ == "add_boxplot_to_axis":
+                plot_func(data_subset, ax, x_col, y_col, self.group_col, self.palette, show_legend, **kwargs)
+            elif plot_func.__name__ == "add_stripplot_to_axis":
+                plot_func(data_subset, ax, x_col, y_col, self.group_col, self.palette, show_legend, **kwargs)
+            elif plot_func.__name__ == "add_histogram_to_axis":
+                plot_func(data_subset, ax, y_col, **kwargs)
+            elif plot_func.__name__ == "add_correlation_heatmap_to_axis":
+                plot_func(data_subset, ax, **kwargs)
+            else:
+                raise NotImplementedError(f"Plot function {plot_func.__name__} not implemented")
 
     def add_boxplot(self, **kwargs) -> None:
         self._add_plot_to_axes(self.add_boxplot_to_axis, **kwargs)
@@ -881,32 +951,30 @@ class DataVisualizer:
         y_col: str,
         group_col: str,
         palette: List[Tuple[float, float, float]],
+        show_legend: bool = True,
         **kwargs,
     ) -> Axes:
         """
-        Add box plot to the specified axes or all current axes.
+        Add a boxplot to the specified matplotlib axis.
 
         Parameters:
-            axes: The axes to add box plots to (if None, uses all current axes)
-            x_col: Column to use as x-axis grouping (if None, uses current plot data)
-            y_col: Column to visualize on y-axis (if None, uses current plot data)
-            alpha: Transparency level
+            data (pd.DataFrame): The input DataFrame.
+            axis (Axes): The matplotlib axis to plot on.
+            x_col (str): Column name to use for x-axis grouping.
+            y_col (str): Column name to use for y-axis values.
+            group_col (str): Column name to use for hue/grouping (can be None).
+            palette (List[Tuple[float, float, float]]): List of colors for the plot.
+            show_legend (bool, optional): Whether to display the legend. Defaults to True.
+            **kwargs: Additional keyword arguments passed to seaborn.boxplot.
 
         Returns:
-            The axes with box plots added
+            Axes: The axis with the boxplot added.
         """
 
-        df_long = data.melt(
-            id_vars=[x_col] + ([group_col] if group_col else []),
-            value_vars=[y_col],
-            var_name="variable",  # This column is not strictly needed after melt for single y_col
-            value_name="value",
-        )
-
         sns.boxplot(
-            data=df_long,
+            data=data,
             x=x_col,
-            y="value",
+            y=y_col,
             hue=group_col if group_col else None,
             ax=axis,
             palette=palette,
@@ -918,6 +986,12 @@ class DataVisualizer:
             **kwargs,
         )
 
+        # Remove legend if show_legend is False
+        if not show_legend:
+            legend = axis.get_legend()
+            if legend is not None:
+                legend.remove()
+
         # Get the list of boxes and median lines
         boxes = [child for child in axis.get_children() if isinstance(child, mpatches.PathPatch)]
         box_lines = [
@@ -927,10 +1001,10 @@ class DataVisualizer:
         ]
 
         if group_col:
-            group_length = len(df_long[group_col].unique())
+            group_length = len(data[group_col].unique())
         else:
             group_length = 1
-        x_col_length = len(df_long[x_col].unique())
+        x_col_length = len(data[x_col].unique())
 
         for i, box in enumerate(boxes):
             hue_idx = i // x_col_length % group_length
@@ -981,18 +1055,11 @@ class DataVisualizer:
             The axes with strip plots added
         """
 
-        df_long = data.melt(
-            id_vars=[x_col] + ([group_col] if group_col else []),
-            value_vars=[y_col],
-            var_name="variable",  # This column is not strictly needed after melt for single y_col
-            value_name="value",
-        )
-
-        non_nans = df_long["value"].count()
+        non_nans = data[y_col].count()
         sns.stripplot(
-            data=df_long,
+            data=data,
             x=x_col,
-            y="value",
+            y=y_col,
             hue=group_col if group_col else None,
             dodge=True if group_col else False,
             ax=axis,
@@ -1094,28 +1161,23 @@ class DataVisualizer:
 
         return axis
 
-    def add_heatmap(
+    def add_correlation_heatmap(
         self,
         method: str = "pearson",
-        title: str = "Heatmap",
+        value_cols: List[str] = [],
     ) -> None:
         """Add correlation heatmap to the current figure."""
         if not hasattr(self, "figure") or self.figure is None:
             raise ValueError("No figure available. Create figure first.")
 
-        # Get the first axis from the figure
-        ax = self.figure.axes[0] if self.figure.axes else None
-        if ax is None:
-            raise ValueError("No axes available in the figure.")
-
-        numeric_data = self.data.select_dtypes(include=["number"])
-        correlation_matrix = numeric_data.corr(method=method)
+        if len(value_cols) == 0:
+            value_cols = self.data_profiler.processed_numerical_columns
 
         # Use the static method to add the heatmap
-        self.add_heatmap_to_axis(correlation_matrix, ax, method, title)
+        self._add_plot_to_axes(self.add_correlation_heatmap_to_axis, method=method, value_cols=value_cols)
 
     @staticmethod
-    def add_heatmap_to_axis(
+    def add_correlation_heatmap_to_axis(
         heatmap_data: pd.DataFrame, axis: Axes, method: str = "pearson", title: str = "Heatmap"
     ) -> Axes:
         """
@@ -1130,8 +1192,17 @@ class DataVisualizer:
             The axes with heatmaps added
         """
 
+        dropped_cols = heatmap_data.columns[heatmap_data.isna().any()].tolist()
+        if dropped_cols:
+            print(f"Dropping columns with NA values for heatmap: {dropped_cols}")
+        heatmap_data = heatmap_data.dropna(axis=1)
+        if heatmap_data.empty:
+            raise ValueError("No numeric columns left after dropping NA values.")
+
+        correlation_matrix = heatmap_data.corr(method=method)
+
         heatmap = sns.heatmap(
-            heatmap_data,
+            correlation_matrix,
             cmap="viridis",
             linewidths=0.5,
             ax=axis,
@@ -1267,7 +1338,7 @@ class DataVisualizer:
         handles, labels = [], []
 
         # Try to get handles and labels from any axis
-        for ax in self.axes_map.values():
+        for ax in self.axes:
             if ax is not None and ax.get_legend():
                 handles, labels = ax.get_legend_handles_labels()
                 break
@@ -1329,11 +1400,20 @@ class DataProfiler:
         """Get processed numerical columns for analysis."""
         return self.check_numeric_columns(include_boolean=True, refresh=True)
 
-    def check_numeric_columns(self, include_boolean: bool = True, refresh: bool = False) -> List[str]:
+    def check_numeric_columns(
+        self, include_boolean: bool = True, subset_cols: Optional[Union[str, List[str]]] = None, refresh: bool = False
+    ) -> List[str]:
         """Check and return numeric columns in the DataFrame."""
-        if not hasattr(self, "_processed_numerical_columns") or refresh:
-            self._processed_numerical_columns = self.check_df_numerical_columns(self.df, include_boolean)
-        return self._processed_numerical_columns
+
+        if subset_cols:
+            processed_numerical_columns = self.check_df_numerical_columns(self.df[subset_cols], include_boolean)
+        else:
+            if not hasattr(self, "_processed_numerical_columns") or refresh:
+                processed_numerical_columns = self.check_df_numerical_columns(self.df, include_boolean)
+                self._processed_numerical_columns = processed_numerical_columns
+            else:
+                processed_numerical_columns = self._processed_numerical_columns
+        return processed_numerical_columns
 
     @staticmethod
     def check_df_numerical_columns(data: Union[pd.DataFrame, pd.Series], include_boolean: bool = True) -> List[str]:
@@ -1685,16 +1765,21 @@ class Anova:
         return res_post_hoc
 
     def show_box_plot(
-        self, x_cols: str, group_col: str, plots_per_figure: int = 5, output_path: str = ".", fig_title: str = "boxplot"
+        self, x_col: str, group_col: str, plots_per_figure: int = 5, output_path: str = ".", fig_title: str = "boxplot"
     ) -> None:
         post_hoc_table = pd.DataFrame(self.post_hoc_report)
-        for y_cols, i, num_chunks in batch_iterator(post_hoc_table["variable"].drop_duplicates(), plots_per_figure):
+        for layout_cols, i, num_chunks in batch_iterator(
+            post_hoc_table["variable"].drop_duplicates(), plots_per_figure
+        ):
             viz = DataVisualizer(self.data)
             viz.create_figure(
-                x_cols=x_cols, y_cols=y_cols, group_col=group_col, n_cols=1, fig_title=f"{fig_title}: {i}/{num_chunks}"
+                layout_cols=layout_cols.to_list(),
+                group_col=group_col,
+                n_cols=1,
+                fig_title=f"{fig_title}: {i}/{num_chunks}",
             )
-            viz.add_boxplot()
-            viz.add_stripplot()
+            viz.add_boxplot(x_col=x_col)
+            viz.add_stripplot(x_col=x_col)
             viz.display()
             viz.save(f"{output_path}/{fig_title}_{i}.png")
 
@@ -1716,22 +1801,25 @@ if __name__ == "__main__":
     np.random.seed(42)
     data["group1"] = np.random.choice(["A", "B", "C"], size=5000)
     data["group2"] = np.random.choice(["X", "Y"], size=5000)
+    viz = DataVisualizer(data)
 
     # Test add_histogram
-    viz = DataVisualizer(data)
-    viz.create_figure(y_cols=["normal", "positive_skewed", "negative_skewed", "bimodal"], n_cols=2)
+    viz.create_figure(layout_cols=["normal", "positive_skewed", "negative_skewed", "bimodal"], n_cols=2)
     viz.add_histogram(show_distribution_stats=True, add_kde=True)
     viz.display()
 
-    # Test add_boxplot
+    # Test add_boxplot and add_stripplot
     fig, axes_map = viz.create_figure(
-        x_cols=["group1"],
-        y_cols=["normal", "positive_skewed", "negative_skewed", "bimodal"],
+        layout_cols=["normal", "positive_skewed", "negative_skewed", "bimodal"],
         group_col="group2",
         n_cols=2,
         fig_title="Boxplot by group1",
     )
-    viz.add_boxplot()
-    # Test add_stripplot
-    viz.add_stripplot()
+    viz.add_boxplot(x_col="group1")
+    viz.add_stripplot(x_col="group1")
+    viz.display()
+
+    # Test add_heatmap
+    viz.create_figure(layout_cols=["group1"], n_cols=2, fig_title="Correlation Heatmap (Test Data)")
+    viz.add_correlation_heatmap()
     viz.display()
