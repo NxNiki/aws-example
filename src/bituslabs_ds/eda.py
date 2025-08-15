@@ -780,6 +780,8 @@ class DataVisualizer:
             if unique_counts:
                 for n_unique in unique_counts:
                     n_plots *= n_unique
+
+            logger.info(f"Number of plots in current figure: {n_plots}")
             return n_plots
 
     def _get_axes_keys(self, non_numeric_cols: List[str], numeric_cols: List[str]) -> List[Tuple[str, str, Any]]:
@@ -873,9 +875,9 @@ class DataVisualizer:
         else:
             axes = np.array(axes).flatten()
 
-        for idx in range(n_plots):
+        for idx in range(len(axes)):
             ax = axes[idx]
-            if idx < len(axes):
+            if idx < n_plots:
                 ax.set_xlabel("", fontsize=12)
                 ax.set_ylabel("", fontsize=12)
                 ax.tick_params(axis="x", rotation=0, labelsize=10)
@@ -982,7 +984,7 @@ class DataVisualizer:
             medianprops=dict(linewidth=2),
             whis=1.5,
             notch=True,
-            showfliers=False,
+            showfliers=True,
             **kwargs,
         )
 
@@ -1013,7 +1015,7 @@ class DataVisualizer:
 
         # Set median line color to match box edge
         for i, median in enumerate(box_lines):
-            hue_idx = i // (x_col_length * 5) % group_length
+            hue_idx = i // (x_col_length * 6) % group_length
             color = palette[hue_idx]
             median.set_color(color)
             median.set_linewidth(2)
@@ -1067,7 +1069,7 @@ class DataVisualizer:
             size=2 if non_nans > 1e5 else size,
             legend=False,
             jitter=jitter,
-            alpha=0.1 if non_nans > 1e5 else alpha,
+            alpha=0.2 if non_nans > 1e5 else alpha,
             **kwargs,
         )
 
