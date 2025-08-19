@@ -25,12 +25,12 @@ from pandas import DataFrame, Series
 from scipy.cluster.hierarchy import leaves_list, linkage
 from scipy.stats import energy_distance, skew
 from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, power_transform
 from statannotations.Annotator import Annotator
 
 from bituslabs_ds.config import DEFAULT_MAX_JOBS
 from bituslabs_ds.descriptors import ListProperty
-from bituslabs_ds.utils import batch_iterator, convert_to_list, df_power_transform, group_iterator, keep_numeric_columns
+from bituslabs_ds.utils import batch_iterator, convert_to_list, group_iterator, keep_numeric_columns
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -687,13 +687,13 @@ class DataVisualizer:
         self.layout_cols = ListProperty("layout_cols", immutable=False)
 
         # attributes defined in create_figure:
-        self.figure = None
-        self.figure_size: Optional[Tuple[float, float]] = None
-        self.group_col: Optional[str] = None
+        self.figure: plt.Figure = None
+        self.figure_size: Tuple[float, float] = (8, 6)
+        self.group_col: str = ""
         self.axes_keys: List[Tuple[str, str, Any]] = []
         self.axes: List[Axes] = []
-        self.n_cols: Optional[int] = None
-        self.n_rows: Optional[int] = None
+        self.n_cols: int = 1
+        self.n_rows: int = 1
         self.plot_numeric_cols: List[str] = []
         self.plot_non_numeric_cols: List[str] = []
 
@@ -830,7 +830,7 @@ class DataVisualizer:
     def create_figure(
         self,
         layout_cols: Optional[Union[str, List[str]]] = None,
-        group_col: Optional[str] = None,
+        group_col: str = "",
         n_cols: int = 3,
         fig_title: Optional[str] = None,
         fig_size: Tuple[float, float] = (8, 6),
@@ -867,7 +867,6 @@ class DataVisualizer:
             n_rows,
             n_cols,
             figsize=(fig_size[0] * n_cols, fig_size[1] * n_rows),
-            gridspec_kw={"wspace": 0.3, "hspace": 0.25, "left": 0.05, "right": 0.95, "top": 0.95, "bottom": 0.08},
         )
 
         if n_plots == 1:
@@ -1135,16 +1134,21 @@ class DataVisualizer:
             else:
                 legend_label = ""
 
-        n_bins = max(min(bins, values.nunique()), 50)
+        values = np.asarray(values, dtype=float)
+        values = values[np.isfinite(values)]
+        n_bins = max(min(bins, len(np.unique(values))), 50)
         counts, bin_edges, patches = axis.hist(
             values, bins=n_bins, alpha=alpha, edgecolor="black", label=legend_label, **kwargs
         )
 
         if add_kde:
-            ax2 = axis.twinx()
-            sns.kdeplot(values, bw_method="silverman", color="red", linestyle="--", ax=ax2)
-            ax2.set_ylabel("Density")
-            ax2.grid(False)
+            try:
+                ax2 = axis.twinx()
+                sns.kdeplot(values, bw_method="silverman", color="red", linestyle="--", ax=ax2)
+                ax2.set_ylabel("Density")
+                ax2.grid(False)
+            except Exception as e:
+                logger.warning(f"Error adding KDE plot: {e}")
 
         # Annotate with column name at max bin
         if len(counts) > 0:
@@ -1205,9 +1209,12 @@ class DataVisualizer:
 
         heatmap = sns.heatmap(
             correlation_matrix,
-            cmap="viridis",
+            cmap="Reds",
             linewidths=0.5,
             ax=axis,
+            annot=True,  # Add correlation values to the heatmap
+            fmt=".2f",  # Format the annotation to 2 decimal places
+            annot_kws={"size": 10},
         )
 
         axis.set_title(title, fontsize=16, pad=20)
@@ -1396,6 +1403,18 @@ class DataProfiler:
         # Initialize profiling results
         self._original_numeric_columns: List[str] = self.check_numeric_columns(include_boolean=True)
         self.count_missing_columns(verbose=True)
+        self.count_nan_for_columns()
+        self.count_rows_with_nan()
+
+    def count_nan_for_columns(self) -> Dict[str, int]:
+        res = {col: self.df[col].isna().sum() for col in self.df.columns}
+        logger.info(f"number of nans in each column: \n {res}")
+        return res
+
+    def count_rows_with_nan(self) -> int:
+        res = self.df.isna().any(axis=1).sum()
+        logger.info(f"number of rows with nans: \n {res}/{self.df.shape[0]}")
+        return res
 
     @property
     def processed_numerical_columns(self):
@@ -1468,13 +1487,13 @@ class DataProfiler:
         """Transform skewed columns using log or exponential transformations."""
         pos_skewed, neg_skewed = self.get_skewed_columns()
 
-        # Transform positively skewed columns (log transformation)
+        # Transform positively skewed columns (yeo-johnson transformation)
         for col in pos_skewed:
-            self.df[f"{col}{pos_suffix}"] = np.log1p(self.df[col])
+            self.df[f"{col}{pos_suffix}"] = power_transform(self.df[col].values.reshape(-1, 1), method="yeo-johnson")
 
-        # Transform negatively skewed columns (exponential transformation)
+        # Transform negatively skewed columns (yeo-johnson transformation)
         for col in neg_skewed:
-            self.df[f"{col}{neg_suffix}"] = np.exp(self.df[col])
+            self.df[f"{col}{neg_suffix}"] = power_transform(self.df[col].values.reshape(-1, 1), method="yeo-johnson")
 
     def get_correlation_matrix(self, method: str = "pearson") -> pd.DataFrame:
         """Get correlation matrix for numerical columns."""
@@ -1500,6 +1519,7 @@ class DataProfiler:
             logger.warning("Only one columns is selected to augment data")
 
         scaler = StandardScaler()
+        data = data.replace([np.inf, -np.inf], np.nan)
         df_scaled = scaler.fit_transform(data[columns].dropna(axis=1, how="any"))
 
         if "mean" in method:
@@ -1535,14 +1555,12 @@ class DataProfiler:
         grouped = data.groupby(group_cols)[var_columns]
 
         # Calculate statistics
-        stats = grouped.agg(["count", "mean", "std", "min", "max"])
+        stats = grouped.agg(["count", "median", "mean", "std", "min", "max"])
 
         if transpose:
             stats = stats.T
 
-        print("Group Statistics:")
-        print(stats)
-        print("\n" + "=" * 50 + "\n")
+        logger.info(f"Group Statistics:\n {stats.reset_index().to_markdown(index=False)}")
 
     def count_missing_columns(self, verbose: bool = True) -> dict:
         return self.count_df_missing_columns(self.df, verbose)
@@ -1580,6 +1598,8 @@ class Anova:
         var_columns = convert_to_list(var_columns)
 
         self.data = df[between_vars + var_columns].copy()
+        self.data = self.data.replace([np.inf, -np.inf], np.nan)
+
         self.between_vars = between_vars
         self.var_columns = var_columns
         self.anova_report: Dict = defaultdict(list)
@@ -1624,12 +1644,15 @@ class Anova:
 
     @property
     def anova_table(self) -> pd.DataFrame:
-        if len(self.anova_report) == 0:
-            res = pd.DataFrame({})
+        res = pd.DataFrame(self.anova_report)
+        if len(res) == 0:
+            return res
+
+        if len(self.between_vars) > 1:
+            eta_label = f"{self.between_vars[0]} * {self.between_vars[1]}-eta2"
         else:
-            res = pd.DataFrame(self.anova_report)
-            interaction_eta_label = f"{self.between_vars[0]} * {self.between_vars[1]}-eta2"
-            res.sort_values(by=interaction_eta_label, inplace=True, ascending=False)
+            eta_label = f"{self.between_vars[0]}-eta2"
+        res.sort_values(by=eta_label, inplace=True, ascending=False)
         return res
 
     def _perform_and_report_post_hoc(
@@ -1725,7 +1748,7 @@ class Anova:
         self.post_hoc_report = defaultdict(list)
 
         if len(anova_table) == 0:
-            raise Exception("Run anova before post-hoc analysis!")
+            logger.warning("Run anova before post-hoc analysis!")
 
         for col in var_columns:
             # Check if the variable was processed by ANOVA and if any main effect or interaction was significant
@@ -1808,6 +1831,7 @@ if __name__ == "__main__":
     # Test add_histogram
     viz.create_figure(layout_cols=["normal", "positive_skewed", "negative_skewed", "bimodal"], n_cols=2)
     viz.add_histogram(show_distribution_stats=True, add_kde=True)
+    viz.figure.subplots_adjust(left=0.05, bottom=0.05, top=0.95, right=0.95, wspace=0.25, hspace=0.25)
     viz.display()
 
     # Test add_boxplot and add_stripplot
