@@ -937,7 +937,8 @@ class DataVisualizer:
             elif plot_func.__name__ == "add_histogram_to_axis":
                 plot_func(data_subset, ax, y_col, **kwargs)
             elif plot_func.__name__ == "add_correlation_heatmap_to_axis":
-                plot_func(data_subset, ax, **kwargs)
+                title = f"{key[0]}={key[2]}"
+                plot_func(data_subset, ax, title=title, **kwargs)
             else:
                 raise NotImplementedError(f"Plot function {plot_func.__name__} not implemented")
 
@@ -1218,10 +1219,10 @@ class DataVisualizer:
         )
 
         axis.set_title(title, fontsize=16, pad=20)
-        axis.set_xlabel("Variables", fontsize=12)
-        axis.set_ylabel("Variables", fontsize=12)
-        plt.setp(axis.get_xticklabels(), rotation=45, ha="right")
-        plt.setp(axis.get_yticklabels(), rotation=0)
+        axis.set_xlabel(None)
+        axis.set_ylabel(None)
+        plt.setp(axis.get_xticklabels(), rotation=30, ha="right", fontsize=12)
+        plt.setp(axis.get_yticklabels(), rotation=0, fontsize=12)
 
         return axis
 
@@ -1848,4 +1849,5 @@ if __name__ == "__main__":
     # Test add_heatmap
     viz.create_figure(layout_cols=["group1"], n_cols=2, fig_title="Correlation Heatmap (Test Data)")
     viz.add_correlation_heatmap()
+    viz.figure.subplots_adjust(left=0.15, bottom=0.15, top=0.9, right=0.97, wspace=0.25, hspace=0.4)
     viz.display()
