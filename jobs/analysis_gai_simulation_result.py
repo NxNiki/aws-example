@@ -26,12 +26,12 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def load_process_data(reload: bool = False) -> pd.DataFrame:
-    local_output = f"{SCRIPT_DIR}/output/v1_all_sessions_summary_20250729.csv"
+    local_output = f"{SCRIPT_DIR}/output/v1_all_sessions_summary_20250806.csv"
     s3_files: List[str] = []
     if reload or not os.path.exists(local_output):
         s3_files += list_s3_files(
             S3_BUCKET,
-            prefix="gail_simulator_data_raw/results_v20250725/sim_20250729_0009/",
+            prefix="gail_simulator_data_raw/results_v20250725/sim_20250806/",
             pattern=".*_sessions_summary.csv",
         )
         # s3_files += list_s3_files(
@@ -47,6 +47,7 @@ def load_process_data(reload: bool = False) -> pd.DataFrame:
     data = read_files(s3_files, local_cache_path=local_output, reload=reload)
     data.drop(columns=["active", "session_id", "balance_change"], inplace=True)
     data["cluster_index"] = data["player_id"].str.extract(r"(cluster\d+)_", expand=False).astype(str)
+    data = data[data["cluster_index"] == "cluster2"]
     print(data.shape)
     # data = data[data["total_spins"]>40]
     print(data.shape)
@@ -61,29 +62,36 @@ def load_process_data(reload: bool = False) -> pd.DataFrame:
 if __name__ == "__main__":
 
     data = load_process_data(reload=False)
-    data_profiler = DataProfiler(data)
-    viz = DataVisualizer(data_profiler)
+    data_profiler = DataProfiler(data, skewness_threshold=1.5)
 
+    viz = DataVisualizer(data_profiler)
     # Plot distributions with distribution statistics
-    viz.create_figure(layout_cols=data_profiler.processed_numerical_columns, n_cols=5)
-    viz.add_histogram(show_distribution_stats=True, add_kde=True)
+    viz.create_figure(layout_cols=data_profiler.processed_numerical_columns, group_col="machine_id", n_cols=5)
+    viz.add_histogram(show_distribution_stats=True, kde=True)
+    viz.figure.subplots_adjust(left=0.05, bottom=0.05, top=0.95, right=0.95)
     viz.display()
     viz.save(f"{SCRIPT_DIR}/figures/gai_simulation_distribution.png")
 
     # Transform skewed columns
     viz.data_profiler.transform_skewed_columns(pos_suffix="_log", neg_suffix="_exp")
-    viz.create_figure(layout_cols=data_profiler.processed_numerical_columns, n_cols=5)
-    viz.add_histogram(show_distribution_stats=True, add_kde=True)
+    viz.create_figure(layout_cols=data_profiler.processed_numerical_columns, group_col="machine_id", n_cols=5)
+    viz.add_histogram(show_distribution_stats=True, kde=True)
+    viz.figure.subplots_adjust(left=0.05, bottom=0.05, top=0.95, right=0.95)
     viz.display()
     viz.save(f"{SCRIPT_DIR}/figures/gai_simulation_distribution_log.png")
 
     # Plot correlation heatmap
-    viz.create_figure(fig_title="Correlation for: all group")
+    # viz.create_figure(layout_cols=["machine_id"], fig_title="Correlation for: cluster 2", fig_size=(5, 3.5))
+    viz.create_figure(fig_title="Correlation for: cluster 2", fig_size=(20, 15))
     viz.add_correlation_heatmap()
-    # viz.save("./figures/gai_simulation_correlation.png")
+    viz.figure.subplots_adjust(left=0.15, bottom=0.15, top=0.90, right=0.97)
     viz.display()
+    viz.save(f"{SCRIPT_DIR}/figures/gai_simulation_correlation.png")
 
     # two-way ANOVA:
+    # anova_between_vars = ["machine_id", "cluster_index"]
+    anova_between_vars = ["machine_id"]
+
     data_profiler.augment_columns(
         columns=data_profiler.processed_numerical_columns, col_name="compound_metric", method=["pca"]
     )
@@ -107,8 +115,16 @@ if __name__ == "__main__":
         transpose=False,
     )
 
-    anova = Anova(data_profiler.df, between_vars=["machine_id", "cluster_index"], var_columns=anova_dv)
+    anova = Anova(data_profiler.df, between_vars=anova_between_vars, var_columns=anova_dv)
     anova.run_anova()
-    anova.run_post_hoc_analysis(anova_dv, effects="main")
-    anova.run_post_hoc_analysis(anova_dv, effects="interaction", group_var="cluster_index", p_thresh=0.05)
-    anova.show_box_plot(x_col="cluster_index", group_col="machine_id", output_path=f"{SCRIPT_DIR}/figures")
+    anova.run_post_hoc_analysis(anova_dv, effects="main", p_thresh=0.05)
+    if len(anova_between_vars) > 1:
+        anova.run_post_hoc_analysis(anova_dv, effects="interaction", group_var="cluster_index", p_thresh=0.05)
+        anova.show_box_plot(
+            x_col="cluster_index",
+            group_col="machine_id",
+            output_path=f"{SCRIPT_DIR}/figures",
+            fig_title="boxplot_two_factors",
+        )
+    else:
+        anova.show_box_plot(x_col="machine_id", output_path=f"{SCRIPT_DIR}/figures", fig_title="boxplot_machine_id")

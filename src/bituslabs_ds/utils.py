@@ -277,6 +277,8 @@ def column_iterator(
 ) -> Iterator[Tuple[pd.DataFrame, int]]:
     """
     iterator to select first n columns of dataframe with order defined by ordered_column_names.
+    This is typcially used in elbow method to select top n features.
+
     :param data:
     :param ordered_column_names: order of columns to select first n columns of dataframe
     :param n_columns: first n columns of dataframe to select

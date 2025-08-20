@@ -21,6 +21,7 @@ from diptest import diptest
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
 from matplotlib.ticker import MaxNLocator
+from matplotlib.typing import ColorType
 from pandas import DataFrame, Series
 from scipy.cluster.hierarchy import leaves_list, linkage
 from scipy.stats import energy_distance, skew
@@ -935,9 +936,9 @@ class DataVisualizer:
             elif plot_func.__name__ == "add_stripplot_to_axis":
                 plot_func(data_subset, ax, x_col, y_col, self.group_col, self.palette, show_legend=False, **kwargs)
             elif plot_func.__name__ == "add_histogram_to_axis":
-                plot_func(data_subset, ax, y_col, **kwargs)
+                plot_func(data_subset, ax, y_col, self.group_col, **kwargs)
             elif plot_func.__name__ == "add_correlation_heatmap_to_axis":
-                title = f"{key[0]}={key[2]}"
+                title = f"{key[0]}={key[2]}" if key[0] != "" else ""
                 plot_func(data_subset, ax, title=title, **kwargs)
             else:
                 raise NotImplementedError(f"Plot function {plot_func.__name__} not implemented")
@@ -1086,6 +1087,8 @@ class DataVisualizer:
         data: pd.DataFrame,
         axis: Axes,
         y_col: str,
+        group_col: Optional[str] = None,
+        show_distribution_stats: bool = False,
         **kwargs,
     ) -> Axes:
         """
@@ -1102,66 +1105,45 @@ class DataVisualizer:
             The axes with histograms added
         """
 
-        bins = kwargs.pop("bins", 50)
-        alpha = kwargs.pop("alpha", 0.5)
-        add_kde = kwargs.pop("add_kde", False)
-        show_distribution_stats = kwargs.pop("show_distribution_stats", False)
-
-        if show_distribution_stats:
-            feature_stats = self.data_profiler.check_distribution_stats(refresh=True)
-        else:
-            feature_stats = None
-
-        values = data[[y_col]].dropna()
+        values = data[[y_col]].dropna().values.flatten()
+        values = np.asarray(values, dtype=float)
+        values = values[np.isfinite(values)]
 
         if len(values) == 0:
             logger.warning(f"No values found for column: {y_col}")
             return
 
-        # Distribution statistics using profiler analytics
-        if feature_stats is not None:
-            stat = next((s for s in feature_stats if s.get("column") == y_col), None)
-            if stat and not pd.isna(stat.get("skewness")):
-                skewness = stat["skewness"]
-                dip_stat = stat["dip_stat"]
-                p_value = stat["dip_p_values"]
+        if len(np.unique(values)) == 1:
+            logger.warning(f"Only one unique value found for column: {y_col}. Set kde to False.")
+            kwargs["kde"] = False
+            return
 
-                if p_value < 0.05:
-                    legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_stat:.3f}*"
-                else:
-                    legend_label = f"skewness: {skewness:.3f}\nunimodality: {dip_stat:.3f}"
-            else:
-                legend_label = ""
+        group_col = None if group_col == "" else group_col
+        sns.histplot(data, x=y_col, hue=group_col, palette=self.palette, ax=axis, **kwargs)
 
-        values = np.asarray(values, dtype=float)
-        values = values[np.isfinite(values)]
-        n_bins = max(min(bins, len(np.unique(values))), 50)
-        counts, bin_edges, patches = axis.hist(
-            values, bins=n_bins, alpha=alpha, edgecolor="black", label=legend_label, **kwargs
-        )
+        if show_distribution_stats:
+            legend_labels = []
+            for data_group, group, _ in group_iterator(data, group_col):
+                feature_stats = self.data_profiler.check_df_distribution_stats(data_group, [y_col])
 
-        if add_kde:
-            try:
-                ax2 = axis.twinx()
-                sns.kdeplot(values, bw_method="silverman", color="red", linestyle="--", ax=ax2)
-                ax2.set_ylabel("Density")
-                ax2.grid(False)
-            except Exception as e:
-                logger.warning(f"Error adding KDE plot: {e}")
+                # Distribution statistics using profiler analytics
+                stat = next((s for s in feature_stats if s.get("column") == y_col), None)
+                if stat and not pd.isna(stat.get("skewness")):
+                    skewness = stat["skewness"]
+                    dip_stat = stat["dip_stat"]
+                    p_value = stat["dip_p_values"]
 
-        # Annotate with column name at max bin
-        if len(counts) > 0:
-            max_bin_index = counts.argmax()
-            x_pos = (bin_edges[max_bin_index] + bin_edges[max_bin_index + 1]) / 2
-            y_pos = counts[max_bin_index]
-            axis.text(x_pos, y_pos, f"{counts.max():.2e}", fontsize=9, ha="center", va="bottom")
+                    group_lablel = "" if group is None else f"{group}: "
+                    if p_value < 0.05:
+                        legend_labels.append(f"{group_lablel}skewness: {skewness:.3f}\nunimodality: {dip_stat:.3f}*")
+                    else:
+                        legend_labels.append(f"{group_lablel}skewness: {skewness:.3f}\nunimodality: {dip_stat:.3f}")
+
+            axis.legend(labels=legend_labels, frameon=False)
 
         axis.set_title(y_col)
         axis.set_xlabel("Value")
         axis.set_ylabel("Frequency")
-
-        custom_handler_mapping = {patches[0]: NoSymbolHandler()}
-        axis.legend(handler_map=custom_handler_mapping, frameon=False)
         axis.grid(True)
 
         return axis
@@ -1216,7 +1198,8 @@ class DataVisualizer:
             annot_kws={"size": 10},
         )
 
-        axis.set_title(title, fontsize=16, pad=20)
+        if title != "":
+            axis.set_title(title, fontsize=16, pad=20)
         axis.set_xlabel(None)
         axis.set_ylabel(None)
         plt.setp(axis.get_xticklabels(), rotation=30, ha="right", fontsize=12)
@@ -1798,7 +1781,12 @@ class Anova:
         return res_post_hoc
 
     def show_box_plot(
-        self, x_col: str, group_col: str, plots_per_figure: int = 5, output_path: str = ".", fig_title: str = "boxplot"
+        self,
+        x_col: str,
+        group_col: str = "",
+        plots_per_figure: int = 5,
+        output_path: str = ".",
+        fig_title: str = "boxplot",
     ) -> None:
         post_hoc_table = pd.DataFrame(self.post_hoc_report)
         for layout_cols, i, num_chunks in batch_iterator(
@@ -1836,11 +1824,17 @@ if __name__ == "__main__":
     data["group2"] = np.random.choice(["X", "Y"], size=5000)
     viz = DataVisualizer(data)
 
+    # Test add_histogram without group_col
+    viz.create_figure(layout_cols=["normal", "positive_skewed", "negative_skewed", "bimodal"], n_cols=2)
+    viz.add_histogram(show_distribution_stats=True, kde=True)
+    viz.figure.subplots_adjust(left=0.05, bottom=0.05, top=0.95, right=0.95, wspace=0.25, hspace=0.25)
+    viz.display()
+
     # Test add_histogram
     viz.create_figure(
         layout_cols=["normal", "positive_skewed", "negative_skewed", "bimodal"], group_col="group2", n_cols=2
     )
-    viz.add_histogram(show_distribution_stats=True, add_kde=True)
+    viz.add_histogram(show_distribution_stats=True, kde=True)
     viz.figure.subplots_adjust(left=0.05, bottom=0.05, top=0.95, right=0.95, wspace=0.25, hspace=0.25)
     viz.display()
 
