@@ -755,6 +755,7 @@ class DataVisualizer:
             return [], []
 
         numeric_cols = self.data_profiler.check_numeric_columns(include_boolean=False, subset_cols=layout_cols)
+        numeric_cols.sort()
         non_numeric_cols = [col for col in layout_cols if col not in numeric_cols]
         return numeric_cols, non_numeric_cols
 
@@ -944,6 +945,7 @@ class DataVisualizer:
                 raise NotImplementedError(f"Plot function {plot_func.__name__} not implemented")
 
     def add_boxplot(self, **kwargs) -> None:
+        logger.info(f"Adding boxplot to {len(self.axes)} axes")
         self._add_plot_to_axes(self.add_boxplot_to_axis, **kwargs)
 
     @staticmethod
@@ -1025,7 +1027,7 @@ class DataVisualizer:
         self,
         **kwargs,
     ) -> None:
-
+        logger.info(f"Adding stripplot to {len(self.axes)} axes")
         self._add_plot_to_axes(self.add_stripplot_to_axis, **kwargs)
 
     @staticmethod
@@ -1079,7 +1081,7 @@ class DataVisualizer:
         self,
         **kwargs,
     ):
-
+        logger.info(f"Adding histogram to {len(self.axes)} axes")
         self._add_plot_to_axes(self.add_histogram_to_axis, **kwargs)
 
     def add_histogram_to_axis(
@@ -1116,7 +1118,6 @@ class DataVisualizer:
         if len(np.unique(values)) == 1:
             logger.warning(f"Only one unique value found for column: {y_col}. Set kde to False.")
             kwargs["kde"] = False
-            return
 
         group_col = None if group_col == "" else group_col
         sns.histplot(data, x=y_col, hue=group_col, palette=self.palette, ax=axis, **kwargs)
@@ -1154,6 +1155,8 @@ class DataVisualizer:
         value_cols: List[str] = [],
     ) -> None:
         """Add correlation heatmap to the current figure."""
+        logger.info(f"Adding correlation heatmap to {len(self.axes)} axes")
+
         if not hasattr(self, "figure") or self.figure is None:
             raise ValueError("No figure available. Create figure first.")
 
@@ -1356,6 +1359,7 @@ class DataVisualizer:
     def save(self, filename: str, dpi: int = 300, bbox_inches: str = "tight"):
         """Save the current figure."""
         if self.figure:
+            logger.info(f"saving figure to {filename}")
             self.figure.savefig(filename, dpi=dpi, bbox_inches=bbox_inches)
         else:
             print("No figure to save. Create a plot first.")
@@ -1381,9 +1385,13 @@ class DataProfiler:
         self.df = df.copy() if isinstance(df, pd.DataFrame) else df.to_frame()
         self.skewness_threshold = abs(skewness_threshold)
         self.output_path = output_path
+        self._pos_skewed_col_suffix = "_log"
+        self._neg_skewed_col_suffix = "_exp"
+        self._transform_skewed_columns: Dict[str, str] = {}
 
         # Initialize profiling results
         self._original_numeric_columns: List[str] = self.check_numeric_columns(include_boolean=True)
+
         self.count_missing_columns(verbose=True)
         self.count_nan_for_columns()
         self.count_rows_with_nan()
@@ -1400,23 +1408,23 @@ class DataProfiler:
 
     @property
     def processed_numerical_columns(self):
-        """Get processed numerical columns for analysis. This includes power transformed columns."""
-        return self.check_numeric_columns(include_boolean=True, refresh=True)
+        """Get processed numerical columns for analysis. If a column is power transformed, it will be replaced with the transformed column."""
+        res = [
+            col if col not in self._transform_skewed_columns else self._transform_skewed_columns[col]
+            for col in self._original_numeric_columns
+        ]
+        return res
 
     def check_numeric_columns(
         self, include_boolean: bool = True, subset_cols: Optional[Union[str, List[str]]] = None, refresh: bool = False
     ) -> List[str]:
-        """Check and return numeric columns in the DataFrame."""
+        """Check and return numeric columns in the DataFrame. This includes the orignal and power transformed columns."""
 
         if subset_cols:
-            processed_numerical_columns = self.check_df_numerical_columns(self.df[subset_cols], include_boolean)
+            numerical_columns = self.check_df_numerical_columns(self.df[subset_cols], include_boolean)
         else:
-            if not hasattr(self, "_processed_numerical_columns") or refresh:
-                processed_numerical_columns = self.check_df_numerical_columns(self.df, include_boolean)
-                self._processed_numerical_columns = processed_numerical_columns
-            else:
-                processed_numerical_columns = self._processed_numerical_columns
-        return processed_numerical_columns
+            numerical_columns = self.check_df_numerical_columns(self.df, include_boolean)
+        return numerical_columns
 
     @staticmethod
     def check_df_numerical_columns(data: Union[pd.DataFrame, pd.Series], include_boolean: bool = True) -> List[str]:
@@ -1478,13 +1486,25 @@ class DataProfiler:
         """Transform skewed columns using log or exponential transformations."""
         pos_skewed, neg_skewed = self.get_skewed_columns()
 
+        if pos_suffix == "" or pos_suffix is None:
+            pos_suffix = self._pos_skewed_col_suffix
+        else:
+            self._pos_skewed_col_suffix = pos_suffix
+
+        if neg_suffix == "" or neg_suffix is None:
+            neg_suffix = self._neg_skewed_col_suffix
+        else:
+            self._neg_skewed_col_suffix = neg_suffix
+
         # Transform positively skewed columns (yeo-johnson transformation)
         for col in pos_skewed:
             self.df[f"{col}{pos_suffix}"] = power_transform(self.df[col].values.reshape(-1, 1), method="yeo-johnson")
+            self._transform_skewed_columns[col] = f"{col}{pos_suffix}"
 
         # Transform negatively skewed columns (yeo-johnson transformation)
         for col in neg_skewed:
             self.df[f"{col}{neg_suffix}"] = power_transform(self.df[col].values.reshape(-1, 1), method="yeo-johnson")
+            self._transform_skewed_columns[col] = f"{col}{neg_suffix}"
 
     def get_correlation_matrix(self, method: str = "pearson") -> pd.DataFrame:
         """Get correlation matrix for numerical columns."""
@@ -1622,7 +1642,7 @@ class Anova:
             self.anova_report["variable"].append(col)
             for index, row in anova_output.iterrows():
                 source = row["Source"]
-                if source == "Residual":
+                if source == "Residual" or source == "Within":
                     break
                 self.anova_report[f"{source}-p_value"].append(row["p-unc"])
                 self.anova_report[f"{source}-eta2"].append(row["np2"])
@@ -1789,6 +1809,11 @@ class Anova:
         fig_title: str = "boxplot",
     ) -> None:
         post_hoc_table = pd.DataFrame(self.post_hoc_report)
+
+        if len(post_hoc_table) == 0:
+            logger.warning("No post-hoc results found. Skip boxplot.")
+            return
+
         for layout_cols, i, num_chunks in batch_iterator(
             post_hoc_table["variable"].drop_duplicates(), plots_per_figure
         ):

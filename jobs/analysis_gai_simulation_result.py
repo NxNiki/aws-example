@@ -66,7 +66,9 @@ if __name__ == "__main__":
 
     viz = DataVisualizer(data_profiler)
     # Plot distributions with distribution statistics
-    viz.create_figure(layout_cols=data_profiler.processed_numerical_columns, group_col="machine_id", n_cols=5)
+    viz.create_figure(
+        layout_cols=data_profiler.processed_numerical_columns, group_col="cluster_index", n_cols=5, fig_size=(7, 3.5)
+    )
     viz.add_histogram(show_distribution_stats=True, kde=True)
     viz.figure.subplots_adjust(left=0.05, bottom=0.05, top=0.95, right=0.95)
     viz.display()
@@ -74,19 +76,27 @@ if __name__ == "__main__":
 
     # Transform skewed columns
     viz.data_profiler.transform_skewed_columns(pos_suffix="_log", neg_suffix="_exp")
-    viz.create_figure(layout_cols=data_profiler.processed_numerical_columns, group_col="machine_id", n_cols=5)
+    viz.create_figure(
+        layout_cols=data_profiler.processed_numerical_columns, group_col="cluster_index", n_cols=5, fig_size=(7, 3.5)
+    )
     viz.add_histogram(show_distribution_stats=True, kde=True)
     viz.figure.subplots_adjust(left=0.05, bottom=0.05, top=0.95, right=0.95)
     viz.display()
-    viz.save(f"{SCRIPT_DIR}/figures/gai_simulation_distribution_log.png")
+    viz.save(f"{SCRIPT_DIR}/figures/gai_simulation_distribution_transformed.png")
 
     # Plot correlation heatmap
-    # viz.create_figure(layout_cols=["machine_id"], fig_title="Correlation for: cluster 2", fig_size=(5, 3.5))
-    viz.create_figure(fig_title="Correlation for: cluster 2", fig_size=(20, 15))
+    viz.create_figure(fig_title="Correlation for: cluster 2", fig_size=(12, 7))
     viz.add_correlation_heatmap()
     viz.figure.subplots_adjust(left=0.15, bottom=0.15, top=0.90, right=0.97)
     viz.display()
     viz.save(f"{SCRIPT_DIR}/figures/gai_simulation_correlation.png")
+
+    # Plot correlation heatmap for machine_id
+    viz.create_figure(layout_cols=["machine_id"], fig_title="Correlation for: cluster 2", fig_size=(12, 7))
+    viz.add_correlation_heatmap()
+    viz.figure.subplots_adjust(left=0.15, bottom=0.15, top=0.90, right=0.97, wspace=0.25, hspace=0.35)
+    viz.display()
+    viz.save(f"{SCRIPT_DIR}/figures/gai_simulation_correlation_machine_id.png")
 
     # two-way ANOVA:
     # anova_between_vars = ["machine_id", "cluster_index"]
