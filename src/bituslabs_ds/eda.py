@@ -1457,9 +1457,12 @@ class DataProfiler:
         return self._distribution_stats
 
     @staticmethod
-    def check_df_distribution_stats(data: pd.DataFrame, numeric_columns: List[str]) -> List[Dict]:
+    def check_df_distribution_stats(data: pd.DataFrame, numeric_columns: Optional[List[str]] = None) -> List[Dict]:
         """Check distribution statistics for numerical columns for a given dataframe."""
         distribution_stats: List[Dict] = []
+        if numeric_columns is None:
+            numeric_columns = data.select_dtypes(include=["number"]).columns.tolist()
+
         for col in numeric_columns:
             values = data[col].dropna()
             if len(values) == 0:
