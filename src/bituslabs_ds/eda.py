@@ -933,7 +933,7 @@ class DataVisualizer:
             if plot_func.__name__ == "add_boxplot_to_axis":
                 plot_func(data_subset, ax, x_col, y_col, self.group_col, self.palette, show_legend, **kwargs)
             elif plot_func.__name__ == "add_stripplot_to_axis":
-                plot_func(data_subset, ax, x_col, y_col, self.group_col, self.palette, show_legend, **kwargs)
+                plot_func(data_subset, ax, x_col, y_col, self.group_col, self.palette, show_legend=False, **kwargs)
             elif plot_func.__name__ == "add_histogram_to_axis":
                 plot_func(data_subset, ax, y_col, **kwargs)
             elif plot_func.__name__ == "add_correlation_heatmap_to_axis":
@@ -984,15 +984,13 @@ class DataVisualizer:
             medianprops=dict(linewidth=2),
             whis=1.5,
             notch=True,
-            showfliers=True,
+            legend=show_legend,
             **kwargs,
         )
-
-        # Remove legend if show_legend is False
-        if not show_legend:
-            legend = axis.get_legend()
-            if legend is not None:
-                legend.remove()
+        # Remove the frame of the legend if it exists
+        legend = axis.get_legend()
+        if legend is not None:
+            legend.set_frame_on(False)
 
         # Get the list of boxes and median lines
         boxes = [child for child in axis.get_children() if isinstance(child, mpatches.PathPatch)]
@@ -1037,9 +1035,10 @@ class DataVisualizer:
         y_col: str,
         group_col: str,
         palette: List[Tuple[float, float, float]],
-        size: int = 4,
+        size: int = 5,
         alpha: float = 0.7,
         jitter: float = 0.25,
+        show_legend: bool = True,
         **kwargs,
     ) -> Axes:
         """
@@ -1066,10 +1065,10 @@ class DataVisualizer:
             dodge=True if group_col else False,
             ax=axis,
             palette=palette,
-            size=2 if non_nans > 1e5 else size,
-            legend=False,
+            size=3 if non_nans > 1e5 else size,
+            legend=show_legend,
             jitter=jitter,
-            alpha=0.2 if non_nans > 1e5 else alpha,
+            alpha=0.5 if non_nans > 1e5 else alpha,
             **kwargs,
         )
 
@@ -1113,8 +1112,7 @@ class DataVisualizer:
         else:
             feature_stats = None
 
-        # Get data for this column
-        values = data[y_col].dropna()
+        values = data[[y_col]].dropna()
 
         if len(values) == 0:
             logger.warning(f"No values found for column: {y_col}")
@@ -1419,7 +1417,7 @@ class DataProfiler:
 
     @property
     def processed_numerical_columns(self):
-        """Get processed numerical columns for analysis."""
+        """Get processed numerical columns for analysis. This includes power transformed columns."""
         return self.check_numeric_columns(include_boolean=True, refresh=True)
 
     def check_numeric_columns(
@@ -1454,26 +1452,32 @@ class DataProfiler:
         """Check distribution statistics for numerical columns."""
         if not hasattr(self, "_distribution_stats") or refresh:
             numerical_cols = self.check_numeric_columns(include_boolean=True)
-            self._distribution_stats = []
-
-            for col in numerical_cols:
-                values = self.df[col].dropna()
-                if len(values) == 0:
-                    continue
-
-                skewness = skew(values, bias=False)
-                dip_statistic_unimodal, p_value_unimodal = diptest(values)
-
-                self._distribution_stats.append(
-                    {
-                        "column": col,
-                        "skewness": skewness,
-                        "dip_stat": dip_statistic_unimodal,
-                        "dip_p_values": p_value_unimodal,
-                    }
-                )
+            self._distribution_stats = self.check_df_distribution_stats(self.df, numerical_cols)
 
         return self._distribution_stats
+
+    @staticmethod
+    def check_df_distribution_stats(data: pd.DataFrame, numeric_columns: List[str]) -> List[Dict]:
+        """Check distribution statistics for numerical columns for a given dataframe."""
+        distribution_stats: List[Dict] = []
+        for col in numeric_columns:
+            values = data[col].dropna()
+            if len(values) == 0:
+                continue
+
+            skewness = skew(values, bias=False)
+            dip_statistic_unimodal, p_value_unimodal = diptest(values)
+
+            distribution_stats.append(
+                {
+                    "column": col,
+                    "skewness": skewness,
+                    "dip_stat": dip_statistic_unimodal,
+                    "dip_p_values": p_value_unimodal,
+                }
+            )
+
+        return distribution_stats
 
     def get_skewed_columns(self, refresh: bool = False) -> Tuple[List[str], List[str]]:
         """Get positively and negatively skewed columns."""
@@ -1830,19 +1834,21 @@ if __name__ == "__main__":
     viz = DataVisualizer(data)
 
     # Test add_histogram
-    viz.create_figure(layout_cols=["normal", "positive_skewed", "negative_skewed", "bimodal"], n_cols=2)
+    viz.create_figure(
+        layout_cols=["normal", "positive_skewed", "negative_skewed", "bimodal"], group_col="group2", n_cols=2
+    )
     viz.add_histogram(show_distribution_stats=True, add_kde=True)
     viz.figure.subplots_adjust(left=0.05, bottom=0.05, top=0.95, right=0.95, wspace=0.25, hspace=0.25)
     viz.display()
 
     # Test add_boxplot and add_stripplot
-    fig, axes_map = viz.create_figure(
+    fig, axes = viz.create_figure(
         layout_cols=["normal", "positive_skewed", "negative_skewed", "bimodal"],
         group_col="group2",
         n_cols=2,
         fig_title="Boxplot by group1",
     )
-    viz.add_boxplot(x_col="group1")
+    viz.add_boxplot(x_col="group1", showfliers=False)
     viz.add_stripplot(x_col="group1")
     viz.display()
 
