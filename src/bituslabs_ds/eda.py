@@ -667,6 +667,8 @@ class DataVisualizer:
     """
     A comprehensive class for data visualization that organizes all plotting functions
     and allows sharing of data and configuration across methods.
+
+    Most of the plots can also be created with seaborn.FacetGrid.
     """
 
     def __init__(
