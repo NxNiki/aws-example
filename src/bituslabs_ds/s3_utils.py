@@ -133,17 +133,61 @@ def upload_file_to_s3(local_path: Union[str, Path], s3_bucket: str, s3_key: str)
     s3_bucket = parse_bucket_name(s3_bucket)
 
     try:
-        s3_client.upload_file(local_path, s3_bucket, s3_key, ExtraArgs=extra_args)
         logger.info(f"Uploaded {local_path} to s3://{s3_bucket}/{s3_key}")
+        s3_client.upload_file(local_path, s3_bucket, s3_key, ExtraArgs=extra_args)
         return f"s3://{s3_bucket}/{s3_key}"
     except FileNotFoundError:
-        logger.info("Error: The specified file was not found.")
+        logger.error("Error: The specified file was not found.")
     except NoCredentialsError:
-        logger.info("Error: AWS credentials not available.")
+        logger.error("Error: AWS credentials not available.")
     except Exception as e:
-        logger.info(f"Unexpected error: {e}")
+        logger.error(f"Unexpected error: {e}")
 
     return None
+
+
+def upload_folder_to_s3(
+    local_folder_path: Union[str, Path],
+    s3_bucket: str,
+    s3_prefix: str = "",
+    max_workers: int = DEFAULT_MAX_JOBS,
+) -> Tuple[str, List[str]]:
+    """
+    Uploads a local folder to an S3 bucket in parallel.
+
+    :param local_folder_path: Path to the local folder.
+    :param s3_bucket: Name of the S3 bucket.
+    :param s3_prefix: S3 object key prefix (e.g., 'my_data/').
+    :param max_workers: Maximum number of concurrent file uploads.
+    :return: List of S3 URIs for successfully uploaded files.
+    """
+    local_folder_path = Path(local_folder_path).resolve()
+    if not local_folder_path.is_dir():
+        logger.error(f"'{local_folder_path}' is not a valid directory.")
+        return f"s3://{s3_bucket}/{s3_prefix}", []
+
+    s3_bucket = parse_bucket_name(s3_bucket)
+    uploaded_uris = []
+    futures = []
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for root, _, files in os.walk(local_folder_path):
+            for file in files:
+                local_file_path = Path(root) / file
+                relative_path = local_file_path.relative_to(local_folder_path)
+                s3_key = str(Path(s3_prefix) / relative_path).replace("\\", "/")
+
+                # Submit each file upload as a separate task to the thread pool
+                future = executor.submit(upload_file_to_s3, local_file_path, s3_bucket, s3_key)
+                futures.append(future)
+
+        # Wait for all futures to complete and collect results
+        for future in as_completed(futures):
+            result = future.result()
+            if result:
+                uploaded_uris.append(result)
+
+    return f"s3://{s3_bucket}/{s3_prefix}", uploaded_uris
 
 
 def list_s3_files(bucket: str, prefix: str, pattern: Optional[str] = None) -> List[str]:
@@ -162,7 +206,7 @@ def list_s3_files(bucket: str, prefix: str, pattern: Optional[str] = None) -> Li
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
         for obj in page.get("Contents", []):
             key = obj["Key"]
-            if pattern is None or re.search(pattern, key):  # Changed from match to search
+            if pattern is None or re.search(pattern, key):
                 s3_uri = f"s3://{bucket}/{key}"
                 matching_keys.append(s3_uri)
                 logging.info(f"Found {s3_uri}")
@@ -209,7 +253,7 @@ def read_files(
     if isinstance(files, str):
         files = [files]
 
-    if parallel_mode == "none" or max_workers <= 1:
+    if parallel_mode == "none" or max_workers <= 1 or len(files) == 1:
         dfs = [read_func(file) for file in files]
     else:
         logger.info(f"read files using {max_workers} workers")

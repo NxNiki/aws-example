@@ -16,7 +16,7 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
 from bituslabs_ds.config import setup_logging
-from bituslabs_ds.utils import log_transform, remove_outliers
+from bituslabs_ds.utils import df_power_transform, remove_outliers
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -212,7 +212,7 @@ if __name__ == "__main__":
         usecols=[*non_features, *important_features],
     )
 
-    wucaishen_data = log_transform(wucaishen_data, col_names=features_log)
+    wucaishen_data = df_power_transform(wucaishen_data, col_names=features_log)
 
     data = scale_features(
         wucaishen_data[important_features], output_path, f"standardized_features_top_{args.top_features}"

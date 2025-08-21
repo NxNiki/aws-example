@@ -1,6 +1,7 @@
 .DS_Store
-.idea/*
 **/.log/*
+**/*.log
+**/*.zip
 *.csv
 **/features/
 **/figures/
@@ -11,4 +12,7 @@
 **.png
 **.jpg
 __pycache__
-dist/*
+dist/
+.mypy_cache/
+.idea/
+.vscode/

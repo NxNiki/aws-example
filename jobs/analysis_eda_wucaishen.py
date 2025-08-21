@@ -1,11 +1,10 @@
 import glob
-import logging
 import os
 from typing import List, Tuple, Union
 
 import pandas as pd
 
-from bituslabs_ds.eda import plot_df_distribution, plot_scatter_pairs, plot_seasonality, read_csv_cols
+from bituslabs_ds.eda import DataProfiler, plot_scatter_pairs, plot_seasonality, read_csv_cols
 
 
 def load_enriched_data(files: List[str], sampling: Union[int, float], output: str, reload=False) -> pd.DataFrame:
@@ -146,7 +145,7 @@ def run_eda(
     pairs: List[Tuple[str, str, bool, bool]],
 ):
 
-    plot_df_distribution(data.iloc[:, 1:], log=True)
+    DataProfiler.plot_df_distribution(data.iloc[:, 1:], log=True)
     make_seasonality_plots(data, time_column, seasonality_data_columns, freq="monthly")
     make_seasonality_plots(data, time_column, seasonality_data_columns, freq="weekly")
     make_seasonality_plots(data, time_column, seasonality_data_columns, freq="daily")

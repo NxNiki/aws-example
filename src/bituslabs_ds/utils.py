@@ -1,14 +1,107 @@
 import json
 import logging
+import os
+import shutil
+import subprocess
 from collections.abc import Sequence
-from typing import Any, Iterable, Iterator, List, Literal, Optional, Sized, Tuple, Union
+from typing import Any, Iterable, Iterator, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 from scipy.stats import zscore
+from sklearn.preprocessing import power_transform
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
+
+
+def get_data_from_url(url: str, output_filename: str, extraction_dir: str, overwrite=False):
+    """
+    Downloads a zip file from a given URL and unzips its contents locally.
+
+    Args:
+        url (str): The URL of the zip file to download.
+        output_filename (str): The name to save the downloaded zip file as.
+        extraction_dir (str): The directory to extract the contents into.
+        overwrite (bool): If True, delete the extraction directory
+                                   and the zip file before downloading and unzipping.
+                                   If False, and the extraction_dir already exists
+                                   and is not empty, the download/unzip is skipped.
+    Returns:
+        bool: True if the download and extraction were successful or skipped, False otherwise.
+    """
+
+    if not overwrite:
+        if os.path.exists(extraction_dir) and os.path.isdir(extraction_dir):
+            if os.listdir(extraction_dir):
+                print(
+                    f"Directory '{extraction_dir}' already exists and is not empty. Skipping download and extraction."
+                )
+                return True
+            else:
+                print(f"Directory '{extraction_dir}' exists but is empty. Proceeding with download.")
+        elif os.path.exists(output_filename):
+            print(
+                f"Zip file '{output_filename}' exists. Consider running with overwrite_existing=True if you want to re-extract or delete it."
+            )
+            # We'll still try to unzip if the dir is empty or doesn't exist,
+            # but won't re-download the zip if it's already there and not overwriting.
+
+    if overwrite:
+        print(f"'{overwrite}' is True. Cleaning up '{extraction_dir}' and '{output_filename}' before proceeding...")
+        if os.path.exists(extraction_dir) and os.path.isdir(extraction_dir):
+            try:
+                shutil.rmtree(extraction_dir)
+                print(f"Removed existing directory: {extraction_dir}")
+            except OSError as e:
+                print(f"Error removing directory {extraction_dir}: {e}")
+                return False
+        if os.path.exists(output_filename):
+            try:
+                os.remove(output_filename)
+                print(f"Removed existing file: {output_filename}")
+            except OSError as e:
+                print(f"Error removing file {output_filename}: {e}")
+                return False
+
+    # 1. Download the file using wget
+    # Only download if the output_filename doesn't exist OR if overwrite is True
+    if not os.path.exists(output_filename) or overwrite:
+        try:
+            print(f"Downloading {url}...")
+            subprocess.run(["wget", url, "-O", output_filename], check=True)
+            print(f"Downloaded {output_filename}")
+        except FileNotFoundError:
+            print("Error: 'wget' command not found. Please ensure wget is installed and in your system's PATH.")
+            return False
+        except subprocess.CalledProcessError as e:
+            print(f"Error downloading the file: {e}")
+            return False
+        except Exception as e:
+            print(f"An unexpected error occurred during download: {e}")
+            return False
+    else:
+        print(f"Skipping download: '{output_filename}' already exists (overwrite_existing is False).")
+
+    # 2. Unzip the file
+    try:
+        print(f"Unzipping {output_filename}...")
+        # Ensure extraction_dir exists or will be created by unzip
+        # If the directory exists but is empty, unzip will populate it.
+        # If we are not overwriting and the directory is already populated, we would have skipped earlier.
+        # So at this point, if extraction_dir exists, it's either empty or we're overwriting it.
+        subprocess.run(["unzip", output_filename, "-d", extraction_dir], check=True)
+        print(f"Unzipped {output_filename} into {extraction_dir}")
+        return True
+    except FileNotFoundError:
+        print("Error: 'unzip' command not found. Please ensure unzip is installed and in your system's PATH.")
+        return False
+    except subprocess.CalledProcessError as e:
+        print(f"Error unzipping the file: {e}")
+        return False
+    except Exception as e:
+        print(f"An unexpected error occurred during unzipping: {e}")
+        return False
 
 
 def save_list(items: List[Any], filepath: str, output_format: Literal["json", "python"] = "json") -> None:
@@ -50,23 +143,6 @@ def remove_outliers(
     return data_filtered, filtered_indices
 
 
-def count_missing_columns(df: pd.DataFrame, verbose: bool = True) -> int:
-    """
-    Count the number of columns in a DataFrame that contain missing (NaN) values.
-
-    :param df: Input DataFrame
-    :param verbose: If True, print columns with their missing counts
-    :return: Number of columns with missing values
-    """
-    missing_counts = df.isnull().sum()
-    cols_with_missing = missing_counts[missing_counts > 0]
-
-    if verbose:
-        logger.info(f"Columns with missing values: \n{cols_with_missing}")
-
-    return len(cols_with_missing)
-
-
 def keep_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
     Removes non-numeric columns from a pandas DataFrame and logs a warning.
@@ -87,20 +163,19 @@ def keep_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def log_transform(
+def df_power_transform(
     data: pd.DataFrame,
     col_names: Optional[Union[List[str], str]] = None,
-    base: int = 10,
     suffix="",
 ) -> pd.DataFrame:
     """
-    Apply log transformation to selected numeric columns of a DataFrame.
+    Apply log/exp transformation to selected numeric columns of a DataFrame.
     Handles negative values by preserving their sign: sign(x) * log(1 + abs(x))
+    For details, see: https://github.com/scikit-learn/scikit-learn/blob/c5497b7f7eacfaff061cf68e09bcd48aa93d4d6b/sklearn/preprocessing/_data.py#L3187
     0 will be preserved.
 
     :param data: Input DataFrame
     :param col_names: List of column names to transform
-    :param base: Log base, default is 10
     :param suffix: Suffix to add to column names, default is "":
     :return: Transformed DataFrame
     """
@@ -115,9 +190,9 @@ def log_transform(
     for col in col_names:
         if col in data_transformed.columns and np.issubdtype(data_transformed[col].dtype, np.number):
             col_data = data_transformed[col].astype(float).copy()
-            with np.errstate(divide="ignore", invalid="ignore"):
-                col_data = np.sign(col_data) * np.log1p(np.abs(col_data)) / np.log(base)
+            col_data = power_transform(col_data.to_frame())
             data_transformed[f"{col}{suffix}"] = col_data
+            logger.info(f"Column: {col} transformed to: {col}{suffix}.")
         else:
             logger.warning(f"Column: {col} not transformed.")
 
@@ -202,6 +277,8 @@ def column_iterator(
 ) -> Iterator[Tuple[pd.DataFrame, int]]:
     """
     iterator to select first n columns of dataframe with order defined by ordered_column_names.
+    This is typcially used in elbow method to select top n features.
+
     :param data:
     :param ordered_column_names: order of columns to select first n columns of dataframe
     :param n_columns: first n columns of dataframe to select

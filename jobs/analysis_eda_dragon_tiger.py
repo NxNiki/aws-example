@@ -16,18 +16,18 @@ from ydata_profiling.config import Settings
 
 from bituslabs_ds.config import S3_BUCKET, setup_logging
 from bituslabs_ds.eda import (
+    DataProfiler,
     plot_by_time,
-    plot_df_distribution,
     plot_dual_axis_sorted_swarm,
     plot_heatmap,
     plot_multiple_box_swarm,
     plot_scatter_pairs,
-    read_excel_sheets,
+    read_excel,
     split_column_by_multiple_separators,
     split_column_by_threshold,
 )
 from bituslabs_ds.s3_utils import upload_file_to_s3, write_pandas_to_s3
-from bituslabs_ds.utils import add_event_group_by_gap, check_consecutive_event, group_iterator, log_transform
+from bituslabs_ds.utils import add_event_group_by_gap, check_consecutive_event, df_power_transform, group_iterator
 
 config = Settings()
 config.plot.histogram.bins = 200
@@ -118,7 +118,7 @@ def time_to_seconds(t):
 
 def read_and_preprocess(file_name: str) -> pd.DataFrame:
 
-    df = read_excel_sheets(file_name, sheet_name_col="year_month")
+    df = read_excel(file_name, sheet_name_col="year_month")
     print(df.columns)
 
     df.drop(columns=COLUMNS_TO_DROP, inplace=True)
@@ -286,7 +286,7 @@ def plot_bet_time(df: pd.DataFrame, time_col: str = "timestamp", threshold_hours
 
 if __name__ == "__main__":
 
-    setup_logging("./eda_output/", "dragon_tiger.log")
+    setup_logging("./log_eda/", "dragon_tiger.log")
     data = read_and_preprocess("/Users/niuxin/Downloads/N020_BetOrders.xlsx")
 
     # s3_path = "dragon_tiger/processed_data"
@@ -387,11 +387,11 @@ if __name__ == "__main__":
     #     )
 
     ## plot distribution of bet intervals:
-    # plot_df_distribution(data.loc[data["LOGIN_NAME"] == "EW3u96150agent_136361155", "BET_INTERVAL"], log=True)
+    # DataProfiler.plot_df_distribution(data.loc[data["LOGIN_NAME"] == "EW3u96150agent_136361155", "BET_INTERVAL"], log=True)
     # print(data.loc[data["LOGIN_NAME"] == "EW3u96150agent_136361155", "BET_INTERVAL"].describe())
 
     # data_log = log_transform(data, col_names="BET_INTERVAL")
-    # plot_df_distribution(data_log.loc[data_log["LOGIN_NAME"] == "EW3u96150agent_136361155", "BET_INTERVAL"], log=True)
+    # DataProfiler.plot_df_distribution(data_log.loc[data_log["LOGIN_NAME"] == "EW3u96150agent_136361155", "BET_INTERVAL"], log=True)
 
     ## plot the start and end time for each day:
     # plot_bet_time(
