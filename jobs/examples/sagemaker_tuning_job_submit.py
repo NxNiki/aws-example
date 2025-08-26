@@ -3,7 +3,7 @@ from sagemaker.pytorch import PyTorch
 from sagemaker.tuner import CategoricalParameter, ContinuousParameter, HyperparameterTuner, IntegerParameter
 from sagemaker_training_job_submit import prepare_data
 
-from bituslabs_ds.config import SAGEMAKER_ROLE
+from bituslabs_ds.config import LOCAL_ROOT, SAGEMAKER_ROLE
 
 if __name__ == "__main__":
 
@@ -11,7 +11,7 @@ if __name__ == "__main__":
     prepare_data(s3_path)
 
     estimator = PyTorch(
-        entry_point="sagemaker_tuning_job.py",
+        entry_point=f"{LOCAL_ROOT}/jobs/examples/sagemaker_tuning_job.py",
         role=SAGEMAKER_ROLE,
         py_version="py310",
         framework_version="2.0",
@@ -36,8 +36,8 @@ if __name__ == "__main__":
         objective_metric_name,
         hyperparameter_ranges,
         metric_definitions,
-        max_jobs=40,
-        max_parallel_jobs=10,  # make sure this does not exceed the instance quota.
+        max_jobs=5,
+        max_parallel_jobs=5,  # make sure this does not exceed the instance quota.
         objective_type=objective_type,
     )
 
