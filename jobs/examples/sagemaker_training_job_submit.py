@@ -90,12 +90,12 @@ if __name__ == "__main__":
     }
 
     estimator = PyTorch(
-        image_uri=IMAGE_URI,
+        # image_uri=IMAGE_URI,
         role=SAGEMAKER_ROLE,
-        instance_count=1,  # make sure this does not exceed the instance quota, and the job script needs to config distributed training.
+        instance_count=5,  # make sure this does not exceed the instance quota, and the job script needs to config distributed training.
         instance_type="ml.g4dn.xlarge",
         entry_point="sagemaker_training_job.py",
-        source_dir=f"{LOCAL_ROOT}/jobs/examples",  # aviod large files in the scourc_dir or it takes long time to transfer to instance.
+        source_dir=f"{LOCAL_ROOT}/jobs/examples",  # avoid large files in the source_dir, or it takes a long time to transfer to instance.
         framework_version="2.0",
         py_version="py310",
         hyperparameters=hyperparameters,
@@ -109,17 +109,17 @@ if __name__ == "__main__":
     # Input channels with FullyReplicated setting
     train_input = sagemaker.inputs.TrainingInput(
         s3_data=f"{s3_path}/train/",
-        # distribution="FullyReplicated",
+        distribution="FullyReplicated",
     )
 
     validation_input = sagemaker.inputs.TrainingInput(
         s3_data=f"{s3_path}/valid/",
-        # distribution="FullyReplicated",
+        distribution="FullyReplicated",
     )
 
     test_input = sagemaker.inputs.TrainingInput(
         s3_data=f"{s3_path}/test/",
-        # distribution="FullyReplicated",
+        distribution="FullyReplicated",
     )
 
     estimator.fit(

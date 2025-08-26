@@ -37,7 +37,7 @@ if __name__ == "__main__":
         hyperparameter_ranges,
         metric_definitions,
         max_jobs=40,
-        max_parallel_jobs=20,  # make sure this does not exceed the instance quota.
+        max_parallel_jobs=10,  # make sure this does not exceed the instance quota.
         objective_type=objective_type,
     )
 
