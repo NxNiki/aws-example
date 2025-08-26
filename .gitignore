@@ -2,10 +2,11 @@
 **/.log/*
 **/*.log
 **/*.zip
-*.csv
+**/*.csv
+**/*.pkl
+**/*.onnx
 **/features/
 **/figures/
-**/models/
 **/output/
 **/eda_output/
 **/.ipynb_checkpoints/*
