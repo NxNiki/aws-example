@@ -7,7 +7,7 @@ readme = "README.md"
 packages = [{ include = "bituslabs_ds", from = "src" }]
 
 [tool.poetry.dependencies]
-python = ">=3.9.0,<3.13"
+python = ">=3.9.0.0,<3.13"
 numpy = "^1.26.0"
 pandas = "2.1.0"
 skl2onnx = "1.16.0"
@@ -26,6 +26,10 @@ pyspark = "3.0.0" # do not build package with pyspark when submit job to AWS EMR
 openpyxl = "^3.1.5"
 pingouin = "^0.5.1"
 statannotations = "^0.7.1"
+stable_baselines3 = "^2.2.1"
+gymnasium = "^0.29.0"
+imitation = "^1.0.1"
+smdebug = "1.0.34"
 
 [tool.poetry.group.dev.dependencies]
 jupyter = "^1.0"
@@ -38,7 +42,6 @@ pre-commit = "^4.2.0"
 pyjanitor = "^0.31.0"
 ydata-profiling = "^4.16.1"
 pyspark-stubs = "^3.0.0.post3"
-smdebug = "1.0.34"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

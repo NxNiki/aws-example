@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -14,11 +15,11 @@ from sagemaker.debugger import (
 )
 from sagemaker.pytorch import PyTorch
 
-from bituslabs_ds.config import S3_BUCKET, SAGEMAKER_ROLE, setup_logging
+from bituslabs_ds.config import IMAGE_URI, LOCAL_ROOT, S3_BUCKET, SAGEMAKER_ROLE, setup_logging
 from bituslabs_ds.s3_utils import upload_file_to_s3, upload_folder_to_s3
 from bituslabs_ds.utils import get_data_from_url
 
-setup_logging(".sagemaker_log", "sagemaker_training_job_submit.log")
+setup_logging(f"{LOCAL_ROOT}/.sagemaker_log", "sagemaker_training_job_submit.log")
 sagemaker_session = sagemaker.Session()
 bucket = sagemaker_session.default_bucket()
 
@@ -89,10 +90,12 @@ if __name__ == "__main__":
     }
 
     estimator = PyTorch(
+        image_uri=IMAGE_URI,
         role=SAGEMAKER_ROLE,
-        instance_count=1,  # make sure this does not exceed the instance quota, and the job script needs to config distributed training.
+        instance_count=5,  # make sure this does not exceed the instance quota, and the job script needs to config distributed training.
         instance_type="ml.g4dn.xlarge",
         entry_point="sagemaker_training_job.py",
+        source_dir=f"{LOCAL_ROOT}/jobs/examples",  # aviod large files in the scourc_dir or it takes long time to transfer to instance.
         framework_version="2.0",
         py_version="py310",
         hyperparameters=hyperparameters,
@@ -103,11 +106,27 @@ if __name__ == "__main__":
         keep_alive_period_in_seconds=1800,
     )
 
+    # Input channels with FullyReplicated setting
+    train_input = sagemaker.inputs.TrainingInput(
+        s3_data=f"{s3_path}/train/",
+        distribution="FullyReplicated",
+    )
+
+    validation_input = sagemaker.inputs.TrainingInput(
+        s3_data=f"{s3_path}/valid/",
+        distribution="FullyReplicated",
+    )
+
+    test_input = sagemaker.inputs.TrainingInput(
+        s3_data=f"{s3_path}/test/",
+        distribution="FullyReplicated",
+    )
+
     estimator.fit(
         {
-            "train": f"{s3_path}/train",
-            "valid": f"{s3_path}/valid",
-            "test": f"{s3_path}/test",
+            "train": train_input,
+            "valid": validation_input,
+            "test": test_input,
         },
-        wait=True,
+        wait=False,
     )
