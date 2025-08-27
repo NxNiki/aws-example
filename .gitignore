@@ -7,6 +7,7 @@
 **/*.onnx
 **/features/
 **/figures/
+**/model_output/
 **/output/
 **/eda_output/
 **/.ipynb_checkpoints/*

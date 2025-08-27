@@ -95,7 +95,7 @@ if __name__ == "__main__":
         instance_count=10,  # make sure this does not exceed the instance quota, and the job script needs to config distributed training.
         instance_type="ml.g4dn.xlarge",
         entry_point=f"{LOCAL_ROOT}/jobs/examples/sagemaker_training_job.py",
-        source_dir=f"{LOCAL_ROOT}/jobs/examples",  # avoid large files in the source_dir, or it takes a long time to transfer to instance.
+        # source_dir=f"{LOCAL_ROOT}/jobs/examples",  # avoid large files in the source_dir, or it takes a long time to transfer to instance.
         framework_version="2.0",
         py_version="py310",
         hyperparameters=hyperparameters,
