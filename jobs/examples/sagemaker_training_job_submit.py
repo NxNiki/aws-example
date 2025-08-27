@@ -103,7 +103,7 @@ if __name__ == "__main__":
         profiler_config=profiler_config,
         rules=rules,
         max_run=36000,  # 10 hours (in seconds)
-        keep_alive_period_in_seconds=1800,
+        keep_alive_period_in_seconds=1800,  # keep instance alive for 30 mins to reuse.
     )
 
     # Input channels with FullyReplicated setting
