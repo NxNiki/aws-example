@@ -28,16 +28,16 @@ wucaishen_enriched_with_clusters = [
     "s3://bituslabs-team-ai/ds-data-kmeans/wucaishen_with_cluster_2024_2.csv",
 ]
 
-year = 2025
-wucaishen_enriched_with_clusters = [
-    "s3://bituslabs-team-ai/ds-data-kmeans/2025_2025-06-18_16-43-44/wucaishen_with_cluster_2025_0.csv",
-    "s3://bituslabs-team-ai/ds-data-kmeans/2025_2025-06-18_16-43-44/wucaishen_with_cluster_2025_1.csv",
-    "s3://bituslabs-team-ai/ds-data-kmeans/2025_2025-06-18_16-43-44/wucaishen_with_cluster_2025_2.csv",
-]
+# year = 2025
+# wucaishen_enriched_with_clusters = [
+#     "s3://bituslabs-team-ai/ds-data-kmeans/2025_2025-06-18_16-43-44/wucaishen_with_cluster_2025_0.csv",
+#     "s3://bituslabs-team-ai/ds-data-kmeans/2025_2025-06-18_16-43-44/wucaishen_with_cluster_2025_1.csv",
+#     "s3://bituslabs-team-ai/ds-data-kmeans/2025_2025-06-18_16-43-44/wucaishen_with_cluster_2025_2.csv",
+# ]
 
 scaler = StandardScaler()
 cluster_stats = {}
-for cluster_index in range(3):
+for cluster_index in range(len(wucaishen_enriched_with_clusters)):
     data = read_files(
         [wucaishen_enriched_with_clusters[cluster_index]],
         local_cache_path=f"{SCRIPT_DIR}/output/wucaishen_enriched_with_clusters_{year}_{cluster_index}.csv",
@@ -46,8 +46,15 @@ for cluster_index in range(3):
 
     scaler.fit(data["basepoint"].to_frame())
 
+    _basepoint_clean = data["basepoint"].dropna()
     stats = {
         "basepoint_mean": data["basepoint"].mean(),
+        "basepoint_min": data["basepoint"].min(),
+        "basepoint_max": data["basepoint"].max(),
+        "basepoint_p5": np.percentile(_basepoint_clean, 5) if _basepoint_clean.size > 0 else None,
+        "basepoint_p25": np.percentile(_basepoint_clean, 25) if _basepoint_clean.size > 0 else None,
+        "basepoint_p75": np.percentile(_basepoint_clean, 75) if _basepoint_clean.size > 0 else None,
+        "basepoint_p95": np.percentile(_basepoint_clean, 95) if _basepoint_clean.size > 0 else None,
         "basepoint_scaler_mean": scaler.mean_[0],
         "basepoint_median": data["basepoint"].median(),
         "basepoint_std": data["basepoint"].std(),
