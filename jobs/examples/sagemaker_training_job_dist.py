@@ -9,11 +9,27 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from PIL import ImageFile
-from torch.cuda import amp
 from torch.utils.data import DataLoader, DistributedSampler
 from torchvision import datasets, models, transforms
 
-DEVICE = torch.device(f"cuda:0")
+try:
+    from torch import amp
+except:
+    from torch.cuda import amp
+
+# Initialize distributed training
+if "WORLD_SIZE" in os.environ and int(os.environ["WORLD_SIZE"]) > 1:
+    dist.init_process_group(backend="nccl")
+    local_rank = int(os.environ["LOCAL_RANK"])
+    torch.cuda.set_device(local_rank)
+    print(f"Initialized distributed training: rank {dist.get_rank()} / {dist.get_world_size()}")
+else:
+    print("Single-node training")
+
+# Determine device once at module level
+DEVICE = torch.device(f"cuda:{os.environ.get('LOCAL_RANK', 0)}" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {DEVICE}")
+
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 import argparse
@@ -26,6 +42,8 @@ def test(model, test_loader, criterion, hook=None):
     """
 
     model = model.to(DEVICE)
+    print(f"Using device: {DEVICE}")
+
     model.eval()
     # ===================================================#
     # 3. Set the SMDebug hook for the validation phase. #
@@ -67,15 +85,23 @@ def train(model, train_loader, epochs, criterion, optimizer, hook=None):
     :return:
     """
 
-    model = model.to(DEVICE)
     model.train()
 
     if hook:
         hook.set_mode(smd.modes.TRAIN)
 
+    # scaler = amp.GradScaler("cuda")
     scaler = amp.GradScaler()
 
     for epoch in range(epochs):
+        # Set epoch for distributed sampler
+        if (
+            "WORLD_SIZE" in os.environ
+            and int(os.environ["WORLD_SIZE"]) > 1
+            and hasattr(train_loader.sampler, "set_epoch")
+        ):
+            train_loader.sampler.set_epoch(epoch)
+
         samples_processed = 0
         for batch_idx, (data, target) in enumerate(train_loader):
             data = data.to(DEVICE)
@@ -132,8 +158,18 @@ def create_data_loaders(data_train, data_test, batch_size_train, batch_size_test
     train_dataset = datasets.ImageFolder(root=data_train, transform=transform)
     test_dataset = datasets.ImageFolder(root=data_test, transform=transform)
 
+    # Set up distributed sampling for training
+    train_sampler = None
+    if "WORLD_SIZE" in os.environ and int(os.environ["WORLD_SIZE"]) > 1:
+        train_sampler = DistributedSampler(train_dataset, shuffle=True)
+
     train_loader = DataLoader(
-        train_dataset, batch_size=batch_size_train, shuffle=True, num_workers=num_workers, pin_memory=True
+        train_dataset,
+        batch_size=batch_size_train,
+        shuffle=(train_sampler is None),
+        num_workers=num_workers,
+        pin_memory=True,
+        sampler=train_sampler,
     )
     test_loader = DataLoader(
         test_dataset, batch_size=batch_size_test, shuffle=False, num_workers=num_workers, pin_memory=True
@@ -143,7 +179,6 @@ def create_data_loaders(data_train, data_test, batch_size_train, batch_size_test
 
 
 def main(args):
-
     train_loader, test_loader = create_data_loaders(
         args.data_train, args.data_test, args.batch_size, args.test_batch_size
     )
@@ -153,17 +188,28 @@ def main(args):
     """
     model = net()
 
+    # Wrap model with DistributedDataParallel if using distributed training
+    if "WORLD_SIZE" in os.environ and int(os.environ["WORLD_SIZE"]) > 1:
+        from torch.nn.parallel import DistributedDataParallel as DDP
+
+        model = DDP(model, device_ids=[dist.get_rank()])
+
     """
     Create loss and optimizer
     """
     loss_criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.fc.parameters(), lr=args.lr)
+
+    # Scale learning rate for distributed training
+    lr = args.lr
+    if "WORLD_SIZE" in os.environ and int(os.environ["WORLD_SIZE"]) > 1:
+        lr = lr * dist.get_world_size()  # Scale LR by world size for distributed training
+
+    optimizer = optim.Adam(model.fc.parameters(), lr=lr)
 
     if os.path.exists("/opt/ml/input/config/debughookconfig.json"):
         hook = smd.Hook.create_from_json_file()
         hook.register_hook(model)
     else:
-        print("debug and profiler hook is not configured!")
         hook = None
 
     """
@@ -180,8 +226,13 @@ def main(args):
     """
     Save the trained model
     """
-
-    torch.save(model.state_dict(), os.path.join(args.model_dir, "model.pth"))
+    # Only save model on main process to avoid conflicts
+    if not "WORLD_SIZE" in os.environ or int(os.environ["WORLD_SIZE"]) <= 1 or dist.get_rank() == 0:
+        if "WORLD_SIZE" in os.environ and int(os.environ["WORLD_SIZE"]) > 1:
+            # Save the underlying model, not the DDP wrapper
+            torch.save(model.module.state_dict(), os.path.join(args.model_dir, "model.pth"))
+        else:
+            torch.save(model.state_dict(), os.path.join(args.model_dir, "model.pth"))
 
 
 if __name__ == "__main__":

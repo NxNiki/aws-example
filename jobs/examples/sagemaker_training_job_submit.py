@@ -40,7 +40,6 @@ def prepare_data(s3_path):
 
 if __name__ == "__main__":
 
-    # s3_path = "s3://sagemaker-us-west-2-338568447110/Project-pytorch-dogImages-20250729-163817/dogImages"
     s3_path = "s3://bituslabs-team-ai/Project-pytorch-dogImages-20250729-180144/dogImages"
     prepare_data(s3_path)
 
@@ -92,34 +91,32 @@ if __name__ == "__main__":
     estimator = PyTorch(
         # image_uri=IMAGE_URI,
         role=SAGEMAKER_ROLE,
-        instance_count=10,  # make sure this does not exceed the instance quota, and the job script needs to config distributed training.
+        instance_count=1,  # if distributed training is not configured, multiple instances will run the same job independently.
         instance_type="ml.g4dn.xlarge",
         entry_point=f"{LOCAL_ROOT}/jobs/examples/sagemaker_training_job.py",
         # source_dir=f"{LOCAL_ROOT}/jobs/examples",  # avoid large files in the source_dir, or it takes a long time to transfer to instance.
-        framework_version="2.0",
+        framework_version="2.0",  # higher versions does not have smdebug installed.
         py_version="py310",
         hyperparameters=hyperparameters,
         debugger_hook_config=hook_config,
         profiler_config=profiler_config,
         rules=rules,
-        max_run=36000,  # 10 hours (in seconds)
-        keep_alive_period_in_seconds=1800,  # keep instance alive for 30 mins to reuse.
+        use_spot_instances=True,
+        max_run=3600,  # MaxRuntimeInSeconds (1 hour)
+        max_wait=7200,  # for spot instance, MaxWaitTimeInSeconds (must be >= max_run)
+        # keep_alive_period_in_seconds=1800,  # keep instance alive for 30 mins to reuse. spot instance cannot retain instance.
     )
 
-    # Input channels with FullyReplicated setting
     train_input = sagemaker.inputs.TrainingInput(
         s3_data=f"{s3_path}/train/",
-        distribution="FullyReplicated",
     )
 
     validation_input = sagemaker.inputs.TrainingInput(
         s3_data=f"{s3_path}/valid/",
-        distribution="FullyReplicated",
     )
 
     test_input = sagemaker.inputs.TrainingInput(
         s3_data=f"{s3_path}/test/",
-        distribution="FullyReplicated",
     )
 
     estimator.fit(
