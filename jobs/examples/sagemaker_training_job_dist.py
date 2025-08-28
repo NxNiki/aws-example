@@ -26,6 +26,9 @@ if "WORLD_SIZE" in os.environ and int(os.environ["WORLD_SIZE"]) > 1:
     print(
         f"Initialized distributed training: rank {dist.get_rank()} / {dist.get_world_size()}, local_rank: {local_rank}"
     )
+    print(f"CUDA available: {torch.cuda.is_available()}, CUDA device count: {torch.cuda.device_count()}")
+    if torch.cuda.is_available():
+        print(f"Current CUDA device: {torch.cuda.current_device()}, Device name: {torch.cuda.get_device_name()}")
 else:
     print("Single-node training")
 
@@ -44,7 +47,8 @@ def test(model, test_loader, criterion, hook=None):
     model. Remember to include any debugging/profiling hooks that you might need
     """
 
-    model = model.to(DEVICE)
+    # Model should already be on correct device from main function
+    print(f"Testing model on device: {next(model.parameters()).device}")
     model.eval()
     # ===================================================#
     # 3. Set the SMDebug hook for the validation phase. #
@@ -86,7 +90,8 @@ def train(model, train_loader, epochs, criterion, optimizer, hook=None):
     :return:
     """
 
-    model = model.to(DEVICE)
+    # Model should already be on correct device from main function
+    print(f"Training model on device: {next(model.parameters()).device}")
     model.train()
 
     if hook:
@@ -193,11 +198,16 @@ def main(args):
     """
     model = net()
 
+    # Move model to device BEFORE DDP wrapping
+    model = model.to(DEVICE)
+    print(f"Model created and moved to device: {next(model.parameters()).device}")
+
     # Wrap model with DistributedDataParallel if using distributed training
     if "WORLD_SIZE" in os.environ and int(os.environ["WORLD_SIZE"]) > 1:
         from torch.nn.parallel import DistributedDataParallel as DDP
 
         model = DDP(model, device_ids=[local_rank])
+        print(f"Model wrapped with DDP, device_ids: {[local_rank]}")
 
     """
     Create loss and optimizer
