@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 
@@ -37,8 +38,6 @@ DEVICE = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cp
 print(f"Using device: {DEVICE}")
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
-
-import argparse
 
 
 def test(model, test_loader, criterion, hook=None):
