@@ -18,16 +18,19 @@ except:
     from torch.cuda import amp
 
 # Initialize distributed training
+local_rank = 0
 if "WORLD_SIZE" in os.environ and int(os.environ["WORLD_SIZE"]) > 1:
     dist.init_process_group(backend="nccl")
     local_rank = int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(local_rank)
-    print(f"Initialized distributed training: rank {dist.get_rank()} / {dist.get_world_size()}")
+    print(
+        f"Initialized distributed training: rank {dist.get_rank()} / {dist.get_world_size()}, local_rank: {local_rank}"
+    )
 else:
     print("Single-node training")
 
 # Determine device once at module level
-DEVICE = torch.device(f"cuda:{os.environ.get('LOCAL_RANK', 0)}" if torch.cuda.is_available() else "cpu")
+DEVICE = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {DEVICE}")
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -42,8 +45,6 @@ def test(model, test_loader, criterion, hook=None):
     """
 
     model = model.to(DEVICE)
-    print(f"Using device: {DEVICE}")
-
     model.eval()
     # ===================================================#
     # 3. Set the SMDebug hook for the validation phase. #
@@ -85,6 +86,7 @@ def train(model, train_loader, epochs, criterion, optimizer, hook=None):
     :return:
     """
 
+    model = model.to(DEVICE)
     model.train()
 
     if hook:
@@ -161,7 +163,9 @@ def create_data_loaders(data_train, data_test, batch_size_train, batch_size_test
     # Set up distributed sampling for training
     train_sampler = None
     if "WORLD_SIZE" in os.environ and int(os.environ["WORLD_SIZE"]) > 1:
-        train_sampler = DistributedSampler(train_dataset, shuffle=True)
+        train_sampler = DistributedSampler(
+            train_dataset, shuffle=True, num_replicas=dist.get_world_size(), rank=dist.get_rank()
+        )
 
     train_loader = DataLoader(
         train_dataset,
@@ -170,6 +174,7 @@ def create_data_loaders(data_train, data_test, batch_size_train, batch_size_test
         num_workers=num_workers,
         pin_memory=True,
         sampler=train_sampler,
+        drop_last=True,  # Important for DDP to avoid uneven batch sizes
     )
     test_loader = DataLoader(
         test_dataset, batch_size=batch_size_test, shuffle=False, num_workers=num_workers, pin_memory=True
@@ -192,7 +197,7 @@ def main(args):
     if "WORLD_SIZE" in os.environ and int(os.environ["WORLD_SIZE"]) > 1:
         from torch.nn.parallel import DistributedDataParallel as DDP
 
-        model = DDP(model, device_ids=[dist.get_rank()])
+        model = DDP(model, device_ids=[local_rank])
 
     """
     Create loss and optimizer
