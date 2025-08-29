@@ -13,10 +13,27 @@ from PIL import ImageFile
 from torch.utils.data import DataLoader, DistributedSampler
 from torchvision import datasets, models, transforms
 
+# Print PyTorch version and CUDA info for debugging
+print(f"PyTorch version: {torch.__version__}")
+print(f"CUDA available: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"CUDA version: {torch.version.cuda}")
+
+# Handle mixed precision training with compatibility for different PyTorch versions
 try:
     from torch import amp
-except:
-    from torch.cuda import amp
+
+    AMP_AVAILABLE = True
+    print("Using torch.amp for mixed precision training")
+except ImportError:
+    try:
+        from torch.cuda import amp
+
+        AMP_AVAILABLE = True
+        print("Using torch.cuda.amp for mixed precision training")
+    except ImportError:
+        AMP_AVAILABLE = False
+        print("Mixed precision training not available, falling back to full precision")
 
 # Initialize distributed training
 local_rank = 0
@@ -96,8 +113,18 @@ def train(model, train_loader, epochs, criterion, optimizer, hook=None):
     if hook:
         hook.set_mode(smd.modes.TRAIN)
 
-    # scaler = amp.GradScaler("cuda")
-    scaler = amp.GradScaler()
+    # Initialize mixed precision training if available
+    scaler = None
+    if AMP_AVAILABLE:
+        try:
+            scaler = amp.GradScaler()
+            print("Mixed precision training enabled with GradScaler")
+        except (AttributeError, TypeError) as e:
+            print(f"GradScaler not available ({e}), falling back to full precision")
+            AMP_AVAILABLE = False
+        except Exception as e:
+            print(f"Unexpected error initializing GradScaler ({e}), falling back to full precision")
+            AMP_AVAILABLE = False
 
     for epoch in range(epochs):
         # Set epoch for distributed sampler
@@ -114,14 +141,30 @@ def train(model, train_loader, epochs, criterion, optimizer, hook=None):
             target = target.to(DEVICE)
             optimizer.zero_grad()
 
-            # Autocast enables mixed precision for the forward pass
-            with amp.autocast():
+            # Use mixed precision if available, otherwise use full precision
+            if AMP_AVAILABLE and scaler is not None:
+                try:
+                    with amp.autocast():
+                        output = model(data)
+                        loss = criterion(output, target)
+
+                    scaler.scale(loss).backward()  # Scale loss before backward()
+                    scaler.step(optimizer)  # Unscale gradients and call optimizer.step()
+                    scaler.update()  # Update the scaler for the next iteration
+                except Exception as e:
+                    print(f"Mixed precision training failed ({e}), falling back to full precision")
+                    AMP_AVAILABLE = False
+                    # Fall back to full precision for this batch
+                    output = model(data)
+                    loss = criterion(output, target)
+                    loss.backward()
+                    optimizer.step()
+            else:
+                # Full precision training
                 output = model(data)
                 loss = criterion(output, target)
-
-            scaler.scale(loss).backward()  # Scale loss before backward()
-            scaler.step(optimizer)  # Unscale gradients and call optimizer.step()
-            scaler.update()  # Update the scaler for the next iteration
+                loss.backward()
+                optimizer.step()
 
             samples_processed += len(data)
             if batch_idx % 100 == 0 or batch_idx == len(train_loader) - 1:
@@ -188,65 +231,88 @@ def create_data_loaders(data_train, data_test, batch_size_train, batch_size_test
 
 
 def main(args):
-    train_loader, test_loader = create_data_loaders(
-        args.data_train, args.data_test, args.batch_size, args.test_batch_size
-    )
+    try:
+        train_loader, test_loader = create_data_loaders(
+            args.data_train, args.data_test, args.batch_size, args.test_batch_size
+        )
 
-    """
-    Initialize a model by calling the net function
-    """
-    model = net()
+        """
+        Initialize a model by calling the net function
+        """
+        model = net()
+        print(f"Model created successfully: {type(model)}")
+        print(f"Model fc layer: {model.fc}")
+        print(f"Model fc layer type: {type(model.fc)}")
 
-    # Move model to device BEFORE DDP wrapping
-    model = model.to(DEVICE)
-    print(f"Model created and moved to device: {next(model.parameters()).device}")
+        # Move model to device BEFORE DDP wrapping
+        model = model.to(DEVICE)
+        print(f"Model created and moved to device: {next(model.parameters()).device}")
 
-    # Wrap model with DistributedDataParallel if using distributed training
-    if "WORLD_SIZE" in os.environ and int(os.environ["WORLD_SIZE"]) > 1:
-        from torch.nn.parallel import DistributedDataParallel as DDP
-
-        model = DDP(model, device_ids=[local_rank])
-        print(f"Model wrapped with DDP, device_ids: {[local_rank]}")
-
-    """
-    Create loss and optimizer
-    """
-    loss_criterion = nn.CrossEntropyLoss()
-
-    # Scale learning rate for distributed training
-    lr = args.lr
-    if "WORLD_SIZE" in os.environ and int(os.environ["WORLD_SIZE"]) > 1:
-        lr = lr * dist.get_world_size()  # Scale LR by world size for distributed training
-
-    optimizer = optim.Adam(model.fc.parameters(), lr=lr)
-
-    if os.path.exists("/opt/ml/input/config/debughookconfig.json"):
-        hook = smd.Hook.create_from_json_file()
-        hook.register_hook(model)
-    else:
-        hook = None
-
-    """
-    Call the train function to start training your model
-    Remember that you will need to set up a way to get training data from S3
-    """
-    train(model, train_loader, args.epochs, loss_criterion, optimizer, hook)
-
-    """
-    Test the model to see its accuracy
-    """
-    test(model, test_loader, loss_criterion, hook)
-
-    """
-    Save the trained model
-    """
-    # Only save model on main process to avoid conflicts
-    if not "WORLD_SIZE" in os.environ or int(os.environ["WORLD_SIZE"]) <= 1 or dist.get_rank() == 0:
+        # Wrap model with DistributedDataParallel if using distributed training
         if "WORLD_SIZE" in os.environ and int(os.environ["WORLD_SIZE"]) > 1:
-            # Save the underlying model, not the DDP wrapper
-            torch.save(model.module.state_dict(), os.path.join(args.model_dir, "model.pth"))
+            from torch.nn.parallel import DistributedDataParallel as DDP
+
+            model = DDP(model, device_ids=[local_rank])
+            print(f"Model wrapped with DDP, device_ids: {[local_rank]}")
+            print(f"DDP model structure - module.fc exists: {hasattr(model.module, 'fc')}")
+            print(f"DDP model structure - fc layer: {model.module.fc}")
+
+        """
+        Create loss and optimizer
+        """
+        loss_criterion = nn.CrossEntropyLoss()
+
+        # Scale learning rate for distributed training
+        lr = args.lr
+        if "WORLD_SIZE" in os.environ and int(os.environ["WORLD_SIZE"]) > 1:
+            # Scale LR by sqrt of world size for more stable training
+            lr = lr * (dist.get_world_size() ** 0.5)
+            print(
+                f"Scaled learning rate from {args.lr} to {lr} for distributed training (world_size={dist.get_world_size()})"
+            )
+
+        # Access fc layer correctly whether using DDP or not
+        if "WORLD_SIZE" in os.environ and int(os.environ["WORLD_SIZE"]) > 1:
+            print(f"Creating optimizer for DDP model using model.module.fc")
+            optimizer = optim.Adam(model.module.fc.parameters(), lr=lr)
         else:
-            torch.save(model.state_dict(), os.path.join(args.model_dir, "model.pth"))
+            print(f"Creating optimizer for single model using model.fc")
+            optimizer = optim.Adam(model.fc.parameters(), lr=lr)
+
+        if os.path.exists("/opt/ml/input/config/debughookconfig.json"):
+            hook = smd.Hook.create_from_json_file()
+            hook.register_hook(model)
+        else:
+            hook = None
+
+        """
+        Call the train function to start training your model
+        Remember that you will need to set up a way to get training data from S3
+        """
+        train(model, train_loader, args.epochs, loss_criterion, optimizer, hook)
+
+        """
+        Test the model to see its accuracy
+        """
+        test(model, test_loader, loss_criterion, hook)
+
+        """
+        Save the trained model
+        """
+        # Only save model on main process to avoid conflicts
+        if not "WORLD_SIZE" in os.environ or int(os.environ["WORLD_SIZE"]) <= 1 or dist.get_rank() == 0:
+            if "WORLD_SIZE" in os.environ and int(os.environ["WORLD_SIZE"]) > 1:
+                # Save the underlying model, not the DDP wrapper
+                torch.save(model.module.state_dict(), os.path.join(args.model_dir, "model.pth"))
+            else:
+                torch.save(model.state_dict(), os.path.join(args.model_dir, "model.pth"))
+
+    except Exception as e:
+        print(f"Error during training: {e}")
+        import traceback
+
+        traceback.print_exc()
+        raise
 
 
 if __name__ == "__main__":
