@@ -26,12 +26,12 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def load_process_data(reload: bool = False) -> pd.DataFrame:
-    local_output = f"{SCRIPT_DIR}/output/v1_all_sessions_summary_20250806.csv"
+    local_output = f"{SCRIPT_DIR}/output/v1_all_sessions_summary_20250827.csv"
     s3_files: List[str] = []
     if reload or not os.path.exists(local_output):
         s3_files += list_s3_files(
             S3_BUCKET,
-            prefix="gail_simulator_data_raw/results_v20250725/sim_20250806/",
+            prefix="gail_simulator_data_raw/results_v20250827/sim_test100/",
             pattern=".*_sessions_summary.csv",
         )
         # s3_files += list_s3_files(
@@ -47,7 +47,7 @@ def load_process_data(reload: bool = False) -> pd.DataFrame:
     data = read_files(s3_files, local_cache_path=local_output, reload=reload)
     data.drop(columns=["active", "session_id", "balance_change"], inplace=True)
     data["cluster_index"] = data["player_id"].str.extract(r"(cluster\d+)_", expand=False).astype(str)
-    data = data[data["cluster_index"] == "cluster2"]
+    # data = data[data["cluster_index"] == "cluster2"]
     print(data.shape)
     # data = data[data["total_spins"]>40]
     print(data.shape)
@@ -98,9 +98,9 @@ if __name__ == "__main__":
     viz.display()
     viz.save(f"{SCRIPT_DIR}/figures/gai_simulation_correlation_machine_id.png")
 
-    # two-way ANOVA:
-    # anova_between_vars = ["machine_id", "cluster_index"]
-    anova_between_vars = ["machine_id"]
+    # ANOVA:
+    anova_between_vars = ["machine_id", "cluster_index"]
+    # anova_between_vars = ["machine_id"]
 
     data_profiler.augment_columns(
         columns=data_profiler.processed_numerical_columns, col_name="compound_metric", method=["pca"]
