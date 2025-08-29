@@ -21,6 +21,25 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 setup_logging(f"{SCRIPT_DIR}.log/data_process_wucaishen_cluster_stats.log")
 
+
+def convert_numpy_types(obj):
+    """Convert NumPy types to native Python types for JSON serialization."""
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, Counter):
+        return dict(obj)
+    elif isinstance(obj, dict):
+        return {key: convert_numpy_types(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_numpy_types(item) for item in obj]
+    else:
+        return obj
+
+
 year = 2024
 wucaishen_enriched_with_clusters = [
     "s3://bituslabs-team-ai/ds-data-kmeans/wucaishen_with_cluster_2024_0.csv",
@@ -55,15 +74,22 @@ for cluster_index in range(len(wucaishen_enriched_with_clusters)):
         "basepoint_p25": np.percentile(_basepoint_clean, 25) if _basepoint_clean.size > 0 else None,
         "basepoint_p75": np.percentile(_basepoint_clean, 75) if _basepoint_clean.size > 0 else None,
         "basepoint_p95": np.percentile(_basepoint_clean, 95) if _basepoint_clean.size > 0 else None,
-        "basepoint_scaler_mean": scaler.mean_[0],
         "basepoint_median": data["basepoint"].median(),
         "basepoint_std": data["basepoint"].std(),
+        "basepoint_count": len(data["basepoint"]),
+        "basepoint_nan_count": len(data["basepoint"]) - len(_basepoint_clean),
+        "basepoint_nan_ratio": (len(data["basepoint"]) - len(_basepoint_clean)) / len(data["basepoint"]),
+        "basepoint_less_than_0_count": (_basepoint_clean < 0).sum(),
+        "basepoint_less_than_0_ratio": (_basepoint_clean < 0).sum() / len(data["basepoint"]),
+        "basepoint_scaler_mean": scaler.mean_[0],
         "basepoint_scaler_std": np.sqrt(scaler.var_[0]),
         "account_counter": Counter(data["account"]),
     }
     cluster_stats[f"cluster_{cluster_index}"] = stats
 
-json.dump(cluster_stats, open(f"{SCRIPT_DIR}/output/cluster_stats.json", "w"), indent=4)
+# Convert NumPy types to native Python types for JSON serialization
+cluster_stats_serializable = convert_numpy_types(cluster_stats)
+json.dump(cluster_stats_serializable, open(f"{SCRIPT_DIR}/output/cluster_stats.json", "w"), indent=4)
 
 time_tag = datetime.datetime.now().strftime("%Y-%m-%d_%H")
 output_key = f"ds-data-kmeans/wucaishen_cluster_stats_{year}_{time_tag}.json"
