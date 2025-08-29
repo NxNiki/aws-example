@@ -668,7 +668,8 @@ class DataVisualizer:
     A comprehensive class for data visualization that organizes all plotting functions
     and allows sharing of data and configuration across methods.
 
-    Most of the plots can also be created with seaborn.FacetGrid.
+    Most of the plots can also be created with seaborn.FacetGrid. This class is more flexiable to
+    arrange layouts based on different columns of input data.
     """
 
     def __init__(
@@ -984,7 +985,7 @@ class DataVisualizer:
             y=y_col,
             hue=group_col if group_col else None,
             ax=axis,
-            palette=palette,
+            palette=palette if group_col else None,
             boxprops=dict(linewidth=1.5, facecolor=(0, 0, 0, 0)),
             medianprops=dict(linewidth=2),
             whis=1.5,
@@ -1108,6 +1109,16 @@ class DataVisualizer:
         Returns:
             The axes with histograms added
         """
+
+        if group_col:
+            data = data[[y_col, group_col]].copy()
+        else:
+            data = data[y_col].to_frame()
+
+        max_value_length = int(1e5)
+        if len(data) > max_value_length:
+            logger.warning(f"Randomly selecting {max_value_length} rows from input dataframe to create histogram")
+            data = data.sample(n=max_value_length, random_state=42)
 
         values = data[[y_col]].dropna().values.flatten()
         values = np.asarray(values, dtype=float)
@@ -1400,12 +1411,12 @@ class DataProfiler:
 
     def count_nan_for_columns(self) -> Dict[str, int]:
         res = {col: self.df[col].isna().sum() for col in self.df.columns}
-        logger.info(f"number of nans in each column: \n {res}")
+        logger.info(f"\n\n Number of nans in each column: \n\n {res}")
         return res
 
     def count_rows_with_nan(self) -> int:
         res = self.df.isna().any(axis=1).sum()
-        logger.info(f"number of rows with nans: \n {res}/{self.df.shape[0]}")
+        logger.info(f"\n\n Number of rows with nans: \n\n {res}/{self.df.shape[0]}")
         return res
 
     @property
@@ -1463,7 +1474,6 @@ class DataProfiler:
 
             skewness = skew(values, bias=False)
             dip_statistic_unimodal, p_value_unimodal = diptest(values)
-
             distribution_stats.append(
                 {
                     "column": col,

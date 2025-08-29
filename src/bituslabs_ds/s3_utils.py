@@ -245,7 +245,7 @@ def read_files(
 
     if local_cache_path is not None and os.path.exists(local_cache_path) and not reload:
         logger.info(f"Found local cache at {local_cache_path}")
-        data = pd.read_csv(local_cache_path)
+        data = pd.read_csv(local_cache_path, usecols=columns)
         return data
 
     read_func = partial(_read_file, columns=columns)
