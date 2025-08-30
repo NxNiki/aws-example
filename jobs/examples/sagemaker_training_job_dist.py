@@ -20,20 +20,33 @@ if torch.cuda.is_available():
     print(f"CUDA version: {torch.version.cuda}")
 
 # Handle mixed precision training with compatibility for different PyTorch versions
+amp_module = None
 try:
     from torch import amp
 
-    AMP_AVAILABLE = True
+    amp_module = amp
     print("Using torch.amp for mixed precision training")
 except ImportError:
     try:
         from torch.cuda import amp
 
-        AMP_AVAILABLE = True
+        amp_module = amp
         print("Using torch.cuda.amp for mixed precision training")
     except ImportError:
-        AMP_AVAILABLE = False
         print("Mixed precision training not available, falling back to full precision")
+
+
+# Check if we can actually use mixed precision
+def is_amp_available():
+    if amp_module is None:
+        return False
+    try:
+        # Test if GradScaler is available
+        _ = amp_module.GradScaler()
+        return True
+    except (AttributeError, TypeError):
+        return False
+
 
 # Initialize distributed training
 local_rank = 0
@@ -115,16 +128,18 @@ def train(model, train_loader, epochs, criterion, optimizer, hook=None):
 
     # Initialize mixed precision training if available
     scaler = None
-    if AMP_AVAILABLE:
+    amp_available = is_amp_available()
+    print(f"Mixed precision availability check: {amp_available}")
+    if amp_available:
         try:
-            scaler = amp.GradScaler()
+            scaler = amp_module.GradScaler()
             print("Mixed precision training enabled with GradScaler")
         except (AttributeError, TypeError) as e:
             print(f"GradScaler not available ({e}), falling back to full precision")
-            AMP_AVAILABLE = False
+            amp_available = False
         except Exception as e:
             print(f"Unexpected error initializing GradScaler ({e}), falling back to full precision")
-            AMP_AVAILABLE = False
+            amp_available = False
 
     for epoch in range(epochs):
         # Set epoch for distributed sampler
@@ -142,9 +157,9 @@ def train(model, train_loader, epochs, criterion, optimizer, hook=None):
             optimizer.zero_grad()
 
             # Use mixed precision if available, otherwise use full precision
-            if AMP_AVAILABLE and scaler is not None:
+            if amp_available and scaler is not None:
                 try:
-                    with amp.autocast():
+                    with amp_module.autocast():
                         output = model(data)
                         loss = criterion(output, target)
 
@@ -153,7 +168,7 @@ def train(model, train_loader, epochs, criterion, optimizer, hook=None):
                     scaler.update()  # Update the scaler for the next iteration
                 except Exception as e:
                     print(f"Mixed precision training failed ({e}), falling back to full precision")
-                    AMP_AVAILABLE = False
+                    amp_available = False
                     # Fall back to full precision for this batch
                     output = model(data)
                     loss = criterion(output, target)
