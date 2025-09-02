@@ -60,6 +60,27 @@ if __name__ == "__main__":
     print(data_slottype17.head(10).to_markdown())
     data_slottype17.to_csv(f"{script_dir}/output/deep_dive_slottype17.csv")
 
+    # get the mean and median of daily number of bets across all players, and number of unique players in each months:
+    data["billtime"] = pd.to_datetime(data["billtime"])
+    data["bill_year"] = data["billtime"].dt.year
+    print(data["bill_year"].value_counts())
+    # data = data[data["bill_year"] == 2025]
+    data["bill_day"] = data["billtime"].dt.date
+    data["bill_month"] = data["billtime"].dt.month
+    data_monthly_bet_stats = (
+        data[["bill_year", "bill_month", "bill_day", "username", "slottype"]]
+        .groupby(["bill_year", "bill_month", "bill_day", "username"])
+        .agg({"count"})
+        .reset_index()
+    )
+    data_monthly_bet_stats.columns = ["bill_year", "bill_month", "bill_day", "username", "num_bets"]
+    data_monthly_bet_stats = (
+        data_monthly_bet_stats.groupby(["bill_year", "bill_month"])
+        .agg({"num_bets": ["mean", "median"], "username": "count"})
+        .reset_index()
+    )
+    print(data_monthly_bet_stats.to_markdown())
+
     # data_profiler = DataProfiler(data, skewness_threshold=1.5)
 
     # viz = DataVisualizer(data_profiler)
