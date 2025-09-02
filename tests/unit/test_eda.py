@@ -2,6 +2,7 @@
 Unit tests for the eda module.
 """
 
+from textwrap import dedent
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -37,12 +38,14 @@ class TestReadCsvCols:
 
     def test_read_csv_cols_with_filters(self, temp_dir):
         """Test CSV reading with filters."""
-        csv_content = """id,value,category
-1,10.5,A
-2,20.3,B
-3,15.7,A
-4,8.2,C
-5,12.1,B"""
+        csv_content = dedent(
+            """id,value,category
+            1,10.5,A
+            2,20.3,B
+            3,15.7,A
+            4,8.2,C
+            5,12.1,B"""
+        )
 
         csv_file = temp_dir / "test.csv"
         csv_file.write_text(csv_content)
