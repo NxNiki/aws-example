@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
@@ -23,7 +24,7 @@ from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
 
 from bituslabs_ds.config import S3_BUCKET, setup_logging
-from bituslabs_ds.eda import DataProfiler
+from bituslabs_ds.eda import DataProfiler, DataVisualizer
 from bituslabs_ds.s3_utils import list_s3_files, read_dataset, read_files
 from bituslabs_ds.utils import column_iterator, df_power_transform, keep_numeric_columns, remove_outliers, save_list
 
@@ -163,7 +164,7 @@ def elbow_method(
             cluster_sizes.append(cluster_counts)
 
         title = f"Elbow Method for Optimal k n_features({n})"
-        fig, ax1 = plt.subplots(figsize=(10, 9))
+        fig, ax1 = plt.subplots(figsize=(12, 9))
         (line1,) = ax1.plot(k_range, inertia, marker="o", linestyle="-", label="Inertia")
         ax1.set_xlabel("Number of Clusters (k)")
         ax1.set_ylabel("Inertia")
@@ -303,7 +304,13 @@ def main(output_path: str):
     wucaishen_data.fillna(0, inplace=True)
     wucaishen_data = df_power_transform(wucaishen_data, skewed_features)
     save_list(normal_features + skewed_features, f"{output_path}/features/log_transform_features.json")
-    DataProfiler.plot_df_correlation(wucaishen_data[normal_features + skewed_features], output_path)
+
+    viz = DataVisualizer(wucaishen_data[normal_features + skewed_features])
+    viz.create_figure(fig_title="Correlation of features: wucaishen", fig_size=(20, 17))
+    viz.add_correlation_heatmap(annot=False, cmap="coolwarm")
+    viz.figure.subplots_adjust(left=0.15, bottom=0.15, top=0.90, right=0.97)
+    viz.display()
+    viz.save(f"{output_path}/figures/wucaishen_correlation.png")
 
     # remove highly correlated features:
     _, kept_features = smart_feature_selection(wucaishen_data[normal_features + skewed_features], threshold=0.9)
@@ -316,8 +323,9 @@ def main(output_path: str):
 
 if __name__ == "__main__":
 
+    default_output_path = Path(__file__).parent / "output"
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output_path", required=False, default=".")
+    parser.add_argument("--output_path", required=False, default=default_output_path)
     args = parser.parse_args()
 
     setup_logging(args.output_path, "analysis_cluster_01_elbow_method.log")

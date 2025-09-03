@@ -1166,6 +1166,7 @@ class DataVisualizer:
         self,
         method: str = "pearson",
         value_cols: List[str] = [],
+        **kwargs,
     ) -> None:
         """Add correlation heatmap to the current figure."""
         logger.info(f"Adding correlation heatmap to {len(self.axes)} axes")
@@ -1177,11 +1178,11 @@ class DataVisualizer:
             value_cols = self.data_profiler.processed_numerical_columns
 
         # Use the static method to add the heatmap
-        self._add_plot_to_axes(self.add_correlation_heatmap_to_axis, method=method, value_cols=value_cols)
+        self._add_plot_to_axes(self.add_correlation_heatmap_to_axis, method=method, value_cols=value_cols, **kwargs)
 
     @staticmethod
     def add_correlation_heatmap_to_axis(
-        heatmap_data: pd.DataFrame, axis: Axes, method: str = "pearson", title: str = "Heatmap"
+        heatmap_data: pd.DataFrame, axis: Axes, method: str = "pearson", title: str = "Heatmap", **kwargs
     ) -> Axes:
         """
         Add correlation heatmap to the specified axes or all current axes.
@@ -1206,12 +1207,9 @@ class DataVisualizer:
 
         heatmap = sns.heatmap(
             correlation_matrix,
-            cmap="Reds",
             linewidths=0.5,
             ax=axis,
-            annot=True,  # Add correlation values to the heatmap
-            fmt=".2f",  # Format the annotation to 2 decimal places
-            annot_kws={"size": 10},
+            **kwargs,
         )
 
         if title != "":
