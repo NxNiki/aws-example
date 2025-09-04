@@ -13,6 +13,7 @@ with open(_config_path, "r") as f:
     _config: Dict[str, Any] = yaml.safe_load(f)
 
 # Extract commonly used values
+ENVIRONMENT = _config["environment"]["current"]
 USE_CNY = _config["analysis"]["use_cny"]
 WORK_DIR = Path(__file__).parent / _config["directories"]["work_dir"]
 OUTPUT_PATH = Path(__file__).parent / _config["directories"]["output_path"]

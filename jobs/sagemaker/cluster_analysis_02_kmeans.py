@@ -33,7 +33,7 @@ def scale_features(
     :param load_cache:
     :return:
     """
-    output_dir = output_dir.rstrip("/")
+    output_dir = str(output_dir).rstrip("/")
 
     if os.path.exists(f"{output_dir}/features/{output_file_name}.csv") and load_cache:
         logger.info(f"read existing output file {output_file_name}...")
@@ -75,7 +75,7 @@ def run_cluster_analysis(data: pd.DataFrame, n_clusters: int, output_dir: str = 
     :param output_dir:
     :return:
     """
-    output_dir = output_dir.rstrip("/")
+    output_dir = str(output_dir).rstrip("/")
     kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
     data_cluster = kmeans.fit_predict(data)
 
@@ -133,7 +133,7 @@ def plot_radar_chart(data: pd.DataFrame, data_cluster: np.ndarray, output_dir: s
     :param output_dir:
     :return:
     """
-    output_dir = output_dir.rstrip("/")
+    output_dir = str(output_dir).rstrip("/")
     data["_cluster"] = data_cluster
     cluster_means = data.groupby("_cluster").mean().T
     categories = cluster_means.index
@@ -175,7 +175,7 @@ def save_cluster_data(
     :return:
     """
 
-    output_dir.rstrip("/")
+    output_dir = str(output_dir).rstrip("/")
     data_merged = data_original.merge(data_cluster, on=merge_columns, how="inner")
     for cluster, group_df in data_merged.groupby(cluster_column):
         file_name = f"original_data_cluster_{cluster}.csv"

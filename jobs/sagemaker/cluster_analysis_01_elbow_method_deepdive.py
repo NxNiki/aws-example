@@ -83,7 +83,6 @@ def get_feature_names() -> Tuple[List[str], List[str], List[str]]:
         "weekend_count",
         "duration_seconds",
         "avg_time_per_bet",
-        # currently we combine all currencies as different currency users may have different purchase power.
         "currency_label",
     ]
 

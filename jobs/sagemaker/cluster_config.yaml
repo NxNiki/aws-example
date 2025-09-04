@@ -4,7 +4,7 @@
 analysis:
   use_cny: true  # Whether to filter data to only include CNY currency
   default_n_clusters: 3  # Default number of clusters for K-means
-  default_top_features: 25  # Default number of top features to use
+  default_top_features: 30  # Default number of top features to use
 
 directories:
   work_dir: "deepdive"  # Base working directory
