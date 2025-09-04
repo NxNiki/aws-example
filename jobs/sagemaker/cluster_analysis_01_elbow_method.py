@@ -9,22 +9,22 @@ import argparse
 import logging
 import os
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from joblib import parallel_backend
-from sklearn.base import ClusterMixin
+import torch
+from balanced_kmeans import kmeans_equal
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.feature_selection import VarianceThreshold
-from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
 
 from bituslabs_ds.config import S3_BUCKET, setup_logging
 from bituslabs_ds.eda import DataProfiler, DataVisualizer
+from bituslabs_ds.ml import calculate_inertia, calculate_silhouette_score
 from bituslabs_ds.s3_utils import list_s3_files, read_dataset, read_files
 from bituslabs_ds.utils import column_iterator, df_power_transform, keep_numeric_columns, remove_outliers, save_list
 
@@ -115,6 +115,7 @@ def feature_selection_by_pca(data: pd.DataFrame, output_path: str = ".") -> List
     feature_importance = pd.DataFrame({"Feature": features, "Importance": importance})
     feature_importance = feature_importance.sort_values(by="Importance", ascending=False)
 
+    # TODO: isolate plot.
     plt.figure(figsize=(18, 10))
     colors = sns.color_palette("viridis", len(feature_importance))
     sns.barplot(x="Importance", y="Feature", hue="Feature", data=feature_importance, palette=colors, legend=False)
@@ -124,7 +125,7 @@ def feature_selection_by_pca(data: pd.DataFrame, output_path: str = ".") -> List
     plt.ylabel("Feature", fontsize=12)
     plt.grid(axis="x", linestyle="--", alpha=0.6)
     plt.savefig(f"{output_path}/figures/{title}.png")
-    plt.show()
+    # plt.show()
 
     features = [features[i] for i in np.argsort(importance)[::-1]]
     save_list(features, f"{output_path}/features/important_features.json")
@@ -134,34 +135,49 @@ def feature_selection_by_pca(data: pd.DataFrame, output_path: str = ".") -> List
 
 def elbow_method(
     data: pd.DataFrame, features: List[str], n_features: Optional[Union[List[int], int]] = None, output_path: str = "."
-):
+) -> Dict[int, Dict[int, int]]:
     """
     run elbow method to determine the number of clusters
     :param data:
     :param features: label of columns of data that order by feature importance.
     :param n_features: select top n features
     :param output_path:
-    :return:
+    :return: the cluster index for each feature set.
     """
 
     k_range = range(2, 10)
     scaler = StandardScaler()
 
+    cluster_indices = {}
     for x, n in column_iterator(data, features, n_features):
-        x, _ = remove_outliers(x)
+        x, filter_index = remove_outliers(x)
         x = scaler.fit_transform(x)
+        cluster_indices_by_k = {}
         inertia = []
         silhouette_scores = []
         cluster_sizes = []
         for k in k_range:
-            # kmeans = KMeans(n_clusters=k, random_state=42, n_init="auto", max_iter=100) # run faster for testing
-            kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
-            kmeans.fit(x)
-            inertia.append(kmeans.inertia_)
 
-            silhouette_scores.append(calculate_silhouette_score(x, kmeans))
-            cluster_counts = np.bincount(kmeans.labels_)
+            # model = KMeans(n_clusters=k, random_state=42, n_init="auto", max_iter=100) # run faster for testing
+            model = KMeans(n_clusters=k, random_state=42, n_init=10)
+            model.fit(x)
+            labels = model.labels_
+            inertia.append(model.inertia_)
+
+            # Convert NumPy array to PyTorch tensor and add batch dimension
+            # x_tensor = torch.from_numpy(x).float().unsqueeze(0)  # Add batch dimension: (1, num_samples, num_features)
+            # labels_tensor, centroids_tensor = kmeans_equal(x_tensor, num_clusters=k, cluster_size=int(len(x) / k))
+            # labels = labels_tensor.squeeze(0).numpy()  # Remove batch dimension: (num_samples,)
+            # inertia.append(calculate_inertia(x, labels))
+
+            cluster_index = np.full(len(filter_index), np.nan)
+            cluster_index[filter_index] = labels
+            cluster_indices_by_k[k] = cluster_index
+            silhouette_scores.append(calculate_silhouette_score(x, labels))
+            cluster_counts = np.bincount(labels)
             cluster_sizes.append(cluster_counts)
+
+        cluster_indices[n] = cluster_indices_by_k
 
         title = f"Elbow Method for Optimal k n_features({n})"
         fig, ax1 = plt.subplots(figsize=(12, 9))
@@ -210,21 +226,9 @@ def elbow_method(
         plt.subplots_adjust(left=0.1, bottom=0.3)
 
         plt.savefig(f"{output_path}/figures/{title}.png")
-        plt.show()
+        # plt.show()
 
-
-def calculate_silhouette_score(x: Union[np.ndarray, pd.DataFrame], cluster_obj: ClusterMixin) -> float:
-
-    if len(np.unique(cluster_obj.labels_)) < 2:
-        return float("nan")
-
-    try:
-        with parallel_backend("loky"):
-            # a small sample size may lead to small cluster totally omitted!
-            score = silhouette_score(x, cluster_obj.labels_, sample_size=min(5000, x.shape[0]), random_state=42)
-    except ValueError:
-        score = float("nan")
-    return score
+    return cluster_indices
 
 
 def get_feature_names() -> Tuple[List[str], List[str], List[str]]:
