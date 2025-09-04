@@ -32,6 +32,8 @@ imitation = "^1.0.1"
 smdebug = "1.0.34"
 giotto-tda = "^0.6.0"
 balanced-kmeans = "^0.1.0"
+pyyaml = "^6.0.2"
+types-pyyaml = "^6.0.12.20250822"
 
 [tool.poetry.group.dev.dependencies]
 jupyter = "^1.0"
@@ -44,6 +46,7 @@ pyjanitor = "^0.31.0"
 ydata-profiling = "^4.16.1"
 pyspark-stubs = "^3.0.0.post3"
 bokeh = "^3.4.3"
+types-pyyaml = "^6.0.12.20250822"
 
 [tool.poetry.group.test.dependencies]
 # Core testing framework

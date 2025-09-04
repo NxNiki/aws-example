@@ -11,16 +11,13 @@ from cluster_analysis_01_elbow_method import (
     feature_selection_by_variance,
     smart_feature_selection,
 )
+from cluster_config import CORRELATION_THRESHOLD, ELBOW_K_RANGE, OUTPUT_PATH, USE_CNY, VARIANCE_THRESHOLD, WORK_DIR
 from sklearn.metrics import confusion_matrix
 
 from bituslabs_ds.config import setup_logging
 from bituslabs_ds.eda import DataProfiler, DataVisualizer
 from bituslabs_ds.s3_utils import list_s3_files, read_dataset, read_files
 from bituslabs_ds.utils import column_iterator, df_power_transform, keep_numeric_columns, remove_outliers, save_list
-
-USE_CNY = True
-WORK_DIR = Path(__file__).parent / "deepdive"
-OUTPUT_PATH = Path(__file__).parent / "deepdive/cny_8_months"
 
 
 def load_data(output_file: str, columns: Optional[List[str]] = None, pattern: str = ".*") -> pd.DataFrame:
@@ -141,12 +138,14 @@ def main():
     viz.save(f"{OUTPUT_PATH}/figures/deepdive_correlation.png")
 
     # remove highly correlated features:
-    _, kept_features = smart_feature_selection(player_data[normal_features + skewed_features], threshold=0.9)
-    _, kept_features = feature_selection_by_variance(player_data[kept_features], threshold=0.01)
+    _, kept_features = smart_feature_selection(
+        player_data[normal_features + skewed_features], threshold=CORRELATION_THRESHOLD
+    )
+    _, kept_features = feature_selection_by_variance(player_data[kept_features], threshold=VARIANCE_THRESHOLD)
     data_select = player_data[kept_features + non_features]
 
     important_features = feature_selection_by_pca(data_select, OUTPUT_PATH)
-    cluster_indices = elbow_method(player_data, important_features, [15, 20, 25, 30, 35, 40, 45, 50], OUTPUT_PATH)
+    cluster_indices = elbow_method(player_data, important_features, ELBOW_K_RANGE, OUTPUT_PATH)
 
     if not USE_CNY:
         check_cluster_index_contingency(

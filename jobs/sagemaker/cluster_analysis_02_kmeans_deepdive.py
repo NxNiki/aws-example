@@ -10,6 +10,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from cluster_config import (
+    DEFAULT_N_CLUSTERS,
+    DEFAULT_TOP_FEATURES,
+    KMEANS_N_INIT,
+    KMEANS_RANDOM_STATE,
+    OUTPUT_PATH,
+    USE_CNY,
+    WORK_DIR,
+)
 from skl2onnx import convert_sklearn
 from skl2onnx.common.data_types import FloatTensorType
 from sklearn.cluster import KMeans
@@ -77,7 +86,7 @@ def run_cluster_analysis(data: pd.DataFrame, n_clusters: int, output_dir: Union[
     :return:
     """
     output_dir = str(output_dir).rstrip("/")
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+    kmeans = KMeans(n_clusters=n_clusters, random_state=KMEANS_RANDOM_STATE, n_init=KMEANS_N_INIT)
     data_cluster = kmeans.fit_predict(data)
 
     # ===== 每个聚类中心在标准化空间的特征值 =====
@@ -195,8 +204,8 @@ if __name__ == "__main__":
     output_path = Path(__file__).parent / "output_deepdive"
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--n_clusters", type=int, default=3)
-    parser.add_argument("--top_features", type=int, default=25)
+    parser.add_argument("--n_clusters", type=int, default=DEFAULT_N_CLUSTERS)
+    parser.add_argument("--top_features", type=int, default=DEFAULT_TOP_FEATURES)
     parser.add_argument("--input_path_data", type=str, default=".input")
     parser.add_argument("--input_path_features", type=str, default=".input")
     parser.add_argument("--output_path", type=str, default=output_path)
