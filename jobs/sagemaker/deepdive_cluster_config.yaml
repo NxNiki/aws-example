@@ -1,0 +1,154 @@
+# Deepdive Cluster Analysis Configuration
+# This file contains configuration specific to the deepdive clustering project
+
+analysis:
+  use_cny: true  # Whether to filter data to only include CNY currency
+  default_n_clusters: 3  # Default number of clusters for K-means
+  default_top_features: 30  # Default number of top features to use
+
+directories:
+  work_dir: "deepdive"  # Base working directory
+  output_path: "deepdive/cny_8_months"  # Output directory for results
+
+data_loading:
+  input_bucket: "hyber-slot"  # S3 bucket for input data
+  output_bucket: "bituslabs-team-ai"  # S3 bucket for output data
+  input_prefix: "deepdive_groupdata"  # S3 prefix for input data
+  output_prefix: "deepdive_analysis_kmeans"  # S3 prefix for output data
+  columns_to_read:  # Columns to read from original data files
+    - "loginname"
+    - "billno"
+    - "billtime"
+    - "account"
+    - "cus_account"
+    - "currency"
+    - "slottype"
+    - "basepoint"
+    - "delta_t"
+    - "delta_bet"
+    - "delta_profit"
+    - "delta_payout"
+    - "streak"
+    - "win_streak"
+    - "lose_streak"
+    - "result_clean"
+    - "group_id"
+  file_patterns:
+    grouped_data: "deepdive_grouped_stat_output_24.*\\.csv$"  # Pattern for grouped data files
+    enriched_data: "25\\d{2}/deepdive_enriched_output/part-.*\\.csv"  # Pattern for enriched data files
+    cluster_data: "original_data_cluster_.*\\.csv"  # Pattern for cluster data files
+  currency_filter: "CNY"  # Currency to filter (null to disable filtering)
+
+features:
+  key_features:  # Features used to identify rows for joining with other tables
+    - "group_id"
+    - "loginname"
+    - "start_time"
+  
+  skewed_features:  # Features that need log transformation
+    - "rtp_mean"
+    - "bet_min"
+    - "bet_max"
+    - "bet_mean"
+    - "bet_p25"
+    - "bet_median"
+    - "bet_p75"
+    - "basepoint_min"
+    - "basepoint_max"
+    - "basepoint_mean"
+    - "basepoint_p25"
+    - "basepoint_median"
+    - "basepoint_p75"
+    - "payout_min"
+    - "payout_max"
+    - "payout_mean"
+    - "payout_p25"
+    - "payout_median"
+    - "payout_p75"
+    - "profit_min"
+    - "profit_max"
+    - "profit_mean"
+    - "profit_p25"
+    - "profit_median"
+    - "profit_p75"
+    - "delta_t_min"
+    - "delta_t_max"
+    - "delta_t_mean"
+    - "delta_t_p25"
+    - "delta_t_median"
+    - "delta_t_p75"
+    - "delta_bet_min"
+    - "delta_bet_max"
+    - "delta_bet_mean"
+    - "delta_bet_p25"
+    - "delta_bet_median"
+    - "delta_bet_p75"
+    - "delta_profit_min"
+    - "delta_profit_max"
+    - "delta_profit_mean"
+    - "delta_profit_p25"
+    - "delta_profit_median"
+    - "delta_profit_p75"
+    - "streak_min"
+    - "streak_max"
+    - "streak_mean"
+    - "streak_p25"
+    - "streak_median"
+    - "streak_p75"
+    - "win_streak_min"
+    - "win_streak_max"
+    - "win_streak_mean"
+    - "win_streak_p25"
+    - "win_streak_median"
+    - "win_streak_p75"
+    - "lose_streak_min"
+    - "lose_streak_max"
+    - "lose_streak_mean"
+    - "lose_streak_p25"
+    - "lose_streak_median"
+    - "lose_streak_p75"
+    - "deposit_min"
+    - "deposit_max"
+    - "deposit_mean"
+    - "deposit_p25"
+    - "deposit_median"
+    - "deposit_p75"
+  
+  normal_features:  # Features that don't need transformation
+    - "slottype_2_count"
+    - "payout_rate"
+    - "profit_rate"
+    - "profit_stddev"
+    - "account_stddev"
+    - "morning_count"
+    - "afternoon_count"
+    - "night_count"
+    - "midnight_count"
+    - "weekend_count"
+    - "duration_seconds"
+    - "avg_time_per_bet"
+
+feature_selection:
+  correlation_threshold: 0.9  # Threshold for removing highly correlated features
+  variance_threshold: 0.01  # Threshold for removing low-variance features
+
+kmeans:
+  random_state: 42  # Random state for reproducible results
+  n_init: 10  # Number of initializations for K-means algorithm
+
+elbow_method:
+  k_range: [15, 20, 25, 30, 35, 40, 45, 50]  # Range of k values to test
+
+pipeline:
+  elbow_method: true  # Run elbow method analysis
+  kmeans: true  # Run K-means clustering
+  fit_kmeans: true  # Apply trained model to new data
+  attach_cluster_index: true  # Attach cluster indices to original data
+
+environment:
+  current: "cny_8_months"  # Current analysis environment
+  available:
+    - "cny_8_months"
+    - "cny_after_march"
+    - "all_currency_after_march"
+    - "cny_8_months_balanced_kmeans"
