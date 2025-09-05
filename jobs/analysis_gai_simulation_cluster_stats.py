@@ -12,6 +12,7 @@ import os
 from collections import Counter
 
 import numpy as np
+from scipy.stats import skew
 from sklearn.preprocessing import StandardScaler
 
 from bituslabs_ds.config import S3_BUCKET, setup_logging
@@ -19,7 +20,7 @@ from bituslabs_ds.s3_utils import read_files, upload_file_to_s3
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-setup_logging(f"{SCRIPT_DIR}.log/data_process_wucaishen_cluster_stats.log")
+setup_logging(f"{SCRIPT_DIR}/log/data_process_wucaishen_cluster_stats.log")
 
 
 def convert_numpy_types(obj):
@@ -75,6 +76,7 @@ for cluster_index in range(len(wucaishen_enriched_with_clusters)):
         "basepoint_p75": np.percentile(_basepoint_clean, 75) if _basepoint_clean.size > 0 else None,
         "basepoint_p95": np.percentile(_basepoint_clean, 95) if _basepoint_clean.size > 0 else None,
         "basepoint_median": data["basepoint"].median(),
+        "basepoint_skewness": skew(_basepoint_clean),
         "basepoint_std": data["basepoint"].std(),
         "basepoint_count": len(data["basepoint"]),
         "basepoint_nan_count": len(data["basepoint"]) - len(_basepoint_clean),

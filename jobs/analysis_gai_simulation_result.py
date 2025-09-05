@@ -15,7 +15,7 @@ import pandas as pd
 
 from bituslabs_ds.config import S3_BUCKET, setup_logging
 from bituslabs_ds.eda import Anova, DataProfiler, DataVisualizer, split_column_by_threshold
-from bituslabs_ds.s3_utils import list_s3_files, read_files
+from bituslabs_ds.s3_utils import list_s3_files, read_files, write_df_to_s3
 
 setup_logging(".", "analysis_gai_simulation_result.log")
 pd.set_option("display.max_columns", None)
@@ -26,12 +26,12 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def load_process_data(reload: bool = False) -> pd.DataFrame:
-    local_output = f"{SCRIPT_DIR}/output/v1_all_sessions_summary_20250827.csv"
+    local_output = f"{SCRIPT_DIR}/output/v1_all_sessions_summary_20250905.csv"
     s3_files: List[str] = []
     if reload or not os.path.exists(local_output):
         s3_files += list_s3_files(
             S3_BUCKET,
-            prefix="gail_simulator_data_raw/results_v20250827/sim_test100/",
+            prefix="gail_simulator_data_raw/results_v20250827/sim_20250829_5e4/",
             pattern=".*_sessions_summary.csv",
         )
         # s3_files += list_s3_files(
@@ -70,7 +70,7 @@ if __name__ == "__main__":
         layout_cols=data_profiler.processed_numerical_columns, group_col="cluster_index", n_cols=5, fig_size=(7, 3.5)
     )
     viz.add_histogram(show_distribution_stats=True, kde=True)
-    viz.figure.subplots_adjust(left=0.05, bottom=0.05, top=0.95, right=0.95)
+    viz.figure.subplots_adjust(left=0.05, bottom=0.05, top=0.95, right=0.95, hspace=0.2)
     viz.display()
     viz.save(f"{SCRIPT_DIR}/figures/gai_simulation_distribution.png")
 
@@ -126,7 +126,9 @@ if __name__ == "__main__":
     )
 
     anova = Anova(data_profiler.df, between_vars=anova_between_vars, var_columns=anova_dv)
-    anova.run_anova()
+    anova_res = anova.run_anova()
+    write_df_to_s3(anova_res, S3_BUCKET, key="ds-data-kmeans/wucaishen_simulation/anova_result.csv")
+
     anova.run_post_hoc_analysis(anova_dv, effects="main", p_thresh=0.05)
     if len(anova_between_vars) > 1:
         anova.run_post_hoc_analysis(anova_dv, effects="interaction", group_var="cluster_index", p_thresh=0.05)
