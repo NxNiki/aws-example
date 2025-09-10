@@ -16,12 +16,6 @@ from bituslabs_ds.utils import df_power_transform
 logger = logging.getLogger(__name__)
 
 
-# Feature names are now loaded from configuration files via clustering.get_feature_names()
-
-
-# Data loading is now handled by clustering.load_grouped_data() method
-
-
 def main(project_name: str, top_features: int, output_path: str):
     """Main function for applying trained K-means model."""
     # Initialize clustering analysis

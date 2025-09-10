@@ -24,6 +24,9 @@ from sklearn.feature_selection import VarianceThreshold
 from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
 
+from bituslabs_ds.s3_utils import list_s3_files, read_files
+from bituslabs_ds.utils import column_iterator, keep_numeric_columns, remove_outliers, save_list
+
 logger = logging.getLogger(__name__)
 
 
@@ -102,7 +105,6 @@ class ClusterAnalysis:
         self, output_file: str, pattern: Optional[str] = None, columns: Optional[list] = None
     ) -> pd.DataFrame:
         """Load grouped data from S3 using configuration."""
-        from bituslabs_ds.s3_utils import list_s3_files, read_files
 
         data_config = self.get_data_loading_config()
 
@@ -132,7 +134,6 @@ class ClusterAnalysis:
         self, output_file: str, pattern: Optional[str] = None, columns: Optional[list] = None
     ) -> pd.DataFrame:
         """Load enriched data from S3 using configuration."""
-        from bituslabs_ds.s3_utils import list_s3_files, read_files
 
         data_config = self.get_data_loading_config()
 
@@ -177,11 +178,7 @@ class ClusterAnalysis:
         if prefer_keywords is None:
             prefer_keywords = ["mean", "median"]
 
-        # Keep only numeric columns
-        from bituslabs_ds.utils import keep_numeric_columns
-
         data = keep_numeric_columns(data)
-
         corr_matrix = data.corr().abs()
         upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
         to_drop = set()
@@ -216,10 +213,7 @@ class ClusterAnalysis:
         if threshold is None:
             threshold = self.config["feature_selection"]["variance_threshold"]
 
-        from bituslabs_ds.utils import keep_numeric_columns
-
         data = keep_numeric_columns(data)
-
         selector = VarianceThreshold(threshold=threshold)
         data_filtered = selector.fit_transform(data)
         selected_features = data.columns[selector.get_support()].tolist()
@@ -229,10 +223,8 @@ class ClusterAnalysis:
 
     def feature_selection_by_pca(self, data: pd.DataFrame) -> List[str]:
         """Select features using PCA importance."""
-        from bituslabs_ds.utils import keep_numeric_columns, save_list
 
         data = keep_numeric_columns(data)
-
         pca = PCA(n_components=data.shape[1])
         pca.fit(data)
 
@@ -263,7 +255,6 @@ class ClusterAnalysis:
         self, data: pd.DataFrame, features: List[str], n_features: Optional[Union[List[int], int]] = None
     ) -> Dict[Any, Dict[Any, Any]]:
         """Run elbow method to determine optimal number of clusters."""
-        from bituslabs_ds.utils import column_iterator, remove_outliers
 
         k_range = self.config["elbow_method"]["k_range"]
         scaler = StandardScaler()
@@ -401,10 +392,7 @@ class ClusterAnalysis:
             self.output_path / "models" / f"cluster_centers_standardized_{len(data.columns)}.csv", index=False
         )
 
-        # Save model
         joblib.dump(kmeans, self.output_path / "models" / "kmeans_model.pkl")
-
-        # Save ONNX model
         initial_type = [("float_input", FloatTensorType([None, data.shape[1]]))]
         onnx_model = convert_sklearn(kmeans, initial_types=initial_type)
         with open(self.output_path / "models" / "kmeans_model.onnx", "wb") as f:
