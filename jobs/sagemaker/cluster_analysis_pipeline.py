@@ -82,7 +82,7 @@ class ClusteringPipeline:
         key_features, normal_features, skewed_features = self.clustering.get_feature_names()
 
         # Load data using configuration
-        data_file = f"{output_path}/output/{self.project_name}_grouped_stat_output_24.csv"
+        data_file = f"{output_path}/output/{self.project_name}_grouped_stat_output.csv"
         data = self.clustering.load_grouped_data(data_file)
 
         # Data profiling and cleaning
@@ -115,7 +115,7 @@ class ClusteringPipeline:
         important_features = self.clustering.feature_selection_by_pca(data_select)
 
         # Run elbow method
-        n_features_list = self.config["elbow_method"]["k_range"][:3]  # Use first 3 values
+        n_features_list = self.config["elbow_method"]["k_range"]
         cluster_indices = self.clustering.elbow_method(data, important_features, n_features_list)
 
         logger.info("Elbow method analysis completed")
@@ -134,7 +134,7 @@ class ClusteringPipeline:
         logger.info(f"Log transform features: {features_log}")
 
         # Load data
-        data_file = f"{output_path}/output/{self.project_name}_grouped_stat_output_24.csv"
+        data_file = f"{output_path}/output/{self.project_name}_grouped_stat_output.csv"
         data = self.clustering.load_grouped_data(data_file)
 
         # Apply power transformation
@@ -150,7 +150,7 @@ class ClusteringPipeline:
         data_reference = data.loc[row_index, key_features]
 
         # Run clustering analysis
-        n_clusters = self.config["analysis"]["default_n_clusters"]
+        n_clusters = self.config["analysis"]["n_clusters"]
         cluster_index = self.clustering.run_cluster_analysis(scaled_data, n_clusters)
 
         # Create visualizations
@@ -179,7 +179,7 @@ class ClusteringPipeline:
         logger.info(f"Log transform features: {features_log}")
 
         # Load new data for prediction using configuration
-        data_file = f"{output_path}/output/{self.project_name}_grouped_stat_output_2025.csv"
+        data_file = f"{output_path}/output/{self.project_name}_grouped_stat_output.csv"
         data = self.clustering.load_grouped_data(data_file)
 
         # Apply power transformation
@@ -202,7 +202,7 @@ class ClusteringPipeline:
         # Save data for each cluster
         for cluster in sorted(data["cluster"].unique()):
             cluster_data = data[data["cluster"] == cluster].drop(columns="cluster")
-            output_file = self.clustering.output_path / "output" / f"grouped_data_2025_cluster_{cluster}.csv"
+            output_file = self.clustering.output_path / "output" / f"grouped_data_cluster_{cluster}.csv"
             cluster_data.to_csv(output_file, index=False)
             logger.info(f"Saved cluster {cluster} data: {output_file}")
 
@@ -221,7 +221,7 @@ class ClusteringPipeline:
 
         # Load cluster data and merge
         for i in range(3):  # Assuming 3 clusters
-            cluster_file = f"{output_path}/kmeans_output/grouped_data_2025_cluster_{i}.csv"
+            cluster_file = f"{output_path}/kmeans_output/grouped_data_cluster_{i}.csv"
 
             if os.path.exists(cluster_file):
                 cluster_data = pd.read_csv(cluster_file, usecols=["group_id"])
@@ -231,7 +231,7 @@ class ClusteringPipeline:
                 merged_data = pd.merge(data, cluster_data, how="inner", on="group_id")
 
                 # Save merged data
-                output_file = f"{self.project_name}_with_cluster_2025_{i}.csv"
+                output_file = f"{self.project_name}_with_cluster_{i}.csv"
                 merged_data.to_csv(f"{output_path}/{output_file}", index=False)
                 logger.info(f"Saved cluster {i} data: {output_file} ({len(merged_data)} records)")
             else:
@@ -247,12 +247,6 @@ def main():
     parser.add_argument(
         "--output_path", type=str, default=None, help="Output path for results (default: project-specific)"
     )
-    parser.add_argument(
-        "--steps",
-        nargs="+",
-        choices=["elbow_method", "kmeans", "fit_kmeans", "attach_cluster_index"],
-        help="Specific steps to run (overrides config)",
-    )
     args = parser.parse_args()
 
     # Setup logging
@@ -261,12 +255,6 @@ def main():
 
     # Initialize pipeline
     pipeline = ClusteringPipeline(args.project)
-
-    # Override pipeline steps if specified
-    if args.steps:
-        for step in pipeline.pipeline_config:
-            pipeline.pipeline_config[step] = step in args.steps
-        logger.info(f"Overriding pipeline steps: {args.steps}")
 
     # Run pipeline
     pipeline.run_pipeline(args.output_path)

@@ -124,7 +124,7 @@ def main():
     DataProfiler.count_df_missing_columns(player_data)
     player_data.fillna(0, inplace=True)
     player_data = df_power_transform(player_data, skewed_features)
-    save_list(normal_features + skewed_features, f"{OUTPUT_PATH}/features/log_transform_features.json")
+    save_list(skewed_features, f"{OUTPUT_PATH}/features/log_transform_features.json")
 
     if USE_CNY:
         normal_features.remove("currency_label")

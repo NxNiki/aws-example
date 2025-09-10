@@ -216,6 +216,19 @@ def split_column_by_multiple_separators(data: pd.DataFrame, column: str, sep: st
     return result_df
 
 
+def barplot(data: pd.DataFrame, output_path: str, title: str):
+
+    plt.figure(figsize=(18, 10))
+    colors = sns.color_palette("viridis", len(data))
+    sns.barplot(x="Importance", y="Feature", hue="Feature", data=data, palette=colors, legend=False)
+    plt.title(title, fontsize=16)
+    plt.xlabel("Importance Score", fontsize=12)
+    plt.ylabel("Feature", fontsize=12)
+    plt.grid(axis="x", linestyle="--", alpha=0.6)
+    plt.savefig(f"{output_path}/{title}.png")
+    plt.show()
+
+
 def plot_by_time(
     data: pd.DataFrame,
     time_col: str,
