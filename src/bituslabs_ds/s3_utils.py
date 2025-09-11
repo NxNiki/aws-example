@@ -288,6 +288,7 @@ def read_files(
         data = pd.concat(dfs, ignore_index=True)
 
     if local_cache_path is not None:
+        os.makedirs(os.path.dirname(local_cache_path), exist_ok=True)
         data.to_csv(local_cache_path, index=False)
 
     logger.info("first 5 rows of dataframe: \n%s", data.head(5).to_markdown())

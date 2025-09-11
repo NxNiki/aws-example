@@ -34,6 +34,9 @@ data_loading:
     grouped_data: "deepdive_grouped_stat_output_24.*\\.csv$"  # Pattern for grouped data files
     enriched_data: "25\\d{2}/deepdive_enriched_output/part-.*\\.csv"  # Pattern for enriched data files
     cluster_data: "original_data_cluster_.*\\.csv"  # Pattern for cluster data files
+  local_cache:
+    enriched: "enriched_data.csv"
+    grouped: "grouped_stat_data.csv"
   currency_filter: "CNY"  # Currency to filter (null to disable filtering)
 
 features:

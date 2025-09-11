@@ -2,6 +2,10 @@ import argparse
 import json
 import logging
 import os
+from datetime import datetime
+from pathlib import Path
+from re import I
+from tarfile import data_filter
 from typing import List, Optional, Tuple
 
 import joblib
@@ -12,62 +16,35 @@ import seaborn as sns
 from skl2onnx import convert_sklearn
 from skl2onnx.common.data_types import FloatTensorType
 from sklearn.cluster import KMeans
+from sklearn.compose import ColumnTransformer
 from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import PowerTransformer, RobustScaler, StandardScaler
 
-from bituslabs_ds.config import setup_logging
+from bituslabs_ds.config import S3_BUCKET, setup_logging
+from bituslabs_ds.s3_utils import upload_folder_to_s3
 from bituslabs_ds.utils import df_power_transform, remove_outliers
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 
-def scale_features(
-    data: pd.DataFrame, output_dir: str, output_file_name: str, load_cache: bool = False
-) -> pd.DataFrame:
-    """
-    Normalize the columns of df to have zero mean and unit variance.
-    :param data:
-    :param output_dir:
-    :param output_file_name:
-    :param load_cache:
-    :return:
-    """
-    output_dir = str(output_dir).rstrip("/")
-
-    if os.path.exists(f"{output_dir}/features/{output_file_name}.csv") and load_cache:
-        logger.info(f"read existing output file {output_file_name}...")
-        df_scaled = pd.read_csv(f"{output_dir}/features/{output_file_name}.csv")
-    else:
-        scaler = StandardScaler()
-        x_scaled = scaler.fit_transform(data)
-        df_scaled = pd.DataFrame(x_scaled, columns=data.columns)
-
-        df_scaled.to_csv(f"{output_dir}/features/{output_file_name}.csv", index=False)
-        df_scaled.to_json(f"{output_dir}/features/{output_file_name}.json", orient="records", indent=2)
-
-        mean_std_df = pd.DataFrame({"Mean": scaler.mean_, "Std": scaler.scale_}, index=data.columns)
-        mean_std_df.to_csv(f"{output_dir}/features/{output_file_name}_parameters.csv")
-        print("\n 每个特征的标准化参数（均值与标准差）：")
-        print(mean_std_df)
-
-    return df_scaled
-
-
 def load_features(feature_path: str, top_features: int) -> Tuple[List[str], List[str]]:
 
-    important_features = json.load(open(f"{feature_path}/important_features.json", "r"))
+    important_features = json.load(open(f"{feature_path}/features/important_features.json", "r"))
     important_features = important_features[:top_features]
-    print(important_features)
+    logger.info(f"select top {top_features} features: \n{important_features}")
 
-    features_log = json.load(open(f"{feature_path}/log_transform_features.json", "r"))
+    features_log = json.load(open(f"{feature_path}/features/log_transform_features.json", "r"))
     features_log = [f for f in features_log if f in important_features]
-    print(features_log)
+    logger.info(f"load features to run power transform: \n{features_log}")
 
     return important_features, features_log
 
 
-def run_cluster_analysis(data: pd.DataFrame, n_clusters: int, output_dir: str = ".") -> np.ndarray:
+def run_cluster_analysis(
+    data: pd.DataFrame, n_clusters: int, transform_columns: Optional[List[str]] = None, output_dir: str = "."
+) -> Tuple[np.ndarray, pd.DataFrame]:
     """
     run cluster analysis and return the cluster index.
     :param data:
@@ -76,24 +53,45 @@ def run_cluster_analysis(data: pd.DataFrame, n_clusters: int, output_dir: str = 
     :return:
     """
     output_dir = str(output_dir).rstrip("/")
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-    data_cluster = kmeans.fit_predict(data)
+    pipeline_steps = []
+
+    if transform_columns is not None and len(transform_columns) > 1:
+        power_columns = [i for i, f in enumerate(data.columns) if f in transform_columns]
+        logger.info(f"add power transformation for columns:\n {transform_columns}")
+        logger.info(f"data columns:\n {data.columns.to_list()}")
+        logger.info(f"transform column index:\n {power_columns}")
+
+        preprocessor = ColumnTransformer(
+            transformers=[("yeojohnson", PowerTransformer(method="yeo-johnson", standardize=False), power_columns)],
+            remainder="passthrough",
+        )
+        pipeline_steps.append(("power_transform", preprocessor))
+
+    pipeline_steps.extend([("scaler", RobustScaler()), ("kmeans", KMeans(n_clusters=n_clusters, random_state=42))])
+
+    pipeline = Pipeline(pipeline_steps)
+    data_cluster = pipeline.fit_predict(data)
+
+    transformed_data = pipeline[:-1].transform(data)
+    transformed_df = pd.DataFrame(transformed_data, columns=data.columns)
 
     # ===== 每个聚类中心在标准化空间的特征值 =====
-    centroids_df = pd.DataFrame(kmeans.cluster_centers_, columns=data.columns)
+    centroids_df = pd.DataFrame(pipeline.named_steps["kmeans"].cluster_centers_, columns=data.columns)
     logger.info(f"\n 各聚类中心的标准化特征值：\n {centroids_df}")
     centroids_df.to_csv(f"{output_dir}/models/cluster_centers_standardized_{len(data.columns)}.csv", index=False)
 
     # ===== 模型保存 =====
-    joblib.dump(kmeans, f"{output_dir}/models/kmeans_model.pkl")
+    model_name = f"kmean_model_top{len(data)}_features"
+    joblib.dump(pipeline, f"{output_dir}/models/{model_name}.pkl")
     n_features = data.shape[1]
     initial_type = [("float_input", FloatTensorType([None, n_features]))]
-    onnx_model = convert_sklearn(kmeans, initial_types=initial_type)
-    with open(f"{output_dir}/models/kmeans_model.onnx", "wb") as f:
+    onnx_model = convert_sklearn(pipeline, initial_types=initial_type)
+    with open(f"{output_dir}/models/{model_name}.onnx", "wb") as f:
         f.write(onnx_model.SerializeToString())
 
-    logger.info(f"save cluster model to s3：{output_dir}/models")
-    return data_cluster
+    logger.info(f"save cluster model to：{output_dir}/models")
+
+    return data_cluster, transformed_df
 
 
 def plot_pca_2(
@@ -178,7 +176,7 @@ def save_cluster_data(
     output_dir = str(output_dir).rstrip("/")
     data_merged = data_original.merge(data_cluster, on=merge_columns, how="inner")
     for cluster, group_df in data_merged.groupby(cluster_column):
-        file_name = f"original_data_cluster_{cluster}.csv"
+        file_name = f"grouped_data_cluster_2024_{cluster}.csv"
         group_df.drop(columns=[cluster_column]).to_csv(f"{output_dir}/output/{file_name}", index=False)
         if feature_columns is not None:
             stats = group_df[feature_columns].describe().T  # include: count, mean, std, min, 25%, 50%, 75%, max
@@ -191,9 +189,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--n_clusters", type=int, default=3)
     parser.add_argument("--top_features", type=int, default=25)
-    parser.add_argument("--input_path_data", type=str, default=".input")
-    parser.add_argument("--input_path_features", type=str, default=".input")
-    parser.add_argument("--output_path", type=str, default=".output")
+    parser.add_argument("--input_path", type=str, default=f"{Path(__file__).parent}/wucaishen_local")
+    parser.add_argument("--output_path", type=str, default=f"{Path(__file__).parent}/wucaishen")
+    parser.add_argument("--upload_result_to_s3", type=bool, default=False)
     args = parser.parse_args()
 
     output_path = args.output_path
@@ -205,25 +203,26 @@ if __name__ == "__main__":
     setup_logging(output_path, "analysis_cluster_02_kmeans.log")
 
     non_features = ["group_id", "loginname", "start_time"]
-    important_features, features_log = load_features(args.input_path_features, args.top_features)
+    important_features, features_log = load_features(args.output_path, args.top_features)
 
     wucaishen_data = pd.read_csv(
-        f"{args.input_path_data}/wucaishen_grouped_stat_output_24.csv",
+        f"{args.input_path}/wucaishen_grouped_stat_output_24.csv",
         usecols=[*non_features, *important_features],
     )
 
-    wucaishen_data = df_power_transform(wucaishen_data, col_names=features_log)
-
-    data = scale_features(
-        wucaishen_data[important_features], output_path, f"standardized_features_top_{args.top_features}"
+    wucaishen_data, outlier_indices = remove_outliers(wucaishen_data, z_thresh=5)
+    cluster_index, transformed_data = run_cluster_analysis(
+        wucaishen_data[important_features], args.n_clusters, features_log, output_path
     )
-    data, row_index = remove_outliers(data)
-    data_reference = wucaishen_data.loc[row_index, non_features]
 
-    cluster_index = run_cluster_analysis(data, args.n_clusters, output_path)
+    plot_pca_2(transformed_data, cluster_index, output_path)
+    plot_radar_chart(transformed_data, cluster_index, output_path)
 
-    plot_pca_2(data, cluster_index, output_path)
-    plot_radar_chart(data, cluster_index, output_path)
+    # data_reference = wucaishen_data[non_features].copy()
+    # data_reference["Cluster"] = cluster_index
+    # save_cluster_data(wucaishen_data, data_reference, non_features, "Cluster", output_dir=output_path)
 
-    data_reference["Cluster"] = cluster_index
-    save_cluster_data(wucaishen_data, data_reference, non_features, "Cluster", output_dir=output_path)
+    if args.upload_result_to_s3:
+        time_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
+        s3_prefix = f"wucaishen_kmeans/{time_tag}"
+        upload_folder_to_s3(output_path, S3_BUCKET, s3_prefix)

@@ -53,7 +53,7 @@ class ClusterAnalysis:
         if config_path is None:
             # Default config path based on project
             config_path = str(
-                Path(__file__).parent.parent.parent / "jobs" / "sagemaker" / f"{self.project_name}_cluster_config.yaml"
+                Path(__file__).parent.parent.parent / "jobs" / "sagemaker" / f"cluster_config-{self.project_name}.yaml"
             )
 
         if not os.path.exists(config_path):

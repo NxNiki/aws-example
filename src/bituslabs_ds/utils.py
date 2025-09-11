@@ -9,6 +9,7 @@ from typing import Any, Iterable, Iterator, List, Literal, Optional, Tuple, Unio
 import numpy as np
 import pandas as pd
 from scipy.stats import zscore
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.preprocessing import power_transform
 
 logger = logging.getLogger(__name__)
@@ -132,6 +133,7 @@ def remove_outliers(
     data: Union[np.ndarray, pd.DataFrame], z_thresh: float = 3
 ) -> Tuple[Union[np.ndarray, pd.DataFrame], np.ndarray]:
     """
+    It is recommended to use RobustScaler instead of remove_outlier.
     remove samples (rows) of data that has zscore above a certain threshold.
     :param data:
     :param z_thresh:
