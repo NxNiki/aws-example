@@ -1,6 +1,5 @@
 import argparse
 import os
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -12,12 +11,11 @@ from cluster_analysis_01_elbow_method import (
     smart_feature_selection,
 )
 from cluster_config import CORRELATION_THRESHOLD, ELBOW_K_RANGE, OUTPUT_PATH, USE_CNY, VARIANCE_THRESHOLD, WORK_DIR
-from sklearn.metrics import confusion_matrix
 
 from bituslabs_ds.config import setup_logging
 from bituslabs_ds.eda import DataProfiler, DataVisualizer
-from bituslabs_ds.s3_utils import list_s3_files, read_dataset, read_files
-from bituslabs_ds.utils import column_iterator, df_power_transform, keep_numeric_columns, remove_outliers, save_list
+from bituslabs_ds.s3_utils import list_s3_files, read_files
+from bituslabs_ds.utils import df_power_transform, remove_outliers, save_list
 
 
 def load_data(output_file: str, columns: Optional[List[str]] = None, pattern: str = ".*") -> pd.DataFrame:
