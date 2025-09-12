@@ -52,13 +52,13 @@ def main(input_dir: str, output_dir: str, upload_output: bool):
 
     os.makedirs(output_dir, exist_ok=True)
     for i in range(3):
-        cluster_file = f"{output_dir}/output/original_data_cluster_{i}.csv"
+        cluster_file = f"{output_dir}/output/grouped_data_cluster_{i}.csv"
         cluster_data = pd.read_csv(cluster_file, usecols=["group_id"])
         cluster_data["cluster"] = i
         cluster_data = pd.merge(data, cluster_data, how="inner", on="group_id")
         # cluster_data.drop("group_id", axis=1, inplace=True)
 
-        f_name = f"deepdive_enrich_with_cluster_2025_{i}.csv"
+        f_name = f"deepdive_enrich_with_cluster_{i}.csv"
         cluster_data.to_csv(f"{output_dir}/output/{f_name}", index=False)
 
     if upload_output:

@@ -23,7 +23,6 @@ from sklearn.preprocessing import PowerTransformer, RobustScaler, StandardScaler
 
 from bituslabs_ds.config import S3_BUCKET, setup_logging
 from bituslabs_ds.s3_utils import upload_folder_to_s3
-from bituslabs_ds.utils import df_power_transform, remove_outliers
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -67,9 +66,7 @@ def run_cluster_analysis(
         )
         pipeline_steps.append(("power_transform", preprocessor))
 
-    pipeline_steps.extend(
-        [("scaler", RobustScaler(quantile_range=(10, 90))), ("kmeans", KMeans(n_clusters=n_clusters, random_state=42))]
-    )
+    pipeline_steps.extend([("scaler", RobustScaler()), ("kmeans", KMeans(n_clusters=n_clusters, random_state=42))])
     pipeline = Pipeline(pipeline_steps)
     data_cluster = pipeline.fit_predict(data)
 
@@ -177,7 +174,7 @@ def save_cluster_data(
     output_dir = str(output_dir).rstrip("/")
     data_merged = data_original.merge(data_cluster, on=merge_columns, how="inner")
     for cluster, group_df in data_merged.groupby(cluster_column):
-        file_name = f"grouped_data_cluster_2024_{cluster}.csv"
+        file_name = f"grouped_data_cluster_{cluster}.csv"
         group_df.drop(columns=[cluster_column]).to_csv(f"{output_dir}/output/{file_name}", index=False)
         if feature_columns is not None:
             stats = group_df[feature_columns].describe().T  # include: count, mean, std, min, 25%, 50%, 75%, max

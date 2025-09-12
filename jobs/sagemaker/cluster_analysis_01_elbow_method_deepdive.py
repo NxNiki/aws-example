@@ -103,7 +103,6 @@ def check_cluster_index_contingency(
             print(f"\nContingency Matrix for k={k}:")
             contingency = pd.crosstab(cluster_labels, reference_feature, rownames=["Cluster"], colnames=["Reference"])
             print(contingency)
-
             contingency.to_csv(f"{output_dir}/cluster_index_contingency_nfeature-{idx}_k-{k}.csv", index=False)
 
 
@@ -120,14 +119,16 @@ def main():
         columns=[*non_features, *normal_features, *skewed_features],
         pattern=r"250.?/deepdive_grouped_stat_output.*\.csv$",
     )
+    if USE_CNY:
+        normal_features.remove("currency_label")
 
     DataProfiler.count_df_missing_columns(player_data)
     player_data.fillna(0, inplace=True)
+    _, filter_index = remove_outliers(player_data[normal_features + skewed_features], z_thresh=3)
+    print(f"remove {sum(~filter_index)} outliers.")
+    player_data[filter_index].to_csv(f"{WORK_DIR}/deepdive_grouped_stat_output_25_outliers_removed.csv")
     player_data = df_power_transform(player_data, skewed_features)
     save_list(skewed_features, f"{OUTPUT_PATH}/features/log_transform_features.json")
-
-    if USE_CNY:
-        normal_features.remove("currency_label")
 
     viz = DataVisualizer(player_data[normal_features + skewed_features])
     viz.create_figure(fig_title="Correlation of features: deepdive", fig_size=(23, 13.5))
