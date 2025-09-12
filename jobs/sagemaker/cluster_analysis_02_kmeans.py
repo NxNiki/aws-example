@@ -62,13 +62,14 @@ def run_cluster_analysis(
         logger.info(f"transform column index:\n {power_columns}")
 
         preprocessor = ColumnTransformer(
-            transformers=[("yeojohnson", PowerTransformer(method="yeo-johnson", standardize=False), power_columns)],
+            transformers=[("yeojohnson", PowerTransformer(method="yeo-johnson", standardize=True), power_columns)],
             remainder="passthrough",
         )
         pipeline_steps.append(("power_transform", preprocessor))
 
-    pipeline_steps.extend([("scaler", RobustScaler()), ("kmeans", KMeans(n_clusters=n_clusters, random_state=42))])
-
+    pipeline_steps.extend(
+        [("scaler", RobustScaler(quantile_range=(10, 90))), ("kmeans", KMeans(n_clusters=n_clusters, random_state=42))]
+    )
     pipeline = Pipeline(pipeline_steps)
     data_cluster = pipeline.fit_predict(data)
 
@@ -81,9 +82,9 @@ def run_cluster_analysis(
     centroids_df.to_csv(f"{output_dir}/models/cluster_centers_standardized_{len(data.columns)}.csv", index=False)
 
     # ===== 模型保存 =====
-    model_name = f"kmean_model_top{len(data)}_features"
-    joblib.dump(pipeline, f"{output_dir}/models/{model_name}.pkl")
     n_features = data.shape[1]
+    model_name = f"kmean_model_top{n_features}_features"
+    joblib.dump(pipeline, f"{output_dir}/models/{model_name}.pkl")
     initial_type = [("float_input", FloatTensorType([None, n_features]))]
     onnx_model = convert_sklearn(pipeline, initial_types=initial_type)
     with open(f"{output_dir}/models/{model_name}.onnx", "wb") as f:
@@ -116,7 +117,7 @@ def plot_pca_2(
     plt.legend(title="Cluster")
     plt.grid(True)
     plt.savefig(f"{output_dir}/figures/{output_file_name}.png")
-    plt.show()
+    # plt.show()
 
     unique_values, counts = np.unique(data_cluster, return_counts=True)
     cluster_counts = dict(zip(unique_values, counts))
@@ -151,7 +152,7 @@ def plot_radar_chart(data: pd.DataFrame, data_cluster: np.ndarray, output_dir: s
     plt.legend(loc="upper right")
     plt.subplots_adjust(left=0.1, bottom=0.1)
     plt.savefig(f"{output_dir}/figures/Radar_Clusters.png")
-    plt.show()
+    # plt.show()
 
 
 def save_cluster_data(
@@ -191,7 +192,7 @@ if __name__ == "__main__":
     parser.add_argument("--top_features", type=int, default=25)
     parser.add_argument("--input_path", type=str, default=f"{Path(__file__).parent}/wucaishen_local")
     parser.add_argument("--output_path", type=str, default=f"{Path(__file__).parent}/wucaishen")
-    parser.add_argument("--upload_result_to_s3", type=bool, default=False)
+    parser.add_argument("--upload_result_to_s3", type=bool, default=True)
     args = parser.parse_args()
 
     output_path = args.output_path
@@ -206,11 +207,11 @@ if __name__ == "__main__":
     important_features, features_log = load_features(args.output_path, args.top_features)
 
     wucaishen_data = pd.read_csv(
-        f"{args.input_path}/wucaishen_grouped_stat_output_24.csv",
+        f"{args.input_path}/wucaishen_grouped_stat_output_24_outliers_removed.csv",
         usecols=[*non_features, *important_features],
     )
-
-    wucaishen_data, outlier_indices = remove_outliers(wucaishen_data, z_thresh=5)
+    print(f"read data with shape: {wucaishen_data.shape}")
+    print("run cluster analysis:")
     cluster_index, transformed_data = run_cluster_analysis(
         wucaishen_data[important_features], args.n_clusters, features_log, output_path
     )
@@ -218,11 +219,11 @@ if __name__ == "__main__":
     plot_pca_2(transformed_data, cluster_index, output_path)
     plot_radar_chart(transformed_data, cluster_index, output_path)
 
-    # data_reference = wucaishen_data[non_features].copy()
-    # data_reference["Cluster"] = cluster_index
-    # save_cluster_data(wucaishen_data, data_reference, non_features, "Cluster", output_dir=output_path)
+    data_reference = wucaishen_data[non_features].copy()
+    data_reference["Cluster"] = cluster_index
+    save_cluster_data(wucaishen_data, data_reference, non_features, "Cluster", output_dir=output_path)
 
     if args.upload_result_to_s3:
         time_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
-        s3_prefix = f"wucaishen_kmeans/{time_tag}"
+        s3_prefix = f"wucaishen_analysis_kmeans/{time_tag}"
         upload_folder_to_s3(output_path, S3_BUCKET, s3_prefix)

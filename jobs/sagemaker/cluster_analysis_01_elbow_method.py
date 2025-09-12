@@ -20,7 +20,7 @@ from balanced_kmeans import kmeans_equal
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.feature_selection import VarianceThreshold
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import RobustScaler, StandardScaler
 
 from bituslabs_ds.config import S3_BUCKET, setup_logging
 from bituslabs_ds.eda import DataProfiler, DataVisualizer
@@ -145,11 +145,10 @@ def elbow_method(
     """
 
     k_range = range(2, 7)
-    scaler = StandardScaler()
+    scaler = RobustScaler()
 
     cluster_indices = {}
     for x, n in column_iterator(data, features, n_features):
-        x, filter_index = remove_outliers(x)
         x = scaler.fit_transform(x)
         cluster_indices_by_k = {}
         inertia = []
@@ -169,9 +168,7 @@ def elbow_method(
             # labels = labels_tensor.squeeze(0).numpy()  # Remove batch dimension: (num_samples,)
             # inertia.append(calculate_inertia(x, labels))
 
-            cluster_index = np.full(len(filter_index), np.nan)
-            cluster_index[filter_index] = labels
-            cluster_indices_by_k[k] = cluster_index
+            cluster_indices_by_k[k] = labels
             silhouette_scores.append(calculate_silhouette_score(x, labels))
             cluster_counts = np.bincount(labels)
             cluster_sizes.append(cluster_counts)
@@ -305,8 +302,12 @@ def main(input_path: str, output_path: str):
 
     DataProfiler.count_df_missing_columns(wucaishen_data)
     wucaishen_data.fillna(0, inplace=True)
+    _, filter_index = remove_outliers(wucaishen_data[[*normal_features, *skewed_features]], z_thresh=3)
+    print(f"remove {sum(~filter_index)} features with outliers")
+    wucaishen_data = wucaishen_data[filter_index]
+    wucaishen_data.to_csv(f"{input_path}/wucaishen_grouped_stat_output_24_outliers_removed.csv", index=False)
     wucaishen_data = df_power_transform(wucaishen_data, skewed_features)
-    save_list(normal_features + skewed_features, f"{output_path}/features/log_transform_features.json")
+    save_list(skewed_features, f"{output_path}/features/log_transform_features.json")
 
     viz = DataVisualizer(wucaishen_data[normal_features + skewed_features])
     viz.create_figure(fig_title="Correlation of features: wucaishen", fig_size=(20, 17))
