@@ -9,6 +9,7 @@ from typing import Any, Iterable, Iterator, List, Literal, Optional, Tuple, Unio
 import numpy as np
 import pandas as pd
 from scipy.stats import zscore
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.preprocessing import power_transform
 
 logger = logging.getLogger(__name__)
@@ -132,15 +133,40 @@ def remove_outliers(
     data: Union[np.ndarray, pd.DataFrame], z_thresh: float = 3
 ) -> Tuple[Union[np.ndarray, pd.DataFrame], np.ndarray]:
     """
+    It is recommended to use RobustScaler instead of remove_outlier.
     remove samples (rows) of data that has zscore above a certain threshold.
     :param data:
     :param z_thresh:
     :return:
     """
-    z_scores = np.abs(zscore(data))
-    filtered_indices = (z_scores < z_thresh).all(axis=1)
-    data_filtered = data[filtered_indices]
-    return data_filtered, filtered_indices
+    if isinstance(data, pd.DataFrame):
+        arr = data.values
+    else:
+        arr = data
+
+    # Ensure 2D
+    if arr.ndim == 1:
+        arr = arr.reshape(-1, 1)
+
+    # Compute mean and std per column
+    mean = arr.mean(axis=0)
+    std = arr.std(axis=0, ddof=0)
+    std[std == 0] = 1.0  # avoid division by zero
+
+    # Compute boolean mask without creating z_scores array
+    mask = np.ones(arr.shape[0], dtype=bool)
+    for col in range(arr.shape[1]):
+        col_mask = np.abs(arr[:, col] - mean[col]) < z_thresh * std[col]
+        mask &= col_mask  # remove rows where any column exceeds threshold
+
+    # Return filtered data
+    if isinstance(data, pd.DataFrame):
+        return data.loc[mask], mask
+    else:
+        # If input was 1D, return 1D
+        if mask.shape[0] == arr.shape[0] and arr.shape[1] == 1:
+            return arr[mask, 0], mask
+        return arr[mask], mask
 
 
 def keep_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:

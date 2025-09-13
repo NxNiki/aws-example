@@ -19,6 +19,7 @@ import pingouin as pg
 import seaborn as sns
 from diptest import diptest
 from matplotlib.axes import Axes
+from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.ticker import MaxNLocator
 from matplotlib.typing import ColorType
@@ -215,6 +216,19 @@ def split_column_by_multiple_separators(data: pd.DataFrame, column: str, sep: st
     return result_df
 
 
+def barplot(data: pd.DataFrame, output_path: str, title: str):
+
+    plt.figure(figsize=(18, 10))
+    colors = sns.color_palette("viridis", len(data))
+    sns.barplot(x="Importance", y="Feature", hue="Feature", data=data, palette=colors, legend=False)
+    plt.title(title, fontsize=16)
+    plt.xlabel("Importance Score", fontsize=12)
+    plt.ylabel("Feature", fontsize=12)
+    plt.grid(axis="x", linestyle="--", alpha=0.6)
+    plt.savefig(f"{output_path}/{title}.png")
+    plt.show()
+
+
 def plot_by_time(
     data: pd.DataFrame,
     time_col: str,
@@ -329,7 +343,7 @@ def plot_by_time(
     ax.set_xticks(valid_ticks)
     ax.set_xticklabels(data_resampled.loc[valid_ticks, "time_str"], rotation=45, ha="right", fontsize=7)
     fig.suptitle(title, fontsize=10)
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    plt.tight_layout(rect=(0, 0, 1, 0.96))
     plt.show()
 
 
@@ -358,7 +372,7 @@ def plot_dual_axis_sorted_swarm(
     y_col_left: str,
     hue_col: str,
     value_cols: List[str],
-    y_col_right: Optional[str] = None,
+    y_col_right: str = "",
 ) -> None:
     """
     Creates a horizontal swarm plot with dual y-axis labels and detailed annotations.
@@ -441,7 +455,7 @@ def plot_dual_axis_sorted_swarm(
                 ax1.annotate(
                     text_neg,
                     xy=(0, text_y_pos),
-                    xycoords=("axes fraction", "data"),
+                    xycoords=("axes fraction", "data"),  # type: ignore[arg-type]
                     xytext=(-10, 0),
                     textcoords="offset points",
                     ha="right",
@@ -454,7 +468,7 @@ def plot_dual_axis_sorted_swarm(
                 ax1.annotate(
                     text_pos,
                     xy=(1, text_y_pos),
-                    xycoords=("axes fraction", "data"),
+                    xycoords=("axes fraction", "data"),  # type: ignore[arg-type]
                     xytext=(10, 0),
                     textcoords="offset points",
                     ha="left",
@@ -667,6 +681,9 @@ class DataVisualizer:
     """
     A comprehensive class for data visualization that organizes all plotting functions
     and allows sharing of data and configuration across methods.
+
+    Most of the plots can also be created with seaborn.FacetGrid. This class is more flexiable to
+    arrange layouts based on different columns of input data.
     """
 
     def __init__(
@@ -688,7 +705,7 @@ class DataVisualizer:
         self.layout_cols = ListProperty("layout_cols", immutable=False)
 
         # attributes defined in create_figure:
-        self.figure: plt.Figure = None
+        self.figure: plt.Figure = Figure()
         self.figure_size: Tuple[float, float] = (8, 6)
         self.group_col: str = ""
         self.axes_keys: List[Tuple[str, str, Any]] = []
@@ -755,6 +772,7 @@ class DataVisualizer:
             return [], []
 
         numeric_cols = self.data_profiler.check_numeric_columns(include_boolean=False, subset_cols=layout_cols)
+        numeric_cols.sort()
         non_numeric_cols = [col for col in layout_cols if col not in numeric_cols]
         return numeric_cols, non_numeric_cols
 
@@ -836,7 +854,7 @@ class DataVisualizer:
         fig_title: Optional[str] = None,
         fig_size: Tuple[float, float] = (8, 6),
         palette: str = "pastel",
-    ) -> Tuple[plt.Figure, dict]:
+    ) -> Tuple[plt.Figure, List[Axes]]:
         """
         Create figure and subplots for visualization.
 
@@ -854,7 +872,9 @@ class DataVisualizer:
             Tuple of (figure, axes, axes_map) for further customization.
             axes_map is a dict mapping (x_col, y_col) to the corresponding axis.
         """
-        self.layout_cols = layout_cols
+
+        self.layout_cols = layout_cols  # type: ignore[assignment]
+
         self.group_col = group_col
         self._update_palette(group_col, palette)
 
@@ -871,9 +891,9 @@ class DataVisualizer:
         )
 
         if n_plots == 1:
-            axes = np.array([axes])
+            axes = [axes]
         else:
-            axes = np.array(axes).flatten()
+            axes = list(np.array(axes).flatten())
 
         for idx in range(len(axes)):
             ax = axes[idx]
@@ -944,6 +964,7 @@ class DataVisualizer:
                 raise NotImplementedError(f"Plot function {plot_func.__name__} not implemented")
 
     def add_boxplot(self, **kwargs) -> None:
+        logger.info(f"Adding boxplot to {len(self.axes)} axes")
         self._add_plot_to_axes(self.add_boxplot_to_axis, **kwargs)
 
     @staticmethod
@@ -980,7 +1001,7 @@ class DataVisualizer:
             y=y_col,
             hue=group_col if group_col else None,
             ax=axis,
-            palette=palette,
+            palette=palette if group_col else None,
             boxprops=dict(linewidth=1.5, facecolor=(0, 0, 0, 0)),
             medianprops=dict(linewidth=2),
             whis=1.5,
@@ -1025,7 +1046,7 @@ class DataVisualizer:
         self,
         **kwargs,
     ) -> None:
-
+        logger.info(f"Adding stripplot to {len(self.axes)} axes")
         self._add_plot_to_axes(self.add_stripplot_to_axis, **kwargs)
 
     @staticmethod
@@ -1066,10 +1087,10 @@ class DataVisualizer:
             dodge=True if group_col else False,
             ax=axis,
             palette=palette,
-            size=3 if non_nans > 1e5 else size,
+            size=size / 3 if non_nans > 1e4 else size,
             legend=show_legend,
             jitter=jitter,
-            alpha=0.5 if non_nans > 1e5 else alpha,
+            alpha=0.5 if non_nans > 1e4 else alpha,
             **kwargs,
         )
 
@@ -1079,7 +1100,7 @@ class DataVisualizer:
         self,
         **kwargs,
     ):
-
+        logger.info(f"Adding histogram to {len(self.axes)} axes")
         self._add_plot_to_axes(self.add_histogram_to_axis, **kwargs)
 
     def add_histogram_to_axis(
@@ -1090,7 +1111,7 @@ class DataVisualizer:
         group_col: Optional[str] = None,
         show_distribution_stats: bool = False,
         **kwargs,
-    ) -> Axes:
+    ) -> Optional[Axes]:
         """
         Add histogram to the specified axes or all current axes.
 
@@ -1105,18 +1126,27 @@ class DataVisualizer:
             The axes with histograms added
         """
 
+        if group_col:
+            data = data[[y_col, group_col]].copy()
+        else:
+            data = data[y_col].to_frame()
+
+        max_value_length = int(1e5)
+        if len(data) > max_value_length:
+            logger.warning(f"Randomly selecting {max_value_length} rows from input dataframe to create histogram")
+            data = data.sample(n=max_value_length, random_state=42)
+
         values = data[[y_col]].dropna().values.flatten()
         values = np.asarray(values, dtype=float)
         values = values[np.isfinite(values)]
 
         if len(values) == 0:
             logger.warning(f"No values found for column: {y_col}")
-            return
+            return None
 
         if len(np.unique(values)) == 1:
             logger.warning(f"Only one unique value found for column: {y_col}. Set kde to False.")
             kwargs["kde"] = False
-            return
 
         group_col = None if group_col == "" else group_col
         sns.histplot(data, x=y_col, hue=group_col, palette=self.palette, ax=axis, **kwargs)
@@ -1141,9 +1171,9 @@ class DataVisualizer:
 
             axis.legend(labels=legend_labels, frameon=False)
 
-        axis.set_title(y_col)
-        axis.set_xlabel("Value")
-        axis.set_ylabel("Frequency")
+        # axis.set_title(y_col)
+        axis.set_xlabel(y_col)
+        axis.set_ylabel(None)  # type: ignore[arg-type]
         axis.grid(True)
 
         return axis
@@ -1152,8 +1182,11 @@ class DataVisualizer:
         self,
         method: str = "pearson",
         value_cols: List[str] = [],
+        **kwargs,
     ) -> None:
         """Add correlation heatmap to the current figure."""
+        logger.info(f"Adding correlation heatmap to {len(self.axes)} axes")
+
         if not hasattr(self, "figure") or self.figure is None:
             raise ValueError("No figure available. Create figure first.")
 
@@ -1161,11 +1194,11 @@ class DataVisualizer:
             value_cols = self.data_profiler.processed_numerical_columns
 
         # Use the static method to add the heatmap
-        self._add_plot_to_axes(self.add_correlation_heatmap_to_axis, method=method, value_cols=value_cols)
+        self._add_plot_to_axes(self.add_correlation_heatmap_to_axis, method=method, value_cols=value_cols, **kwargs)
 
     @staticmethod
     def add_correlation_heatmap_to_axis(
-        heatmap_data: pd.DataFrame, axis: Axes, method: str = "pearson", title: str = "Heatmap"
+        heatmap_data: pd.DataFrame, axis: Axes, method: str = "pearson", title: str = "Heatmap", **kwargs
     ) -> Axes:
         """
         Add correlation heatmap to the specified axes or all current axes.
@@ -1190,18 +1223,15 @@ class DataVisualizer:
 
         heatmap = sns.heatmap(
             correlation_matrix,
-            cmap="Reds",
             linewidths=0.5,
             ax=axis,
-            annot=True,  # Add correlation values to the heatmap
-            fmt=".2f",  # Format the annotation to 2 decimal places
-            annot_kws={"size": 10},
+            **kwargs,
         )
 
         if title != "":
             axis.set_title(title, fontsize=16, pad=20)
-        axis.set_xlabel(None)
-        axis.set_ylabel(None)
+        axis.set_xlabel(None)  # type: ignore[arg-type]
+        axis.set_ylabel(None)  # type: ignore[arg-type]
         plt.setp(axis.get_xticklabels(), rotation=30, ha="right", fontsize=12)
         plt.setp(axis.get_yticklabels(), rotation=0, fontsize=12)
 
@@ -1326,7 +1356,8 @@ class DataVisualizer:
         num_groups_for_palette = len(self.data[self.group_col].unique())
         palette = sns.color_palette(self.palette, n_colors=num_groups_for_palette)
 
-        handles, labels = [], []
+        handles: list = []
+        labels: list = []
 
         # Try to get handles and labels from any axis
         for ax in self.axes:
@@ -1356,6 +1387,7 @@ class DataVisualizer:
     def save(self, filename: str, dpi: int = 300, bbox_inches: str = "tight"):
         """Save the current figure."""
         if self.figure:
+            logger.info(f"saving figure to {filename}")
             self.figure.savefig(filename, dpi=dpi, bbox_inches=bbox_inches)
         else:
             print("No figure to save. Create a plot first.")
@@ -1381,42 +1413,46 @@ class DataProfiler:
         self.df = df.copy() if isinstance(df, pd.DataFrame) else df.to_frame()
         self.skewness_threshold = abs(skewness_threshold)
         self.output_path = output_path
+        self._pos_skewed_col_suffix = "_log"
+        self._neg_skewed_col_suffix = "_exp"
+        self._transform_skewed_columns: Dict[str, str] = {}
 
         # Initialize profiling results
         self._original_numeric_columns: List[str] = self.check_numeric_columns(include_boolean=True)
+
         self.count_missing_columns(verbose=True)
         self.count_nan_for_columns()
         self.count_rows_with_nan()
 
     def count_nan_for_columns(self) -> Dict[str, int]:
         res = {col: self.df[col].isna().sum() for col in self.df.columns}
-        logger.info(f"number of nans in each column: \n {res}")
+        logger.info(f"\n\n Number of nans in each column: \n\n {res}")
         return res
 
     def count_rows_with_nan(self) -> int:
         res = self.df.isna().any(axis=1).sum()
-        logger.info(f"number of rows with nans: \n {res}/{self.df.shape[0]}")
+        logger.info(f"\n\n Number of rows with nans: \n\n {res}/{self.df.shape[0]}")
         return res
 
     @property
     def processed_numerical_columns(self):
-        """Get processed numerical columns for analysis. This includes power transformed columns."""
-        return self.check_numeric_columns(include_boolean=True, refresh=True)
+        """Get processed numerical columns for analysis. If a column is power transformed, it will be replaced with the transformed column."""
+        res = [
+            col if col not in self._transform_skewed_columns else self._transform_skewed_columns[col]
+            for col in self._original_numeric_columns
+        ]
+        return res
 
     def check_numeric_columns(
         self, include_boolean: bool = True, subset_cols: Optional[Union[str, List[str]]] = None, refresh: bool = False
     ) -> List[str]:
-        """Check and return numeric columns in the DataFrame."""
+        """Check and return numeric columns in the DataFrame. This includes the orignal and power transformed columns."""
 
         if subset_cols:
-            processed_numerical_columns = self.check_df_numerical_columns(self.df[subset_cols], include_boolean)
+            numerical_columns = self.check_df_numerical_columns(self.df[subset_cols], include_boolean)
         else:
-            if not hasattr(self, "_processed_numerical_columns") or refresh:
-                processed_numerical_columns = self.check_df_numerical_columns(self.df, include_boolean)
-                self._processed_numerical_columns = processed_numerical_columns
-            else:
-                processed_numerical_columns = self._processed_numerical_columns
-        return processed_numerical_columns
+            numerical_columns = self.check_df_numerical_columns(self.df, include_boolean)
+        return numerical_columns
 
     @staticmethod
     def check_df_numerical_columns(data: Union[pd.DataFrame, pd.Series], include_boolean: bool = True) -> List[str]:
@@ -1453,7 +1489,6 @@ class DataProfiler:
 
             skewness = skew(values, bias=False)
             dip_statistic_unimodal, p_value_unimodal = diptest(values)
-
             distribution_stats.append(
                 {
                     "column": col,
@@ -1478,13 +1513,25 @@ class DataProfiler:
         """Transform skewed columns using log or exponential transformations."""
         pos_skewed, neg_skewed = self.get_skewed_columns()
 
+        if pos_suffix == "" or pos_suffix is None:
+            pos_suffix = self._pos_skewed_col_suffix
+        else:
+            self._pos_skewed_col_suffix = pos_suffix
+
+        if neg_suffix == "" or neg_suffix is None:
+            neg_suffix = self._neg_skewed_col_suffix
+        else:
+            self._neg_skewed_col_suffix = neg_suffix
+
         # Transform positively skewed columns (yeo-johnson transformation)
         for col in pos_skewed:
             self.df[f"{col}{pos_suffix}"] = power_transform(self.df[col].values.reshape(-1, 1), method="yeo-johnson")
+            self._transform_skewed_columns[col] = f"{col}{pos_suffix}"
 
         # Transform negatively skewed columns (yeo-johnson transformation)
         for col in neg_skewed:
             self.df[f"{col}{neg_suffix}"] = power_transform(self.df[col].values.reshape(-1, 1), method="yeo-johnson")
+            self._transform_skewed_columns[col] = f"{col}{neg_suffix}"
 
     def get_correlation_matrix(self, method: str = "pearson") -> pd.DataFrame:
         """Get correlation matrix for numerical columns."""
@@ -1516,6 +1563,7 @@ class DataProfiler:
         if "mean" in method:
             data[f"{col_name}_mean"] = df_scaled.mean(axis=1)
         if "pca" in method:
+            logger.info(f"run pca on the following columns of dataframe:\n {columns}")
             pca = PCA(n_components=None)
             principal_components = pca.fit_transform(df_scaled)
             explained_variance_ratio_cumsum = np.cumsum(pca.explained_variance_ratio_)
@@ -1528,13 +1576,13 @@ class DataProfiler:
 
         return data
 
-    def show_group_stats(self, group_cols: List[str], var_columns: List[str], transpose: bool = False):
-        self.show_df_group_stats(self.df, group_cols, var_columns, transpose)
+    def show_group_stats(self, group_cols: List[str], var_columns: List[str], transpose: bool = False) -> pd.DataFrame:
+        return self.show_df_group_stats(self.df, group_cols, var_columns, transpose)
 
     @staticmethod
     def show_df_group_stats(
         data: pd.DataFrame, group_cols: List[str], var_columns: List[str], transpose: bool = False
-    ) -> None:
+    ) -> pd.DataFrame:
         """
         Display group statistics for specified columns.
         """
@@ -1552,6 +1600,8 @@ class DataProfiler:
             stats = stats.T
 
         logger.info(f"Group Statistics:\n {stats.reset_index().to_markdown(index=False)}")
+
+        return stats
 
     def count_missing_columns(self, verbose: bool = True) -> dict:
         return self.count_df_missing_columns(self.df, verbose)
@@ -1622,7 +1672,7 @@ class Anova:
             self.anova_report["variable"].append(col)
             for index, row in anova_output.iterrows():
                 source = row["Source"]
-                if source == "Residual":
+                if source == "Residual" or source == "Within":
                     break
                 self.anova_report[f"{source}-p_value"].append(row["p-unc"])
                 self.anova_report[f"{source}-eta2"].append(row["np2"])
@@ -1787,8 +1837,14 @@ class Anova:
         plots_per_figure: int = 5,
         output_path: str = ".",
         fig_title: str = "boxplot",
-    ) -> None:
+        stripplot_kws: Dict[str, Any] = {},
+    ) -> Optional[DataVisualizer]:
         post_hoc_table = pd.DataFrame(self.post_hoc_report)
+
+        if len(post_hoc_table) == 0:
+            logger.warning("No post-hoc results found. Skip boxplot.")
+            return None
+
         for layout_cols, i, num_chunks in batch_iterator(
             post_hoc_table["variable"].drop_duplicates(), plots_per_figure
         ):
@@ -1800,9 +1856,11 @@ class Anova:
                 fig_title=f"{fig_title}: {i}/{num_chunks}",
             )
             viz.add_boxplot(x_col=x_col)
-            viz.add_stripplot(x_col=x_col)
+            viz.add_stripplot(x_col=x_col, **stripplot_kws)
+            viz.figure.subplots_adjust(left=0.15, bottom=0.1, top=0.95, right=0.97, wspace=0.25, hspace=0.1)
             viz.display()
             viz.save(f"{output_path}/{fig_title}_{i}.png")
+        return viz
 
 
 if __name__ == "__main__":

@@ -151,6 +151,7 @@ def upload_folder_to_s3(
     s3_bucket: str,
     s3_prefix: str = "",
     max_workers: int = DEFAULT_MAX_JOBS,
+    ignore_hidden: bool = True,
 ) -> Tuple[str, List[str]]:
     """
     Uploads a local folder to an S3 bucket in parallel.
@@ -159,6 +160,7 @@ def upload_folder_to_s3(
     :param s3_bucket: Name of the S3 bucket.
     :param s3_prefix: S3 object key prefix (e.g., 'my_data/').
     :param max_workers: Maximum number of concurrent file uploads.
+    :param ignore_hidden: If True, ignore hidden files and directories (starting with '.').
     :return: List of S3 URIs for successfully uploaded files.
     """
     local_folder_path = Path(local_folder_path).resolve()
@@ -170,14 +172,23 @@ def upload_folder_to_s3(
     uploaded_uris = []
     futures = []
 
+    def is_hidden(path: Path) -> bool:
+        return any(part.startswith(".") for part in path.parts)
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        for root, _, files in os.walk(local_folder_path):
+        for root, dirs, files in os.walk(local_folder_path):
+            if ignore_hidden:
+                # Remove hidden directories from traversal
+                dirs[:] = [d for d in dirs if not d.startswith(".")]
             for file in files:
+                if ignore_hidden and file.startswith("."):
+                    continue
                 local_file_path = Path(root) / file
+                # If ignore_hidden, also check if any parent is hidden
+                if ignore_hidden and is_hidden(local_file_path.relative_to(local_folder_path)):
+                    continue
                 relative_path = local_file_path.relative_to(local_folder_path)
                 s3_key = str(Path(s3_prefix) / relative_path).replace("\\", "/")
-
-                # Submit each file upload as a separate task to the thread pool
                 future = executor.submit(upload_file_to_s3, local_file_path, s3_bucket, s3_key)
                 futures.append(future)
 
@@ -245,7 +256,7 @@ def read_files(
 
     if local_cache_path is not None and os.path.exists(local_cache_path) and not reload:
         logger.info(f"Found local cache at {local_cache_path}")
-        data = pd.read_csv(local_cache_path)
+        data = pd.read_csv(local_cache_path, usecols=columns)
         return data
 
     read_func = partial(_read_file, columns=columns)
@@ -277,6 +288,7 @@ def read_files(
         data = pd.concat(dfs, ignore_index=True)
 
     if local_cache_path is not None:
+        os.makedirs(os.path.dirname(local_cache_path), exist_ok=True)
         data.to_csv(local_cache_path, index=False)
 
     logger.info("first 5 rows of dataframe: \n%s", data.head(5).to_markdown())

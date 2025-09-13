@@ -62,7 +62,7 @@ if __name__ == "__main__":
             CollectionConfig(
                 name="fc_weights",
                 parameters={
-                    "include_regex": "model.fc.0.(weight|bias)",  # Regex for your new FC layer's weights and biases
+                    "include_regex": "(model|module).fc.0.(weight|bias)",  # Regex for FC layer's weights and biases (works with and without DDP)
                     "save_interval": "5000",  # Less frequent saves for these tensors
                 },
             ),
@@ -70,7 +70,7 @@ if __name__ == "__main__":
             CollectionConfig(
                 name="fc_gradients",
                 parameters={
-                    "include_regex": "model.fc.0.(weight|bias).grad",  # Regex for your new FC layer's gradients
+                    "include_regex": "(model|module).fc.0.(weight|bias).grad",  # Regex for FC layer's gradients (works with and without DDP)
                     "save_interval": "5000",
                 },
             ),
@@ -83,7 +83,7 @@ if __name__ == "__main__":
 
     hyperparameters = {
         "_tuning_objective_metric": '"average test loss"',
-        "batch-size": 256,
+        "batch-size": 128,  # Reduced batch size for distributed training (effective batch size = 128 * 2 = 256)
         "lr": 0.005,
         "epochs": 20,
     }
@@ -91,20 +91,21 @@ if __name__ == "__main__":
     estimator = PyTorch(
         # image_uri=IMAGE_URI,
         role=SAGEMAKER_ROLE,
-        instance_count=1,  # if distributed training is not configured, multiple instances will run the same job independently.
+        instance_count=2,  # Multiple instances for DDP distributed training
         instance_type="ml.g4dn.xlarge",
-        entry_point=f"{LOCAL_ROOT}/jobs/examples/sagemaker_training_job.py",
+        entry_point=f"{LOCAL_ROOT}/jobs/examples/sagemaker_training_job_dist.py",  # Use DDP-enabled training script
         # source_dir=f"{LOCAL_ROOT}/jobs/examples",  # avoid large files in the source_dir, or it takes a long time to transfer to instance.
-        framework_version="2.0",  # higher versions does not have smdebug installed.
+        framework_version="2.0.1",  # higher versions does not have smdebug installed.
         py_version="py310",
         hyperparameters=hyperparameters,
         debugger_hook_config=hook_config,
         profiler_config=profiler_config,
         rules=rules,
-        use_spot_instances=True,
+        use_spot_instances=False,  # Changed to False to use on-demand instances
         max_run=3600,  # MaxRuntimeInSeconds (1 hour)
-        max_wait=7200,  # for spot instance, MaxWaitTimeInSeconds (must be >= max_run)
+        # max_wait=7200,  # Remove max_wait since we're not using spot instances
         # keep_alive_period_in_seconds=1800,  # keep instance alive for 30 mins to reuse. spot instance cannot retain instance.
+        distribution={"pytorchddp": {"enabled": True}},
     )
 
     train_input = sagemaker.inputs.TrainingInput(

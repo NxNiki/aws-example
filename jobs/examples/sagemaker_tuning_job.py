@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from PIL import ImageFile
-from torch.cuda import amp
+from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 from torchvision import datasets, models, transforms
 
@@ -73,7 +73,7 @@ def train(model, train_loader, epochs, criterion, optimizer, hook=None):
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
     print(f"Using device: {device}")
-    scaler = amp.GradScaler()
+    scaler = GradScaler()
 
     for epoch in range(epochs):
         samples_processed = 0
@@ -83,7 +83,7 @@ def train(model, train_loader, epochs, criterion, optimizer, hook=None):
             optimizer.zero_grad()
 
             # Autocast enables mixed precision for the forward pass
-            with amp.autocast():
+            with autocast():
                 output = model(data)
                 loss = criterion(output, target)
 

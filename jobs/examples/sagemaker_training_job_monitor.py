@@ -93,7 +93,7 @@ def create_profiler():
 
 if __name__ == "__main__":
 
-    job_name = ""
+    job_name = "pytorch-training-2025-08-27-00-47-32-919"
     sagemaker_session = sagemaker.Session()
 
     estimator = PyTorch.attach(training_job_name=job_name, sagemaker_session=sagemaker_session)

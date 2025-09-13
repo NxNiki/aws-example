@@ -4,14 +4,16 @@ import os
 import numpy as np
 import smdebug.pytorch as smd
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from PIL import ImageFile
 from torch.cuda import amp
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, DistributedSampler
 from torchvision import datasets, models, transforms
 
+DEVICE = torch.device(f"cuda:0")
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 import argparse
@@ -23,10 +25,7 @@ def test(model, test_loader, criterion, hook=None):
     model. Remember to include any debugging/profiling hooks that you might need
     """
 
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    model = model.to(device)
-    print(f"Using device: {device}")
-
+    model = model.to(DEVICE)
     model.eval()
     # ===================================================#
     # 3. Set the SMDebug hook for the validation phase. #
@@ -38,8 +37,8 @@ def test(model, test_loader, criterion, hook=None):
     correct = 0
     with torch.no_grad():
         for data, target in test_loader:
-            data = data.to(device)
-            target = target.to(device)
+            data = data.to(DEVICE)
+            target = target.to(DEVICE)
             output = model(data)
             test_loss += criterion(output, target).item()
             pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
@@ -68,21 +67,19 @@ def train(model, train_loader, epochs, criterion, optimizer, hook=None):
     :return:
     """
 
+    model = model.to(DEVICE)
     model.train()
 
     if hook:
         hook.set_mode(smd.modes.TRAIN)
 
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    model = model.to(device)
-    print(f"Using device: {device}")
     scaler = amp.GradScaler()
 
     for epoch in range(epochs):
         samples_processed = 0
         for batch_idx, (data, target) in enumerate(train_loader):
-            data = data.to(device)
-            target = target.to(device)
+            data = data.to(DEVICE)
+            target = target.to(DEVICE)
             optimizer.zero_grad()
 
             # Autocast enables mixed precision for the forward pass
@@ -146,6 +143,7 @@ def create_data_loaders(data_train, data_test, batch_size_train, batch_size_test
 
 
 def main(args):
+
     train_loader, test_loader = create_data_loaders(
         args.data_train, args.data_test, args.batch_size, args.test_batch_size
     )
@@ -165,6 +163,7 @@ def main(args):
         hook = smd.Hook.create_from_json_file()
         hook.register_hook(model)
     else:
+        print("debug and profiler hook is not configured!")
         hook = None
 
     """
@@ -181,6 +180,7 @@ def main(args):
     """
     Save the trained model
     """
+
     torch.save(model.state_dict(), os.path.join(args.model_dir, "model.pth"))
 
 
