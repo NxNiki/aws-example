@@ -37,7 +37,12 @@ data_loading:
   local_cache:
     enriched: "enriched_data.csv"
     grouped: "grouped_stat_data.csv"
-  currency_filter: "CNY"  # Currency to filter (null to disable filtering)
+  row_filters:  # General row filtering (null to disable filtering)
+    currency: "CNY"  # Filter to specific currency
+
+# ONNX model configuration
+onnx:
+  opset_version: 19  # ONNX opset version for model conversion
 
 features:
   key_features:  # Features used to identify rows for joining with other tables
@@ -146,4 +151,6 @@ pipeline:
   kmeans: true  # Run K-means clustering
   fit_kmeans: false  # Apply trained model to new data
   attach_cluster_index: true  # Attach cluster indices to original data
+
+
 

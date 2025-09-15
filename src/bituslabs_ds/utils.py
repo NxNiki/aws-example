@@ -133,8 +133,8 @@ def remove_outliers(
     data: Union[np.ndarray, pd.DataFrame], z_thresh: float = 3
 ) -> Tuple[Union[np.ndarray, pd.DataFrame], np.ndarray]:
     """
-    It is recommended to use RobustScaler instead of remove_outlier.
-    remove samples (rows) of data that has zscore above a certain threshold.
+    Remove samples (rows) of data that has zscore above a certain threshold.
+    It is suggested to remove outliers before power transform and scaling.
     :param data:
     :param z_thresh:
     :return:

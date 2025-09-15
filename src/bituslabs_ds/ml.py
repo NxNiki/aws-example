@@ -19,10 +19,12 @@ from joblib import parallel_backend
 from skl2onnx import convert_sklearn
 from skl2onnx.common.data_types import FloatTensorType
 from sklearn.cluster import KMeans
+from sklearn.compose import ColumnTransformer
 from sklearn.decomposition import PCA
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.metrics import silhouette_score
-from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import PowerTransformer, RobustScaler, StandardScaler
 
 from bituslabs_ds.s3_utils import list_s3_files, read_files
 from bituslabs_ds.utils import column_iterator, keep_numeric_columns, remove_outliers, save_list
@@ -45,8 +47,16 @@ class ClusterAnalysis:
             config_path: Optional path to config file. If None, uses default location.
         """
         self.project_name = project_name
-        self.config = self._load_config(config_path)
+        self._config_path = config_path
+        self._config = self._load_config(config_path)
         self._setup_directories()
+
+    @property
+    def config(self) -> Dict[str, Any]:
+        return self._config
+
+    def reload_config(self) -> None:
+        self._config = self._load_config(self._config_path)
 
     def _load_config(self, config_path: Optional[str] = None) -> Dict[str, Any]:
         """Load configuration from YAML file."""
@@ -76,10 +86,6 @@ class ClusterAnalysis:
         for dir_name in ["output", "features", "figures", "models", "log"]:
             os.makedirs(self.output_path / dir_name, exist_ok=True)
 
-    def read_cluster_config(self) -> Dict[str, Any]:
-        """Read and return the cluster configuration."""
-        return self.config
-
     def get_feature_names(self) -> Tuple[List[str], List[str], List[str]]:
         """
         Get feature names from configuration.
@@ -87,7 +93,7 @@ class ClusterAnalysis:
         Returns:
             Tuple of (key_features, normal_features, skewed_features)
         """
-        config = self.read_cluster_config()
+        config = self.config
 
         # Get features from configuration
         key_features = config["features"]["key_features"]
@@ -98,14 +104,13 @@ class ClusterAnalysis:
 
     def get_data_loading_config(self) -> Dict[str, Any]:
         """Get data loading configuration."""
-        config = self.read_cluster_config()
+        config = self.config
         return config["data_loading"]
 
     def load_grouped_data(
         self, output_file: str, pattern: Optional[str] = None, columns: Optional[list] = None
     ) -> pd.DataFrame:
         """Load grouped data from S3 using configuration."""
-
         data_config = self.get_data_loading_config()
 
         if pattern is None:
@@ -114,27 +119,12 @@ class ClusterAnalysis:
         if columns is None:
             columns = data_config["columns_to_read"]
 
-        files = list_s3_files(data_config["input_bucket"], data_config["input_prefix"], pattern)
-
-        data = read_files(
-            files,
-            local_cache_path=output_file,
-            columns=columns,
-            reload=False,
-        )
-
-        # Apply currency filter if specified
-        if data_config.get("currency_filter"):
-            data = data[data["currency"] == data_config["currency_filter"]]
-            logger.info(f"Filtered data to {data_config['currency_filter']} currency only")
-
-        return data
+        return self._load_s3_data(data_config, pattern, output_file, columns)
 
     def load_enriched_data(
         self, output_file: str, pattern: Optional[str] = None, columns: Optional[list] = None
     ) -> pd.DataFrame:
         """Load enriched data from S3 using configuration."""
-
         data_config = self.get_data_loading_config()
 
         if pattern is None:
@@ -143,6 +133,16 @@ class ClusterAnalysis:
         if columns is None:
             columns = data_config["columns_to_read"]
 
+        return self._load_s3_data(data_config, pattern, output_file, columns)
+
+    def _load_s3_data(
+        self,
+        data_config: Dict[str, Any],
+        pattern: str,
+        output_file: str,
+        columns: Optional[list],
+    ) -> pd.DataFrame:
+        """List, read, and row-filter S3 dataset based on data_config."""
         files = list_s3_files(data_config["input_bucket"], data_config["input_prefix"], pattern)
 
         data = read_files(
@@ -152,10 +152,21 @@ class ClusterAnalysis:
             reload=False,
         )
 
-        # Apply currency filter if specified
-        if data_config.get("currency_filter"):
-            data = data[data["currency"] == data_config["currency_filter"]]
-            logger.info(f"Filtered data to {data_config['currency_filter']} currency only")
+        # Apply general row filters if specified
+        row_filters = data_config.get("row_filters")
+        if row_filters:
+            for column_name, allowed in row_filters.items():
+                if column_name not in data.columns:
+                    logger.warning(f"Row filter column '{column_name}' not in data; skipping this filter")
+                    continue
+                if isinstance(allowed, (list, set, tuple)):
+                    data = data[data[column_name].isin(list(allowed))]
+                    logger.info(
+                        f"Applied filter on '{column_name}' with {len(list(allowed))} allowed values; remaining {len(data)} rows"
+                    )
+                else:
+                    data = data[data[column_name] == allowed]
+                    logger.info(f"Applied filter on '{column_name}' == {allowed!r}; remaining {len(data)} rows")
 
         return data
 
@@ -252,21 +263,31 @@ class ClusterAnalysis:
         return features_ordered
 
     def elbow_method(
-        self, data: pd.DataFrame, features: List[str], n_features: Optional[Union[List[int], int]] = None
+        self,
+        data: pd.DataFrame,
+        features: List[str],
+        n_features: Optional[Union[List[int], int]] = None,
+        pipeline: Optional[Pipeline] = None,
     ) -> Dict[Any, Dict[Any, Any]]:
         """Run elbow method to determine optimal number of clusters."""
 
         k_range = self.config["elbow_method"]["k_range"]
-        scaler = StandardScaler()
         cluster_indices = {}
 
         for x, n in column_iterator(data, features, n_features):
-            x, filter_index = remove_outliers(x)
-            x = scaler.fit_transform(x)
             cluster_indices_by_k = {}
             inertia = []
             silhouette_scores = []
             cluster_sizes = []
+
+            # Use provided pipeline or create a basic scaler
+            if pipeline is not None:
+                # Use the provided pipeline for preprocessing
+                x_transformed = pipeline[:-1].transform(x)  # Apply all steps except the final K-means
+            else:
+                # Fallback to basic scaling
+                scaler = StandardScaler()
+                x_transformed = scaler.fit_transform(x)
 
             for k in k_range:
                 model = KMeans(
@@ -274,14 +295,12 @@ class ClusterAnalysis:
                     random_state=self.config["kmeans"]["random_state"],
                     n_init=self.config["kmeans"]["n_init"],
                 )
-                model.fit(x)
+                model.fit(x_transformed)
                 labels = model.labels_
                 inertia.append(model.inertia_)
 
-                cluster_index = np.full(len(filter_index), np.nan)
-                cluster_index[filter_index] = labels
-                cluster_indices_by_k[k] = cluster_index
-                silhouette_scores.append(calculate_silhouette_score(x, labels))
+                cluster_indices_by_k[k] = labels
+                silhouette_scores.append(calculate_silhouette_score(x_transformed, labels))
                 cluster_counts = np.bincount(labels)
                 cluster_sizes.append(cluster_counts)
 
@@ -342,7 +361,9 @@ class ClusterAnalysis:
         )
 
     def scale_features(self, data: pd.DataFrame, output_file_name: str, load_cache: bool = False) -> pd.DataFrame:
-        """Normalize features to zero mean and unit variance."""
+        """Normalize features to zero mean and unit variance.
+        This is obsolete and will be removed as we pack scaler into the pipline model (.onnx/.pickle file).
+        """
         output_file = self.output_path / "features" / f"{output_file_name}.csv"
 
         if os.path.exists(output_file) and load_cache:
@@ -376,30 +397,39 @@ class ClusterAnalysis:
 
         return important_features, features_log
 
-    def run_cluster_analysis(self, data: pd.DataFrame, n_clusters: int) -> np.ndarray:
-        """Run K-means clustering analysis."""
-        kmeans = KMeans(
-            n_clusters=n_clusters,
-            random_state=self.config["kmeans"]["random_state"],
-            n_init=self.config["kmeans"]["n_init"],
+    def run_cluster_analysis(
+        self, data: pd.DataFrame, n_clusters: int, transform_columns: Optional[List[str]] = None
+    ) -> Tuple[np.ndarray, Pipeline]:
+        """Run K-means clustering analysis using pipeline approach."""
+        # Create clustering pipeline
+        pipeline, data_cluster = self.create_clustering_pipeline(
+            data=data, transform_columns=transform_columns, n_clusters=n_clusters
         )
-        data_cluster = kmeans.fit_predict(data)
 
         # Save cluster centers
-        centroids_df = pd.DataFrame(kmeans.cluster_centers_, columns=data.columns)
+        centroids_df = pd.DataFrame(pipeline.named_steps["kmeans"].cluster_centers_, columns=data.columns)
         logger.info(f"Cluster centers:\n{centroids_df}")
         centroids_df.to_csv(
             self.output_path / "models" / f"cluster_centers_standardized_{len(data.columns)}.csv", index=False
         )
 
-        joblib.dump(kmeans, self.output_path / "models" / "kmeans_model.pkl")
-        initial_type = [("float_input", FloatTensorType([None, data.shape[1]]))]
-        onnx_model = convert_sklearn(kmeans, initial_types=initial_type)
-        with open(self.output_path / "models" / "kmeans_model.onnx", "wb") as f:
+        # Save pipeline model
+        n_features = data.shape[1]
+        model_name = f"kmeans_model_top{n_features}_features"
+        joblib.dump(pipeline, self.output_path / "models" / f"{model_name}.pkl")
+
+        # Save ONNX model with version from config
+        onnx_opset_version = self.config.get("onnx", {}).get("opset_version", 19)
+        initial_type = [("float_input", FloatTensorType([None, n_features]))]
+        logger.info(f"Using ONNX opset version: {onnx_opset_version}")
+        onnx_model = convert_sklearn(pipeline, initial_types=initial_type, target_opset=onnx_opset_version)
+        onnx_filename = f"{model_name}_opset_{onnx_opset_version}.onnx"
+        with open(self.output_path / "models" / onnx_filename, "wb") as f:
             f.write(onnx_model.SerializeToString())
 
-        logger.info(f"K-means model saved to: {self.output_path / 'models'}")
-        return data_cluster
+        logger.info(f"K-means pipeline model saved to: {self.output_path / 'models'}")
+        logger.info(f"ONNX model saved as: {onnx_filename}")
+        return data_cluster, pipeline
 
     def plot_pca_2(self, data: pd.DataFrame, data_cluster: np.ndarray, output_file_name: str = "PCA_Clusters") -> None:
         """Plot PCA visualization of clusters."""
@@ -485,6 +515,176 @@ class ClusterAnalysis:
         """Predict clusters for new data using trained model."""
         model = self.load_trained_model()
         return model.predict(data[features])
+
+    def save_pipeline_model(self, pipeline: Pipeline, file_path: str) -> None:
+        """Save a complete pipeline model to disk."""
+        # Save as pickle
+        joblib.dump(pipeline, file_path)
+
+        # Save as ONNX
+        onnx_path = file_path.replace(".pkl", ".onnx")
+        n_features = pipeline.named_steps["kmeans"].n_features_in_
+        initial_type = [("float_input", FloatTensorType([None, n_features]))]
+        onnx_model = convert_sklearn(pipeline, initial_types=initial_type)
+        with open(onnx_path, "wb") as f:
+            f.write(onnx_model.SerializeToString())
+
+        logger.info(f"Pipeline model saved to: {file_path} and {onnx_path}")
+
+    def create_preprocessing_pipeline(
+        self, data: pd.DataFrame, transform_columns: Optional[List[str]] = None
+    ) -> Pipeline:
+        """
+        Create a preprocessing pipeline with optional power transformation (no clustering).
+
+        Args:
+            data: DataFrame with features for preprocessing
+            transform_columns: List of column names to apply power transformation to
+
+        Returns:
+            Fitted preprocessing pipeline
+        """
+        pipeline_steps = []
+
+        if transform_columns is not None and len(transform_columns) > 1:
+            power_columns = [i for i, f in enumerate(data.columns) if f in transform_columns]
+            logger.info(f"Adding power transformation for columns: {transform_columns}")
+            logger.info(f"Data columns: {data.columns.to_list()}")
+            logger.info(f"Transform column indices: {power_columns}")
+
+            preprocessor = ColumnTransformer(
+                transformers=[("yeojohnson", PowerTransformer(method="yeo-johnson", standardize=True), power_columns)],
+                remainder="passthrough",
+            )
+            pipeline_steps.append(("power_transform", preprocessor))
+
+        pipeline_steps.append(("scaler", RobustScaler()))
+
+        pipeline = Pipeline(pipeline_steps)
+        pipeline.fit(data)
+
+        logger.info(f"Created preprocessing pipeline with {len(pipeline_steps)} steps")
+        logger.info(f"Pipeline steps: {[step[0] for step in pipeline_steps]}")
+
+        return pipeline
+
+    def create_flexible_clustering_pipeline(
+        self, data: pd.DataFrame, transform_columns: Optional[List[str]] = None, n_clusters: int = 5
+    ) -> Pipeline:
+        """
+        Create a flexible clustering pipeline where n_clusters can be changed after creation.
+
+        Args:
+            data: DataFrame with features for clustering
+            transform_columns: List of column names to apply power transformation to
+            n_clusters: Initial number of clusters (can be changed later)
+
+        Returns:
+            Fitted flexible clustering pipeline
+        """
+        pipeline_steps = []
+
+        if transform_columns is not None and len(transform_columns) > 1:
+            power_columns = [i for i, f in enumerate(data.columns) if f in transform_columns]
+            logger.info(f"Adding power transformation for columns: {transform_columns}")
+            logger.info(f"Data columns: {data.columns.to_list()}")
+            logger.info(f"Transform column indices: {power_columns}")
+
+            preprocessor = ColumnTransformer(
+                transformers=[("yeojohnson", PowerTransformer(method="yeo-johnson", standardize=True), power_columns)],
+                remainder="passthrough",
+            )
+            pipeline_steps.append(("power_transform", preprocessor))
+
+        pipeline_steps.extend([("scaler", RobustScaler()), ("kmeans", KMeans(n_clusters=n_clusters, random_state=42))])
+
+        pipeline = Pipeline(pipeline_steps)
+        pipeline.fit(data)
+
+        logger.info(f"Created flexible clustering pipeline with {len(pipeline_steps)} steps")
+        logger.info(f"Pipeline steps: {[step[0] for step in pipeline_steps]}")
+        logger.info(f"Initial n_clusters: {n_clusters}")
+
+        return pipeline
+
+    def set_n_clusters(self, pipeline: Pipeline, n_clusters: int) -> Pipeline:
+        """
+        Set the number of clusters for a flexible clustering pipeline.
+
+        Args:
+            pipeline: The flexible clustering pipeline
+            n_clusters: New number of clusters
+
+        Returns:
+            Updated pipeline with new n_clusters
+        """
+        if "kmeans" not in pipeline.named_steps:
+            raise ValueError("Pipeline does not contain a K-means step")
+
+        # Update the n_clusters parameter
+        pipeline.named_steps["kmeans"].set_params(n_clusters=n_clusters)
+
+        logger.info(f"Updated pipeline n_clusters to: {n_clusters}")
+        return pipeline
+
+    def fit_predict_with_n_clusters(self, pipeline: Pipeline, data: pd.DataFrame, n_clusters: int) -> np.ndarray:
+        """
+        Fit and predict with a specific number of clusters using a flexible pipeline.
+
+        Args:
+            pipeline: The flexible clustering pipeline
+            data: Data to fit and predict on
+            n_clusters: Number of clusters to use
+
+        Returns:
+            Cluster labels
+        """
+        # Set the number of clusters
+        pipeline = self.set_n_clusters(pipeline, n_clusters)
+
+        # Fit and predict
+        cluster_labels = pipeline.fit_predict(data)
+
+        logger.info(f"Fitted and predicted with n_clusters={n_clusters}")
+        return cluster_labels
+
+    def create_clustering_pipeline(
+        self, data: pd.DataFrame, transform_columns: Optional[List[str]] = None, n_clusters: int = 5
+    ) -> Tuple[Pipeline, np.ndarray]:
+        """
+        Create and fit a clustering pipeline with optional power transformation.
+
+        Args:
+            data: DataFrame with features for clustering
+            transform_columns: List of column names to apply power transformation to
+            n_clusters: Number of clusters for K-means
+
+        Returns:
+            Tuple of (fitted_pipeline, cluster_labels)
+        """
+        pipeline_steps = []
+
+        if transform_columns is not None and len(transform_columns) > 1:
+            power_columns = [i for i, f in enumerate(data.columns) if f in transform_columns]
+            logger.info(f"Adding power transformation for columns: {transform_columns}")
+            logger.info(f"Data columns: {data.columns.to_list()}")
+            logger.info(f"Transform column indices: {power_columns}")
+
+            preprocessor = ColumnTransformer(
+                transformers=[("yeojohnson", PowerTransformer(method="yeo-johnson", standardize=True), power_columns)],
+                remainder="passthrough",
+            )
+            pipeline_steps.append(("power_transform", preprocessor))
+
+        pipeline_steps.extend([("scaler", RobustScaler()), ("kmeans", KMeans(n_clusters=n_clusters, random_state=42))])
+
+        pipeline = Pipeline(pipeline_steps)
+        data_cluster = pipeline.fit_predict(data)
+
+        logger.info(f"Created clustering pipeline with {len(pipeline_steps)} steps")
+        logger.info(f"Pipeline steps: {[step[0] for step in pipeline_steps]}")
+
+        return pipeline, data_cluster
 
 
 def calculate_inertia(x: np.ndarray, y: np.ndarray) -> float:

@@ -1,6 +1,7 @@
 """
-Refactored elbow method clustering analysis using OOP structure.
-This script uses the new ClusteringAnalysis class for feature selection and elbow method.
+Refactored elbow method clustering analysis using OOP structure and pipeline method.
+This script uses the new ClusterAnalysis class and create_clustering_pipeline method
+for streamlined clustering analysis with automatic power transformation and scaling.
 """
 
 import argparse
@@ -9,14 +10,22 @@ import os
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 
 from bituslabs_ds.config import setup_logging
 from bituslabs_ds.eda import DataProfiler, DataVisualizer
-from bituslabs_ds.ml import ClusterAnalysis
-from bituslabs_ds.utils import df_power_transform, save_list
+from bituslabs_ds.ml import ClusterAnalysis, calculate_silhouette_score
+from bituslabs_ds.utils import save_list
 
 logger = logging.getLogger(__name__)
+
+
+# This script now uses the create_clustering_pipeline method which automatically:
+# 1. Applies power transformation to skewed features
+# 2. Scales features using RobustScaler
+# 3. Performs K-means clustering
+# All in a single, reusable pipeline method for elbow method analysis
 
 
 def main(project_name: str, output_path: str):
@@ -25,7 +34,7 @@ def main(project_name: str, output_path: str):
     clustering = ClusterAnalysis(project_name)
 
     # Get configuration
-    config = clustering.read_cluster_config()
+    config = clustering.config
     logger.info(f"Using project: {project_name}")
     logger.info(f"Output path: {clustering.output_path}")
 
@@ -41,10 +50,9 @@ def main(project_name: str, output_path: str):
     # Data profiling and cleaning
     DataProfiler.count_df_missing_columns(data)
     data.fillna(0, inplace=True)
-    data = df_power_transform(data, skewed_features)
-    save_list(
-        normal_features + skewed_features, str(clustering.output_path / "features" / "log_transform_features.json")
-    )
+
+    # Save log transform features for reference
+    save_list(skewed_features, str(clustering.output_path / "features" / "log_transform_features.json"))
 
     # Create correlation heatmap
     viz = DataVisualizer(data[normal_features + skewed_features])
@@ -66,9 +74,54 @@ def main(project_name: str, output_path: str):
     data_select = data[kept_features + key_features]
     important_features = clustering.feature_selection_by_pca(data_select)
 
-    # Run elbow method
+    # Prepare data for clustering (exclude key features)
+    clustering_data = data[important_features]
+
+    # Create a flexible clustering pipeline that allows changing n_clusters
+    logger.info("Creating flexible clustering pipeline for elbow method analysis...")
+    flexible_pipeline = clustering.create_flexible_clustering_pipeline(
+        data=clustering_data,
+        transform_columns=skewed_features,  # Apply power transformation to skewed features
+        n_clusters=config["elbow_method"]["k_range"][0],  # Start with first k value
+    )
+
+    # Save the flexible pipeline
+    clustering.save_pipeline_model(flexible_pipeline, f"{clustering.output_path}/models/elbow_flexible_pipeline.pkl")
+
+    # Run elbow method using the flexible pipeline approach
+    logger.info("Running elbow method analysis with flexible pipeline...")
     n_features_list = config["elbow_method"]["k_range"][:3]  # Use first 3 values
-    cluster_indices = clustering.elbow_method(data, important_features, n_features_list)
+    k_range = config["elbow_method"]["k_range"]
+
+    # Use the flexible pipeline for elbow method evaluation
+    cluster_indices = {}
+
+    for n_features in n_features_list:
+        logger.info(f"Running elbow method for {n_features} features...")
+        cluster_indices_by_k = {}
+        inertia = []
+        silhouette_scores = []
+        cluster_sizes = []
+
+        # Get the data subset for this number of features
+        data_subset = clustering_data.iloc[:, :n_features]
+
+        for k in k_range:
+            # Use the flexible pipeline with different k values
+            cluster_labels = clustering.fit_predict_with_n_clusters(flexible_pipeline, data_subset, k)
+
+            # Calculate metrics
+            inertia.append(flexible_pipeline.named_steps["kmeans"].inertia_)
+            silhouette_scores.append(calculate_silhouette_score(data_subset, cluster_labels))
+            cluster_counts = np.bincount(cluster_labels)
+            cluster_sizes.append(cluster_counts)
+
+            cluster_indices_by_k[k] = cluster_labels
+
+        cluster_indices[n_features] = cluster_indices_by_k
+
+        # Plot elbow method for this feature set
+        clustering._plot_elbow_method(k_range, inertia, silhouette_scores, cluster_sizes, n_features)
 
     logger.info(f"Elbow method analysis completed for {project_name}")
 

@@ -39,6 +39,7 @@ Each project now has its own configuration file with complete feature definition
 - **Consolidated Pipeline**: All 4 clustering steps are now in a single configurable pipeline script
 - Pipeline steps can be enabled/disabled via YAML configuration or command line arguments
 - All refactored scripts use `clustering.get_feature_names()` and `clustering.load_grouped_data()` methods
+- **Pipeline Method**: New `create_clustering_pipeline()` method eliminates code duplication across scripts
 
 ### Key Methods
 
@@ -61,6 +62,8 @@ Each project now has its own configuration file with complete feature definition
 #### Clustering Analysis
 - `elbow_method()` - Determine optimal number of clusters
 - `run_cluster_analysis()` - Perform K-means clustering
+- `create_clustering_pipeline()` - Create and fit clustering pipeline with optional power transformation
+- `save_pipeline_model()` - Save complete pipeline model (pickle and ONNX formats)
 - `predict_clusters()` - Apply trained model to new data
 
 #### Visualization
@@ -109,6 +112,47 @@ cluster_labels = clustering.run_cluster_analysis(scaled_data, n_clusters=3)
 clustering.plot_pca_2(scaled_data, cluster_labels)
 clustering.plot_radar_chart(scaled_data, cluster_labels)
 ```
+
+### Pipeline Method Usage
+
+The new `create_clustering_pipeline()` method eliminates code duplication by providing a single method for pipeline construction:
+
+```python
+from bituslabs_ds.ml import ClusterAnalysis
+
+# Initialize clustering analysis
+clustering = ClusterAnalysis("wucaishen")
+
+# Load data
+data = clustering.load_grouped_data("data.csv")
+
+# Get feature names from configuration
+key_features, normal_features, skewed_features = clustering.get_feature_names()
+
+# Create and fit clustering pipeline
+pipeline, cluster_labels = clustering.create_clustering_pipeline(
+    data=data[normal_features + skewed_features],
+    transform_columns=skewed_features,  # Apply power transformation
+    n_clusters=3
+)
+
+# Get transformed data for visualization
+transformed_data = pipeline[:-1].transform(data[normal_features + skewed_features])
+scaled_data = pd.DataFrame(transformed_data, columns=data[normal_features + skewed_features].columns)
+
+# Save the complete pipeline model
+clustering.save_pipeline_model(pipeline, "models/clustering_pipeline.pkl")
+
+# Use pipeline for prediction on new data
+new_cluster_labels = pipeline.predict(new_data)
+```
+
+**Benefits of Pipeline Method:**
+- **Code Reusability**: Single method handles pipeline creation across all scripts
+- **Consistency**: Ensures all scripts use the same pipeline configuration
+- **Maintainability**: Changes to pipeline logic only need to be made in one place
+- **Flexibility**: Easy to enable/disable power transformation based on feature types
+- **Clean Code**: Eliminates ~15 lines of duplicated pipeline construction code per script
 
 ### Project-Specific Configuration
 

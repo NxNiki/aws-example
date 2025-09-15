@@ -1,6 +1,7 @@
 """
-Refactored K-means clustering analysis using OOP structure.
-This script uses the new ClusteringAnalysis class for K-means clustering.
+Refactored K-means clustering analysis using OOP structure and pipeline method.
+This script uses the new ClusterAnalysis class and create_clustering_pipeline method
+for streamlined clustering analysis with automatic power transformation and scaling.
 """
 
 import argparse
@@ -12,12 +13,16 @@ import pandas as pd
 
 from bituslabs_ds.config import setup_logging
 from bituslabs_ds.ml import ClusterAnalysis
-from bituslabs_ds.utils import df_power_transform, remove_outliers
+from bituslabs_ds.utils import remove_outliers
 
 logger = logging.getLogger(__name__)
 
 
-# Feature names are now loaded from configuration files via clustering.get_feature_names()
+# This script now uses the create_clustering_pipeline method which automatically:
+# 1. Applies power transformation to skewed features
+# 2. Scales features using RobustScaler
+# 3. Performs K-means clustering
+# All in a single, reusable pipeline method
 
 
 def main(
@@ -33,7 +38,7 @@ def main(
     clustering = ClusterAnalysis(project_name)
 
     # Get configuration
-    config = clustering.read_cluster_config()
+    config = clustering.config
     logger.info(f"Using project: {project_name}")
     logger.info(f"Output path: {clustering.output_path}")
 
@@ -49,20 +54,27 @@ def main(
     data_file = f"{input_path_data}/{project_name}_grouped_stat_output_24.csv"
     data = pd.read_csv(data_file, usecols=[*key_features, *important_features])
 
-    # Apply power transformation
-    data = df_power_transform(data, col_names=features_log)
+    # Prepare data for clustering (exclude key features)
+    clustering_data = data[important_features]
 
-    # Scale features
-    scaled_data = clustering.scale_features(
-        data[important_features], f"standardized_features_top_{top_features}", load_cache=False
-    )
-
-    # Remove outliers
-    scaled_data, row_index = remove_outliers(scaled_data)
+    # Remove outliers before clustering
+    clustering_data, row_index = remove_outliers(clustering_data)
     data_reference = data.loc[row_index, key_features]
 
-    # Run clustering analysis
-    cluster_index = clustering.run_cluster_analysis(scaled_data, n_clusters)
+    # Use the new pipeline method for clustering
+    logger.info("Running clustering analysis with pipeline method...")
+    pipeline, cluster_index = clustering.create_clustering_pipeline(
+        data=clustering_data,
+        transform_columns=features_log,  # Apply power transformation to skewed features
+        n_clusters=n_clusters,
+    )
+
+    # Get transformed data for visualization
+    transformed_data = pipeline[:-1].transform(clustering_data)
+    scaled_data = pd.DataFrame(transformed_data, columns=important_features)
+
+    # Save the complete pipeline model
+    clustering.save_pipeline_model(pipeline, f"{clustering.output_path}/models/kmeans_pipeline_model.pkl")
 
     # Create visualizations
     clustering.plot_pca_2(scaled_data, cluster_index)
