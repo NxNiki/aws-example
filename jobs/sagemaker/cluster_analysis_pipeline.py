@@ -34,9 +34,11 @@ def main(config_path: str):
     DataProfiler.count_df_missing_columns(data)
     data.fillna(0, inplace=True)
 
+    data_transformed = cluster_pipeline.power_transform(data)
+
     # Create correlation heatmap
     features = cluster_pipeline.normal_features + cluster_pipeline.skewed_features
-    viz = DataVisualizer(data[features])
+    viz = DataVisualizer(data_transformed[features])
     viz.create_figure(fig_title=f"Correlation of features: {cluster_pipeline.project_name}", fig_size=(20, 17))
     viz.add_correlation_heatmap(annot=False, cmap="coolwarm")
     viz.figure.subplots_adjust(left=0.15, bottom=0.15, top=0.90, right=0.97)
@@ -44,14 +46,15 @@ def main(config_path: str):
     viz.save(str(cluster_pipeline.output_path / "figures" / f"{cluster_pipeline.project_name}_correlation.png"))
 
     # Feature selection
-    _, kept_features = cluster_pipeline.df_smart_feature_selection(data[features])
-    _, kept_features = cluster_pipeline.feature_selection_by_variance(data[kept_features])
+    _, kept_features = cluster_pipeline.smart_feature_selection(data_transformed[features])
+    _, kept_features = cluster_pipeline.feature_selection_by_variance(data_transformed[kept_features])
 
     # Select features for clustering
-    data_select = data[kept_features]
+    data_select = data_transformed[kept_features]
     important_features = cluster_pipeline.feature_selection_by_pca(data_select)
 
     # Prepare data for clustering (exclude key features)
+    # feed original data (without power transform it is packed in the clustering pipeline)
     clustering_data = data[important_features]
 
     if cluster_pipeline.run_elbow_method:

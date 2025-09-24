@@ -26,7 +26,7 @@ from sklearn.preprocessing import PowerTransformer, RobustScaler, StandardScaler
 
 from bituslabs_ds.config import LOCAL_ROOT
 from bituslabs_ds.s3_utils import list_s3_files, read_files
-from bituslabs_ds.utils import column_iterator, keep_numeric_columns, remove_outliers, save_list
+from bituslabs_ds.utils import column_iterator, df_power_transform, keep_numeric_columns, remove_outliers, save_list
 
 logger = logging.getLogger(__name__)
 
@@ -184,7 +184,13 @@ class ClusterAnalysisPipeline:
 
         return data
 
-    def df_smart_feature_selection(
+    def power_transform(self, data: pd.DataFrame) -> pd.DataFrame:
+
+        data = df_power_transform(data, self.skewed_features)
+
+        return data
+
+    def smart_feature_selection(
         self, data: pd.DataFrame, threshold: Optional[float] = None, prefer_keywords: Optional[List[str]] = None
     ) -> Tuple[List[str], List[str]]:
         """

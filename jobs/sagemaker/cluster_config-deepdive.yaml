@@ -11,13 +11,13 @@ data_loader:
     pattern: '250[1-8]/deepdive_grouped_stat_output/part.*\.csv$'  # Pattern for grouped data files
     row_filters:  # General row filtering (null to disable filtering)
       currency: "CNY"  # Filter to specific currency
-    outlier_threshold: 1.5  # z score to filter outliers
+    outlier_threshold: 3  # z score to filter outliers
     local_cache: "deepdive_grouped_data_2025.csv"
 
   attach_data:  # data to attach cluster index.
     bucket: "hyber-slot"  # S3 bucket for input data
     prefix: "deepdive_groupdata"  # S3 prefix for input data
-    pattern: '250[1-8]/deepdive_enriched_output/part.*\\.csv$'  # Pattern for grouped data files
+    pattern: '250[1-8]/deepdive_enriched_output/part.*\.csv$'  # Pattern for grouped data files
     local_cache: "deepdive_enriched_data_2025.csv"
 
     columns_to_read:  # Columns to read from original data files
@@ -128,6 +128,8 @@ features:
   
   normal_features:  # Features that don't need transformation
     - "slottype_2_count"
+    - "slottype_16_count"
+    - "slottype_17_count"
     - "payout_rate"
     - "profit_rate"
     - "profit_stddev"
@@ -139,6 +141,8 @@ features:
     - "weekend_count"
     - "duration_seconds"
     - "avg_time_per_bet"
+    - "currency_label"
+        
 
 feature_selection:
   correlation_threshold: 0.9  # Threshold for removing highly correlated features
@@ -152,7 +156,7 @@ cluster_analysis:
   random_state: 42  # Random state for reproducible results
   n_init: 10  # Number of initializations for K-means algorithm
   n_clusters: 3  # Default number of clusters for K-means
-  top_features: 30  # Default number of top features to use
+  top_features: 40  # Default number of top features to use
 
 pipeline:
   elbow_method: true  # Run elbow method analysis
