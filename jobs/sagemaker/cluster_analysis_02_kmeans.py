@@ -4,8 +4,6 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from re import I
-from tarfile import data_filter
 from typing import List, Optional, Tuple
 
 import joblib
@@ -13,7 +11,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from skl2onnx import convert_sklearn, get_latest_tested_opset_version
+from skl2onnx import convert_sklearn
 from skl2onnx.common.data_types import FloatTensorType
 from sklearn.cluster import KMeans
 from sklearn.compose import ColumnTransformer
@@ -87,7 +85,7 @@ def run_cluster_analysis(
     initial_type = [("float_input", FloatTensorType([None, n_features]))]
     logger.info(f"use onnx version: {onnx_opset_version}")
     onnx_model = convert_sklearn(pipeline, initial_types=initial_type, target_opset=onnx_opset_version)
-    with open(f"{output_dir}/models/{model_name}.onnx", "wb") as f:
+    with open(f"{output_dir}/models/{model_name}_opset_version_{onnx_opset_version}.onnx", "wb") as f:
         f.write(onnx_model.SerializeToString())
 
     logger.info(f"save cluster model to：{output_dir}/models")
