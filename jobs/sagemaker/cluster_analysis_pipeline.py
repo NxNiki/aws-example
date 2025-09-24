@@ -28,7 +28,7 @@ def main(config_path: str):
     setup_logging(LOCAL_ROOT / "jobs/log", f"cluster_analysis_pipeline_{project_name}.log")
 
     cluster_pipeline = ClusterAnalysisPipeline(config_path)
-    data = cluster_pipeline.load_data(data_label="cluster_data")
+    data = cluster_pipeline.load_data(data_label="cluster_data", reload=False)
 
     # Data profiling and cleaning
     DataProfiler.count_df_missing_columns(data)

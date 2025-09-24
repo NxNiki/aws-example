@@ -2,9 +2,9 @@
 Machine Learning utilities and clustering analysis classes.
 """
 
-import json
 import logging
 import os
+from pprint import pformat
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import joblib
@@ -68,7 +68,7 @@ class ClusterAnalysisPipeline:
             config = yaml.safe_load(f)
 
         logger.info(f"Loaded config from {config_file}:")
-        logger.info(f"config: \n {config}")
+        logger.info(f"config: \n {pformat(config)} \n")
         return config
 
     def _setup_directories(self) -> None:
@@ -94,7 +94,7 @@ class ClusterAnalysisPipeline:
 
     @property
     def outlier_threshold(self):
-        val = self.config["data_loader"]["cluster_data"].get("outlier_threshold", np.nan)
+        val = self._config["data_loader"]["cluster_data"].get("outlier_threshold", np.nan)
         return val
 
     @property
@@ -162,9 +162,6 @@ class ClusterAnalysisPipeline:
             reload=reload,
         )
 
-        if data_label == "cluster_data":
-            data = remove_outliers(data)
-
         if row_filters:
             for column_name, allowed in row_filters.items():
                 if column_name not in data.columns:
@@ -178,6 +175,12 @@ class ClusterAnalysisPipeline:
                 else:
                     data = data[data[column_name] == allowed]
                     logger.info(f"Applied filter on '{column_name}' == {allowed!r}; remaining {len(data)} rows")
+
+        if data_label == "cluster_data":
+            numeric_columns = data.select_dtypes(include="number").columns.tolist()
+            _, mask = remove_outliers(data[numeric_columns], self.outlier_threshold)
+            logger.info(f"remove {sum(mask)} outliers out of {len(mask)} samples, ratio: {sum(mask)/len(mask):.3f}")
+            data = data.loc[mask]
 
         return data
 

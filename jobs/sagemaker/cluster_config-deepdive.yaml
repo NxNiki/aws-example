@@ -11,7 +11,7 @@ data_loader:
     pattern: '250[1-8]/deepdive_grouped_stat_output/part.*\.csv$'  # Pattern for grouped data files
     row_filters:  # General row filtering (null to disable filtering)
       currency: "CNY"  # Filter to specific currency
-    outlier_threshold: 3  # z score to filter outliers
+    outlier_threshold: 1.5  # z score to filter outliers
     local_cache: "deepdive_grouped_data_2025.csv"
 
   attach_data:  # data to attach cluster index.
