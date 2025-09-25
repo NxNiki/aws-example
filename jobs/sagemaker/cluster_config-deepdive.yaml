@@ -41,7 +41,7 @@ data_loader:
     row_filters:  # General row filtering (null to disable filtering)
       currency: "CNY"  # Filter to specific currency
 
-merge_on: "group_id"
+  merge_on: "group_id"  # Column used to attach cluster index to attach_data.
 
 output:
   bucket: "bituslabs-team-ai"  # S3 bucket for output data
@@ -57,7 +57,7 @@ features:
     - "start_time"
     - "currency"
   
-  skewed_features:  # Features that need log transformation
+  skewed_features:  # Features that need power transformation
     - "rtp_mean"
     - "bet_min"
     - "bet_max"
@@ -159,7 +159,7 @@ cluster_analysis:
   top_features: 40  # Default number of top features to use
 
 pipeline:
-  elbow_method: true  # Run elbow method analysis
+  elbow_method: false  # Run elbow method analysis
   cluster_analysis: true  # Run cluster analysis with selected features and n_clusters  
   fit_cluster_model: false  # Apply trained model to new data
   attach_cluster_label: true  # Attach cluster indices to original data

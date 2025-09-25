@@ -409,15 +409,20 @@ class ClusterAnalysisPipeline:
 
         logger.info(f"K-means pipeline model saved to: {self.output_path / 'models'}")
         logger.info(f"ONNX model saved as: {onnx_filename}")
+
+        x_transformed = pipeline[:-1].transform(data)
+        self.plot_pca_2(x_transformed, cluster_label)
+        self.plot_radar_chart(x_transformed, cluster_label)
+
         return cluster_label, pipeline
 
-    def plot_pca_2(self, data: pd.DataFrame, data_cluster: np.ndarray, output_file_name: str = "PCA_Clusters") -> None:
+    def plot_pca_2(self, data: pd.DataFrame, cluster_label: np.ndarray, output_file_name: str = "PCA_Clusters") -> None:
         """Plot PCA visualization of clusters."""
         pca = PCA(n_components=2)
         x_pca = pca.fit_transform(data)
 
         plt.figure(figsize=(20, 16))
-        sns.scatterplot(x=x_pca[:, 0], y=x_pca[:, 1], hue=data_cluster, palette="Set1", alpha=0.7)
+        sns.scatterplot(x=x_pca[:, 0], y=x_pca[:, 1], hue=cluster_label, palette="Set1", alpha=0.7)
         plt.xlabel("PCA Component 1")
         plt.ylabel("PCA Component 2")
         plt.title("PCA Visualization of KMeans Clusters")
@@ -426,7 +431,7 @@ class ClusterAnalysisPipeline:
         plt.savefig(self.output_path / "figures" / f"{output_file_name}.png")
         plt.close()
 
-        unique_values, counts = np.unique(data_cluster, return_counts=True)
+        unique_values, counts = np.unique(cluster_label, return_counts=True)
         cluster_counts = dict(zip(unique_values, counts))
         logger.info(f"Cluster sizes: {cluster_counts}")
 
