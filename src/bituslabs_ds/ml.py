@@ -22,7 +22,7 @@ from sklearn.decomposition import PCA
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.metrics import silhouette_score
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import PowerTransformer, RobustScaler, StandardScaler
+from sklearn.preprocessing import MinMaxScaler, PowerTransformer, RobustScaler, StandardScaler
 
 from bituslabs_ds.config import LOCAL_ROOT
 from bituslabs_ds.s3_utils import list_s3_files, read_files
@@ -284,6 +284,45 @@ class ClusterAnalysisPipeline:
         plt.savefig(self.output_path / "figures" / "Feature Importance Rank.png")
         plt.close()
 
+    def create_clustering_pipeline(
+        self,
+        n_clusters: int = 5,
+        transform_columns_index: Optional[List[int]] = None,
+    ) -> Pipeline:
+        """
+        Create and fit a clustering pipeline with optional power transformation.
+
+        Args:
+            transform_columns: List of column names to apply power transformation to
+            n_clusters: Number of clusters for K-means
+
+        Returns:
+            Tuple of (fitted_pipeline, cluster_labels)
+        """
+        pipeline_steps = []
+
+        if transform_columns_index is not None and len(transform_columns_index) > 1:
+
+            preprocessor = ColumnTransformer(
+                transformers=[
+                    ("yeojohnson", PowerTransformer(method="yeo-johnson", standardize=True), transform_columns_index)
+                ],
+                remainder="passthrough",
+            )
+            pipeline_steps.append(("power_transform", preprocessor))
+
+        # avoid robust scaler as it gives werid data pattern and destroys clustering analyis.
+        pipeline_steps.extend(
+            [("scaler", StandardScaler()), ("cluster", KMeans(n_clusters=n_clusters, random_state=42))]
+        )
+        pipeline = Pipeline(pipeline_steps)
+
+        logger.info(f"Created clustering pipeline with {len(pipeline_steps)} steps")
+        logger.info(f"Pipeline steps: {[step[0] for step in pipeline_steps]}")
+        logger.info(f"n_clusters: {n_clusters}")
+
+        return pipeline
+
     def elbow_method(
         self,
         data: pd.DataFrame,
@@ -412,7 +451,7 @@ class ClusterAnalysisPipeline:
 
         x_transformed = pipeline[:-1].transform(data)
         self.plot_pca_2(x_transformed, cluster_label)
-        self.plot_radar_chart(x_transformed, cluster_label)
+        self.plot_radar_chart(pd.DataFrame(x_transformed, columns=data.columns), cluster_label)
 
         return cluster_label, pipeline
 
@@ -438,8 +477,9 @@ class ClusterAnalysisPipeline:
     def plot_radar_chart(self, data: pd.DataFrame, data_cluster: np.ndarray) -> None:
         """Plot radar chart of cluster feature means."""
         data = data.copy()
-        data["_cluster"] = data_cluster
+        data.loc[:, "_cluster"] = data_cluster
         cluster_means = data.groupby("_cluster").mean().T
+        cluster_means.sort_index(ascending=True, inplace=True)
         categories = cluster_means.index
         angles = np.linspace(0, 2 * np.pi, len(categories), endpoint=False).tolist()
         angles += angles[:1]
@@ -556,42 +596,6 @@ class ClusterAnalysisPipeline:
 
         logger.info(f"Fitted and predicted with n_clusters={n_clusters}")
         return cluster_labels
-
-    def create_clustering_pipeline(
-        self,
-        n_clusters: int = 5,
-        transform_columns_index: Optional[List[int]] = None,
-    ) -> Pipeline:
-        """
-        Create and fit a clustering pipeline with optional power transformation.
-
-        Args:
-            transform_columns: List of column names to apply power transformation to
-            n_clusters: Number of clusters for K-means
-
-        Returns:
-            Tuple of (fitted_pipeline, cluster_labels)
-        """
-        pipeline_steps = []
-
-        if transform_columns_index is not None and len(transform_columns_index) > 1:
-
-            preprocessor = ColumnTransformer(
-                transformers=[
-                    ("yeojohnson", PowerTransformer(method="yeo-johnson", standardize=True), transform_columns_index)
-                ],
-                remainder="passthrough",
-            )
-            pipeline_steps.append(("power_transform", preprocessor))
-
-        pipeline_steps.extend([("scaler", RobustScaler()), ("cluster", KMeans(n_clusters=n_clusters, random_state=42))])
-        pipeline = Pipeline(pipeline_steps)
-
-        logger.info(f"Created clustering pipeline with {len(pipeline_steps)} steps")
-        logger.info(f"Pipeline steps: {[step[0] for step in pipeline_steps]}")
-        logger.info(f"n_clusters: {n_clusters}")
-
-        return pipeline
 
 
 def calculate_inertia(x: np.ndarray, y: np.ndarray) -> float:
