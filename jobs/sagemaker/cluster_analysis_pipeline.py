@@ -75,10 +75,13 @@ def main(config_path: str):
 
 if __name__ == "__main__":
 
+    # project = "deepdive"
+    project = "wucaishen"
+
     current_path = os.path.abspath(os.path.dirname(__file__))
     parser = argparse.ArgumentParser(description="cluster analysis pipeline")
     parser.add_argument(
-        "--config_file", default=f"{current_path}/cluster_config-deepdive.yaml", help="Project to analyze"
+        "--config_file", default=f"{current_path}/cluster_config-{project}.yaml", help="Project to analyze"
     )
     args = parser.parse_args()
 

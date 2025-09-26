@@ -18,6 +18,8 @@ data_loader:
     bucket: "hyber-slot"  # S3 bucket for input data
     prefix: "deepdive_groupdata"  # S3 prefix for input data
     pattern: '250[1-8]/deepdive_enriched_output/part.*\.csv$'  # Pattern for grouped data files
+    row_filters:  # General row filtering (null to disable filtering)
+      currency: "CNY"  # Filter to specific currency
     local_cache: "deepdive_enriched_data_2025.csv"
 
     columns_to_read:  # Columns to read from original data files
@@ -38,8 +40,6 @@ data_loader:
       - "lose_streak"
       - "result_clean"
       - "group_id"
-    row_filters:  # General row filtering (null to disable filtering)
-      currency: "CNY"  # Filter to specific currency
 
   merge_on: "group_id"  # Column used to attach cluster index to attach_data.
 
