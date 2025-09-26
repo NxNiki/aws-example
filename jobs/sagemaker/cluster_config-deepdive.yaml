@@ -125,6 +125,12 @@ features:
     - "deposit_p25"
     - "deposit_median"
     - "deposit_p75"
+    - "withdrawal_min"
+    - "withdrawal_max"
+    - "withdrawal_mean"
+    - "withdrawal_p25"
+    - "withdrawal_median"
+    - "withdrawal_p75"
   
   normal_features:  # Features that don't need transformation
     - "slottype_2_count"
@@ -159,7 +165,7 @@ cluster_analysis:
   top_features: 40  # Default number of top features to use
 
 pipeline:
-  elbow_method: false  # Run elbow method analysis
+  elbow_method: true  # Run elbow method analysis
   cluster_analysis: true  # Run cluster analysis with selected features and n_clusters  
   fit_cluster_model: false  # Apply trained model to new data
   attach_cluster_label: true  # Attach cluster indices to original data
