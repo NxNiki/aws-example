@@ -53,21 +53,24 @@ def main(config_path: str):
     data_select = data_transformed[kept_features]
     important_features = cluster_pipeline.feature_selection_by_pca(data_select)
 
-    # Prepare data for clustering (exclude key features)
-    # feed original data (without power transform it is packed in the clustering pipeline)
-    clustering_data = data[important_features]
-
+    # feed original data (without power transform which is packed in the clustering pipeline)
     if cluster_pipeline.run_elbow_method:
         cluster_pipeline.elbow_method(
-            data=clustering_data,
+            data=data,
             features_ordered_by_importance=important_features,
         )
 
     if cluster_pipeline.run_cluster_analysis:
         cluster_pipeline.cluster_analysis(
-            data=clustering_data,
+            data=data,
             features_ordered_by_importance=important_features,
         )
+
+    if cluster_pipeline.run_fit_cluster_model:
+        pass
+
+    if cluster_pipeline.run_attach_cluster_label:
+        cluster_pipeline.attach_cluster_label()
 
 
 if __name__ == "__main__":

@@ -56,7 +56,7 @@ class ClusterAnalysisPipeline:
             cluster_data_config["bucket"], cluster_data_config["prefix"], cluster_data_config["pattern"]
         )
 
-        attach_data_config = self._config["data_loader"]["cluster_data"]
+        attach_data_config = self._config["data_loader"]["attach_data"]
         self._attach_data_files = list_s3_files(
             attach_data_config["bucket"], attach_data_config["prefix"], attach_data_config["pattern"]
         )
@@ -93,6 +93,10 @@ class ClusterAnalysisPipeline:
         return self._config["features"]["skewed_features"]
 
     @property
+    def n_top_features(self):
+        return self._config["cluster_analysis"]["top_features"]
+
+    @property
     def outlier_threshold(self):
         val = self._config["data_loader"]["cluster_data"].get("outlier_threshold", np.nan)
         return val
@@ -104,6 +108,14 @@ class ClusterAnalysisPipeline:
     @property
     def run_cluster_analysis(self):
         return self._config["pipeline"]["cluster_analysis"]
+
+    @property
+    def pickle_model_name(self):
+        return f"kmeans_model_top{self.n_top_features}_features.pkl"
+
+    @property
+    def onnx_model_name(self):
+        return f"kmeans_model_top{self.n_top_features}_features_opset_{self.onnx_opset_version}.onnx"
 
     @property
     def run_fit_cluster_model(self):
@@ -416,42 +428,35 @@ class ClusterAnalysisPipeline:
         """Run K-means clustering analysis using pipeline approach."""
 
         n_clusters = self._config["cluster_analysis"]["n_clusters"]
-        top_features = self._config["cluster_analysis"]["top_features"]
-        data = data[features_ordered_by_importance[:top_features]].copy()
+        clustering_data = data[features_ordered_by_importance[: self.n_top_features]].copy()
 
-        _, transform_columns_index = self.get_transform_columns(data)
+        _, transform_columns_index = self.get_transform_columns(clustering_data)
         pipeline = self.create_clustering_pipeline(
             n_clusters=n_clusters,
             transform_columns_index=transform_columns_index,
         )
-        cluster_label = pipeline.fit_predict(data)
+        cluster_label = pipeline.fit_predict(clustering_data)
 
         # Save cluster centers
-        centroids_df = pd.DataFrame(pipeline.named_steps["cluster"].cluster_centers_, columns=data.columns)
+        centroids_df = pd.DataFrame(pipeline.named_steps["cluster"].cluster_centers_, columns=clustering_data.columns)
         logger.info(f"Cluster centers:\n{centroids_df}")
         centroids_df.to_csv(
-            self.output_path / "models" / f"cluster_centers_standardized_{len(data.columns)}.csv", index=False
+            self.output_path / "models" / f"cluster_centers_standardized_{self.n_top_features}.csv", index=False
         )
+
+        # Save cluster labels:
+        data_with_cluster_label = data[self.key_features].copy()
+        data_with_cluster_label["cluster_label"] = cluster_label
+        data_with_cluster_label.to_csv(
+            self.output_path / "output" / f"cluster_label_top_features_{self.n_top_features}.csv", index=False
+        )
+
         # Save pipeline model
-        n_features = data.shape[1]
-        model_name = f"kmeans_model_top{n_features}_features"
-        joblib.dump(pipeline, self.output_path / "models" / f"{model_name}.pkl")
+        self.save_pipeline_model(pipeline)
 
-        # Save ONNX model with version from config
-        onnx_opset_version = self.onnx_opset_version
-        initial_type = [("float_input", FloatTensorType([None, n_features]))]
-        logger.info(f"Using ONNX opset version: {onnx_opset_version}")
-        onnx_model = convert_sklearn(pipeline, initial_types=initial_type, target_opset=onnx_opset_version)
-        onnx_filename = f"{model_name}_opset_{onnx_opset_version}.onnx"
-        with open(self.output_path / "models" / onnx_filename, "wb") as f:
-            f.write(onnx_model.SerializeToString())
-
-        logger.info(f"K-means pipeline model saved to: {self.output_path / 'models'}")
-        logger.info(f"ONNX model saved as: {onnx_filename}")
-
-        x_transformed = pipeline[:-1].transform(data)
+        x_transformed = pipeline[:-1].transform(clustering_data)
         self.plot_pca_2(x_transformed, cluster_label)
-        self.plot_radar_chart(pd.DataFrame(x_transformed, columns=data.columns), cluster_label)
+        self.plot_radar_chart(pd.DataFrame(x_transformed, columns=clustering_data.columns), cluster_label)
 
         return cluster_label, pipeline
 
@@ -504,7 +509,7 @@ class ClusterAnalysisPipeline:
         data_original: pd.DataFrame,
         data_cluster: pd.DataFrame,
         merge_columns: List[str],
-        cluster_column: str = "Cluster",
+        cluster_column: str = "cluster_label",
         feature_columns: Optional[List[str]] = None,
     ) -> None:
         """Merge cluster index with original data and save data for each cluster."""
@@ -519,21 +524,11 @@ class ClusterAnalysisPipeline:
                 logger.info(f"Cluster {cluster} feature statistics:")
                 logger.info(stats[["mean", "std", "min", "25%", "50%", "75%", "max"]])
 
-    def apply_scale_features(self, df_features: pd.DataFrame, df_scale: pd.DataFrame) -> pd.DataFrame:
-        """Apply scaling to features using saved scaling parameters."""
-        df_scaled = df_features.copy()
-
-        for col in df_scale.columns:
-            mean = df_scale.loc["Mean", col]
-            std = df_scale.loc["Std", col]
-            if std != 0:
-                df_scaled[col] = (df_features[col] - mean) / std
-
-        return df_scaled
-
     def load_trained_model(self) -> KMeans:
         """Load the trained K-means model."""
-        model_path = self.output_path / "models" / "kmeans_model.pkl"
+        model_path = self.output_path / "models" / self.pickle_model_name
+        if not os.path.exists(model_path):
+            raise ValueError("clustering model is not trained!")
         return joblib.load(model_path)
 
     def predict_clusters(self, data: pd.DataFrame, features: List[str]) -> np.ndarray:
@@ -541,20 +536,25 @@ class ClusterAnalysisPipeline:
         model = self.load_trained_model()
         return model.predict(data[features])
 
-    def save_pipeline_model(self, pipeline: Pipeline, file_path: str) -> None:
+    def save_pipeline_model(self, pipeline: Pipeline) -> None:
         """Save a complete pipeline model to disk."""
-        # Save as pickle
-        joblib.dump(pipeline, file_path)
 
-        # Save as ONNX
-        onnx_path = file_path.replace(".pkl", ".onnx")
-        n_features = pipeline.named_steps["kmeans"].n_features_in_
-        initial_type = [("float_input", FloatTensorType([None, n_features]))]
-        onnx_model = convert_sklearn(pipeline, initial_types=initial_type)
-        with open(onnx_path, "wb") as f:
+        pickle_model_name = self.pickle_model_name
+        joblib.dump(pipeline, self.output_path / "models" / pickle_model_name)
+
+        # Save ONNX model with version from config
+        onnx_opset_version = self.onnx_opset_version
+        logger.info(f"Using ONNX opset version: {onnx_opset_version}")
+        initial_type = [("float_input", FloatTensorType([None, self.n_top_features]))]
+        onnx_model = convert_sklearn(pipeline, initial_types=initial_type, target_opset=onnx_opset_version)
+
+        onnx_model_name = self.onnx_model_name
+        with open(self.output_path / "models" / onnx_model_name, "wb") as f:
             f.write(onnx_model.SerializeToString())
 
-        logger.info(f"Pipeline model saved to: {file_path} and {onnx_path}")
+        logger.info(f"Clustering pipeline model saved to: {self.output_path / 'models'}")
+        logger.info(f"Pickle model saved as: {pickle_model_name}")
+        logger.info(f"ONNX model saved as: {onnx_model_name}")
 
     def set_n_clusters(self, pipeline: Pipeline, n_clusters: int) -> Pipeline:
         """
@@ -588,14 +588,31 @@ class ClusterAnalysisPipeline:
         Returns:
             Cluster labels
         """
-        # Set the number of clusters
         pipeline = self.set_n_clusters(pipeline, n_clusters)
-
-        # Fit and predict
         cluster_labels = pipeline.fit_predict(data)
 
         logger.info(f"Fitted and predicted with n_clusters={n_clusters}")
         return cluster_labels
+
+    def attach_cluster_label(self):
+        attach_data = self.load_data(data_label="attach_data", reload=False)
+        data_with_cluster_label = pd.read_csv(
+            self.output_path / "output" / f"cluster_label_top_features_{self.n_top_features}.csv"
+        )
+        data_merged = attach_data.merge(
+            data_with_cluster_label, on=self._config["data_loader"]["merge_on"], how="inner"
+        )
+
+        cluster_column = "cluster_label"
+        feature_columns = attach_data.select_dtypes(include="number").columns.to_list()
+        for cluster, group_df in data_merged.groupby(cluster_column):
+            file_name = f"enriched_data_cluster_{cluster}.csv"
+            group_df.drop(columns=[cluster_column]).to_csv(self.output_path / "output" / file_name, index=False)
+
+            if feature_columns is not None:
+                stats = group_df[feature_columns].describe().T
+                logger.info(f"Cluster {cluster} feature statistics:")
+                logger.info(stats[["mean", "std", "min", "25%", "50%", "75%", "max"]])
 
 
 def calculate_inertia(x: np.ndarray, y: np.ndarray) -> float:
