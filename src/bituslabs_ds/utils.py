@@ -1,3 +1,4 @@
+import concurrent.futures
 import json
 import logging
 import os
@@ -11,6 +12,8 @@ import pandas as pd
 from scipy.stats import zscore
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.preprocessing import power_transform
+
+from bituslabs_ds.config import DEFAULT_MAX_JOBS
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -213,14 +216,26 @@ def df_power_transform(
     if isinstance(col_names, str):
         col_names = [col_names]
 
-    for col in col_names:
+    def transform_column(col):
         if col in data_transformed.columns and np.issubdtype(data_transformed[col].dtype, np.number):
             col_data = data_transformed[col].astype(float).copy()
             col_data = power_transform(col_data.to_frame())
-            data_transformed[f"{col}{suffix}"] = col_data
             logger.info(f"Column: {col} transformed to: {col}{suffix}.")
+            return (f"{col}{suffix}", col_data)
         else:
             logger.warning(f"Column: {col} not transformed.")
+            return None
+
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=DEFAULT_MAX_JOBS) as executor:
+        futures = {executor.submit(transform_column, col): col for col in col_names}
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            if result is not None:
+                results.append(result)
+
+    for col_name, col_data in results:
+        data_transformed[col_name] = col_data
 
     return data_transformed
 

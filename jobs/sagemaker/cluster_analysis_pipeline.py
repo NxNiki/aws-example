@@ -7,6 +7,7 @@ for streamlined clustering analysis with automatic power transformation and scal
 import argparse
 import logging
 import os
+import time
 
 from bituslabs_ds.config import LOCAL_ROOT, setup_logging
 from bituslabs_ds.eda import DataProfiler, DataVisualizer
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 def main(config_path: str):
+    start_time = time.time()
 
     project_name = os.path.basename(config_path).replace(".yaml", "")
     setup_logging(LOCAL_ROOT / "jobs/log", f"cluster_analysis_pipeline_{project_name}.log")
@@ -34,7 +36,7 @@ def main(config_path: str):
     DataProfiler.count_df_missing_columns(data)
     data.fillna(0, inplace=True)
 
-    data_transformed = cluster_pipeline.power_transform(data)
+    data_transformed = cluster_pipeline.preprocess_data(data)
 
     # Create correlation heatmap
     features = cluster_pipeline.normal_features + cluster_pipeline.skewed_features
@@ -71,6 +73,9 @@ def main(config_path: str):
 
     if cluster_pipeline.run_attach_cluster_label:
         cluster_pipeline.attach_cluster_label()
+
+    elapsed_time = time.time() - start_time
+    logger.info(f"Total running time of main: {elapsed_time:.2f} seconds")
 
 
 if __name__ == "__main__":

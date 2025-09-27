@@ -1,7 +1,7 @@
 # Wucaishen Cluster Analysis Configuration
 # This file contains configuration specific to the wucaishen clustering project
 
-project_name: "wucaishen_2024_test"  # Current analysis environment
+project_name: "wucaishen_2024_test_parallel"  # Current analysis environment
 work_dir: "wucaishen"  # Base working directory, where local cache of the input data will be saved.
 
 data_loader:
@@ -165,4 +165,4 @@ pipeline:
   elbow_method: true  # Run elbow method analysis
   cluster_analysis: true  # Run cluster analysis with selected features and n_clusters  
   fit_cluster_model: false  # Apply trained model to new data
-  attach_cluster_label: true  # Attach cluster indices to original data
+  attach_cluster_label: false  # Attach cluster indices to original data

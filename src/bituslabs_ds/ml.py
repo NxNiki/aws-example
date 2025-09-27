@@ -4,6 +4,7 @@ Machine Learning utilities and clustering analysis classes.
 
 import logging
 import os
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pprint import pformat
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -24,7 +25,7 @@ from sklearn.metrics import silhouette_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import MinMaxScaler, PowerTransformer, RobustScaler, StandardScaler
 
-from bituslabs_ds.config import LOCAL_ROOT
+from bituslabs_ds.config import DEFAULT_MAX_JOBS, LOCAL_ROOT
 from bituslabs_ds.s3_utils import list_s3_files, read_files
 from bituslabs_ds.utils import column_iterator, df_power_transform, keep_numeric_columns, remove_outliers, save_list
 
@@ -131,13 +132,18 @@ class ClusterAnalysisPipeline:
 
     def get_transform_columns(self, data: pd.DataFrame) -> Tuple[List[str], List[int]]:
 
-        transform_columns = [f for i, f in enumerate(data.columns) if f in self.skewed_features]
+        transform_columns = [f for f in data.columns if f in self.skewed_features]
         transform_columns_index = [i for i, f in enumerate(data.columns) if f in self.skewed_features]
+
         logger.info(f"Adding power transformation for columns: {transform_columns}")
         logger.info(f"Data columns: {data.columns.to_list()}")
         logger.info(f"Transform column indices: {transform_columns_index}")
 
         return transform_columns, transform_columns_index
+
+    @staticmethod
+    def get_scaler():
+        return StandardScaler()
 
     def load_data(
         self,
@@ -196,9 +202,17 @@ class ClusterAnalysisPipeline:
 
         return data
 
-    def power_transform(self, data: pd.DataFrame) -> pd.DataFrame:
-
+    def preprocess_data(self, data: pd.DataFrame) -> pd.DataFrame:
+        """
+        apply preprocess steps same as in the clustering pipeline, which includes:
+            power transform
+            scaler
+        """
+        data = data.copy()
         data = df_power_transform(data, self.skewed_features)
+        numeric_columns = data.select_dtypes(include="number").columns.tolist()
+        scaler = self.get_scaler()
+        data[numeric_columns] = scaler.fit_transform(data[numeric_columns])
 
         return data
 
@@ -325,7 +339,7 @@ class ClusterAnalysisPipeline:
 
         # avoid robust scaler as it gives werid data pattern and destroys clustering analyis.
         pipeline_steps.extend(
-            [("scaler", StandardScaler()), ("cluster", KMeans(n_clusters=n_clusters, random_state=42))]
+            [("scaler", self.get_scaler()), ("cluster", KMeans(n_clusters=n_clusters, random_state=42))]
         )
         pipeline = Pipeline(pipeline_steps)
 
@@ -352,22 +366,34 @@ class ClusterAnalysisPipeline:
             silhouette_scores = []
             cluster_sizes = []
 
-            for k in k_range:
+            def fit_kmeans(k):
                 _, transform_columns_index = self.get_transform_columns(df_x)
                 cluster_pipeline = self.create_clustering_pipeline(
                     n_clusters=k, transform_columns_index=transform_columns_index
                 )
                 labels = cluster_pipeline.fit_predict(df_x)
-                inertia.append(cluster_pipeline.named_steps["cluster"].inertia_)
-                cluster_indices_by_k[k] = labels
+                inertia_val = cluster_pipeline.named_steps["cluster"].inertia_
                 x_transformed = cluster_pipeline[:-1].transform(df_x)
-                silhouette_scores.append(calculate_silhouette_score(x_transformed, labels))
+                silhouette = calculate_silhouette_score(x_transformed, labels)
                 cluster_counts = np.bincount(labels)
+                return k, labels, inertia_val, silhouette, cluster_counts
+
+            results = []
+            with ThreadPoolExecutor(max_workers=DEFAULT_MAX_JOBS) as executor:
+                future_to_k = {executor.submit(fit_kmeans, k): k for k in k_range}
+                for future in as_completed(future_to_k):
+                    k, labels, inertia_val, silhouette, cluster_counts = future.result()
+                    results.append((k, labels, inertia_val, silhouette, cluster_counts))
+
+            # Sort results by k to maintain order
+            results.sort(key=lambda x: k_range.index(x[0]))
+            for k, labels, inertia_val, silhouette, cluster_counts in results:
+                cluster_indices_by_k[k] = labels
+                inertia.append(inertia_val)
+                silhouette_scores.append(silhouette)
                 cluster_sizes.append(cluster_counts)
 
             cluster_indices[n] = cluster_indices_by_k
-
-            # Plot elbow method
             self._plot_elbow_method(k_range, inertia, silhouette_scores, cluster_sizes, n)
 
         return cluster_indices
@@ -430,7 +456,7 @@ class ClusterAnalysisPipeline:
         n_clusters = self._config["cluster_analysis"]["n_clusters"]
         clustering_data = data[features_ordered_by_importance[: self.n_top_features]].copy()
 
-        _, transform_columns_index = self.get_transform_columns(clustering_data)
+        transform_columns, transform_columns_index = self.get_transform_columns(clustering_data)
         pipeline = self.create_clustering_pipeline(
             n_clusters=n_clusters,
             transform_columns_index=transform_columns_index,
