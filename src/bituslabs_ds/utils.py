@@ -227,7 +227,7 @@ def df_power_transform(
             return None
 
     results = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=DEFAULT_MAX_JOBS) as executor:
+    with concurrent.futures.ProcessPoolExecutor(max_workers=DEFAULT_MAX_JOBS) as executor:
         futures = {executor.submit(transform_column, col): col for col in col_names}
         for future in concurrent.futures.as_completed(futures):
             result = future.result()
