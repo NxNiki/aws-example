@@ -11,6 +11,8 @@ log
 **/model_output/
 **/output/
 **/eda_output/
+**/output_*/
+**/*_output/
 **/.ipynb_checkpoints/*
 **.png
 **.jpg
