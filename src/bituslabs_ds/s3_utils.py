@@ -272,7 +272,10 @@ def read_files(
 
     if local_cache_path is not None and os.path.exists(local_cache_path) and not reload:
         logger.info(f"Found local cache at {local_cache_path}")
-        data = pd.read_csv(local_cache_path, usecols=columns)
+        if local_cache_path.endswith(".csv"):
+            data = pd.read_csv(local_cache_path, usecols=columns)
+        elif local_cache_path.endswith(".parquet"):
+            data = pd.read_parquet(local_cache_path, columns=columns)
         return data
 
     read_func = partial(_read_file, columns=columns)
@@ -305,7 +308,10 @@ def read_files(
 
     if local_cache_path is not None:
         os.makedirs(os.path.dirname(local_cache_path), exist_ok=True)
-        data.to_csv(local_cache_path, index=False)
+        if local_cache_path.endswith(".csv"):
+            data.to_csv(local_cache_path, index=False)
+        elif local_cache_path.endswith(".parquet"):
+            data.to_parquet(local_cache_path, index=False)
 
     logger.info("first 5 rows of dataframe: \n%s", data.head(5).to_markdown())
     return data
