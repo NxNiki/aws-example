@@ -4,6 +4,7 @@ import logging
 import os
 from collections import defaultdict
 from pathlib import Path
+from typing import Dict, List
 
 import numpy as np
 
@@ -105,21 +106,12 @@ def add_base_account(data):
 
 def get_hit_count(data, game_type=None):
 
-    # if game_type:
-    #     max_payout_per_bet = data.loc[data["game_type"] == game_type].groupby("round_num")["payout"].max()
-    # else:
-    #     max_payout_per_bet = data.groupby("round_num")["payout"].max()
-
-    # return int((max_payout_per_bet > 0).sum())
-
     if game_type:
-        data_first_round = data[
-            (data["game_type"] == game_type) & (data["elimination_num"] == 1) & (data["payout"] > 0)
-        ]
+        max_payout = data[data["game_type"] == game_type].groupby(["bet_num", "loginname"])["payout"].max()
     else:
-        data_first_round = data[(data["elimination_num"] == 1) & (data["payout"] > 0)]
+        max_payout = data.groupby(["bet_num", "loginname"])["payout"].max()
 
-    return len(data_first_round)
+    return sum(max_payout > 0)
 
 
 def get_trigger_stats(data):
@@ -194,8 +186,7 @@ def get_item_stats(data, game_type=None):
     game_rounds = len(data[["bet_num", "loginname"]].drop_duplicates())
     stats["Total_Count"] = game_rounds
 
-    hit_count = get_hit_count(data)
-    stats["Zero_Count"] = game_rounds - hit_count
+    stats["Zero_Count"] = game_rounds - get_hit_count(data)
     stats["Nonzero_Payouts"] = get_payout_stats(data)
 
     logger.info(f"item stats for gametype {game_type}: {stats}")
@@ -298,10 +289,55 @@ def check_existing_file(file_name):
     return stats_f
 
 
-def append_item_stats(stats_total, stats):
+def update_trigger_stats(stats_total: Dict, stats: Dict) -> Dict:
+
+    stats_total["Total_Game_Rounds"] += stats["Total_Game_Rounds"]
+    stats_total["Hit_Count"] += stats["Hit_Count"]
+    stats_total["Hit_Count_BG"] += stats["Hit_Count_BG"]
+    stats_total["Hit_Count_FG"] += stats["Hit_Count_FG"]
+    stats_total["Free_Game_Triggered"] += stats["Free_Game_Triggered"]
+
+    for key, value in stats["Free_Trigger_Rounds"].items():
+        stats_total["Free_Trigger_Rounds"][key] += value
+
+    return stats_total
+
+
+def update_item_stats(stats_total, stats):
 
     stats_total["Total_Count"] += stats["Total_Count"]
-    stats_total["Total_Count"] += stats["Total_Count"]
+    stats_total["Zero_Count"] += stats["Zero_Count"]
+
+    stats_total["Nonzero_Payouts"] = update_payout_stats(stats_total["Nonzero_Payouts"], stats["Nonzero_Payouts"])
+
+
+def update_payout_stats(payout_total: List[Dict], payout: List[Dict]) -> List[Dict]:
+
+    payout_index = {d["payouts"]: i for i, d in enumerate(payout_total)}
+    for d in payout:
+        if d["payouts"] in payout_index:
+            index = payout_index[d["payouts"]]
+            payout_total[index]["payouts_count"] + d["payouts_count"]
+            payout_total[index]["Compositions"] = update_payout_composition(
+                payout_total[index]["Compositions"], d["Compositions"]
+            )
+        else:
+            payout_total.append(d)
+
+    return payout_total
+
+
+def update_payout_composition(composition_total: List[Dict], composition: List[Dict]) -> List[Dict]:
+
+    composition_index = {str(d["payout"]): i for i, d in enumerate(composition_total)}
+    for d in composition:
+        if d["payout"] in composition_index:
+            index = composition_index[d["payout"]]
+            composition_total[index]["composition_count"] += d["composition_count"]
+        else:
+            composition_total.append(d)
+
+    return composition_total
 
 
 def get_game_stats(files, output_path):
@@ -377,19 +413,14 @@ def get_game_stats(files, output_path):
                 stats_f_fg = get_item_stats(data, game_type="FG")
                 json.dump(stats_f_fg, open(trigger_stats_file_fg_f, "w"), indent=4, cls=NumpyEncoder)
 
-        stats_trigger["Total_Game_Rounds"] += stats_f["Total_Game_Rounds"]
-        stats_trigger["Hit_Count"] += stats_f["Hit_Count"]
-        stats_trigger["Hit_Count_BG"] += stats_f["Hit_Count_BG"]
-        stats_trigger["Hit_Count_FG"] += stats_f["Hit_Count_FG"]
-        stats_trigger["Free_Game_Triggered"] += stats_f["Free_Game_Triggered"]
-
-        for key, value in stats_f["Free_Trigger_Rounds"].items():
-            stats_trigger["Free_Trigger_Rounds"][key] += value
-
-        # update base game items:
+        update_trigger_stats(stats_trigger, stats_f)
+        update_item_stats(stats_bg, stats_f_bg)
+        update_item_stats(stats_fg, stats_f_fg)
 
     stats_trigger["Free_Trigger_Rounds"] = dict(sorted(stats_trigger["Free_Trigger_Rounds"].items()))
     json.dump(stats_trigger, open(stats_file, "w"), indent=4, cls=NumpyEncoder)
+    json.dump(stats_bg, open(stats_file_bg, "w"), indent=4, cls=NumpyEncoder)
+    json.dump(stats_bg, open(stats_file_fg, "w"), indent=4, cls=NumpyEncoder)
 
     stats_trigger
 
