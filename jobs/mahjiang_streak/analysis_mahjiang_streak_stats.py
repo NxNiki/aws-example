@@ -41,7 +41,7 @@ logger.addHandler(logging.NullHandler())
 def remove_first_and_last_n_bets(data, n=1):
     # Remove rows where bet_num is the minimum for each loginname
 
-    data = data.sort_values(by=["loginname", "bet_num", "elimination_num", "free_elimination_num"])
+    data = data.sort_values(by=["loginname", "bet_num", "elimination_num"])
 
     min_betnum_per_login = data.groupby("loginname")["bet_num"].transform(
         lambda x: sorted(set(x))[n - 1] if len(set(x)) > n else max(x)
@@ -178,10 +178,12 @@ def get_item_stats(data, game_type=None):
         "Nonzero_Payouts": [],
     }
 
+    # select sub-columns to save memory space:
+    columns = ["bet_num", "loginname", "payout", "base_account", "game_type"]
     if game_type is not None:
-        data = data[data["game_type"] == game_type].copy()
+        data = data.loc[data["game_type"] == game_type, columns].copy()
     else:
-        data = data.copy()
+        data = data[columns].copy()
 
     game_rounds = len(data[["bet_num", "loginname"]].drop_duplicates())
     stats["Total_Count"] = game_rounds
@@ -238,7 +240,8 @@ def get_composition_stats(data):
 
     for level in sorted(data["level"].unique()):
         logger.info(f"process payout level: {level}")
-        data_level = data.loc[data["level"] == level, ["bet_num", "loginname", "standard_payout"]].copy()
+        # data_level = data.loc[data["level"] == level, ["bet_num", "loginname", "standard_payout"]].copy()
+        data_level = data.loc[data["level"] == level, ["bet_num", "loginname", "standard_payout"]]
 
         # For each unique (bet_num, loginname) in this level, get the sequence of standard_payouts (ordered as they appear)
         composition_counter = {}
@@ -282,7 +285,7 @@ def check_existing_file(file_name):
         with open(file_name, "r") as f:
             stats_f = json.load(f)
 
-        logger.info(f"update existing stats: {stats_f}")
+        logger.info(f"read existing stats file: {file_name}")
     else:
         stats_f = None
 
@@ -317,7 +320,7 @@ def update_payout_stats(payout_total: List[Dict], payout: List[Dict]) -> List[Di
     for d in payout:
         if d["payouts"] in payout_index:
             index = payout_index[d["payouts"]]
-            payout_total[index]["payouts_count"] + d["payouts_count"]
+            payout_total[index]["payouts_count"] += d["payouts_count"]
             payout_total[index]["Compositions"] = update_payout_composition(
                 payout_total[index]["Compositions"], d["Compositions"]
             )
@@ -331,13 +334,43 @@ def update_payout_composition(composition_total: List[Dict], composition: List[D
 
     composition_index = {str(d["payout"]): i for i, d in enumerate(composition_total)}
     for d in composition:
-        if d["payout"] in composition_index:
-            index = composition_index[d["payout"]]
+        if str(d["payout"]) in composition_index:
+            index = composition_index[str(d["payout"])]
             composition_total[index]["composition_count"] += d["composition_count"]
         else:
             composition_total.append(d)
 
     return composition_total
+
+
+def remove_rare_payouts(stats: Dict, frequency_threshold: float = 0.001):
+
+    count_threshold = int(stats["Total_Count"] * frequency_threshold)
+    selected_payouts = []
+    for payout in stats["Nonzero_Payouts"]:
+        if payout["payouts_count"] < count_threshold:
+            logger.info(
+                f"remove rare payout: {payout['payouts']}, count: {payout['payouts_count']}, threshold: {count_threshold}"
+            )
+        else:
+            payout = remove_rare_compositions(payout)
+            selected_payouts.append(payout)
+    stats["Nonzero_Payouts"] = selected_payouts
+    return stats
+
+
+def remove_rare_compositions(payout: Dict, frequency_threshold: float = 0.001):
+    count_threshold = int(payout["payouts_count"] * frequency_threshold)
+    selected_compositions = []
+    for comp in payout["Compositions"]:
+        if comp["composition_count"] < count_threshold:
+            logger.info(
+                f"remove rare composition: {comp['payout']}, count: {comp['composition_count']}, threshold: {count_threshold}"
+            )
+        else:
+            selected_compositions.append(comp)
+    payout["Compositions"] = selected_compositions
+    return payout
 
 
 def get_game_stats(files, output_path):
@@ -361,14 +394,14 @@ def get_game_stats(files, output_path):
     stats_bg = {
         "Total_Count": 0,
         "Zero_Count": 0,
-        "Compositions": [],
+        "Nonzero_Payouts": [],
     }
 
     stats_file_fg = f"{output_path}/SS03_FG_Items.json"
     stats_fg = {
         "Total_Count": 0,
         "Zero_Count": 0,
-        "Compositions": [],
+        "Nonzero_Payouts": [],
     }
 
     for f in files:
@@ -419,8 +452,12 @@ def get_game_stats(files, output_path):
 
     stats_trigger["Free_Trigger_Rounds"] = dict(sorted(stats_trigger["Free_Trigger_Rounds"].items()))
     json.dump(stats_trigger, open(stats_file, "w"), indent=4, cls=NumpyEncoder)
+
+    stats_bg = remove_rare_payouts(stats_bg)
     json.dump(stats_bg, open(stats_file_bg, "w"), indent=4, cls=NumpyEncoder)
-    json.dump(stats_bg, open(stats_file_fg, "w"), indent=4, cls=NumpyEncoder)
+
+    stats_fg = remove_rare_payouts(stats_fg)
+    json.dump(stats_fg, open(stats_file_fg, "w"), indent=4, cls=NumpyEncoder)
 
     stats_trigger
 
