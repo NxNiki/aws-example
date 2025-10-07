@@ -28,6 +28,8 @@ class NumpyEncoder(json.JSONEncoder):
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
+REMOVE_RARE_PAYOUT_THRESHOLD = 0.0001
+REMOVE_RARE_COMPOSITION_THRESHOLD = 0.0001
 
 # TODO: separate process each single file and combine all results to enable parallel processing.
 
@@ -36,6 +38,8 @@ logger.addHandler(logging.NullHandler())
 
 # issue: For some bet, the base_account (the first bet amount in a bet round) is 0. This result in Inf when calculating
 #   the stardard payout (payout/base_account * 20)
+
+# issue: there are very rare cases where free game round is odd number.
 
 
 def remove_first_and_last_n_bets(data, n=1):
@@ -104,12 +108,12 @@ def add_base_account(data):
     return data[~mask]
 
 
-def get_hit_count(data, game_type=None):
+def get_hit_count(data, game_type=None, group_cols=["bet_num", "loginname"]):
 
     if game_type:
-        max_payout = data[data["game_type"] == game_type].groupby(["bet_num", "loginname"])["payout"].max()
+        max_payout = data[data["game_type"] == game_type].groupby(group_cols)["payout"].max()
     else:
-        max_payout = data.groupby(["bet_num", "loginname"])["payout"].max()
+        max_payout = data.groupby(group_cols)["payout"].max()
 
     return sum(max_payout > 0)
 
@@ -179,29 +183,34 @@ def get_item_stats(data, game_type=None):
     }
 
     # select sub-columns to save memory space:
-    columns = ["bet_num", "loginname", "payout", "base_account", "game_type"]
-    if game_type is not None:
+    if game_type == "BG":
+        columns = ["bet_num", "loginname", "payout", "base_account", "game_type"]
+        group_cols = ["bet_num", "loginname"]
+        data = data.loc[data["game_type"] == game_type, columns].copy()
+    elif game_type == "FG":
+        columns = ["bet_num", "loginname", "payout", "base_account", "game_type", "free_elimination_num"]
+        group_cols = ["bet_num", "loginname", "free_elimination_num"]
         data = data.loc[data["game_type"] == game_type, columns].copy()
     else:
         data = data[columns].copy()
 
-    game_rounds = len(data[["bet_num", "loginname"]].drop_duplicates())
+    game_rounds = len(data[group_cols].drop_duplicates())
     stats["Total_Count"] = game_rounds
 
     stats["Zero_Count"] = game_rounds - get_hit_count(data)
-    stats["Nonzero_Payouts"] = get_payout_stats(data)
+    stats["Nonzero_Payouts"] = get_payout_stats(data, group_cols)
 
     logger.info(f"item stats for gametype {game_type}: {stats}")
 
     return stats
 
 
-def get_payout_stats(data):
+def get_payout_stats(data, group_cols=["bet_num", "loginname"]):
 
     payout_stats = []
     data = data[data["payout"] > 0].copy()
     data["standard_payout"] = (data["payout"] / data["base_account"] * 20).round().astype(int)
-    data["total_payouts"] = data.groupby(["bet_num", "loginname"])["standard_payout"].transform("sum")
+    data["total_payouts"] = data.groupby(group_cols)["standard_payout"].transform("sum")
     total_payouts = sorted(data["total_payouts"].unique())
 
     for total_payout in total_payouts:
@@ -211,8 +220,8 @@ def get_payout_stats(data):
         data_payout = data[data["total_payouts"] == total_payout]
         p_stats = {
             "payouts": total_payout,
-            "payouts_count": len(data_payout[["bet_num", "loginname"]].drop_duplicates()),
-            "Compositions": get_composition_stats(data_payout),
+            "payouts_count": len(data_payout[group_cols].drop_duplicates()),
+            "Compositions": get_composition_stats(data_payout, group_cols),
         }
 
         payout_stats.append(p_stats)
@@ -220,7 +229,7 @@ def get_payout_stats(data):
     return payout_stats
 
 
-def get_composition_stats(data):
+def get_composition_stats(data, group_cols=["bet_num", "loginname"]):
     """
     data with same total_payouts.
     """
@@ -236,16 +245,18 @@ def get_composition_stats(data):
 
     payouts_compositions = []
     data = data.copy()
-    data["level"] = data.groupby(["bet_num", "loginname"])["standard_payout"].transform("count")
+    data["level"] = data.groupby(group_cols)["standard_payout"].transform("count")
 
     for level in sorted(data["level"].unique()):
         logger.info(f"process payout level: {level}")
         # data_level = data.loc[data["level"] == level, ["bet_num", "loginname", "standard_payout"]].copy()
-        data_level = data.loc[data["level"] == level, ["bet_num", "loginname", "standard_payout"]]
+        data_level = data.loc[
+            data["level"] == level, ["bet_num", "loginname", "free_elimination_num", "standard_payout"]
+        ]
 
         # For each unique (bet_num, loginname) in this level, get the sequence of standard_payouts (ordered as they appear)
         composition_counter = {}
-        grouped = data_level.groupby(["bet_num", "loginname"])
+        grouped = data_level.groupby(group_cols)
         prev_payout_sequence = []
         for _, group in grouped:
             payout_sequence = group["standard_payout"].tolist()  # keep as list, order matters
@@ -343,9 +354,9 @@ def update_payout_composition(composition_total: List[Dict], composition: List[D
     return composition_total
 
 
-def remove_rare_payouts(stats: Dict, frequency_threshold: float = 0.001):
+def remove_rare_payouts(stats: Dict):
 
-    count_threshold = int(stats["Total_Count"] * frequency_threshold)
+    count_threshold = int(stats["Total_Count"] * REMOVE_RARE_PAYOUT_THRESHOLD)
     selected_payouts = []
     for payout in stats["Nonzero_Payouts"]:
         if payout["payouts_count"] < count_threshold:
@@ -359,8 +370,8 @@ def remove_rare_payouts(stats: Dict, frequency_threshold: float = 0.001):
     return stats
 
 
-def remove_rare_compositions(payout: Dict, frequency_threshold: float = 0.001):
-    count_threshold = int(payout["payouts_count"] * frequency_threshold)
+def remove_rare_compositions(payout: Dict):
+    count_threshold = int(payout["payouts_count"] * REMOVE_RARE_COMPOSITION_THRESHOLD)
     selected_compositions = []
     for comp in payout["Compositions"]:
         if comp["composition_count"] < count_threshold:
