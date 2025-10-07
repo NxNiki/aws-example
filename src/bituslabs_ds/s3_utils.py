@@ -61,10 +61,26 @@ def parse_s3_path(s3_path: str) -> Tuple[str, str]:
 
 
 def read_to_pandas_df(bucket: str, key: str, columns: Optional[List[str]] = None) -> pd.DataFrame:
-    """Read a CSV file from S3 and return it as a Pandas DataFrame."""
+    """
+    Read a CSV or Parquet file from S3 and return it as a Pandas DataFrame.
+
+    :param bucket: S3 bucket name
+    :param key: S3 object key
+    :param columns: Optional list of columns to read
+    :return: Pandas DataFrame
+    """
     bucket = parse_bucket_name(bucket)
-    response = s3_client.get_object(Bucket=bucket, Key=key)
-    return pd.read_csv(response["Body"], usecols=columns)
+    _, ext = os.path.splitext(key.lower())
+    if ext == ".csv":
+        response = s3_client.get_object(Bucket=bucket, Key=key)
+        return pd.read_csv(response["Body"], usecols=columns)
+    elif ext == ".parquet":
+        s3 = fs.S3FileSystem(region=REGION)
+        s3_path = f"{bucket}/{key}"
+        with s3.open_input_file(s3_path) as f:
+            return pd.read_parquet(f, columns=columns)
+    else:
+        raise ValueError(f"Unsupported file extension for S3 object: {key}")
 
 
 def write_df_to_s3(data: Union[pd.DataFrame, SparkDataFrame], bucket: str, key: str) -> None:
@@ -256,7 +272,10 @@ def read_files(
 
     if local_cache_path is not None and os.path.exists(local_cache_path) and not reload:
         logger.info(f"Found local cache at {local_cache_path}")
-        data = pd.read_csv(local_cache_path, usecols=columns)
+        if local_cache_path.endswith(".csv"):
+            data = pd.read_csv(local_cache_path, usecols=columns)
+        elif local_cache_path.endswith(".parquet"):
+            data = pd.read_parquet(local_cache_path, columns=columns)
         return data
 
     read_func = partial(_read_file, columns=columns)
@@ -289,7 +308,10 @@ def read_files(
 
     if local_cache_path is not None:
         os.makedirs(os.path.dirname(local_cache_path), exist_ok=True)
-        data.to_csv(local_cache_path, index=False)
+        if local_cache_path.endswith(".csv"):
+            data.to_csv(local_cache_path, index=False)
+        elif local_cache_path.endswith(".parquet"):
+            data.to_parquet(local_cache_path, index=False)
 
     logger.info("first 5 rows of dataframe: \n%s", data.head(5).to_markdown())
     return data

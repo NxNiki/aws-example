@@ -1,5 +1,6 @@
 .DS_Store
-**/.log/*
+.log
+log
 **/*.log
 **/*.zip
 **/*.csv
@@ -10,9 +11,12 @@
 **/model_output/
 **/output/
 **/eda_output/
+**/output_*/
+**/*_output/
 **/.ipynb_checkpoints/*
 **.png
 **.jpg
+.pytest_cache
 __pycache__
 dist/
 .mypy_cache/

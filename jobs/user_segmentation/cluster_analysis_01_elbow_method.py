@@ -219,7 +219,6 @@ def elbow_method(
         )  # [left, bottom, width, height]
 
         plt.subplots_adjust(left=0.1, bottom=0.3)
-
         plt.savefig(f"{output_path}/figures/{title}.png")
         # plt.show()
 

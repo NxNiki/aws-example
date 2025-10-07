@@ -1,9 +1,17 @@
 """
 Example demonstrating the new clustering pipeline approach.
-This shows how all 4 clustering steps are now consolidated into a single configurable pipeline.
+This shows how all 4 clustering steps are now consolidated into a single configurable pipeline,
+and includes a comparison between manual pipeline construction and the new pipeline method.
 """
 
 import logging
+
+import numpy as np
+import pandas as pd
+from sklearn.cluster import KMeans
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import PowerTransformer, RobustScaler
 
 from bituslabs_ds.ml import ClusterAnalysis
 
@@ -124,6 +132,124 @@ def demonstrate_configuration_control():
     print("   - new_project: Custom step combination")
 
 
+def demonstrate_pipeline_method_comparison():
+    """Demonstrate the difference between manual pipeline construction and the new method."""
+
+    print("\n=== Pipeline Method Comparison ===")
+
+    # Create sample data
+    np.random.seed(42)
+    n_samples = 1000
+    n_features = 5
+
+    data = pd.DataFrame(
+        {
+            "normal_feature_1": np.random.normal(0, 1, n_samples),
+            "normal_feature_2": np.random.normal(0, 1, n_samples),
+            "skewed_feature_1": np.random.exponential(1, n_samples),
+            "skewed_feature_2": np.random.gamma(2, 1, n_samples),
+            "normal_feature_3": np.random.normal(0, 1, n_samples),
+        }
+    )
+
+    transform_columns = ["skewed_feature_1", "skewed_feature_2"]
+    n_clusters = 3
+
+    print(f"Sample data shape: {data.shape}")
+    print(f"Features: {data.columns.tolist()}")
+    print(f"Transform columns: {transform_columns}")
+    print(f"Number of clusters: {n_clusters}")
+
+    print("\n--- OLD APPROACH: Manual Pipeline Construction ---")
+    print("Code required (~15 lines):")
+    print(
+        """
+pipeline_steps = []
+if transform_columns is not None and len(transform_columns) > 1:
+    power_columns = [i for i, f in enumerate(data.columns) if f in transform_columns]
+    preprocessor = ColumnTransformer(
+        transformers=[("yeojohnson", PowerTransformer(method="yeo-johnson", standardize=True), power_columns)],
+        remainder="passthrough",
+    )
+    pipeline_steps.append(("power_transform", preprocessor))
+
+pipeline_steps.extend([
+    ("scaler", RobustScaler()), 
+    ("kmeans", KMeans(n_clusters=n_clusters, random_state=42))
+])
+
+pipeline = Pipeline(pipeline_steps)
+data_cluster = pipeline.fit_predict(data)
+    """
+    )
+
+    print("\n--- NEW APPROACH: Pipeline Method ---")
+    print("Code required (1 line):")
+    print(
+        """
+pipeline, data_cluster = clustering.create_clustering_pipeline(
+    data=data, transform_columns=transform_columns, n_clusters=n_clusters
+)
+    """
+    )
+
+    print("\n--- BENEFITS ---")
+    print("✅ Code reduction: ~93% (15 lines → 1 line)")
+    print("✅ Eliminates code duplication across scripts")
+    print("✅ Ensures consistent pipeline configuration")
+    print("✅ Centralized maintenance and updates")
+    print("✅ Less error-prone and more readable")
+
+
+def demonstrate_pipeline_method_usage():
+    """Demonstrate how to use the new pipeline method."""
+
+    print("\n=== Pipeline Method Usage Examples ===")
+
+    print("1. Basic clustering without power transformation:")
+    print(
+        """
+clustering = ClusterAnalysis("wucaishen")
+pipeline, cluster_labels = clustering.create_clustering_pipeline(
+    data=data[feature_columns],
+    transform_columns=None,  # No power transformation
+    n_clusters=3
+)
+    """
+    )
+
+    print("\n2. Clustering with power transformation for skewed features:")
+    print(
+        """
+key_features, normal_features, skewed_features = clustering.get_feature_names()
+pipeline, cluster_labels = clustering.create_clustering_pipeline(
+    data=data[normal_features + skewed_features],
+    transform_columns=skewed_features,  # Apply power transformation
+    n_clusters=3
+)
+    """
+    )
+
+    print("\n3. Using pipeline for prediction on new data:")
+    print(
+        """
+new_cluster_labels = pipeline.predict(new_data)
+    """
+    )
+
+    print("\n4. Saving and loading pipeline models:")
+    print(
+        """
+# Save complete pipeline
+clustering.save_pipeline_model(pipeline, "models/my_pipeline.pkl")
+
+# Load and use for prediction
+loaded_pipeline = joblib.load("models/my_pipeline.pkl")
+predictions = loaded_pipeline.predict(new_data)
+    """
+    )
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
@@ -134,6 +260,8 @@ if __name__ == "__main__":
     demonstrate_pipeline_usage()
     demonstrate_pipeline_benefits()
     demonstrate_configuration_control()
+    demonstrate_pipeline_method_comparison()
+    demonstrate_pipeline_method_usage()
 
     print("\n" + "=" * 50)
     print("This demonstrates the new consolidated pipeline approach!")
@@ -143,3 +271,5 @@ if __name__ == "__main__":
     print("- Better organization and maintainability")
     print("- Consistent data loading and processing")
     print("- Easy to integrate into larger workflows")
+    print("- New pipeline method eliminates code duplication")
+    print("- 93% code reduction for pipeline construction")

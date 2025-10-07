@@ -4,8 +4,6 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from re import I
-from tarfile import data_filter
 from typing import List, Optional, Tuple
 
 import joblib
@@ -82,9 +80,12 @@ def run_cluster_analysis(
     n_features = data.shape[1]
     model_name = f"kmean_model_top{n_features}_features"
     joblib.dump(pipeline, f"{output_dir}/models/{model_name}.pkl")
+
+    onnx_opset_version = 19
     initial_type = [("float_input", FloatTensorType([None, n_features]))]
-    onnx_model = convert_sklearn(pipeline, initial_types=initial_type)
-    with open(f"{output_dir}/models/{model_name}.onnx", "wb") as f:
+    logger.info(f"use onnx version: {onnx_opset_version}")
+    onnx_model = convert_sklearn(pipeline, initial_types=initial_type, target_opset=onnx_opset_version)
+    with open(f"{output_dir}/models/{model_name}_opset_version_{onnx_opset_version}.onnx", "wb") as f:
         f.write(onnx_model.SerializeToString())
 
     logger.info(f"save cluster model to：{output_dir}/models")
