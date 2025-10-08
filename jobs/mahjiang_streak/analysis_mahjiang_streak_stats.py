@@ -4,7 +4,7 @@ import logging
 import os
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 
@@ -364,14 +364,16 @@ def remove_rare_payouts(stats: Dict):
                 f"remove rare payout: {payout['payouts']}, count: {payout['payouts_count']}, threshold: {count_threshold}"
             )
         else:
-            payout = remove_rare_compositions(payout)
+            payout = remove_rare_compositions(payout, count_threshold=count_threshold)
             selected_payouts.append(payout)
     stats["Nonzero_Payouts"] = selected_payouts
     return stats
 
 
-def remove_rare_compositions(payout: Dict):
-    count_threshold = int(payout["payouts_count"] * REMOVE_RARE_COMPOSITION_THRESHOLD)
+def remove_rare_compositions(payout: Dict, count_threshold: Optional[float] = None):
+    if count_threshold is None:
+        count_threshold = int(payout["payouts_count"] * REMOVE_RARE_COMPOSITION_THRESHOLD)
+
     selected_compositions = []
     for comp in payout["Compositions"]:
         if comp["composition_count"] < count_threshold:
@@ -382,6 +384,14 @@ def remove_rare_compositions(payout: Dict):
             selected_compositions.append(comp)
     payout["Compositions"] = selected_compositions
     return payout
+
+
+def get_max_level(stats) -> int:
+    max_level = 0
+    for payout in stats["Nonzero_Payouts"]:
+        for comp in payout["Compositions"]:
+            max_level = max(max_level, comp["levels"])
+    return max_level
 
 
 def get_game_stats(files, output_path):
@@ -405,6 +415,7 @@ def get_game_stats(files, output_path):
     stats_bg = {
         "Total_Count": 0,
         "Zero_Count": 0,
+        "max_level": 0,
         "Nonzero_Payouts": [],
     }
 
@@ -412,6 +423,7 @@ def get_game_stats(files, output_path):
     stats_fg = {
         "Total_Count": 0,
         "Zero_Count": 0,
+        "max_level": 0,
         "Nonzero_Payouts": [],
     }
 
@@ -465,9 +477,11 @@ def get_game_stats(files, output_path):
     json.dump(stats_trigger, open(stats_file, "w"), indent=4, cls=NumpyEncoder)
 
     stats_bg = remove_rare_payouts(stats_bg)
+    stats_bg["max_level"] = get_max_level(stats_bg)
     json.dump(stats_bg, open(stats_file_bg, "w"), indent=4, cls=NumpyEncoder)
 
     stats_fg = remove_rare_payouts(stats_fg)
+    stats_fg["max_level"] = get_max_level(stats_fg)
     json.dump(stats_fg, open(stats_file_fg, "w"), indent=4, cls=NumpyEncoder)
 
     stats_trigger
