@@ -28,8 +28,10 @@ class NumpyEncoder(json.JSONEncoder):
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-REMOVE_RARE_PAYOUT_THRESHOLD = 0.0001
-REMOVE_RARE_COMPOSITION_THRESHOLD = 0.0001
+REMOVE_RARE_PAYOUT_THRESHOLD = 0
+REMOVE_RARE_COMPOSITION_THRESHOLD = 0
+SUBSAMPLE_RATIO = 0.00033
+MIN_SUBSAMPLE_COUNT = 100
 
 # TODO: separate process each single file and combine all results to enable parallel processing.
 
@@ -58,6 +60,24 @@ def remove_first_and_last_n_bets(data, n=1):
     data = data[data["bet_num"] < max_betnum_per_login].copy()
 
     return data
+
+
+def sample_bet_rounds(data, ratio=SUBSAMPLE_RATIO, min_count=MIN_SUBSAMPLE_COUNT):
+    """
+    Randomly sample bet rounds from the DataFrame.
+    All rows with the same ("loginname", "bet_num") will be either selected or not selected.
+    """
+    # Identify unique bet rounds by ("loginname", "bet_num")
+    bet_rounds = data[["loginname", "bet_num"]].drop_duplicates()
+    n_sample = max(int(len(bet_rounds) * ratio), 1)
+
+    if n_sample < min_count:
+        logger.info(f"n_sample is less than {min_count}, no sampling will be performed")
+        return data
+
+    sampled_rounds = bet_rounds.sample(n=n_sample, random_state=42)
+    sampled_data = data.merge(sampled_rounds, on=["loginname", "bet_num"], how="inner")
+    return sampled_data
 
 
 def remove_bet_rounds_with_short_free_game(data):
@@ -249,10 +269,7 @@ def get_composition_stats(data, group_cols=["bet_num", "loginname"]):
 
     for level in sorted(data["level"].unique()):
         logger.info(f"process payout level: {level}")
-        # data_level = data.loc[data["level"] == level, ["bet_num", "loginname", "standard_payout"]].copy()
-        data_level = data.loc[
-            data["level"] == level, ["bet_num", "loginname", "free_elimination_num", "standard_payout"]
-        ]
+        data_level = data.loc[data["level"] == level, group_cols + ["standard_payout"]]
 
         # For each unique (bet_num, loginname) in this level, get the sequence of standard_payouts (ordered as they appear)
         composition_counter = {}
@@ -357,6 +374,11 @@ def update_payout_composition(composition_total: List[Dict], composition: List[D
 def remove_rare_payouts(stats: Dict):
 
     count_threshold = int(stats["Total_Count"] * REMOVE_RARE_PAYOUT_THRESHOLD)
+
+    if count_threshold == 0:
+        logger.info("count_threshold is 0, no rare payouts will be removed")
+        return stats
+
     selected_payouts = []
     for payout in stats["Nonzero_Payouts"]:
         if payout["payouts_count"] < count_threshold:
@@ -454,6 +476,7 @@ def get_game_stats(files, output_path):
             )
             # remove the first and last bet which could be incompelete.
             data = remove_first_and_last_n_bets(data)
+            data = sample_bet_rounds(data)
             data = remove_bet_rounds_with_short_free_game(data)
             data = add_base_account(data)
 
