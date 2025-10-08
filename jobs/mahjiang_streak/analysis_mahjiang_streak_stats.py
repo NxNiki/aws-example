@@ -30,8 +30,10 @@ logger.addHandler(logging.NullHandler())
 
 REMOVE_RARE_PAYOUT_THRESHOLD = 0
 REMOVE_RARE_COMPOSITION_THRESHOLD = 0
-SUBSAMPLE_RATIO = 0.00033
+SUBSAMPLE_RATIO = 0.007
 MIN_SUBSAMPLE_COUNT = 100
+
+GET_STATS = {"BG": False, "FG": True, "Trigger": False}
 
 # TODO: separate process each single file and combine all results to enable parallel processing.
 
@@ -322,6 +324,9 @@ def check_existing_file(file_name):
 
 def update_trigger_stats(stats_total: Dict, stats: Dict) -> Dict:
 
+    if not stats:
+        return {}
+
     stats_total["Total_Game_Rounds"] += stats["Total_Game_Rounds"]
     stats_total["Hit_Count"] += stats["Hit_Count"]
     stats_total["Hit_Count_BG"] += stats["Hit_Count_BG"]
@@ -335,6 +340,9 @@ def update_trigger_stats(stats_total: Dict, stats: Dict) -> Dict:
 
 
 def update_item_stats(stats_total, stats):
+
+    if not stats:
+        return {}
 
     stats_total["Total_Count"] += stats["Total_Count"]
     stats_total["Zero_Count"] += stats["Zero_Count"]
@@ -453,13 +461,24 @@ def get_game_stats(files, output_path):
 
         logger.info(f"process file: {f}")
         basename = Path(f).stem
-        trigger_stats_file_f = stats_file.replace(".json", f"/{basename}.json")
-        trigger_stats_file_bg_f = stats_file_bg.replace(".json", f"/{basename}.json")
-        trigger_stats_file_fg_f = stats_file_fg.replace(".json", f"/{basename}.json")
 
-        stats_f = check_existing_file(trigger_stats_file_f)
-        stats_f_bg = check_existing_file(trigger_stats_file_bg_f)
-        stats_f_fg = check_existing_file(trigger_stats_file_fg_f)
+        if GET_STATS["Trigger"]:
+            trigger_stats_file_f = stats_file.replace(".json", f"/{basename}.json")
+            stats_f = check_existing_file(trigger_stats_file_f)
+        else:
+            stats_f = {}
+
+        if GET_STATS["BG"]:
+            trigger_stats_file_bg_f = stats_file_bg.replace(".json", f"/{basename}.json")
+            stats_f_bg = check_existing_file(trigger_stats_file_bg_f)
+        else:
+            stats_f_bg = {}
+
+        if GET_STATS["FG"]:
+            trigger_stats_file_fg_f = stats_file_fg.replace(".json", f"/{basename}.json")
+            stats_f_fg = check_existing_file(trigger_stats_file_fg_f)
+        else:
+            stats_f_fg = {}
 
         if stats_f is None or stats_f_bg is None or stats_f_fg is None:
             data = read_files(
@@ -496,16 +515,19 @@ def get_game_stats(files, output_path):
         update_item_stats(stats_bg, stats_f_bg)
         update_item_stats(stats_fg, stats_f_fg)
 
-    stats_trigger["Free_Trigger_Rounds"] = dict(sorted(stats_trigger["Free_Trigger_Rounds"].items()))
-    json.dump(stats_trigger, open(stats_file, "w"), indent=4, cls=NumpyEncoder)
+    if stats_trigger:
+        stats_trigger["Free_Trigger_Rounds"] = dict(sorted(stats_trigger["Free_Trigger_Rounds"].items()))
+        json.dump(stats_trigger, open(stats_file, "w"), indent=4, cls=NumpyEncoder)
 
-    stats_bg = remove_rare_payouts(stats_bg)
-    stats_bg["max_level"] = get_max_level(stats_bg)
-    json.dump(stats_bg, open(stats_file_bg, "w"), indent=4, cls=NumpyEncoder)
+    if stats_bg:
+        stats_bg = remove_rare_payouts(stats_bg)
+        stats_bg["max_level"] = get_max_level(stats_bg)
+        json.dump(stats_bg, open(stats_file_bg, "w"), indent=4, cls=NumpyEncoder)
 
-    stats_fg = remove_rare_payouts(stats_fg)
-    stats_fg["max_level"] = get_max_level(stats_fg)
-    json.dump(stats_fg, open(stats_file_fg, "w"), indent=4, cls=NumpyEncoder)
+    if stats_fg:
+        stats_fg = remove_rare_payouts(stats_fg)
+        stats_fg["max_level"] = get_max_level(stats_fg)
+        json.dump(stats_fg, open(stats_file_fg, "w"), indent=4, cls=NumpyEncoder)
 
     stats_trigger
 
