@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 REMOVE_RARE_PAYOUT_THRESHOLD = 0
-REMOVE_RARE_COMPOSITION_THRESHOLD = 0
+REMOVE_RARE_COMPOSITION_THRESHOLD = 0.001
 SUBSAMPLE_RATIO = 0.007
 MIN_SUBSAMPLE_COUNT = 100
 
@@ -164,7 +164,9 @@ def get_trigger_stats(data):
 
     stats["Hit_Count"] = get_hit_count(data)
     stats["Hit_Count_BG"] = get_hit_count(data, game_type="BG")
-    stats["Hit_Count_FG"] = get_hit_count(data, game_type="FG")
+    stats["Hit_Count_FG"] = get_hit_count(
+        data, game_type="FG", group_cols=["bet_num", "loginname", "free_elimination_num"]
+    )
 
     free_game_triggered = len(data.loc[data["game_type"] == "FG", ["loginname", "bet_num"]].drop_duplicates())
     stats["Free_Game_Triggered"] = free_game_triggered
@@ -219,7 +221,7 @@ def get_item_stats(data, game_type=None):
     game_rounds = len(data[group_cols].drop_duplicates())
     stats["Total_Count"] = game_rounds
 
-    stats["Zero_Count"] = game_rounds - get_hit_count(data)
+    stats["Zero_Count"] = game_rounds - get_hit_count(data, game_type=game_type, group_cols=group_cols)
     stats["Nonzero_Payouts"] = get_payout_stats(data, group_cols)
 
     logger.info(f"item stats for gametype {game_type}: {stats}")
