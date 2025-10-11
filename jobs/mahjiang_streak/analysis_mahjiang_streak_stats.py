@@ -29,11 +29,11 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 REMOVE_RARE_PAYOUT_THRESHOLD = 0
-REMOVE_RARE_COMPOSITION_THRESHOLD = 0.001
-SUBSAMPLE_RATIO = 0.007
+REMOVE_RARE_COMPOSITION_THRESHOLD = 0
+SUBSAMPLE_RATIO = 1
 MIN_SUBSAMPLE_COUNT = 100
 
-GET_STATS = {"BG": False, "FG": True, "Trigger": False}
+GET_STATS = {"BG": True, "FG": True, "Trigger": True}
 
 # TODO: separate process each single file and combine all results to enable parallel processing.
 
