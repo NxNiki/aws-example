@@ -7,7 +7,7 @@ from datetime import datetime
 import sagemaker
 from sagemaker.processing import ProcessingInput, ProcessingOutput, ScriptProcessor
 
-from bituslabs_ds.config import S3_BUCKET
+from bituslabs_ds.config import LOCAL_ROOT, S3_BUCKET
 
 # directories on sagemaker to hold data:
 input_dir = "/opt/ml/processing/input"
@@ -24,7 +24,7 @@ processor = ScriptProcessor(
     role=role,
     instance_type="ml.m5.12xlarge",
     instance_count=1,
-    base_job_name="mahjiang_streak_stats",
+    base_job_name="mahjiang-streak-stats",
     sagemaker_session=session,
 )
 
@@ -38,10 +38,11 @@ outputs = [
 ]
 
 processor.run(
-    code="analysis_mahjiang_streak_stats.py",
+    code=f"{LOCAL_ROOT}/jobs/mahjiang_streak/analysis_mahjiang_streak_stats.py",
     outputs=outputs,
     arguments=[
         "--output",
         output_dir,
     ],
+    wait=False,
 )

@@ -3,6 +3,7 @@ import json
 import logging
 import os
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -541,6 +542,7 @@ if __name__ == "__main__":
     parser.add_argument("--log_output", required=False, default=str(LOCAL_ROOT / "jobs/log"))
     args = parser.parse_args()
 
-    setup_logging(output_path=args.log_output, log_filename="analysis_mahjiang_streak_stats.log")
+    time_tag = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    setup_logging(output_path=args.log_output, log_filename=f"analysis_mahjiang_streak_stats_{time_tag}.log")
     files = list_s3_files(bucket="bituslabs-team-ai", prefix="processed_parquet", pattern=r".*/.*.parquet")
     stats = get_game_stats(files, output_path=args.output)
