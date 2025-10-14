@@ -43,6 +43,10 @@ processor.run(
     arguments=[
         "--output",
         output_dir,
+        "--max_workers",
+        "38",
+        "--executor_type",
+        "process",
     ],
     wait=False,
 )

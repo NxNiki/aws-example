@@ -2,14 +2,16 @@ import argparse
 import json
 import logging
 import os
+import random
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from bituslabs_ds.config import LOCAL_ROOT, setup_logging
+from bituslabs_ds.config import LOCAL_ROOT, get_cpu_cores, setup_logging
 from bituslabs_ds.s3_utils import list_s3_files, read_files
 
 
@@ -36,7 +38,7 @@ MIN_SUBSAMPLE_COUNT = 100
 
 GET_STATS = {"BG": True, "FG": True, "Trigger": True}
 
-# TODO: separate process each single file and combine all results to enable parallel processing.
+# Parallel processing implemented: each file is processed separately using ThreadPoolExecutor and results are combined.
 
 # issue: the total number of bet rounds is not consistent using different methods (elimination_num and (bet_num, loginname))
 #   the difference is small though.
@@ -427,20 +429,102 @@ def get_max_level(stats) -> int:
     return max_level
 
 
-def get_game_stats(files, output_path):
+def process_single_file(file_path: str, output_path: str) -> Tuple[str, Dict, Dict, Dict]:
+    """
+    Process a single file and return its statistics.
 
-    logger.info("get_trigger_stats start...")
+    Args:
+        file_path: Path to the file to process
+        output_path: Output directory path
+
+    Returns:
+        Tuple of (basename, trigger_stats, bg_stats, fg_stats)
+    """
+    basename = Path(file_path).stem
+
+    # Initialize stats dictionaries
+    stats_f = {}
+    stats_f_bg = {}
+    stats_f_fg = {}
+
+    # Check for existing files
+    if GET_STATS["Trigger"]:
+        trigger_stats_file_f = f"{output_path}/SS03_Trigger_Stats/{basename}.json"
+        stats_f = check_existing_file(trigger_stats_file_f)
+
+    if GET_STATS["BG"]:
+        bg_stats_file_f = f"{output_path}/SS03_BG_Items/{basename}.json"
+        stats_f_bg = check_existing_file(bg_stats_file_f)
+
+    if GET_STATS["FG"]:
+        fg_stats_file_f = f"{output_path}/SS03_FG_Items/{basename}.json"
+        stats_f_fg = check_existing_file(fg_stats_file_f)
+
+    # Process file if any stats are missing
+    if stats_f is None or stats_f_bg is None or stats_f_fg is None:
+        logger.info(f"Processing file: {file_path}")
+
+        data = read_files(
+            file_path,
+            columns=[
+                "loginname",
+                "bet_num",
+                "payout",
+                "account",
+                "game_type",
+                "elimination_num",
+                "free_elimination_num",
+            ],
+        )
+
+        # Apply data preprocessing
+        data = remove_first_and_last_n_bets(data)
+        data = sample_bet_rounds(data)
+        data = remove_bet_rounds_with_short_free_game(data)
+        data = add_base_account(data)
+
+        # Calculate missing stats
+        if stats_f is None and GET_STATS["Trigger"]:
+            stats_f = get_trigger_stats(data)
+            trigger_stats_file_f = f"{output_path}/SS03_Trigger_Stats/{basename}.json"
+            json.dump(stats_f, open(trigger_stats_file_f, "w"), indent=4, cls=NumpyEncoder)
+
+        if stats_f_bg is None and GET_STATS["BG"]:
+            stats_f_bg = get_item_stats(data, game_type="BG")
+            bg_stats_file_f = f"{output_path}/SS03_BG_Items/{basename}.json"
+            json.dump(stats_f_bg, open(bg_stats_file_f, "w"), indent=4, cls=NumpyEncoder)
+
+        if stats_f_fg is None and GET_STATS["FG"]:
+            stats_f_fg = get_item_stats(data, game_type="FG")
+            fg_stats_file_f = f"{output_path}/SS03_FG_Items/{basename}.json"
+            json.dump(stats_f_fg, open(fg_stats_file_f, "w"), indent=4, cls=NumpyEncoder)
+
+    return basename, stats_f, stats_f_bg, stats_f_fg
+
+
+def get_game_stats(files, output_path, max_workers=None, executor_type="thread"):
+    """
+    Process files in parallel and combine results.
+
+    Args:
+        files: List of file paths to process
+        output_path: Output directory path
+        max_workers: Maximum number of worker threads/processes (default: min(cpu_cores, len(files)))
+        executor_type: Type of executor to use - "thread" or "process"
+    """
+    # Create output directories
     os.makedirs(f"{output_path}/SS03_Trigger_Stats", exist_ok=True)
     os.makedirs(f"{output_path}/SS03_BG_Items", exist_ok=True)
     os.makedirs(f"{output_path}/SS03_FG_Items", exist_ok=True)
 
+    # Initialize aggregated stats
     stats_file = f"{output_path}/SS03_Trigger_Stats.json"
     stats_trigger = {
-        "Total_Game_Rounds": 0,  # total number of bet rounds without considering free game.
-        "Hit_Count": 0,  # the number of bet round with at least one payouts > 0
-        "Hit_Count_BG": 0,  # the number of bet round with at least one payouts > 0
-        "Hit_Count_FG": 0,  # the number of bet round with at least one payouts > 0
-        "Free_Game_Triggered": 0,  # number of bet rounds with free game triggered.
+        "Total_Game_Rounds": 0,
+        "Hit_Count": 0,
+        "Hit_Count_BG": 0,
+        "Hit_Count_FG": 0,
+        "Free_Game_Triggered": 0,
         "Free_Trigger_Rounds": defaultdict(int),
     }
 
@@ -460,79 +544,63 @@ def get_game_stats(files, output_path):
         "Nonzero_Payouts": [],
     }
 
-    for f in files:
+    # Set default max_workers if not specified
+    if max_workers is None:
+        num_cpus = get_cpu_cores()
+        max_workers = min(num_cpus, len(files))
 
-        logger.info(f"process file: {f}")
-        basename = Path(f).stem
+    # Choose executor type
+    executor_class = ThreadPoolExecutor if executor_type.lower() == "thread" else ProcessPoolExecutor
+    executor_name = "ThreadPoolExecutor" if executor_type.lower() == "thread" else "ProcessPoolExecutor"
 
-        if GET_STATS["Trigger"]:
-            trigger_stats_file_f = stats_file.replace(".json", f"/{basename}.json")
-            stats_f = check_existing_file(trigger_stats_file_f)
-        else:
-            stats_f = {}
+    logger.info(f"get_game_stats start with {executor_name} using {max_workers} workers...")
 
-        if GET_STATS["BG"]:
-            trigger_stats_file_bg_f = stats_file_bg.replace(".json", f"/{basename}.json")
-            stats_f_bg = check_existing_file(trigger_stats_file_bg_f)
-        else:
-            stats_f_bg = {}
+    # Process files in parallel
+    random.shuffle(files)
+    logger.info(f"Processing {len(files)} files with {max_workers} workers using {executor_name}...")
+    with executor_class(max_workers=max_workers) as executor:
+        # Submit all tasks
+        future_to_file = {
+            executor.submit(process_single_file, file_path, output_path): file_path for file_path in files
+        }
 
-        if GET_STATS["FG"]:
-            trigger_stats_file_fg_f = stats_file_fg.replace(".json", f"/{basename}.json")
-            stats_f_fg = check_existing_file(trigger_stats_file_fg_f)
-        else:
-            stats_f_fg = {}
+        # Collect results as they complete
+        for future in as_completed(future_to_file):
+            file_path = future_to_file[future]
+            try:
+                basename, stats_f, stats_f_bg, stats_f_fg = future.result()
+                logger.info(f"Completed processing: {basename}")
 
-        if stats_f is None or stats_f_bg is None or stats_f_fg is None:
-            data = read_files(
-                f,
-                columns=[
-                    "loginname",
-                    "bet_num",
-                    "payout",
-                    "account",
-                    "game_type",
-                    "elimination_num",
-                    "free_elimination_num",
-                ],
-            )
-            # remove the first and last bet which could be incompelete.
-            data = remove_first_and_last_n_bets(data)
-            data = sample_bet_rounds(data)
-            data = remove_bet_rounds_with_short_free_game(data)
-            data = add_base_account(data)
+                # Combine results
+                update_trigger_stats(stats_trigger, stats_f)
+                update_item_stats(stats_bg, stats_f_bg)
+                update_item_stats(stats_fg, stats_f_fg)
 
-            if stats_f is None:
-                stats_f = get_trigger_stats(data)
-                json.dump(stats_f, open(trigger_stats_file_f, "w"), indent=4, cls=NumpyEncoder)
+            except Exception as exc:
+                logger.error(f"File {file_path} generated an exception: {exc}")
 
-            if stats_f_bg is None:
-                stats_f_bg = get_item_stats(data, game_type="BG")
-                json.dump(stats_f_bg, open(trigger_stats_file_bg_f, "w"), indent=4, cls=NumpyEncoder)
+    logger.info("All files processed. Writing final aggregated results...")
 
-            if stats_f_fg is None:
-                stats_f_fg = get_item_stats(data, game_type="FG")
-                json.dump(stats_f_fg, open(trigger_stats_file_fg_f, "w"), indent=4, cls=NumpyEncoder)
-
-        update_trigger_stats(stats_trigger, stats_f)
-        update_item_stats(stats_bg, stats_f_bg)
-        update_item_stats(stats_fg, stats_f_fg)
-
+    # Write final aggregated results
     if stats_trigger:
         stats_trigger["Free_Trigger_Rounds"] = dict(sorted(stats_trigger["Free_Trigger_Rounds"].items()))
         json.dump(stats_trigger, open(stats_file, "w"), indent=4, cls=NumpyEncoder)
+        logger.info(f"Written trigger stats to {stats_file}")
 
     if stats_bg:
         stats_bg = remove_rare_payouts(stats_bg)
         stats_bg["max_level"] = get_max_level(stats_bg)
         json.dump(stats_bg, open(stats_file_bg, "w"), indent=4, cls=NumpyEncoder)
+        logger.info(f"Written BG stats to {stats_file_bg}")
 
     if stats_fg:
         stats_fg = remove_rare_payouts(stats_fg)
         stats_fg["max_level"] = get_max_level(stats_fg)
         json.dump(stats_fg, open(stats_file_fg, "w"), indent=4, cls=NumpyEncoder)
+        logger.info(f"Written FG stats to {stats_file_fg}")
 
-    stats_trigger
+    logger.info("get_game_stats completed successfully!")
+    return stats_trigger
 
 
 if __name__ == "__main__":
@@ -540,9 +608,19 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=False, default=str(LOCAL_ROOT / "jobs/output_mahjiang_streak"))
     parser.add_argument("--log_output", required=False, default=str(LOCAL_ROOT / "jobs/log"))
+    parser.add_argument("--max_workers", required=False, default=1)
+    parser.add_argument(
+        "--executor_type",
+        required=False,
+        default="thread",
+        choices=["thread", "process"],
+        help="Type of executor to use: 'thread' for ThreadPoolExecutor or 'process' for ProcessPoolExecutor",
+    )
     args = parser.parse_args()
 
     time_tag = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     setup_logging(output_path=args.log_output, log_filename=f"analysis_mahjiang_streak_stats_{time_tag}.log")
     files = list_s3_files(bucket="bituslabs-team-ai", prefix="processed_parquet", pattern=r".*/.*.parquet")
-    stats = get_game_stats(files, output_path=args.output)
+    stats = get_game_stats(
+        files, output_path=args.output, max_workers=int(args.max_workers), executor_type=args.executor_type
+    )
