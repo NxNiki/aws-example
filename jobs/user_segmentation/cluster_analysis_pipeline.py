@@ -5,6 +5,7 @@ for streamlined clustering analysis with automatic power transformation and scal
 """
 
 import argparse
+import gc
 import logging
 import os
 import time
@@ -49,6 +50,9 @@ def main(config_path: str):
     viz.display()
     viz.save(str(cluster_pipeline.output_path / "figures" / f"{cluster_pipeline.project_name}_correlation.png"))
 
+    del viz
+    gc.collect()
+
     # Feature selection
     _, kept_features = cluster_pipeline.smart_feature_selection(data_transformed[features])
     _, kept_features = cluster_pipeline.feature_selection_by_variance(data_transformed[kept_features])
@@ -56,6 +60,10 @@ def main(config_path: str):
     # Select features for clustering
     data_select = data_transformed[kept_features]
     important_features = cluster_pipeline.feature_selection_by_pca(data_select)
+
+    del data_select
+    del data_transformed
+    gc.collect()
 
     # feed original data (without power transform which is packed in the clustering pipeline)
     if cluster_pipeline.run_elbow_method:
@@ -69,6 +77,9 @@ def main(config_path: str):
             data=data,
             features_ordered_by_importance=important_features,
         )
+
+    del data
+    gc.collect()
 
     if cluster_pipeline.run_fit_cluster_model:
         pass

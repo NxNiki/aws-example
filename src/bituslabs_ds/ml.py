@@ -2,6 +2,7 @@
 Machine Learning utilities and clustering analysis classes.
 """
 
+import gc
 import logging
 import os
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
@@ -473,8 +474,8 @@ class ClusterAnalysisPipeline:
         # Save cluster labels:
         data_with_cluster_label = data[self.key_features].copy()
         data_with_cluster_label["cluster_label"] = cluster_label
-        data_with_cluster_label.to_csv(
-            self.output_path / "output" / f"cluster_label_top_features_{self.n_top_features}.csv", index=False
+        data_with_cluster_label.to_parquet(
+            self.output_path / "output" / f"cluster_label_top_features_{self.n_top_features}.parquet", index=False
         )
 
         # Save pipeline model
@@ -622,8 +623,8 @@ class ClusterAnalysisPipeline:
 
     def attach_cluster_label(self):
         attach_data = self.load_data(data_label="attach_data", reload=False)
-        data_with_cluster_label = pd.read_csv(
-            self.output_path / "output" / f"cluster_label_top_features_{self.n_top_features}.csv"
+        data_with_cluster_label = pd.read_parquet(
+            self.output_path / "output" / f"cluster_label_top_features_{self.n_top_features}.parquet"
         )
         data_merged = attach_data.merge(
             data_with_cluster_label, on=self._config["data_loader"]["merge_on"], how="inner"
@@ -631,14 +632,19 @@ class ClusterAnalysisPipeline:
 
         cluster_column = "cluster_label"
         feature_columns = attach_data.select_dtypes(include="number").columns.to_list()
-        for cluster, group_df in data_merged.groupby(cluster_column):
+        unique_clusters = data_merged[cluster_column].unique()
+        for cluster in unique_clusters:
             file_name = f"enriched_data_cluster_{cluster}.parquet"
-            group_df.drop(columns=[cluster_column]).to_parquet(self.output_path / "output" / file_name, index=False)
+            cluster_data = data_merged[data_merged[cluster_column] == cluster]
+            cluster_data.drop(columns=[cluster_column]).to_parquet(self.output_path / "output" / file_name, index=False)
 
             if feature_columns is not None:
-                stats = group_df[feature_columns].describe().T
+                stats = cluster_data[feature_columns].describe().T
                 logger.info(f"Cluster {cluster} feature statistics:")
                 logger.info(stats[["mean", "std", "min", "25%", "50%", "75%", "max"]])
+
+            del cluster_data
+            gc.collect()
 
 
 def calculate_inertia(x: np.ndarray, y: np.ndarray) -> float:

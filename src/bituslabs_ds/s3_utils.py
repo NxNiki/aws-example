@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import io
 import logging
 import os
@@ -305,6 +306,9 @@ def read_files(
         data = data.reset_index(level=0).rename(columns={"level_0": "source_file"})
     else:
         data = pd.concat(dfs, ignore_index=True)
+
+    del dfs
+    gc.collect()
 
     if local_cache_path is not None:
         os.makedirs(os.path.dirname(local_cache_path), exist_ok=True)
