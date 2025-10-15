@@ -310,22 +310,43 @@ def read_files(
                 except Exception as e:
                     logger.error(f"Failed to read {file}: {e}")
 
-    if add_file_source:
-        # the order of dfs may not be consistent with files!!!
-        data = pd.concat(dfs, keys=[os.path.basename(f) for f in files])
-        data = data.reset_index(level=0).rename(columns={"level_0": "source_file"})
-    else:
-        data = pd.concat(dfs, ignore_index=True)
-
-    del dfs
-    gc.collect()
-
+    # Write incrementally to cache to avoid memory issues with large concatenation
     if local_cache_path is not None:
+        logger.info(f"save data to local cache incrementally: {local_cache_path}")
         os.makedirs(os.path.dirname(local_cache_path), exist_ok=True)
+
+        for i in range(len(dfs)):
+            first_write = i == 0
+            mode = "a" if not first_write else "w"
+            df = dfs[i]
+            if add_file_source:
+                df["source_file"] = os.path.basename(files[i])
+
+            if local_cache_path.endswith(".csv"):
+                df.to_csv(local_cache_path, index=False, mode=mode, header=first_write)
+            elif local_cache_path.endswith(".parquet"):
+                df.to_parquet(local_cache_path, index=False, mode=mode)
+            logger.info(f"Written {len(df)} rows to cache (file {i+1}/{len(dfs)})")
+            dfs[i] = None
+            gc.collect()
+
+        # Read the final cached file and return
         if local_cache_path.endswith(".csv"):
-            data.to_csv(local_cache_path, index=False)
+            data = pd.read_csv(local_cache_path, usecols=columns, dtype=data_types)
         elif local_cache_path.endswith(".parquet"):
-            data.to_parquet(local_cache_path, index=False)
+            data = pd.read_parquet(local_cache_path, columns=columns)
+            if data_types:
+                data = data.astype(data_types)
+    else:
+        if add_file_source:
+            # the order of dfs may not be consistent with files!!!
+            data = pd.concat(dfs, keys=[os.path.basename(f) for f in files])
+            data = data.reset_index(level=0).rename(columns={"level_0": "source_file"})
+        else:
+            data = pd.concat(dfs, ignore_index=True)
+
+        del dfs
+        gc.collect()
 
     logger.info("first 5 rows of dataframe: \n%s", data.head(5).to_markdown())
     return data

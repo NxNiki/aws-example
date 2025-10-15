@@ -168,16 +168,19 @@ class ClusterAnalysisPipeline:
             output_file = self._config["data_loader"]["cluster_data"]["local_cache"]
             columns = self.key_features + self.normal_features + self.skewed_features
             row_filters = self._config["data_loader"]["cluster_data"]["row_filters"]
+            data_types = {}
         elif data_label == "attach_data":
             files = self._attach_data_files
             output_file = self._config["data_loader"]["attach_data"]["local_cache"]
             columns = self._config["data_loader"]["attach_data"]["columns_to_read"]
             row_filters = self._config["data_loader"]["attach_data"]["row_filters"]
+            data_types = self._config["data_loader"]["attach_data"].get("data_types", {})
 
         data = read_files(
             files,
             local_cache_path=f"{self.work_dir}/{output_file}",
             columns=columns,
+            data_types=data_types,
             reload=reload,
         )
 

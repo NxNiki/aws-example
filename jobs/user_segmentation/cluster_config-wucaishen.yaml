@@ -40,6 +40,21 @@ data_loader:
       - "lose_streak"
       - "result_clean"
       - "group_id"
+
+    data_types:
+      account: "float32"
+      cus_account: "float32"
+      currency: "float32"
+      slottype: "int8"
+      basepoint: "float32"
+      delta_t: "float32"
+      delta_bet: "float32"
+      delta_profit: "float32"
+      delta_payout: "float32"
+      streak: "int16"
+      win_streak: "int16"
+      lose_streak: "int16"
+
     
   merge_on: "group_id"  # Column used to attach cluster index to attach_data.
 
