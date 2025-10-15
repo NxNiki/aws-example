@@ -25,20 +25,7 @@ logger = logging.getLogger(__name__)
 # All in a single, reusable pipeline method for elbow method analysis
 
 
-def main(config_path: str):
-    start_time = time.time()
-
-    project_name = os.path.basename(config_path).replace(".yaml", "")
-    time_tag = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    setup_logging(LOCAL_ROOT / "jobs/log", f"cluster_analysis_{project_name}_{time_tag}.log")
-
-    cluster_pipeline = ClusterAnalysisPipeline(config_path)
-    data = cluster_pipeline.load_data(data_label="cluster_data", reload=False)
-
-    # Data profiling and cleaning
-    DataProfiler.count_df_missing_columns(data)
-    data.fillna(0, inplace=True)
-
+def feature_selection(data, cluster_pipeline):
     data_transformed = cluster_pipeline.preprocess_data(data)
 
     # Create correlation heatmap
@@ -54,6 +41,7 @@ def main(config_path: str):
     gc.collect()
 
     # Feature selection
+    features = cluster_pipeline.normal_features + cluster_pipeline.skewed_features
     _, kept_features = cluster_pipeline.smart_feature_selection(data_transformed[features])
     _, kept_features = cluster_pipeline.feature_selection_by_variance(data_transformed[kept_features])
 
@@ -61,9 +49,24 @@ def main(config_path: str):
     data_select = data_transformed[kept_features]
     important_features = cluster_pipeline.feature_selection_by_pca(data_select)
 
-    del data_select
-    del data_transformed
-    gc.collect()
+    return important_features
+
+
+def main(config_path: str):
+    start_time = time.time()
+
+    project_name = os.path.basename(config_path).replace(".yaml", "")
+    time_tag = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    setup_logging(LOCAL_ROOT / "jobs/log", f"cluster_analysis_{project_name}_{time_tag}.log")
+
+    cluster_pipeline = ClusterAnalysisPipeline(config_path)
+    data = cluster_pipeline.load_data(data_label="cluster_data", reload=False)
+
+    # Data profiling and cleaning
+    DataProfiler.count_df_missing_columns(data)
+    data.fillna(0, inplace=True)
+
+    important_features = feature_selection(data, cluster_pipeline)
 
     # feed original data (without power transform which is packed in the clustering pipeline)
     if cluster_pipeline.run_elbow_method:
