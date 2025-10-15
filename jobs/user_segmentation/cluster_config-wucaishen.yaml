@@ -1,7 +1,7 @@
 # Wucaishen Cluster Analysis Configuration
 # This file contains configuration specific to the wucaishen clustering project
 
-project_name: "wucaishen_2024_test_parallel"  # Current analysis environment
+project_name: "wucaishen_2024"  # Current analysis environment
 work_dir: "wucaishen"  # Base working directory, where local cache of the input data will be saved.
 
 data_loader:
@@ -12,7 +12,7 @@ data_loader:
     row_filters:  # General row filtering (null to disable filtering)
       currency: "CNY"  # Filter to specific currency
     outlier_threshold: 3  # z score to filter outliers
-    local_cache: "wucaishen_grouped_data_2024.csv"
+    local_cache: "wucaishen_grouped_data_2024.parquet"
 
   attach_data:  # data to attach cluster index.
     bucket: "bituslabs-team-ai"  # S3 bucket for input data
@@ -20,7 +20,7 @@ data_loader:
     pattern: 'wucaishen_enriched_output_24\d{2}/part.*\.csv$'  # Pattern for grouped data files
     row_filters:  # General row filtering (null to disable filtering)
       currency: "CNY"  # Filter to specific currency
-    local_cache: "wucaishen_enriched_data_2024.csv"
+    local_cache: "wucaishen_enriched_data_2024.parquet"
 
     columns_to_read:  # Columns to read from original data files
       - "loginname"
@@ -41,7 +41,6 @@ data_loader:
       - "result_clean"
       - "group_id"
     
-
   merge_on: "group_id"  # Column used to attach cluster index to attach_data.
 
 output:
@@ -159,10 +158,10 @@ cluster_analysis:
   random_state: 42  # Random state for reproducible results
   n_init: 10  # Number of initializations for K-means algorithm
   n_clusters: 3  # Default number of clusters for K-means
-  top_features: 25  # Default number of top features to use
+  top_features: 40  # Default number of top features to use
 
 pipeline:
-  elbow_method: true  # Run elbow method analysis
+  elbow_method: false  # Run elbow method analysis
   cluster_analysis: true  # Run cluster analysis with selected features and n_clusters  
   fit_cluster_model: false  # Apply trained model to new data
-  attach_cluster_label: false  # Attach cluster indices to original data
+  attach_cluster_label: true  # Attach cluster indices to original data

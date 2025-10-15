@@ -73,7 +73,7 @@ def read_to_pandas_df(bucket: str, key: str, columns: Optional[List[str]] = None
     _, ext = os.path.splitext(key.lower())
     if ext == ".csv":
         response = s3_client.get_object(Bucket=bucket, Key=key)
-        return pd.read_csv(response["Body"], usecols=columns)
+        return pd.read_csv(response["Body"], usecols=columns, low_memory=True)
     elif ext == ".parquet":
         s3 = fs.S3FileSystem(region=REGION)
         s3_path = f"{bucket}/{key}"

@@ -74,7 +74,7 @@ class ClusterAnalysisPipeline:
 
     def _setup_directories(self) -> None:
         """Create necessary directories for the project."""
-        self.work_dir = LOCAL_ROOT / "jobs" / "sagemaker" / self._config["work_dir"]
+        self.work_dir = LOCAL_ROOT / "jobs" / self._config["work_dir"]
         self.output_path = self.work_dir / self._config["project_name"]
 
         # Create directories
@@ -632,8 +632,8 @@ class ClusterAnalysisPipeline:
         cluster_column = "cluster_label"
         feature_columns = attach_data.select_dtypes(include="number").columns.to_list()
         for cluster, group_df in data_merged.groupby(cluster_column):
-            file_name = f"enriched_data_cluster_{cluster}.csv"
-            group_df.drop(columns=[cluster_column]).to_csv(self.output_path / "output" / file_name, index=False)
+            file_name = f"enriched_data_cluster_{cluster}.parquet"
+            group_df.drop(columns=[cluster_column]).to_parquet(self.output_path / "output" / file_name, index=False)
 
             if feature_columns is not None:
                 stats = group_df[feature_columns].describe().T

@@ -8,6 +8,7 @@ import argparse
 import logging
 import os
 import time
+from datetime import datetime
 
 from bituslabs_ds.config import LOCAL_ROOT, setup_logging
 from bituslabs_ds.eda import DataProfiler, DataVisualizer
@@ -27,7 +28,8 @@ def main(config_path: str):
     start_time = time.time()
 
     project_name = os.path.basename(config_path).replace(".yaml", "")
-    setup_logging(LOCAL_ROOT / "jobs/log", f"cluster_analysis_pipeline_{project_name}.log")
+    time_tag = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    setup_logging(LOCAL_ROOT / "jobs/log", f"cluster_analysis_{project_name}_{time_tag}.log")
 
     cluster_pipeline = ClusterAnalysisPipeline(config_path)
     data = cluster_pipeline.load_data(data_label="cluster_data", reload=False)

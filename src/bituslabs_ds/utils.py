@@ -192,6 +192,17 @@ def keep_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _transform_column(data_col):
+    if np.issubdtype(data_col.dtype, np.number):
+        data_col = data_col.astype(float).copy()
+        col_name = data_col.name
+        data_col = power_transform(data_col.to_frame())
+        return (col_name, data_col)
+    else:
+        logger.warning(f"skip power transform column: {col_name}.")
+        return None
+
+
 def df_power_transform(
     data: pd.DataFrame,
     col_names: Optional[Union[List[str], str]] = None,
@@ -216,26 +227,18 @@ def df_power_transform(
     if isinstance(col_names, str):
         col_names = [col_names]
 
-    def transform_column(col):
-        if col in data_transformed.columns and np.issubdtype(data_transformed[col].dtype, np.number):
-            col_data = data_transformed[col].astype(float).copy()
-            col_data = power_transform(col_data.to_frame())
-            logger.info(f"Column: {col} transformed to: {col}{suffix}.")
-            return (f"{col}{suffix}", col_data)
-        else:
-            logger.warning(f"Column: {col} not transformed.")
-            return None
-
     results = []
     with concurrent.futures.ProcessPoolExecutor(max_workers=DEFAULT_MAX_JOBS) as executor:
-        futures = {executor.submit(transform_column, col): col for col in col_names}
+        futures = {executor.submit(_transform_column, data_transformed[col]): col for col in col_names}
         for future in concurrent.futures.as_completed(futures):
             result = future.result()
             if result is not None:
                 results.append(result)
 
     for col_name, col_data in results:
-        data_transformed[col_name] = col_data
+        transform_col_name = f"{col_name}{suffix}"
+        logger.info(f"power transform column: {col_name}, to {transform_col_name}")
+        data_transformed[transform_col_name] = col_data
 
     return data_transformed
 

@@ -4,6 +4,7 @@ log
 **/*.log
 **/*.zip
 **/*.csv
+**/*.parquet
 **/*.pkl
 **/*.onnx
 **/features/
