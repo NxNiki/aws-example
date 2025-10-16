@@ -28,7 +28,14 @@ from sklearn.preprocessing import MinMaxScaler, PowerTransformer, RobustScaler, 
 
 from bituslabs_ds.config import DEFAULT_MAX_JOBS, LOCAL_ROOT
 from bituslabs_ds.s3_utils import list_s3_files, read_files
-from bituslabs_ds.utils import column_iterator, df_power_transform, keep_numeric_columns, remove_outliers, save_list
+from bituslabs_ds.utils import (
+    clip_outliers,
+    column_iterator,
+    df_power_transform,
+    keep_numeric_columns,
+    remove_outliers,
+    save_list,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +111,11 @@ class ClusterAnalysisPipeline:
         return val
 
     @property
+    def clip_threshold(self):
+        val = self._config["data_loader"]["cluster_data"].get("clip_threshold", np.nan)
+        return val
+
+    @property
     def run_elbow_method(self):
         return self._config["pipeline"]["elbow_method"]
 
@@ -136,9 +148,9 @@ class ClusterAnalysisPipeline:
         transform_columns = [f for f in data.columns if f in self.skewed_features]
         transform_columns_index = [i for i, f in enumerate(data.columns) if f in self.skewed_features]
 
-        logger.info(f"Adding power transformation for columns: {transform_columns}")
-        logger.info(f"Data columns: {data.columns.to_list()}")
-        logger.info(f"Transform column indices: {transform_columns_index}")
+        logger.info(
+            f"Power transform columns: \n{transform_columns}\nData columns: \n{data.columns.to_list()}\nTransform column indices: \n{transform_columns_index}"
+        )
 
         return transform_columns, transform_columns_index
 
@@ -168,7 +180,7 @@ class ClusterAnalysisPipeline:
             output_file = self._config["data_loader"]["cluster_data"]["local_cache"]
             columns = self.key_features + self.normal_features + self.skewed_features
             row_filters = self._config["data_loader"]["cluster_data"]["row_filters"]
-            data_types = {}
+            data_types = self._config["data_loader"]["cluster_data"].get("data_types", {})
         elif data_label == "attach_data":
             files = self._attach_data_files
             output_file = self._config["data_loader"]["attach_data"]["local_cache"]
@@ -199,10 +211,8 @@ class ClusterAnalysisPipeline:
                     logger.info(f"Applied filter on '{column_name}' == {allowed!r}; remaining {len(data)} rows")
 
         if data_label == "cluster_data":
-            numeric_columns = data.select_dtypes(include="number").columns.tolist()
-            _, mask = remove_outliers(data[numeric_columns], self.outlier_threshold)
-            logger.info(f"remove {sum(mask)} outliers out of {len(mask)} samples, ratio: {sum(mask)/len(mask):.3f}")
-            data = data.loc[mask]
+            data, _ = remove_outliers(data, self.outlier_threshold)
+            data = clip_outliers(data, self.clip_threshold[0], self.clip_threshold[1])
 
         return data
 
@@ -625,29 +635,32 @@ class ClusterAnalysisPipeline:
         return cluster_labels
 
     def attach_cluster_label(self):
-        attach_data = self.load_data(data_label="attach_data", reload=False)
-        data_with_cluster_label = pd.read_parquet(
-            self.output_path / "output" / f"cluster_label_top_features_{self.n_top_features}.parquet"
-        )
-        data_merged = attach_data.merge(
-            data_with_cluster_label, on=self._config["data_loader"]["merge_on"], how="inner"
-        )
 
         cluster_column = "cluster_label"
+        merge_column = self._config["data_loader"]["merge_on"]
+        data_with_cluster_label = pd.read_parquet(
+            self.output_path / "output" / f"cluster_label_top_features_{self.n_top_features}.parquet",
+            columns=[cluster_column, merge_column],
+        )
+
+        attach_data = self.load_data(data_label="attach_data", reload=False)
         feature_columns = attach_data.select_dtypes(include="number").columns.to_list()
-        unique_clusters = data_merged[cluster_column].unique()
+        unique_clusters = data_with_cluster_label[cluster_column].unique()
+
         for cluster in unique_clusters:
+            logger.info(f"save attach data for cluster: {cluster}")
             file_name = f"enriched_data_cluster_{cluster}.parquet"
-            cluster_data = data_merged[data_merged[cluster_column] == cluster]
-            cluster_data.drop(columns=[cluster_column]).to_parquet(self.output_path / "output" / file_name, index=False)
+            cluster_data = attach_data.merge(
+                data_with_cluster_label[data_with_cluster_label[cluster_column] == cluster],
+                on=merge_column,
+                how="inner",
+            )
+            cluster_data[attach_data.columns].to_parquet(self.output_path / "output" / file_name, index=False)
 
             if feature_columns is not None:
                 stats = cluster_data[feature_columns].describe().T
                 logger.info(f"Cluster {cluster} feature statistics:")
                 logger.info(stats[["mean", "std", "min", "25%", "50%", "75%", "max"]])
-
-            del cluster_data
-            gc.collect()
 
 
 def calculate_inertia(x: np.ndarray, y: np.ndarray) -> float:

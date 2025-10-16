@@ -9,6 +9,7 @@ from typing import Any, Iterable, Iterator, List, Literal, Optional, Tuple, Unio
 
 import numpy as np
 import pandas as pd
+from numpy.core.defchararray import upper
 from scipy.stats import zscore
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.preprocessing import power_transform
@@ -142,8 +143,15 @@ def remove_outliers(
     :param z_thresh:
     :return:
     """
+    mask = np.ones(data.shape[0], dtype=bool)
+
+    if z_thresh == 0:
+        logger.info("skip remove outlier with 0 threshold")
+        return data, mask
+
     if isinstance(data, pd.DataFrame):
-        arr = data.values
+        numeric_columns = data.select_dtypes(include="number").columns.tolist()
+        arr = data[numeric_columns].values
     else:
         arr = data
 
@@ -157,12 +165,13 @@ def remove_outliers(
     std[std == 0] = 1.0  # avoid division by zero
 
     # Compute boolean mask without creating z_scores array
-    mask = np.ones(arr.shape[0], dtype=bool)
     for col in range(arr.shape[1]):
         col_mask = np.abs(arr[:, col] - mean[col]) < z_thresh * std[col]
         mask &= col_mask  # remove rows where any column exceeds threshold
 
-    # Return filtered data
+    logger.info(
+        f"remove {len(mask)-sum(mask)} outliers out of {len(mask)} samples, ratio: {1 - sum(mask)/len(mask):.3f}"
+    )
     if isinstance(data, pd.DataFrame):
         return data.loc[mask], mask
     else:
@@ -170,6 +179,65 @@ def remove_outliers(
         if mask.shape[0] == arr.shape[0] and arr.shape[1] == 1:
             return arr[mask, 0], mask
         return arr[mask], mask
+
+
+def clip_outliers(
+    data: Union[pd.DataFrame, pd.Series, np.ndarray], lower_quantile: float = 0.01, upper_quantile: float = 0.99
+) -> Union[pd.DataFrame, pd.Series, np.ndarray]:
+    """
+    Clips the extreme positive and negative values in each column independently,
+    preserving the central mass of zeros.
+
+    Args:
+        data (pd.DataFrame, pd.Series, or np.ndarray): The input data (features).
+        lower_quantile (float): The quantile used for the negative tail clipping
+                                (e.g., 0.01 will clip the bottom 1% of negative values).
+        upper_quantile (float): The quantile used for the positive tail clipping
+                                (e.g., 0.99 will clip the top 1% of positive values).
+
+    Returns:
+        pd.DataFrame, pd.Series, or np.ndarray: The data with non-zero tails clipped,
+                                                matching the type and dimension of the input.
+    """
+
+    if (lower_quantile == 0 or lower_quantile == 1) and (upper_quantile == 0 or upper_quantile == 1):
+        logger.info(f"skip clip outliers")
+        return data
+
+    if isinstance(data, pd.Series):
+        df = data.to_frame()
+    elif isinstance(data, np.ndarray) and data.ndim == 1:
+        df = pd.DataFrame(data, columns=["col_0"])
+    elif isinstance(data, pd.DataFrame):
+        df = data.copy()
+    elif isinstance(data, np.ndarray):
+        df = pd.DataFrame(data)
+    else:
+        raise TypeError("Input must be a pandas DataFrame, Series, or a numpy array.")
+
+    numeric_columns = df.select_dtypes(include="number").columns.tolist()
+    for col_name in numeric_columns:
+        positives = df.loc[df[col_name] > 0, col_name]
+        negatives = df.loc[df[col_name] < 0, col_name]
+
+        if not positives.empty:
+            upper_bound = positives.quantile(upper_quantile)
+            df.loc[df[col_name] > upper_bound, col_name] = upper_bound
+            logger.info(f"apply clip to positive values in {col_name}, upper bound: {upper_bound}")
+
+        if not negatives.empty:
+            lower_bound = negatives.quantile(lower_quantile)
+            df.loc[df[col_name] < lower_bound, col_name] = lower_bound
+            logger.info(f"apply clip to negative values in {col_name}, lower bound: {lower_bound}")
+
+    if isinstance(data, pd.Series):
+        return df.iloc[:, 0]
+    elif isinstance(data, np.ndarray) and data.ndim == 1:
+        return df.iloc[:, 0].values
+    elif isinstance(data, pd.DataFrame):
+        return df
+    else:
+        return df.to_numpy()
 
 
 def keep_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:

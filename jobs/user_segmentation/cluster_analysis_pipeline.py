@@ -64,7 +64,7 @@ def main(config_path: str):
 
     # Data profiling and cleaning
     DataProfiler.count_df_missing_columns(data)
-    data.fillna(0, inplace=True)
+    data.dropna(how="any", inplace=True)
 
     important_features = feature_selection(data, cluster_pipeline)
 
@@ -91,7 +91,7 @@ def main(config_path: str):
         cluster_pipeline.attach_cluster_label()
 
     elapsed_time = time.time() - start_time
-    logger.info(f"Total running time of main: {elapsed_time:.2f} seconds")
+    logger.info(f"Total running time: {elapsed_time:.2f} seconds")
 
 
 if __name__ == "__main__":

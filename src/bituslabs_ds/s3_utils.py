@@ -278,15 +278,21 @@ def read_files(
     :return: Concatenated DataFrame of all read files.
     """
 
-    if local_cache_path is not None and os.path.exists(local_cache_path) and not reload:
-        logger.info(f"Found local cache at {local_cache_path}")
+    def read_local_cache(local_cache_path):
+        logger.info(f"read data {local_cache_path}.")
         if local_cache_path.endswith(".csv"):
             data = pd.read_csv(local_cache_path, usecols=columns, dtype=data_types)
         elif local_cache_path.endswith(".parquet"):
             data = pd.read_parquet(local_cache_path, columns=columns)
             if data_types:
                 data = data.astype(data_types)
+
+        logger.info("read data finished.")
         return data
+
+    if local_cache_path is not None and os.path.exists(local_cache_path) and not reload:
+        logger.info(f"Found local cache at {local_cache_path}")
+        return read_local_cache(local_cache_path)
 
     logger.info(f"read data with data types spec: {data_types}")
     read_func = partial(_read_file, columns=columns, data_types=data_types)
@@ -317,26 +323,21 @@ def read_files(
 
         for i in range(len(dfs)):
             first_write = i == 0
-            mode = "a" if not first_write else "w"
             df = dfs[i]
             if add_file_source:
                 df["source_file"] = os.path.basename(files[i])
 
             if local_cache_path.endswith(".csv"):
+                mode = "a" if not first_write else "w"
                 df.to_csv(local_cache_path, index=False, mode=mode, header=first_write)
             elif local_cache_path.endswith(".parquet"):
-                df.to_parquet(local_cache_path, index=False, mode=mode)
+                df.to_parquet(local_cache_path, index=False, engine="fastparquet", append=(not first_write))
             logger.info(f"Written {len(df)} rows to cache (file {i+1}/{len(dfs)})")
             dfs[i] = None
             gc.collect()
 
         # Read the final cached file and return
-        if local_cache_path.endswith(".csv"):
-            data = pd.read_csv(local_cache_path, usecols=columns, dtype=data_types)
-        elif local_cache_path.endswith(".parquet"):
-            data = pd.read_parquet(local_cache_path, columns=columns)
-            if data_types:
-                data = data.astype(data_types)
+        data = read_local_cache(local_cache_path)
     else:
         if add_file_source:
             # the order of dfs may not be consistent with files!!!
@@ -344,9 +345,6 @@ def read_files(
             data = data.reset_index(level=0).rename(columns={"level_0": "source_file"})
         else:
             data = pd.concat(dfs, ignore_index=True)
-
-        del dfs
-        gc.collect()
 
     logger.info("first 5 rows of dataframe: \n%s", data.head(5).to_markdown())
     return data
