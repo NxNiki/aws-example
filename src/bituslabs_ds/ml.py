@@ -212,7 +212,6 @@ class ClusterAnalysisPipeline:
 
         if data_label == "cluster_data":
             data, _ = remove_outliers(data, self.outlier_threshold)
-            data = clip_outliers(data, self.clip_threshold[0], self.clip_threshold[1])
 
         return data
 
@@ -373,6 +372,7 @@ class ClusterAnalysisPipeline:
         k_range = self._config["elbow_method"]["k_range"]
         n_features = self._config["elbow_method"]["top_features"]
         cluster_indices = {}
+        data = clip_outliers(data[features_ordered_by_importance], self.clip_threshold[0], self.clip_threshold[1])
 
         for df_x, n in column_iterator(data, features_ordered_by_importance, n_features):
             cluster_indices_by_k = {}
@@ -467,8 +467,10 @@ class ClusterAnalysisPipeline:
     ) -> Tuple[np.ndarray, Pipeline]:
         """Run K-means clustering analysis using pipeline approach."""
 
+        feature_columns = features_ordered_by_importance[: self.n_top_features]
+        clustering_data = clip_outliers(data[feature_columns], self.clip_threshold[0], self.clip_threshold[1])
+
         n_clusters = self._config["cluster_analysis"]["n_clusters"]
-        clustering_data = data[features_ordered_by_importance[: self.n_top_features]].copy()
 
         transform_columns, transform_columns_index = self.get_transform_columns(clustering_data)
         pipeline = self.create_clustering_pipeline(
@@ -477,8 +479,12 @@ class ClusterAnalysisPipeline:
         )
         cluster_label = pipeline.fit_predict(clustering_data)
 
+        unique_values, counts = np.unique(cluster_label, return_counts=True)
+        cluster_counts = dict(zip(unique_values, counts))
+        logger.info(f"Cluster sizes: {cluster_counts}")
+
         # Save cluster centers
-        centroids_df = pd.DataFrame(pipeline.named_steps["cluster"].cluster_centers_, columns=clustering_data.columns)
+        centroids_df = pd.DataFrame(pipeline.named_steps["cluster"].cluster_centers_, columns=feature_columns)
         logger.info(f"Cluster centers:\n{centroids_df}")
         centroids_df.to_csv(
             self.output_path / "models" / f"cluster_centers_standardized_{self.n_top_features}.csv", index=False
@@ -496,7 +502,16 @@ class ClusterAnalysisPipeline:
 
         x_transformed = pipeline[:-1].transform(clustering_data)
         self.plot_pca_2(x_transformed, cluster_label)
-        self.plot_radar_chart(pd.DataFrame(x_transformed, columns=clustering_data.columns), cluster_label)
+        self.plot_radar_chart(pd.DataFrame(x_transformed, columns=feature_columns), cluster_label)
+
+        scaler = self.get_scaler()
+        scaled_data = scaler.fit_transform(data[features_ordered_by_importance[: self.n_top_features]])
+        self.plot_pca_2(scaled_data, cluster_label, output_file_name="pca_cluster_raw_feature")
+        self.plot_radar_chart(
+            pd.DataFrame(scaled_data, columns=feature_columns),
+            cluster_label,
+            output_file_name="radar_clusters_raw_feature",
+        )
 
         return cluster_label, pipeline
 
@@ -515,11 +530,9 @@ class ClusterAnalysisPipeline:
         plt.savefig(self.output_path / "figures" / f"{output_file_name}.png")
         plt.close()
 
-        unique_values, counts = np.unique(cluster_label, return_counts=True)
-        cluster_counts = dict(zip(unique_values, counts))
-        logger.info(f"Cluster sizes: {cluster_counts}")
-
-    def plot_radar_chart(self, data: pd.DataFrame, data_cluster: np.ndarray) -> None:
+    def plot_radar_chart(
+        self, data: pd.DataFrame, data_cluster: np.ndarray, output_file_name: str = "Radar_Clusters"
+    ) -> None:
         """Plot radar chart of cluster feature means."""
         data = data.copy()
         data.loc[:, "_cluster"] = data_cluster
@@ -541,7 +554,7 @@ class ClusterAnalysisPipeline:
         plt.title("Cluster Feature Means (Standardized) - Radar Chart")
         plt.legend(loc="upper right")
         plt.subplots_adjust(left=0.1, bottom=0.1)
-        plt.savefig(self.output_path / "figures" / "Radar_Clusters.png")
+        plt.savefig(self.output_path / "figures" / f"{output_file_name}.png")
         plt.close()
 
     def save_cluster_data(
