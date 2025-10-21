@@ -1,8 +1,9 @@
 # Wucaishen Cluster Analysis Configuration
 # This file contains configuration specific to the wucaishen clustering project
 
-project_name: "wucaishen_2024_test_parallel"  # Current analysis environment
-work_dir: "wucaishen"  # Base working directory, where local cache of the input data will be saved.
+project_name: "wucaishen_2024"  # Current analysis environment
+work_dir: "output_wucaishen"  # Base working directory, where local cache of the input data will be saved.
+s3_prefix: "wucaishen_analysis_kmeans/cny_2025"
 
 data_loader:
   cluster_data:  # data to train cluster model.
@@ -11,8 +12,98 @@ data_loader:
     pattern: 'wucaishen_grouped_stat_output_24\d{2}/part.*\.csv$'  # Pattern for grouped data files
     row_filters:  # General row filtering (null to disable filtering)
       currency: "CNY"  # Filter to specific currency
-    outlier_threshold: 3  # z score to filter outliers
-    local_cache: "wucaishen_grouped_data_2024.csv"
+    outlier_threshold: 0  # z score to filter outliers, be cautious as this may remove rounds with large bet amount/payouts, set 0 to skip.
+    clip_threshold: [.25, .75]  # apply clip to negative and positive values separately to avoid 0 inflation issue.
+    local_cache: "wucaishen_grouped_data_2024.parquet"
+
+    data_types:
+      loginname: "category"
+      currency: "category"
+      rtp_mean: "float64"
+      bet_min: "float64"
+      bet_max: "float64"
+      bet_mean: "float64"
+      bet_p25: "float64"
+      bet_median: "float64"
+      bet_p75: "float64"
+      basepoint_min: "float64"
+      basepoint_max: "float64"
+      basepoint_mean: "float64"
+      basepoint_p25: "float64"
+      basepoint_median: "float64"
+      basepoint_p75: "float64"
+      payout_min: "float64"
+      payout_max: "float64"
+      payout_mean: "float64"
+      payout_p25: "float64"
+      payout_median: "float64"
+      payout_p75: "float64"
+      profit_min: "float64"
+      profit_max: "float64"
+      profit_mean: "float64"
+      profit_p25: "float64"
+      profit_median: "float64"
+      profit_p75: "float64"
+      delta_t_min: "float64"
+      delta_t_max: "float64"
+      delta_t_mean: "float64"
+      delta_t_p25: "float64"
+      delta_t_median: "float64"
+      delta_t_p75: "float64"
+      delta_bet_min: "float64"
+      delta_bet_max: "float64"
+      delta_bet_mean: "float64"
+      delta_bet_p25: "float64"
+      delta_bet_median: "float64"
+      delta_bet_p75: "float64"
+      delta_profit_min: "float64"
+      delta_profit_max: "float64"
+      delta_profit_mean: "float64"
+      delta_profit_p25: "float64"
+      delta_profit_median: "float64"
+      delta_profit_p75: "float64"
+      streak_min: "float64"
+      streak_max: "float64"
+      # streak_mean: "float64"
+      # streak_p25: "float64"
+      # streak_median: "float64"
+      # streak_p75: "float64"
+      win_streak_min: "float64"
+      win_streak_max: "float64"
+      # win_streak_mean: "float64"
+      # win_streak_p25: "float64"
+      # win_streak_median: "float64"
+      # win_streak_p75: "float64"
+      lose_streak_min: "float64"
+      lose_streak_max: "float64"
+      # lose_streak_mean: "float64"
+      # lose_streak_p25: "float64"
+      # lose_streak_median: "float64"
+      # lose_streak_p75: "float64"
+      deposit_min: "float64"
+      deposit_max: "float64"
+      deposit_mean: "float64"
+      deposit_p25: "float64"
+      deposit_median: "float64"
+      deposit_p75: "float64"
+      withdrawal_min: "float64"
+      withdrawal_max: "float64"
+      withdrawal_mean: "float64"
+      withdrawal_p25: "float64"
+      withdrawal_median: "float64"
+      withdrawal_p75: "float64"
+      slottype_2_count: "uint32"
+      payout_rate: "float64"
+      profit_rate: "float64"
+      profit_stddev: "float64"
+      account_stddev: "float64"
+      morning_count: "uint32"
+      afternoon_count: "uint32"
+      night_count: "uint32"
+      midnight_count: "uint32"
+      weekend_count: "uint32"
+      duration_seconds: "uint32"
+      avg_time_per_bet: "float64"
 
   attach_data:  # data to attach cluster index.
     bucket: "bituslabs-team-ai"  # S3 bucket for input data
@@ -20,7 +111,8 @@ data_loader:
     pattern: 'wucaishen_enriched_output_24\d{2}/part.*\.csv$'  # Pattern for grouped data files
     row_filters:  # General row filtering (null to disable filtering)
       currency: "CNY"  # Filter to specific currency
-    local_cache: "wucaishen_enriched_data_2024.csv"
+    session_length: 40  # stats in grouped data are calculated based on consecutive sessions, sample will be removed if session length not equal to this value for both cluster and attach data.
+    local_cache: "wucaishen_enriched_data_2024.parquet"
 
     columns_to_read:  # Columns to read from original data files
       - "loginname"
@@ -40,9 +132,23 @@ data_loader:
       - "lose_streak"
       - "result_clean"
       - "group_id"
-    
 
-  merge_on: "group_id"  # Column used to attach cluster index to attach_data.
+    data_types:
+      loginname: "category"
+      account: "float32"
+      cus_account: "float32"
+      currency: "category"
+      slottype: "uint8"
+      basepoint: "float32"
+      delta_t: "float32"
+      delta_bet: "float32"
+      delta_profit: "float32"
+      delta_payout: "float32"
+      streak: "uint16"
+      win_streak: "uint16"
+      lose_streak: "uint16"
+
+  merge_on: ["group_id", "merge_date"]  # Column used to attach cluster index to attach_data.
 
 output:
   bucket: "bituslabs-team-ai"  # S3 bucket for output data
@@ -55,6 +161,7 @@ features:
   key_features:  # Features used to identify rows for joining with other tables
     - "group_id"
     - "loginname"
+    - "group_num"
     - "start_time"
     - "currency"
   
@@ -104,22 +211,22 @@ features:
     - "delta_profit_p75"
     - "streak_min"
     - "streak_max"
-    - "streak_mean"
-    - "streak_p25"
-    - "streak_median"
-    - "streak_p75"
+    # - "streak_mean"
+    # - "streak_p25"
+    # - "streak_median"
+    # - "streak_p75"
     - "win_streak_min"
     - "win_streak_max"
-    - "win_streak_mean"
-    - "win_streak_p25"
-    - "win_streak_median"
-    - "win_streak_p75"
+    # - "win_streak_mean"
+    # - "win_streak_p25"
+    # - "win_streak_median"
+    # - "win_streak_p75"
     - "lose_streak_min"
     - "lose_streak_max"
-    - "lose_streak_mean"
-    - "lose_streak_p25"
-    - "lose_streak_median"
-    - "lose_streak_p75"
+    # - "lose_streak_mean"
+    # - "lose_streak_p25"
+    # - "lose_streak_median"
+    # - "lose_streak_p75"
     - "deposit_min"
     - "deposit_max"
     - "deposit_mean"
@@ -153,16 +260,17 @@ feature_selection:
 
 elbow_method:
   top_features: [15, 20, 25, 30, 35, 40, 45, 50]  # Range of k values to test
-  k_range: [2, 3, 4, 5, 6, 7]  # Range of k values to test
+  k_range: [2, 3, 4, 5, 6]  # Range of k values to test
 
 cluster_analysis:
   random_state: 42  # Random state for reproducible results
   n_init: 10  # Number of initializations for K-means algorithm
   n_clusters: 3  # Default number of clusters for K-means
-  top_features: 25  # Default number of top features to use
+  top_features: 40  # Default number of top features to use
 
 pipeline:
-  elbow_method: true  # Run elbow method analysis
+  elbow_method: false  # Run elbow method analysis
   cluster_analysis: true  # Run cluster analysis with selected features and n_clusters  
   fit_cluster_model: false  # Apply trained model to new data
-  attach_cluster_label: false  # Attach cluster indices to original data
+  attach_cluster_label: true  # Attach cluster indices to original data
+  upload_result_to_s3: false

@@ -8,6 +8,14 @@ ENV PIP_DEFAULT_TIMEOUT=300 \
     PIP_RETRIES=10 \
     PIP_NO_CACHE_DIR=off
 
+# enable script mode so we can submit custom training jobs:
+RUN apt-get update && apt-get install -y \
+gcc \
+g++ \
+make \
+libc-dev \
+&& rm -rf /var/lib/apt/lists/*
+
 # Install Poetry
 RUN pip install poetry==2.1.3
 
@@ -17,22 +25,14 @@ WORKDIR /opt/program
 # Copy poetry files
 COPY ./pyproject.toml poetry.lock README.md ./
 
+# Copy your actual source code
+COPY ./src ./src
+
 # Install dependencies first (excluding dev deps for SageMaker)
 RUN poetry config virtualenvs.create false && poetry install --only main --no-interaction
 
-# Copy your actual source code
-COPY ./src/bituslabs_ds ./bituslabs_ds
-
 # Optional: copy your processing script here too
 #COPY processing_script.py ./
-
-# enable script mode so we can submit custom training jobs:
-RUN apt-get update && apt-get install -y \
-gcc \
-g++ \
-make \
-libc-dev \
-&& rm -rf /var/lib/apt/lists/*
 
 RUN pip install sagemaker-training
 

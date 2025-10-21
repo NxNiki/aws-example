@@ -2,13 +2,16 @@ import argparse
 import json
 import logging
 import os
+import random
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from bituslabs_ds.config import LOCAL_ROOT, setup_logging
+from bituslabs_ds.config import LOCAL_ROOT, get_cpu_cores, setup_logging
 from bituslabs_ds.s3_utils import list_s3_files, read_files
 
 
@@ -28,14 +31,22 @@ class NumpyEncoder(json.JSONEncoder):
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
+REMOVE_RARE_PAYOUT_THRESHOLD = 0
+REMOVE_RARE_COMPOSITION_THRESHOLD = 0
+SUBSAMPLE_RATIO = 1
+MIN_SUBSAMPLE_COUNT = 100
 
-# TODO: separate process each single file and combine all results to enable parallel processing.
+GET_STATS = {"BG": True, "FG": True, "Trigger": True}
+
+# Parallel processing implemented: each file is processed separately using ThreadPoolExecutor and results are combined.
 
 # issue: the total number of bet rounds is not consistent using different methods (elimination_num and (bet_num, loginname))
 #   the difference is small though.
 
 # issue: For some bet, the base_account (the first bet amount in a bet round) is 0. This result in Inf when calculating
 #   the stardard payout (payout/base_account * 20)
+
+# issue: there are very rare cases where free game round is odd number.
 
 
 def remove_first_and_last_n_bets(data, n=1):
@@ -54,6 +65,24 @@ def remove_first_and_last_n_bets(data, n=1):
     data = data[data["bet_num"] < max_betnum_per_login].copy()
 
     return data
+
+
+def sample_bet_rounds(data, ratio=SUBSAMPLE_RATIO, min_count=MIN_SUBSAMPLE_COUNT):
+    """
+    Randomly sample bet rounds from the DataFrame.
+    All rows with the same ("loginname", "bet_num") will be either selected or not selected.
+    """
+    # Identify unique bet rounds by ("loginname", "bet_num")
+    bet_rounds = data[["loginname", "bet_num"]].drop_duplicates()
+    n_sample = max(int(len(bet_rounds) * ratio), 1)
+
+    if n_sample < min_count:
+        logger.info(f"n_sample is less than {min_count}, no sampling will be performed")
+        return data
+
+    sampled_rounds = bet_rounds.sample(n=n_sample, random_state=42)
+    sampled_data = data.merge(sampled_rounds, on=["loginname", "bet_num"], how="inner")
+    return sampled_data
 
 
 def remove_bet_rounds_with_short_free_game(data):
@@ -104,12 +133,12 @@ def add_base_account(data):
     return data[~mask]
 
 
-def get_hit_count(data, game_type=None):
+def get_hit_count(data, game_type=None, group_cols=["bet_num", "loginname"]):
 
     if game_type:
-        max_payout = data[data["game_type"] == game_type].groupby(["bet_num", "loginname"])["payout"].max()
+        max_payout = data[data["game_type"] == game_type].groupby(group_cols)["payout"].max()
     else:
-        max_payout = data.groupby(["bet_num", "loginname"])["payout"].max()
+        max_payout = data.groupby(group_cols)["payout"].max()
 
     return sum(max_payout > 0)
 
@@ -138,7 +167,9 @@ def get_trigger_stats(data):
 
     stats["Hit_Count"] = get_hit_count(data)
     stats["Hit_Count_BG"] = get_hit_count(data, game_type="BG")
-    stats["Hit_Count_FG"] = get_hit_count(data, game_type="FG")
+    stats["Hit_Count_FG"] = get_hit_count(
+        data, game_type="FG", group_cols=["bet_num", "loginname", "free_elimination_num"]
+    )
 
     free_game_triggered = len(data.loc[data["game_type"] == "FG", ["loginname", "bet_num"]].drop_duplicates())
     stats["Free_Game_Triggered"] = free_game_triggered
@@ -179,29 +210,34 @@ def get_item_stats(data, game_type=None):
     }
 
     # select sub-columns to save memory space:
-    columns = ["bet_num", "loginname", "payout", "base_account", "game_type"]
-    if game_type is not None:
+    if game_type == "BG":
+        columns = ["bet_num", "loginname", "payout", "base_account", "game_type"]
+        group_cols = ["bet_num", "loginname"]
+        data = data.loc[data["game_type"] == game_type, columns].copy()
+    elif game_type == "FG":
+        columns = ["bet_num", "loginname", "payout", "base_account", "game_type", "free_elimination_num"]
+        group_cols = ["bet_num", "loginname", "free_elimination_num"]
         data = data.loc[data["game_type"] == game_type, columns].copy()
     else:
         data = data[columns].copy()
 
-    game_rounds = len(data[["bet_num", "loginname"]].drop_duplicates())
+    game_rounds = len(data[group_cols].drop_duplicates())
     stats["Total_Count"] = game_rounds
 
-    stats["Zero_Count"] = game_rounds - get_hit_count(data)
-    stats["Nonzero_Payouts"] = get_payout_stats(data)
+    stats["Zero_Count"] = game_rounds - get_hit_count(data, game_type=game_type, group_cols=group_cols)
+    stats["Nonzero_Payouts"] = get_payout_stats(data, group_cols)
 
     logger.info(f"item stats for gametype {game_type}: {stats}")
 
     return stats
 
 
-def get_payout_stats(data):
+def get_payout_stats(data, group_cols=["bet_num", "loginname"]):
 
     payout_stats = []
     data = data[data["payout"] > 0].copy()
     data["standard_payout"] = (data["payout"] / data["base_account"] * 20).round().astype(int)
-    data["total_payouts"] = data.groupby(["bet_num", "loginname"])["standard_payout"].transform("sum")
+    data["total_payouts"] = data.groupby(group_cols)["standard_payout"].transform("sum")
     total_payouts = sorted(data["total_payouts"].unique())
 
     for total_payout in total_payouts:
@@ -211,8 +247,8 @@ def get_payout_stats(data):
         data_payout = data[data["total_payouts"] == total_payout]
         p_stats = {
             "payouts": total_payout,
-            "payouts_count": len(data_payout[["bet_num", "loginname"]].drop_duplicates()),
-            "Compositions": get_composition_stats(data_payout),
+            "payouts_count": len(data_payout[group_cols].drop_duplicates()),
+            "Compositions": get_composition_stats(data_payout, group_cols),
         }
 
         payout_stats.append(p_stats)
@@ -220,7 +256,7 @@ def get_payout_stats(data):
     return payout_stats
 
 
-def get_composition_stats(data):
+def get_composition_stats(data, group_cols=["bet_num", "loginname"]):
     """
     data with same total_payouts.
     """
@@ -236,16 +272,15 @@ def get_composition_stats(data):
 
     payouts_compositions = []
     data = data.copy()
-    data["level"] = data.groupby(["bet_num", "loginname"])["standard_payout"].transform("count")
+    data["level"] = data.groupby(group_cols)["standard_payout"].transform("count")
 
     for level in sorted(data["level"].unique()):
         logger.info(f"process payout level: {level}")
-        # data_level = data.loc[data["level"] == level, ["bet_num", "loginname", "standard_payout"]].copy()
-        data_level = data.loc[data["level"] == level, ["bet_num", "loginname", "standard_payout"]]
+        data_level = data.loc[data["level"] == level, group_cols + ["standard_payout"]]
 
         # For each unique (bet_num, loginname) in this level, get the sequence of standard_payouts (ordered as they appear)
         composition_counter = {}
-        grouped = data_level.groupby(["bet_num", "loginname"])
+        grouped = data_level.groupby(group_cols)
         prev_payout_sequence = []
         for _, group in grouped:
             payout_sequence = group["standard_payout"].tolist()  # keep as list, order matters
@@ -294,6 +329,9 @@ def check_existing_file(file_name):
 
 def update_trigger_stats(stats_total: Dict, stats: Dict) -> Dict:
 
+    if not stats:
+        return {}
+
     stats_total["Total_Game_Rounds"] += stats["Total_Game_Rounds"]
     stats_total["Hit_Count"] += stats["Hit_Count"]
     stats_total["Hit_Count_BG"] += stats["Hit_Count_BG"]
@@ -307,6 +345,9 @@ def update_trigger_stats(stats_total: Dict, stats: Dict) -> Dict:
 
 
 def update_item_stats(stats_total, stats):
+
+    if not stats:
+        return {}
 
     stats_total["Total_Count"] += stats["Total_Count"]
     stats_total["Zero_Count"] += stats["Zero_Count"]
@@ -343,9 +384,14 @@ def update_payout_composition(composition_total: List[Dict], composition: List[D
     return composition_total
 
 
-def remove_rare_payouts(stats: Dict, frequency_threshold: float = 0.001):
+def remove_rare_payouts(stats: Dict):
 
-    count_threshold = int(stats["Total_Count"] * frequency_threshold)
+    count_threshold = int(stats["Total_Count"] * REMOVE_RARE_PAYOUT_THRESHOLD)
+
+    if count_threshold == 0:
+        logger.info("count_threshold is 0, no rare payouts will be removed")
+        return stats
+
     selected_payouts = []
     for payout in stats["Nonzero_Payouts"]:
         if payout["payouts_count"] < count_threshold:
@@ -353,14 +399,16 @@ def remove_rare_payouts(stats: Dict, frequency_threshold: float = 0.001):
                 f"remove rare payout: {payout['payouts']}, count: {payout['payouts_count']}, threshold: {count_threshold}"
             )
         else:
-            payout = remove_rare_compositions(payout)
+            payout = remove_rare_compositions(payout, count_threshold=count_threshold)
             selected_payouts.append(payout)
     stats["Nonzero_Payouts"] = selected_payouts
     return stats
 
 
-def remove_rare_compositions(payout: Dict, frequency_threshold: float = 0.001):
-    count_threshold = int(payout["payouts_count"] * frequency_threshold)
+def remove_rare_compositions(payout: Dict, count_threshold: Optional[float] = None):
+    if count_threshold is None:
+        count_threshold = int(payout["payouts_count"] * REMOVE_RARE_COMPOSITION_THRESHOLD)
+
     selected_compositions = []
     for comp in payout["Compositions"]:
         if comp["composition_count"] < count_threshold:
@@ -373,20 +421,110 @@ def remove_rare_compositions(payout: Dict, frequency_threshold: float = 0.001):
     return payout
 
 
-def get_game_stats(files, output_path):
+def get_max_level(stats) -> int:
+    max_level = 0
+    for payout in stats["Nonzero_Payouts"]:
+        for comp in payout["Compositions"]:
+            max_level = max(max_level, comp["levels"])
+    return max_level
 
-    logger.info("get_trigger_stats start...")
+
+def process_single_file(file_path: str, output_path: str) -> Tuple[str, Dict, Dict, Dict]:
+    """
+    Process a single file and return its statistics.
+
+    Args:
+        file_path: Path to the file to process
+        output_path: Output directory path
+
+    Returns:
+        Tuple of (basename, trigger_stats, bg_stats, fg_stats)
+    """
+    basename = Path(file_path).stem
+
+    # Initialize stats dictionaries
+    stats_f = {}
+    stats_f_bg = {}
+    stats_f_fg = {}
+
+    # Check for existing files
+    if GET_STATS["Trigger"]:
+        trigger_stats_file_f = f"{output_path}/SS03_Trigger_Stats/{basename}.json"
+        stats_f = check_existing_file(trigger_stats_file_f)
+
+    if GET_STATS["BG"]:
+        bg_stats_file_f = f"{output_path}/SS03_BG_Items/{basename}.json"
+        stats_f_bg = check_existing_file(bg_stats_file_f)
+
+    if GET_STATS["FG"]:
+        fg_stats_file_f = f"{output_path}/SS03_FG_Items/{basename}.json"
+        stats_f_fg = check_existing_file(fg_stats_file_f)
+
+    # Process file if any stats are missing
+    if stats_f is None or stats_f_bg is None or stats_f_fg is None:
+        logger.info(f"Processing file: {file_path}")
+
+        data = read_files(
+            file_path,
+            columns=[
+                "loginname",
+                "bet_num",
+                "payout",
+                "account",
+                "game_type",
+                "elimination_num",
+                "free_elimination_num",
+            ],
+        )
+
+        # Apply data preprocessing
+        data = remove_first_and_last_n_bets(data)
+        data = sample_bet_rounds(data)
+        data = remove_bet_rounds_with_short_free_game(data)
+        data = add_base_account(data)
+
+        # Calculate missing stats
+        if stats_f is None and GET_STATS["Trigger"]:
+            stats_f = get_trigger_stats(data)
+            trigger_stats_file_f = f"{output_path}/SS03_Trigger_Stats/{basename}.json"
+            json.dump(stats_f, open(trigger_stats_file_f, "w"), indent=4, cls=NumpyEncoder)
+
+        if stats_f_bg is None and GET_STATS["BG"]:
+            stats_f_bg = get_item_stats(data, game_type="BG")
+            bg_stats_file_f = f"{output_path}/SS03_BG_Items/{basename}.json"
+            json.dump(stats_f_bg, open(bg_stats_file_f, "w"), indent=4, cls=NumpyEncoder)
+
+        if stats_f_fg is None and GET_STATS["FG"]:
+            stats_f_fg = get_item_stats(data, game_type="FG")
+            fg_stats_file_f = f"{output_path}/SS03_FG_Items/{basename}.json"
+            json.dump(stats_f_fg, open(fg_stats_file_f, "w"), indent=4, cls=NumpyEncoder)
+
+    return basename, stats_f, stats_f_bg, stats_f_fg
+
+
+def get_game_stats(files, output_path, max_workers=None, executor_type="thread"):
+    """
+    Process files in parallel and combine results.
+
+    Args:
+        files: List of file paths to process
+        output_path: Output directory path
+        max_workers: Maximum number of worker threads/processes (default: min(cpu_cores, len(files)))
+        executor_type: Type of executor to use - "thread" or "process"
+    """
+    # Create output directories
     os.makedirs(f"{output_path}/SS03_Trigger_Stats", exist_ok=True)
     os.makedirs(f"{output_path}/SS03_BG_Items", exist_ok=True)
     os.makedirs(f"{output_path}/SS03_FG_Items", exist_ok=True)
 
+    # Initialize aggregated stats
     stats_file = f"{output_path}/SS03_Trigger_Stats.json"
     stats_trigger = {
-        "Total_Game_Rounds": 0,  # total number of bet rounds without considering free game.
-        "Hit_Count": 0,  # the number of bet round with at least one payouts > 0
-        "Hit_Count_BG": 0,  # the number of bet round with at least one payouts > 0
-        "Hit_Count_FG": 0,  # the number of bet round with at least one payouts > 0
-        "Free_Game_Triggered": 0,  # number of bet rounds with free game triggered.
+        "Total_Game_Rounds": 0,
+        "Hit_Count": 0,
+        "Hit_Count_BG": 0,
+        "Hit_Count_FG": 0,
+        "Free_Game_Triggered": 0,
         "Free_Trigger_Rounds": defaultdict(int),
     }
 
@@ -394,6 +532,7 @@ def get_game_stats(files, output_path):
     stats_bg = {
         "Total_Count": 0,
         "Zero_Count": 0,
+        "max_level": 0,
         "Nonzero_Payouts": [],
     }
 
@@ -401,65 +540,67 @@ def get_game_stats(files, output_path):
     stats_fg = {
         "Total_Count": 0,
         "Zero_Count": 0,
+        "max_level": 0,
         "Nonzero_Payouts": [],
     }
 
-    for f in files:
+    # Set default max_workers if not specified
+    if max_workers is None:
+        num_cpus = get_cpu_cores()
+        max_workers = min(num_cpus, len(files))
 
-        logger.info(f"process file: {f}")
-        basename = Path(f).stem
-        trigger_stats_file_f = stats_file.replace(".json", f"/{basename}.json")
-        trigger_stats_file_bg_f = stats_file_bg.replace(".json", f"/{basename}.json")
-        trigger_stats_file_fg_f = stats_file_fg.replace(".json", f"/{basename}.json")
+    # Choose executor type
+    executor_class = ThreadPoolExecutor if executor_type.lower() == "thread" else ProcessPoolExecutor
+    executor_name = "ThreadPoolExecutor" if executor_type.lower() == "thread" else "ProcessPoolExecutor"
 
-        stats_f = check_existing_file(trigger_stats_file_f)
-        stats_f_bg = check_existing_file(trigger_stats_file_bg_f)
-        stats_f_fg = check_existing_file(trigger_stats_file_fg_f)
+    logger.info(f"get_game_stats start with {executor_name} using {max_workers} workers...")
 
-        if stats_f is None or stats_f_bg is None or stats_f_fg is None:
-            data = read_files(
-                f,
-                columns=[
-                    "loginname",
-                    "bet_num",
-                    "payout",
-                    "account",
-                    "game_type",
-                    "elimination_num",
-                    "free_elimination_num",
-                ],
-            )
-            # remove the first and last bet which could be incompelete.
-            data = remove_first_and_last_n_bets(data)
-            data = remove_bet_rounds_with_short_free_game(data)
-            data = add_base_account(data)
+    # Process files in parallel
+    random.shuffle(files)
+    logger.info(f"Processing {len(files)} files with {max_workers} workers using {executor_name}...")
+    with executor_class(max_workers=max_workers) as executor:
+        # Submit all tasks
+        future_to_file = {
+            executor.submit(process_single_file, file_path, output_path): file_path for file_path in files
+        }
 
-            if stats_f is None:
-                stats_f = get_trigger_stats(data)
-                json.dump(stats_f, open(trigger_stats_file_f, "w"), indent=4, cls=NumpyEncoder)
+        # Collect results as they complete
+        for future in as_completed(future_to_file):
+            file_path = future_to_file[future]
+            try:
+                basename, stats_f, stats_f_bg, stats_f_fg = future.result()
+                logger.info(f"Completed processing: {basename}")
 
-            if stats_f_bg is None:
-                stats_f_bg = get_item_stats(data, game_type="BG")
-                json.dump(stats_f_bg, open(trigger_stats_file_bg_f, "w"), indent=4, cls=NumpyEncoder)
+                # Combine results
+                update_trigger_stats(stats_trigger, stats_f)
+                update_item_stats(stats_bg, stats_f_bg)
+                update_item_stats(stats_fg, stats_f_fg)
 
-            if stats_f_fg is None:
-                stats_f_fg = get_item_stats(data, game_type="FG")
-                json.dump(stats_f_fg, open(trigger_stats_file_fg_f, "w"), indent=4, cls=NumpyEncoder)
+            except Exception as exc:
+                logger.error(f"File {file_path} generated an exception: {exc}")
 
-        update_trigger_stats(stats_trigger, stats_f)
-        update_item_stats(stats_bg, stats_f_bg)
-        update_item_stats(stats_fg, stats_f_fg)
+    logger.info("All files processed. Writing final aggregated results...")
 
-    stats_trigger["Free_Trigger_Rounds"] = dict(sorted(stats_trigger["Free_Trigger_Rounds"].items()))
-    json.dump(stats_trigger, open(stats_file, "w"), indent=4, cls=NumpyEncoder)
+    # Write final aggregated results
+    if stats_trigger:
+        stats_trigger["Free_Trigger_Rounds"] = dict(sorted(stats_trigger["Free_Trigger_Rounds"].items()))
+        json.dump(stats_trigger, open(stats_file, "w"), indent=4, cls=NumpyEncoder)
+        logger.info(f"Written trigger stats to {stats_file}")
 
-    stats_bg = remove_rare_payouts(stats_bg)
-    json.dump(stats_bg, open(stats_file_bg, "w"), indent=4, cls=NumpyEncoder)
+    if stats_bg:
+        stats_bg = remove_rare_payouts(stats_bg)
+        stats_bg["max_level"] = get_max_level(stats_bg)
+        json.dump(stats_bg, open(stats_file_bg, "w"), indent=4, cls=NumpyEncoder)
+        logger.info(f"Written BG stats to {stats_file_bg}")
 
-    stats_fg = remove_rare_payouts(stats_fg)
-    json.dump(stats_fg, open(stats_file_fg, "w"), indent=4, cls=NumpyEncoder)
+    if stats_fg:
+        stats_fg = remove_rare_payouts(stats_fg)
+        stats_fg["max_level"] = get_max_level(stats_fg)
+        json.dump(stats_fg, open(stats_file_fg, "w"), indent=4, cls=NumpyEncoder)
+        logger.info(f"Written FG stats to {stats_file_fg}")
 
-    stats_trigger
+    logger.info("get_game_stats completed successfully!")
+    return stats_trigger
 
 
 if __name__ == "__main__":
@@ -467,8 +608,19 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=False, default=str(LOCAL_ROOT / "jobs/output_mahjiang_streak"))
     parser.add_argument("--log_output", required=False, default=str(LOCAL_ROOT / "jobs/log"))
+    parser.add_argument("--max_workers", required=False, default=1)
+    parser.add_argument(
+        "--executor_type",
+        required=False,
+        default="thread",
+        choices=["thread", "process"],
+        help="Type of executor to use: 'thread' for ThreadPoolExecutor or 'process' for ProcessPoolExecutor",
+    )
     args = parser.parse_args()
 
-    setup_logging(output_path=args.log_output, log_filename="analysis_mahjiang_streak_stats.log")
+    time_tag = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    setup_logging(output_path=args.log_output, log_filename=f"analysis_mahjiang_streak_stats_{time_tag}.log")
     files = list_s3_files(bucket="bituslabs-team-ai", prefix="processed_parquet", pattern=r".*/.*.parquet")
-    stats = get_game_stats(files, output_path=args.output)
+    stats = get_game_stats(
+        files, output_path=args.output, max_workers=int(args.max_workers), executor_type=args.executor_type
+    )
