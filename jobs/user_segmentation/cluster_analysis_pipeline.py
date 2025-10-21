@@ -11,9 +11,10 @@ import os
 import time
 from datetime import datetime
 
-from bituslabs_ds.config import LOCAL_ROOT, setup_logging
+from bituslabs_ds.config import LOCAL_ROOT, S3_BUCKET, setup_logging
 from bituslabs_ds.eda import DataProfiler, DataVisualizer
 from bituslabs_ds.ml import ClusterAnalysisPipeline
+from bituslabs_ds.s3_utils import upload_folder_to_s3
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ def main(config_path: str):
     setup_logging(LOCAL_ROOT / "jobs/log", f"cluster_analysis_{project_name}_{time_tag}.log")
 
     cluster_pipeline = ClusterAnalysisPipeline(config_path)
-    data = cluster_pipeline.load_data(data_label="cluster_data", reload=False)
+    data = cluster_pipeline.load_cluster_data(reload=True)
 
     # Data profiling and cleaning
     DataProfiler.count_df_missing_columns(data)
@@ -88,7 +89,10 @@ def main(config_path: str):
         pass
 
     if cluster_pipeline.run_attach_cluster_label:
-        cluster_pipeline.attach_cluster_label()
+        cluster_pipeline.attach_cluster_label(reload=False)
+
+    if cluster_pipeline.run_upload_result_to_s3:
+        upload_folder_to_s3(cluster_pipeline.output_path, S3_BUCKET, f"{cluster_pipeline.s3_prefix}_{time_tag}")
 
     elapsed_time = time.time() - start_time
     logger.info(f"Total running time: {elapsed_time:.2f} seconds")
@@ -96,8 +100,8 @@ def main(config_path: str):
 
 if __name__ == "__main__":
 
-    # project = "deepdive"
-    project = "wucaishen"
+    project = "deepdive"
+    # project = "wucaishen"
 
     current_path = os.path.abspath(os.path.dirname(__file__))
     parser = argparse.ArgumentParser(description="cluster analysis pipeline")

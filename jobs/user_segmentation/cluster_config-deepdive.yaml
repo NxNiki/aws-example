@@ -1,8 +1,9 @@
 # Deepdive Cluster Analysis Configuration
 # This file contains configuration specific to the deepdive clustering project
 
-project_name: "deepdive_2025_month_1-8_test"  # Current analysis environment
-work_dir: "deepdive"  # Base working directory, where local cache of the input data will be saved.
+project_name: "deepdive_2025_month_1-8"  # Current analysis environment
+work_dir: "output_deepdive"  # Base working directory, where local cache of the input data will be saved.
+s3_prefix: "deepdive_analysis_kmeans/cny_8_month"
 
 data_loader:
   cluster_data:  # data to train cluster model.
@@ -11,8 +12,9 @@ data_loader:
     pattern: '250[1-8]/deepdive_grouped_stat_output/part.*\.csv$'  # Pattern for grouped data files
     row_filters:  # General row filtering (null to disable filtering)
       currency: "CNY"  # Filter to specific currency
-    outlier_threshold: 3  # z score to filter outliers
-    local_cache: "deepdive_grouped_data_2025.csv"
+    outlier_threshold: 0  # z score to filter outliers
+    clip_threshold: [.25, .75]
+    local_cache: "deepdive_grouped_data_2025.parquet"
 
   attach_data:  # data to attach cluster index.
     bucket: "hyber-slot"  # S3 bucket for input data
@@ -20,7 +22,8 @@ data_loader:
     pattern: '250[1-8]/deepdive_enriched_output/part.*\.csv$'  # Pattern for grouped data files
     row_filters:  # General row filtering (null to disable filtering)
       currency: "CNY"  # Filter to specific currency
-    local_cache: "deepdive_enriched_data_2025.csv"
+    session_length: 30  # stats in grouped data are calculated based on consecutive sessions, enriched data will be removed if session length not equal to this value.
+    local_cache: "deepdive_enriched_data_2025.parquet"
 
     columns_to_read:  # Columns to read from original data files
       - "loginname"
@@ -41,7 +44,7 @@ data_loader:
       - "result_clean"
       - "group_id"
 
-  merge_on: "group_id"  # Column used to attach cluster index to attach_data.
+  merge_on: ["group_id", "merge_date"]  # Column used to attach cluster index to attach_data.
 
 output:
   bucket: "bituslabs-team-ai"  # S3 bucket for output data
@@ -51,9 +54,10 @@ output:
     opset_version: 19  # ONNX opset version for model conversion
 
 features:
-  key_features:  # Features used to identify rows for joining with other tables
+  key_features:  
     - "group_id"
     - "loginname"
+    - "group_num"
     - "start_time"
     - "currency"
   
@@ -147,7 +151,7 @@ features:
     - "weekend_count"
     - "duration_seconds"
     - "avg_time_per_bet"
-    - "currency_label"
+    # - "currency_label"
         
 
 feature_selection:
@@ -165,10 +169,11 @@ cluster_analysis:
   top_features: 40  # Default number of top features to use
 
 pipeline:
-  elbow_method: true  # Run elbow method analysis
-  cluster_analysis: true  # Run cluster analysis with selected features and n_clusters  
+  elbow_method: false  # Run elbow method analysis
+  cluster_analysis: false  # Run cluster analysis with selected features and n_clusters  
   fit_cluster_model: false  # Apply trained model to new data
-  attach_cluster_label: true  # Attach cluster indices to original data
+  attach_cluster_label: false  # Attach cluster indices to original data
+  upload_result_to_s3: true  
 
 
 

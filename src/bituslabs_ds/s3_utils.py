@@ -62,7 +62,11 @@ def parse_s3_path(s3_path: str) -> Tuple[str, str]:
 
 
 def read_to_pandas_df(
-    bucket: str, key: str, columns: Optional[List[str]] = None, data_types: Optional[Dict] = None
+    bucket: str,
+    key: str,
+    columns: Optional[List[str]] = None,
+    row_filters: Optional[Dict] = None,
+    data_types: Optional[Dict] = None,
 ) -> pd.DataFrame:
     """
     Read a CSV or Parquet file from S3 and return it as a Pandas DataFrame.
@@ -86,6 +90,20 @@ def read_to_pandas_df(
                 data = data.astype(data_types)
     else:
         raise ValueError(f"Unsupported file extension for S3 object: {key}")
+
+    if row_filters:
+        for column_name, allowed in row_filters.items():
+            if column_name not in data.columns:
+                logger.warning(f"Row filter column '{column_name}' not in data; skipping this filter")
+                continue
+            if isinstance(allowed, (list, set, tuple)):
+                data = data[data[column_name].isin(list(allowed))]
+                logger.info(
+                    f"Applied filter on '{column_name}' with {len(list(allowed))} allowed values; remaining {len(data)} rows"
+                )
+            else:
+                data = data[data[column_name] == allowed]
+                logger.info(f"Applied filter on '{column_name}' == {allowed!r}; remaining {len(data)} rows")
 
     return data
 
@@ -249,16 +267,44 @@ def list_s3_files(bucket: str, prefix: str, pattern: Optional[str] = None) -> Li
     return matching_keys
 
 
-def _read_file(file: str, columns: Optional[List[str]], data_types: Optional[Dict]) -> pd.DataFrame:
+def _read_file(
+    file: str, columns: Optional[List[str]], row_filters: Optional[Dict], data_types: Optional[Dict]
+) -> pd.DataFrame:
     logger.info(f"Reading {file}")
     bucket, file = parse_s3_path(file)
-    return read_to_pandas_df(bucket, file, columns, data_types)
+    return read_to_pandas_df(bucket, file, columns, row_filters, data_types)
+
+
+def read_local_cache(local_cache_path, columns: Optional[List[str]] = None, data_types: Optional[Dict] = None):
+    logger.info(f"read data {local_cache_path}.")
+    if local_cache_path.endswith(".csv"):
+        data = pd.read_csv(local_cache_path, usecols=columns, dtype=data_types)
+    elif local_cache_path.endswith(".parquet"):
+        data = pd.read_parquet(local_cache_path, columns=columns)
+        if data_types:
+            data = data.astype(data_types)
+
+    logger.info("read data finished.")
+    return data
+
+
+def save_local_cache(data: pd.DataFrame, local_cache_path: str, append: bool = False):
+
+    if local_cache_path.endswith(".csv"):
+        mode = "a" if append else "w"
+        data.to_csv(local_cache_path, index=False, mode=mode, header=not append)
+    elif local_cache_path.endswith(".parquet"):
+        if append:
+            data.to_parquet(local_cache_path, index=False, engine="fastparquet", append=append)
+        else:
+            data.to_parquet(local_cache_path, index=False)
 
 
 def read_files(
     files: Union[List[str], str],
     local_cache_path: Optional[str] = None,
     columns: Optional[List[str]] = None,
+    row_filters: Optional[Dict] = None,
     data_types: Optional[Dict] = None,
     max_workers: int = DEFAULT_MAX_JOBS,
     parallel_mode: Literal["thread", "process", "none"] = "thread",
@@ -278,24 +324,12 @@ def read_files(
     :return: Concatenated DataFrame of all read files.
     """
 
-    def read_local_cache(local_cache_path):
-        logger.info(f"read data {local_cache_path}.")
-        if local_cache_path.endswith(".csv"):
-            data = pd.read_csv(local_cache_path, usecols=columns, dtype=data_types)
-        elif local_cache_path.endswith(".parquet"):
-            data = pd.read_parquet(local_cache_path, columns=columns)
-            if data_types:
-                data = data.astype(data_types)
-
-        logger.info("read data finished.")
-        return data
-
     if local_cache_path is not None and os.path.exists(local_cache_path) and not reload:
         logger.info(f"Found local cache at {local_cache_path}")
-        return read_local_cache(local_cache_path)
+        return read_local_cache(local_cache_path, columns, data_types)
 
     logger.info(f"read data with data types spec: {data_types}")
-    read_func = partial(_read_file, columns=columns, data_types=data_types)
+    read_func = partial(_read_file, columns=columns, row_filters=row_filters, data_types=data_types)
 
     if isinstance(files, str):
         files = [files]
@@ -316,22 +350,18 @@ def read_files(
                 except Exception as e:
                     logger.error(f"Failed to read {file}: {e}")
 
-    # Write incrementally to cache to avoid memory issues with large concatenation
     if local_cache_path is not None:
+        # Write incrementally to cache to avoid memory issues with large concatenation
         logger.info(f"save data to local cache incrementally: {local_cache_path}")
         os.makedirs(os.path.dirname(local_cache_path), exist_ok=True)
 
         for i in range(len(dfs)):
-            first_write = i == 0
+            append = i != 0
             df = dfs[i]
             if add_file_source:
                 df["source_file"] = os.path.basename(files[i])
 
-            if local_cache_path.endswith(".csv"):
-                mode = "a" if not first_write else "w"
-                df.to_csv(local_cache_path, index=False, mode=mode, header=first_write)
-            elif local_cache_path.endswith(".parquet"):
-                df.to_parquet(local_cache_path, index=False, engine="fastparquet", append=(not first_write))
+            save_local_cache(df, local_cache_path, append)
             logger.info(f"Written {len(df)} rows to cache (file {i+1}/{len(dfs)})")
             dfs[i] = None
             gc.collect()

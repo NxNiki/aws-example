@@ -27,7 +27,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import MinMaxScaler, PowerTransformer, RobustScaler, StandardScaler
 
 from bituslabs_ds.config import DEFAULT_MAX_JOBS, LOCAL_ROOT
-from bituslabs_ds.s3_utils import list_s3_files, read_files
+from bituslabs_ds.s3_utils import list_s3_files, read_files, read_local_cache, save_local_cache
 from bituslabs_ds.utils import (
     clip_outliers,
     column_iterator,
@@ -58,6 +58,7 @@ class ClusterAnalysisPipeline:
         self._config_file = config_file
         self._config = self._load_config(config_file)
         self.project_name = self._config["project_name"]
+        self.valid_sample_file = ""
         self._setup_directories()
 
         cluster_data_config = self._config["data_loader"]["cluster_data"]
@@ -94,6 +95,10 @@ class ClusterAnalysisPipeline:
         return self._config["features"]["key_features"]
 
     @property
+    def merge_features(self):
+        return self._config["data_loader"]["merge_on"]
+
+    @property
     def normal_features(self):
         return self._config["features"]["normal_features"]
 
@@ -104,6 +109,14 @@ class ClusterAnalysisPipeline:
     @property
     def n_top_features(self):
         return self._config["cluster_analysis"]["top_features"]
+
+    @property
+    def session_length(self):
+        return self._config["data_loader"]["attach_data"]["session_length"]
+
+    @property
+    def n_clusters(self):
+        return self._config["cluster_analysis"]["n_clusters"]
 
     @property
     def outlier_threshold(self):
@@ -125,11 +138,13 @@ class ClusterAnalysisPipeline:
 
     @property
     def pickle_model_name(self):
-        return f"kmeans_model_top{self.n_top_features}_features.pkl"
+        return f"kmeans_model_top{self.n_top_features}_features_k_{self.n_clusters}.pkl"
 
     @property
     def onnx_model_name(self):
-        return f"kmeans_model_top{self.n_top_features}_features_opset_{self.onnx_opset_version}.onnx"
+        return (
+            f"kmeans_model_top{self.n_top_features}_features_k_{self.n_clusters}_opset_{self.onnx_opset_version}.onnx"
+        )
 
     @property
     def run_fit_cluster_model(self):
@@ -140,8 +155,16 @@ class ClusterAnalysisPipeline:
         return self._config["pipeline"]["attach_cluster_label"]
 
     @property
+    def run_upload_result_to_s3(self):
+        return self._config["pipeline"]["upload_result_to_s3"]
+
+    @property
     def onnx_opset_version(self):
         return self._config.get("output", {}).get("onnx", {}).get("onnx_opset_version", 19)
+
+    @property
+    def s3_prefix(self):
+        return self._config.get("s3_prefix", "cluster_analysis_result")
 
     def get_transform_columns(self, data: pd.DataFrame) -> Tuple[List[str], List[int]]:
 
@@ -158,9 +181,64 @@ class ClusterAnalysisPipeline:
     def get_scaler():
         return StandardScaler()
 
-    def load_data(
+    def load_raw_data(self, data_label, reload: bool = False) -> pd.DataFrame:
+        """
+        load preprocessed data from s3.
+        """
+
+        if data_label == "attach_data":
+            files = self._attach_data_files
+            output_file = self._config["data_loader"]["attach_data"]["local_cache"]
+            columns = self._config["data_loader"]["attach_data"]["columns_to_read"]
+            row_filters = self._config["data_loader"]["attach_data"]["row_filters"]
+            data_types = self._config["data_loader"]["attach_data"].get("data_types", {})
+        elif data_label == "cluster_data":
+            files = self._cluster_data_files
+            output_file = self._config["data_loader"]["cluster_data"]["local_cache"]
+            columns = self.key_features + self.normal_features + self.skewed_features
+            row_filters = self._config["data_loader"]["cluster_data"]["row_filters"]
+            data_types = self._config["data_loader"]["cluster_data"].get("data_types", {})
+
+        if output_file.endswith(".csv"):
+            raw_output_file = output_file.replace(".csv", "_raw.csv")
+        elif output_file.endswith(".parquet"):
+            raw_output_file = output_file.replace(".parquet", "_raw.parquet")
+        else:
+            raise ValueError(f"unsupported output file format: {output_file}")
+
+        data = read_files(
+            files,
+            local_cache_path=f"{self.work_dir}/{raw_output_file}",
+            columns=columns,
+            row_filters=row_filters,
+            data_types=data_types,
+            reload=reload,
+        )
+
+        return data
+
+    def load_attach_data(self, reload: bool = False) -> pd.DataFrame:
+        """Read attach data (enriched data) and remove samples with short sessions.
+        Save the result and valid samples (used to select cluster data) to a parquet file.
+        """
+
+        output_file = self._config["data_loader"]["attach_data"]["local_cache"]
+        local_cache_path = f"{self.work_dir}/{output_file}"
+
+        if not reload and os.path.exists(local_cache_path):
+            logger.info(f"read local attach data: {local_cache_path}")
+            data = read_local_cache(local_cache_path)
+        else:
+            data = self.load_raw_data(data_label="attach_data")
+            data["merge_date"] = pd.to_datetime(data["billtime"]).dt.strftime("%Y_%m_%d")
+            group_counts = data[self.merge_features].value_counts(sort=False).reset_index(name="count")
+            valid_groups = group_counts[group_counts["count"] == self.session_length][self.merge_features]
+            data = data.merge(valid_groups, on=self.merge_features, how="inner")
+            save_local_cache(data, local_cache_path)
+        return data
+
+    def load_cluster_data(
         self,
-        data_label: str,
         reload: bool = False,
     ) -> pd.DataFrame:
         """Load data from S3 using configuration.
@@ -175,43 +253,24 @@ class ClusterAnalysisPipeline:
             Loaded and filtered DataFrame
         """
 
-        if data_label == "cluster_data":
-            files = self._cluster_data_files
-            output_file = self._config["data_loader"]["cluster_data"]["local_cache"]
-            columns = self.key_features + self.normal_features + self.skewed_features
-            row_filters = self._config["data_loader"]["cluster_data"]["row_filters"]
-            data_types = self._config["data_loader"]["cluster_data"].get("data_types", {})
-        elif data_label == "attach_data":
-            files = self._attach_data_files
-            output_file = self._config["data_loader"]["attach_data"]["local_cache"]
-            columns = self._config["data_loader"]["attach_data"]["columns_to_read"]
-            row_filters = self._config["data_loader"]["attach_data"]["row_filters"]
-            data_types = self._config["data_loader"]["attach_data"].get("data_types", {})
+        output_file = self._config["data_loader"]["cluster_data"]["local_cache"]
+        local_cache_path = f"{self.work_dir}/{output_file}"
 
-        data = read_files(
-            files,
-            local_cache_path=f"{self.work_dir}/{output_file}",
-            columns=columns,
-            data_types=data_types,
-            reload=reload,
-        )
-
-        if row_filters:
-            for column_name, allowed in row_filters.items():
-                if column_name not in data.columns:
-                    logger.warning(f"Row filter column '{column_name}' not in data; skipping this filter")
-                    continue
-                if isinstance(allowed, (list, set, tuple)):
-                    data = data[data[column_name].isin(list(allowed))]
-                    logger.info(
-                        f"Applied filter on '{column_name}' with {len(list(allowed))} allowed values; remaining {len(data)} rows"
-                    )
-                else:
-                    data = data[data[column_name] == allowed]
-                    logger.info(f"Applied filter on '{column_name}' == {allowed!r}; remaining {len(data)} rows")
-
-        if data_label == "cluster_data":
+        if not reload and os.path.exists(local_cache_path):
+            logger.info(f"read local attach data: {local_cache_path}")
+            data = read_local_cache(local_cache_path)
+        else:
+            data = self.load_raw_data(data_label="cluster_data")
+            data = data[data["group_num"] == self.session_length]
+            data["merge_date"] = pd.to_datetime(data["start_time"]).dt.strftime("%Y_%m_%d")
+            # check if we have duplidated sample:
+            duplicated = data[["group_id", "merge_date"]].duplicated()
+            if duplicated.any():
+                logger.warning(f"duplicated samples found in cluster data: {duplicated.sum()} / {len(data)}")
+                # data = data.drop_duplicates(keep="first")
+                data = data[~duplicated]
             data, _ = remove_outliers(data, self.outlier_threshold)
+            save_local_cache(data, local_cache_path)
 
         return data
 
@@ -469,12 +528,9 @@ class ClusterAnalysisPipeline:
 
         feature_columns = features_ordered_by_importance[: self.n_top_features]
         clustering_data = clip_outliers(data[feature_columns], self.clip_threshold[0], self.clip_threshold[1])
-
-        n_clusters = self._config["cluster_analysis"]["n_clusters"]
-
         transform_columns, transform_columns_index = self.get_transform_columns(clustering_data)
         pipeline = self.create_clustering_pipeline(
-            n_clusters=n_clusters,
+            n_clusters=self.n_clusters,
             transform_columns_index=transform_columns_index,
         )
         cluster_label = pipeline.fit_predict(clustering_data)
@@ -487,14 +543,18 @@ class ClusterAnalysisPipeline:
         centroids_df = pd.DataFrame(pipeline.named_steps["cluster"].cluster_centers_, columns=feature_columns)
         logger.info(f"Cluster centers:\n{centroids_df}")
         centroids_df.to_csv(
-            self.output_path / "models" / f"cluster_centers_standardized_{self.n_top_features}.csv", index=False
+            self.output_path / "models" / f"cluster_centers_standardized_{self.n_top_features}_k_{self.n_clusters}.csv",
+            index=False,
         )
 
         # Save cluster labels:
-        data_with_cluster_label = data[self.key_features].copy()
+        data_with_cluster_label = data[self.merge_features].copy()
         data_with_cluster_label["cluster_label"] = cluster_label
         data_with_cluster_label.to_parquet(
-            self.output_path / "output" / f"cluster_label_top_features_{self.n_top_features}.parquet", index=False
+            self.output_path
+            / "output"
+            / f"cluster_label_top_features_{self.n_top_features}_k_{self.n_clusters}.parquet",
+            index=False,
         )
 
         # Save pipeline model
@@ -527,7 +587,11 @@ class ClusterAnalysisPipeline:
         plt.title("PCA Visualization of KMeans Clusters")
         plt.legend(title="Cluster")
         plt.grid(True)
-        plt.savefig(self.output_path / "figures" / f"{output_file_name}.png")
+        plt.savefig(
+            self.output_path
+            / "figures"
+            / f"{output_file_name}_k({self.n_clusters})_n_features({self.n_top_features}).png"
+        )
         plt.close()
 
     def plot_radar_chart(
@@ -554,7 +618,11 @@ class ClusterAnalysisPipeline:
         plt.title("Cluster Feature Means (Standardized) - Radar Chart")
         plt.legend(loc="upper right")
         plt.subplots_adjust(left=0.1, bottom=0.1)
-        plt.savefig(self.output_path / "figures" / f"{output_file_name}.png")
+        plt.savefig(
+            self.output_path
+            / "figures"
+            / f"{output_file_name}_k({self.n_clusters})_n_features({self.n_top_features}).png"
+        )
         plt.close()
 
     def save_cluster_data(
@@ -647,33 +715,46 @@ class ClusterAnalysisPipeline:
         logger.info(f"Fitted and predicted with n_clusters={n_clusters}")
         return cluster_labels
 
-    def attach_cluster_label(self):
+    def attach_cluster_label(self, reload: bool = False):
 
         cluster_column = "cluster_label"
-        merge_column = self._config["data_loader"]["merge_on"]
         data_with_cluster_label = pd.read_parquet(
-            self.output_path / "output" / f"cluster_label_top_features_{self.n_top_features}.parquet",
-            columns=[cluster_column, merge_column],
+            self.output_path
+            / "output"
+            / f"cluster_label_top_features_{self.n_top_features}_k_{self.n_clusters}.parquet",
+            columns=[cluster_column] + self.merge_features,
         )
-
-        attach_data = self.load_data(data_label="attach_data", reload=False)
-        feature_columns = attach_data.select_dtypes(include="number").columns.to_list()
         unique_clusters = data_with_cluster_label[cluster_column].unique()
 
+        attach_data = self.load_attach_data(reload=reload)
+        feature_columns = attach_data.select_dtypes(include="number").columns.to_list()
+
+        num_samples = 0
         for cluster in unique_clusters:
             logger.info(f"save attach data for cluster: {cluster}")
             file_name = f"enriched_data_cluster_{cluster}.parquet"
             cluster_data = attach_data.merge(
                 data_with_cluster_label[data_with_cluster_label[cluster_column] == cluster],
-                on=merge_column,
+                on=self.merge_features,
                 how="inner",
+                suffixes=("", "_y"),
             )
             cluster_data[attach_data.columns].to_parquet(self.output_path / "output" / file_name, index=False)
+            num_samples += len(cluster_data)
 
             if feature_columns is not None:
                 stats = cluster_data[feature_columns].describe().T
                 logger.info(f"Cluster {cluster} feature statistics:")
                 logger.info(stats[["mean", "std", "min", "25%", "50%", "75%", "max"]])
+
+        if num_samples < len(attach_data):
+            logger.warning(
+                f"sum of sample size for all clusters: {num_samples} less than attach data: {len(attach_data)}!"
+            )
+        if num_samples > len(attach_data):
+            logger.critical(
+                f"sum of sample size for all clusters: {num_samples} larger than attach data: {len(attach_data)}!"
+            )
 
 
 def calculate_inertia(x: np.ndarray, y: np.ndarray) -> float:
