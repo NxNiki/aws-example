@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 # 3. Performs K-means clustering
 # All in a single, reusable pipeline method for elbow method analysis
 
+RELOAD_CLUSTER_DATA = False
+RELOAD_ATTACH_DATA = False
+
 
 def feature_selection(data, cluster_pipeline):
     data_transformed = cluster_pipeline.preprocess_data(data)
@@ -35,7 +38,7 @@ def feature_selection(data, cluster_pipeline):
     viz.create_figure(fig_title=f"Correlation of features: {cluster_pipeline.project_name}", fig_size=(20, 17))
     viz.add_correlation_heatmap(annot=False, cmap="coolwarm")
     viz.figure.subplots_adjust(left=0.15, bottom=0.15, top=0.90, right=0.97)
-    viz.display()
+    # viz.display()
     viz.save(str(cluster_pipeline.output_path / "figures" / f"{cluster_pipeline.project_name}_correlation.png"))
 
     del viz
@@ -45,10 +48,7 @@ def feature_selection(data, cluster_pipeline):
     features = cluster_pipeline.normal_features + cluster_pipeline.skewed_features
     _, kept_features = cluster_pipeline.smart_feature_selection(data_transformed[features])
     _, kept_features = cluster_pipeline.feature_selection_by_variance(data_transformed[kept_features])
-
-    # Select features for clustering
-    data_select = data_transformed[kept_features]
-    important_features = cluster_pipeline.feature_selection_by_pca(data_select)
+    important_features = cluster_pipeline.feature_selection_by_pca(data_transformed[kept_features])
 
     return important_features
 
@@ -61,7 +61,7 @@ def main(config_path: str):
     setup_logging(LOCAL_ROOT / "jobs/log", f"cluster_analysis_{project_name}_{time_tag}.log")
 
     cluster_pipeline = ClusterAnalysisPipeline(config_path)
-    data = cluster_pipeline.load_cluster_data(reload=True)
+    data = cluster_pipeline.load_cluster_data(reload=RELOAD_CLUSTER_DATA)
 
     # Data profiling and cleaning
     DataProfiler.count_df_missing_columns(data)
@@ -89,7 +89,7 @@ def main(config_path: str):
         pass
 
     if cluster_pipeline.run_attach_cluster_label:
-        cluster_pipeline.attach_cluster_label(reload=False)
+        cluster_pipeline.attach_cluster_label(reload=RELOAD_ATTACH_DATA)
 
     if cluster_pipeline.run_upload_result_to_s3:
         upload_folder_to_s3(cluster_pipeline.output_path, S3_BUCKET, f"{cluster_pipeline.s3_prefix}_{time_tag}")
@@ -100,8 +100,8 @@ def main(config_path: str):
 
 if __name__ == "__main__":
 
-    project = "deepdive"
-    # project = "wucaishen"
+    # project = "deepdive"
+    project = "wucaishen"
 
     current_path = os.path.abspath(os.path.dirname(__file__))
     parser = argparse.ArgumentParser(description="cluster analysis pipeline")

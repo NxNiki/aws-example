@@ -22,7 +22,7 @@ data_loader:
     pattern: '250[1-8]/deepdive_enriched_output/part.*\.csv$'  # Pattern for grouped data files
     row_filters:  # General row filtering (null to disable filtering)
       currency: "CNY"  # Filter to specific currency
-    session_length: 30  # stats in grouped data are calculated based on consecutive sessions, enriched data will be removed if session length not equal to this value.
+    session_length: 30  # stats in grouped data are calculated based on consecutive sessions, sample will be removed if session length not equal to this value for both cluster and attach data.
     local_cache: "deepdive_enriched_data_2025.parquet"
 
     columns_to_read:  # Columns to read from original data files

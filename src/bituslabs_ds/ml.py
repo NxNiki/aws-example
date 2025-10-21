@@ -372,7 +372,7 @@ class ClusterAnalysisPipeline:
 
     def _plot_feature_importance(self, feature_importance: pd.DataFrame):
 
-        plt.figure(figsize=(18, 10))
+        plt.figure(figsize=(8, 10))
         colors = sns.color_palette("viridis", len(feature_importance))
         sns.barplot(x="Importance", y="Feature", hue="Feature", data=feature_importance, palette=colors, legend=False)
         plt.title("Feature Importance Rank", fontsize=16)
@@ -561,12 +561,12 @@ class ClusterAnalysisPipeline:
         self.save_pipeline_model(pipeline)
 
         x_transformed = pipeline[:-1].transform(clustering_data)
-        self.plot_pca_2(x_transformed, cluster_label)
+        self.plot_pca(x_transformed, cluster_label)
         self.plot_radar_chart(pd.DataFrame(x_transformed, columns=feature_columns), cluster_label)
 
         scaler = self.get_scaler()
         scaled_data = scaler.fit_transform(data[features_ordered_by_importance[: self.n_top_features]])
-        self.plot_pca_2(scaled_data, cluster_label, output_file_name="pca_cluster_raw_feature")
+        self.plot_pca(scaled_data, cluster_label, output_file_name="pca_cluster_raw_feature")
         self.plot_radar_chart(
             pd.DataFrame(scaled_data, columns=feature_columns),
             cluster_label,
@@ -575,13 +575,23 @@ class ClusterAnalysisPipeline:
 
         return cluster_label, pipeline
 
-    def plot_pca_2(self, data: pd.DataFrame, cluster_label: np.ndarray, output_file_name: str = "PCA_Clusters") -> None:
-        """Plot PCA visualization of clusters."""
-        pca = PCA(n_components=2)
+    def plot_pca(
+        self,
+        data: pd.DataFrame,
+        cluster_label: np.ndarray,
+        n_components: int = 3,
+        output_file_name: str = "PCA_Clusters",
+    ) -> None:
+        """Plot PCA visualization of clusters and pairwise plots for n_components > 3 using seaborn.pairplot."""
+        pca = PCA(n_components=n_components)
         x_pca = pca.fit_transform(data)
+        n_clusters = len(np.unique(cluster_label))
+        palette = sns.color_palette("Set1", n_clusters)
+        cluster_label = np.asarray(cluster_label)
 
+        # Standard 2D PCA scatterplot for first two components.
         plt.figure(figsize=(20, 16))
-        sns.scatterplot(x=x_pca[:, 0], y=x_pca[:, 1], hue=cluster_label, palette="Set1", alpha=0.7)
+        sns.scatterplot(x=x_pca[:, 0], y=x_pca[:, 1], hue=cluster_label, palette=palette, alpha=0.7)
         plt.xlabel("PCA Component 1")
         plt.ylabel("PCA Component 2")
         plt.title("PCA Visualization of KMeans Clusters")
@@ -593,6 +603,30 @@ class ClusterAnalysisPipeline:
             / f"{output_file_name}_k({self.n_clusters})_n_features({self.n_top_features}).png"
         )
         plt.close()
+
+        # If n_components > 3, generate a pair plot for the PCA components
+        if n_components > 3:
+            df_pca = pd.DataFrame(x_pca, columns=[f"PC{i+1}" for i in range(n_components)])
+            df_pca["cluster_label"] = cluster_label
+            # Only lower triangle, diagonal = hist; hue as cluster. Disable upper triangle.
+            pair_grid = sns.PairGrid(
+                df_pca,
+                vars=[f"PC{i+1}" for i in range(n_components)],
+                hue="cluster_label",
+                corner=True,
+                palette=palette,
+            )
+            pair_grid.map_lower(sns.scatterplot, alpha=0.7)
+            pair_grid.map_diag(sns.histplot, kde=False, alpha=0.6, stat="density")
+            pair_grid.add_legend(title="Cluster", adjust_subtitles=True)
+            plt.suptitle(f"Pair Plot of First {n_components} PCA Components by Cluster", fontsize=26, y=1.01)
+            plt.tight_layout(rect=(0, 0.03, 1, 0.97))
+            plt.savefig(
+                self.output_path
+                / "figures"
+                / f"{output_file_name}_pairplot_k({self.n_clusters})_n_features({self.n_top_features})_ncomps({n_components}).png"
+            )
+            plt.close()
 
     def plot_radar_chart(
         self, data: pd.DataFrame, data_cluster: np.ndarray, output_file_name: str = "Radar_Clusters"

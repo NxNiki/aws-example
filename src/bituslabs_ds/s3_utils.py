@@ -7,6 +7,7 @@ import os
 import re
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from functools import partial
+from math import e
 from pathlib import Path
 from typing import Callable, Dict, List, Literal, Optional, Tuple, Union
 from urllib.parse import urlparse
@@ -294,10 +295,7 @@ def save_local_cache(data: pd.DataFrame, local_cache_path: str, append: bool = F
         mode = "a" if append else "w"
         data.to_csv(local_cache_path, index=False, mode=mode, header=not append)
     elif local_cache_path.endswith(".parquet"):
-        if append:
-            data.to_parquet(local_cache_path, index=False, engine="fastparquet", append=append)
-        else:
-            data.to_parquet(local_cache_path, index=False)
+        data.to_parquet(local_cache_path, index=False, engine="fastparquet", append=append)
 
 
 def read_files(
