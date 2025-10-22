@@ -3,6 +3,8 @@ import json
 import logging
 import os
 import random
+import time
+import traceback
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -49,7 +51,7 @@ GET_STATS = {"BG": True, "FG": True, "Trigger": True}
 # issue: there are very rare cases where free game round is odd number.
 
 
-def remove_first_and_last_n_bets(data, n=1):
+def remove_first_n_bets(data, n=1):
     # Remove rows where bet_num is the minimum for each loginname
 
     data = data.sort_values(by=["loginname", "bet_num", "elimination_num"])
@@ -58,11 +60,21 @@ def remove_first_and_last_n_bets(data, n=1):
         lambda x: sorted(set(x))[n - 1] if len(set(x)) > n else max(x)
     )
     data = data[data["bet_num"] > min_betnum_per_login].copy()
+    logger.info(f"remove first {n} bets done!")
+
+    return data
+
+
+def remove_last_n_bets(data, n=1):
+    # Remove rows where bet_num is the minimum for each loginname
+
+    data = data.sort_values(by=["loginname", "bet_num", "elimination_num"])
 
     max_betnum_per_login = data.groupby("loginname")["bet_num"].transform(
         lambda x: sorted(set(x))[-n] if len(set(x)) > n else min(x)
     )
     data = data[data["bet_num"] < max_betnum_per_login].copy()
+    logger.info(f"remove last {n} bets done!")
 
     return data
 
@@ -80,6 +92,7 @@ def sample_bet_rounds(data, ratio=SUBSAMPLE_RATIO, min_count=MIN_SUBSAMPLE_COUNT
         logger.info(f"n_sample is less than {min_count}, no sampling will be performed")
         return data
 
+    logger.info(f"sample data with ratio: {ratio}")
     sampled_rounds = bet_rounds.sample(n=n_sample, random_state=42)
     sampled_data = data.merge(sampled_rounds, on=["loginname", "bet_num"], how="inner")
     return sampled_data
@@ -223,7 +236,6 @@ def get_item_stats(data, game_type=None):
 
     game_rounds = len(data[group_cols].drop_duplicates())
     stats["Total_Count"] = game_rounds
-
     stats["Zero_Count"] = game_rounds - get_hit_count(data, game_type=game_type, group_cols=group_cols)
     stats["Nonzero_Payouts"] = get_payout_stats(data, group_cols)
 
@@ -474,11 +486,18 @@ def process_single_file(file_path: str, output_path: str) -> Tuple[str, Dict, Di
                 "game_type",
                 "elimination_num",
                 "free_elimination_num",
+                "year_first_bet",
+                "month_first_bet",
             ],
         )
 
         # Apply data preprocessing
-        data = remove_first_and_last_n_bets(data)
+        if data["year_first_bet"].iloc[0] == 2024 and data["month_first_bet"].iloc[0] == 8:
+            data = remove_first_n_bets(data)
+
+        if data["year_first_bet"].iloc[0] == 2025 and data["month_first_bet"].iloc[0] == 8:
+            data = remove_last_n_bets(data)
+
         data = sample_bet_rounds(data)
         data = remove_bet_rounds_with_short_free_game(data)
         data = add_base_account(data)
@@ -570,14 +589,12 @@ def get_game_stats(files, output_path, max_workers=None, executor_type="thread")
             try:
                 basename, stats_f, stats_f_bg, stats_f_fg = future.result()
                 logger.info(f"Completed processing: {basename}")
-
-                # Combine results
                 update_trigger_stats(stats_trigger, stats_f)
                 update_item_stats(stats_bg, stats_f_bg)
                 update_item_stats(stats_fg, stats_f_fg)
 
             except Exception as exc:
-                logger.error(f"File {file_path} generated an exception: {exc}")
+                logger.error(f"File {file_path} generated an exception: {exc}\n{traceback.format_exc()}")
 
     logger.info("All files processed. Writing final aggregated results...")
 
@@ -620,7 +637,16 @@ if __name__ == "__main__":
 
     time_tag = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     setup_logging(output_path=args.log_output, log_filename=f"analysis_mahjiang_streak_stats_{time_tag}.log")
-    files = list_s3_files(bucket="bituslabs-team-ai", prefix="processed_parquet", pattern=r".*/.*.parquet")
+    start_time = time.time()
+    logger.info("Program started.")
+
+    files = list_s3_files(
+        bucket="bituslabs-tsplayerai", prefix="dsProcessedData/majianghule_enrich_data/", pattern=r".*/.*.parquet"
+    )
     stats = get_game_stats(
         files, output_path=args.output, max_workers=int(args.max_workers), executor_type=args.executor_type
     )
+
+    end_time = time.time()
+    elapsed = end_time - start_time
+    logger.info(f"Program completed in {elapsed:.2f} seconds.")
