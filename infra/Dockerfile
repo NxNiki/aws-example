@@ -16,25 +16,19 @@ make \
 libc-dev \
 && rm -rf /var/lib/apt/lists/*
 
-# Install Poetry
 RUN pip install poetry==2.1.3
-
+RUN pip install sagemaker-training
 # Set up working directory
 WORKDIR /opt/program
 
-# Copy poetry files
 COPY ./pyproject.toml poetry.lock README.md ./
-
-# Copy your actual source code
-COPY ./src ./src
 
 # Install dependencies first (excluding dev deps for SageMaker)
 RUN poetry config virtualenvs.create false && poetry install --only main --no-interaction
 
+COPY ./src ./src
 # Optional: copy your processing script here too
 #COPY processing_script.py ./
-
-RUN pip install sagemaker-training
 
 # Set Python environment variables
 ENV PYTHONUNBUFFERED=TRUE

@@ -5,6 +5,7 @@ import os
 import random
 import time
 import traceback
+from audioop import mul
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -37,6 +38,17 @@ REMOVE_RARE_PAYOUT_THRESHOLD = 0
 REMOVE_RARE_COMPOSITION_THRESHOLD = 0
 SUBSAMPLE_RATIO = 1
 MIN_SUBSAMPLE_COUNT = 100
+READ_COLUMNS = [
+    "loginname",
+    "bet_num",
+    "payout",
+    "account",
+    "game_type",
+    "elimination_num",
+    "free_elimination_num",
+    # "year_first_bet",
+    # "month_first_bet",
+]
 
 GET_STATS = {"BG": True, "FG": True, "Trigger": True}
 
@@ -66,7 +78,7 @@ def remove_first_n_bets(data, n=1):
 
 
 def remove_last_n_bets(data, n=1):
-    # Remove rows where bet_num is the minimum for each loginname
+    # Remove rows where bet_num is the maximum for each loginname
 
     data = data.sort_values(by=["loginname", "bet_num", "elimination_num"])
 
@@ -84,6 +96,10 @@ def sample_bet_rounds(data, ratio=SUBSAMPLE_RATIO, min_count=MIN_SUBSAMPLE_COUNT
     Randomly sample bet rounds from the DataFrame.
     All rows with the same ("loginname", "bet_num") will be either selected or not selected.
     """
+    if ratio >= 1:
+        logger.info(f"skip sampling bet rounds with ratio: {ratio}")
+        return data
+
     # Identify unique bet rounds by ("loginname", "bet_num")
     bet_rounds = data[["loginname", "bet_num"]].drop_duplicates()
     n_sample = max(int(len(bet_rounds) * ratio), 1)
@@ -342,7 +358,7 @@ def check_existing_file(file_name):
 def update_trigger_stats(stats_total: Dict, stats: Dict) -> Dict:
 
     if not stats:
-        return {}
+        return stats_total
 
     stats_total["Total_Game_Rounds"] += stats["Total_Game_Rounds"]
     stats_total["Hit_Count"] += stats["Hit_Count"]
@@ -359,7 +375,7 @@ def update_trigger_stats(stats_total: Dict, stats: Dict) -> Dict:
 def update_item_stats(stats_total, stats):
 
     if not stats:
-        return {}
+        return stats_total
 
     stats_total["Total_Count"] += stats["Total_Count"]
     stats_total["Zero_Count"] += stats["Zero_Count"]
@@ -441,7 +457,7 @@ def get_max_level(stats) -> int:
     return max_level
 
 
-def process_single_file(file_path: str, output_path: str) -> Tuple[str, Dict, Dict, Dict]:
+def process_single_file(file_path: str, output_path: str) -> Tuple[str, Optional[Dict], Optional[Dict], Optional[Dict]]:
     """
     Process a single file and return its statistics.
 
@@ -455,9 +471,9 @@ def process_single_file(file_path: str, output_path: str) -> Tuple[str, Dict, Di
     basename = Path(file_path).stem
 
     # Initialize stats dictionaries
-    stats_f = {}
-    stats_f_bg = {}
-    stats_f_fg = {}
+    stats_f = None
+    stats_f_bg = None
+    stats_f_fg = None
 
     # Check for existing files
     if GET_STATS["Trigger"]:
@@ -478,24 +494,18 @@ def process_single_file(file_path: str, output_path: str) -> Tuple[str, Dict, Di
 
         data = read_files(
             file_path,
-            columns=[
-                "loginname",
-                "bet_num",
-                "payout",
-                "account",
-                "game_type",
-                "elimination_num",
-                "free_elimination_num",
-                "year_first_bet",
-                "month_first_bet",
-            ],
+            columns=READ_COLUMNS,
         )
 
         # Apply data preprocessing
-        if data["year_first_bet"].iloc[0] == 2024 and data["month_first_bet"].iloc[0] == 8:
+        if ("year_first_bet" not in data.columns) or (
+            data["year_first_bet"].iloc[0] == 2024 and data["month_first_bet"].iloc[0] == 8
+        ):
             data = remove_first_n_bets(data)
 
-        if data["year_first_bet"].iloc[0] == 2025 and data["month_first_bet"].iloc[0] == 8:
+        if ("year_first_bet" not in data.columns) or (
+            data["year_first_bet"].iloc[0] == 2025 and data["month_first_bet"].iloc[0] == 8
+        ):
             data = remove_last_n_bets(data)
 
         data = sample_bet_rounds(data)
@@ -587,8 +597,8 @@ def get_game_stats(files, output_path, max_workers=None, executor_type="thread")
         for future in as_completed(future_to_file):
             file_path = future_to_file[future]
             try:
-                basename, stats_f, stats_f_bg, stats_f_fg = future.result()
-                logger.info(f"Completed processing: {basename}")
+                file_name, stats_f, stats_f_bg, stats_f_fg = future.result()
+                logger.info(f"Completed processing: {file_name}")
                 update_trigger_stats(stats_trigger, stats_f)
                 update_item_stats(stats_bg, stats_f_bg)
                 update_item_stats(stats_fg, stats_f_fg)
@@ -636,12 +646,19 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     time_tag = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    setup_logging(output_path=args.log_output, log_filename=f"analysis_mahjiang_streak_stats_{time_tag}.log")
+    setup_logging(
+        output_path=args.log_output,
+        log_filename=f"analysis_mahjiang_streak_stats_{time_tag}.log",
+        multiprocess=args.executor_type == "process",
+    )
     start_time = time.time()
     logger.info("Program started.")
 
     files = list_s3_files(
-        bucket="bituslabs-tsplayerai", prefix="dsProcessedData/majianghule_enrich_data/", pattern=r".*/.*.parquet"
+        # bucket="bituslabs-tsplayerai", prefix="dsProcessedData/majianghule_enrich_data/", pattern=r".*/.*.parquet"
+        bucket="bituslabs-team-ai",
+        prefix="processed_parquet/",
+        pattern=r".*/.*.parquet",
     )
     stats = get_game_stats(
         files, output_path=args.output, max_workers=int(args.max_workers), executor_type=args.executor_type
