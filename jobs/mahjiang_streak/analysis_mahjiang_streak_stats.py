@@ -655,10 +655,12 @@ if __name__ == "__main__":
     logger.info("Program started.")
 
     files = list_s3_files(
-        # bucket="bituslabs-tsplayerai", prefix="dsProcessedData/majianghule_enrich_data/", pattern=r".*/.*.parquet"
-        bucket="bituslabs-team-ai",
-        prefix="processed_parquet/",
+        bucket="bituslabs-tsplayerai",
+        prefix="dsProcessedData/majianghule_enrich_data/",
         pattern=r".*/.*.parquet",
+        # bucket="bituslabs-team-ai",
+        # prefix="processed_parquet/",
+        # pattern=r".*/.*.parquet",
     )
     stats = get_game_stats(
         files, output_path=args.output, max_workers=int(args.max_workers), executor_type=args.executor_type

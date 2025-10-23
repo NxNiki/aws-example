@@ -33,7 +33,6 @@ imitation = "^1.0.1"
 smdebug = "1.0.34"
 giotto-tda = "^0.6.0"
 pyyaml = "^6.0.2"
-types-pyyaml = "^6.0.12.20250822"
 
 [tool.poetry.group.dev.dependencies]
 jupyter = "^1.0"

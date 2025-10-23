@@ -10,11 +10,13 @@ ENV PIP_DEFAULT_TIMEOUT=300 \
 
 # enable script mode so we can submit custom training jobs:
 RUN apt-get update && apt-get install -y \
-gcc \
-g++ \
-make \
-libc-dev \
-&& rm -rf /var/lib/apt/lists/*
+    gcc \
+    g++ \
+    make \
+    libc-dev \
+    && apt-get autoremove -y \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN pip install poetry==2.1.3
 RUN pip install sagemaker-training
@@ -24,9 +26,9 @@ WORKDIR /opt/program
 COPY ./pyproject.toml poetry.lock README.md ./
 
 # Install dependencies first (excluding dev deps for SageMaker)
+COPY ./src ./src
 RUN poetry config virtualenvs.create false && poetry install --only main --no-interaction
 
-COPY ./src ./src
 # Optional: copy your processing script here too
 #COPY processing_script.py ./
 
