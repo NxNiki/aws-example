@@ -27,6 +27,7 @@ processor = ScriptProcessor(
     instance_count=1,
     base_job_name="mahjiang-streak-stats",
     sagemaker_session=session,
+    max_runtime_in_seconds=2 * 60 * 60,
 )
 
 
