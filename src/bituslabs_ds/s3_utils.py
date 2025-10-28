@@ -284,6 +284,8 @@ def read_local_cache(local_cache_path, columns: Optional[List[str]] = None, data
         data = pd.read_parquet(local_cache_path, columns=columns)
         if data_types:
             data = data.astype(data_types)
+    else:
+        raise ValueError(f"read_local_cache: unsupport file type: {local_cache_path}")
 
     logger.info("read data finished.")
     return data

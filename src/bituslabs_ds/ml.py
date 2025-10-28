@@ -155,6 +155,10 @@ class ClusterAnalysisPipeline:
         return self._config["pipeline"]["attach_cluster_label"]
 
     @property
+    def run_get_cluster_stats(self):
+        return self._config["pipeline"]["get_cluster_stats"]
+
+    @property
     def run_upload_result_to_s3(self):
         return self._config["pipeline"]["upload_result_to_s3"]
 

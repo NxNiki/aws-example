@@ -4,6 +4,7 @@ import logging
 import os
 import shutil
 import subprocess
+from collections import Counter
 from collections.abc import Sequence
 from typing import Any, Iterable, Iterator, List, Literal, Optional, Tuple, Union
 
@@ -484,3 +485,21 @@ def convert_to_list(arg: Any) -> List[Any]:
         return arg
     else:
         raise TypeError(f"cannot convert {type(arg)}")
+
+
+def convert_numpy_types(obj):
+    """Convert NumPy types to native Python types for JSON serialization."""
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, Counter):
+        return dict[Any, int](obj)
+    elif isinstance(obj, dict):
+        return {key: convert_numpy_types(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_numpy_types(item) for item in obj]
+    else:
+        return obj
