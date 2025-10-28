@@ -10,17 +10,19 @@ import datetime
 import json
 import os
 from collections import Counter
+from typing import Any
 
 import numpy as np
 from scipy.stats import skew
 from sklearn.preprocessing import StandardScaler
 
-from bituslabs_ds.config import S3_BUCKET, setup_logging
+from bituslabs_ds.config import LOCAL_ROOT, S3_BUCKET, setup_logging
 from bituslabs_ds.s3_utils import read_files, upload_file_to_s3
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_DIR = LOCAL_ROOT / "jobs/output_deepdive/cluster_stats/"
 
-setup_logging(f"{SCRIPT_DIR}/log/data_process_wucaishen_cluster_stats.log")
+setup_logging(f"{LOCAL_ROOT}/jobs/log/analysis_gai_simulation_cluster_stats.log")
 
 
 def convert_numpy_types(obj):
@@ -32,7 +34,7 @@ def convert_numpy_types(obj):
     elif isinstance(obj, np.ndarray):
         return obj.tolist()
     elif isinstance(obj, Counter):
-        return dict(obj)
+        return dict[Any, int](obj)
     elif isinstance(obj, dict):
         return {key: convert_numpy_types(value) for key, value in obj.items()}
     elif isinstance(obj, list):
@@ -41,15 +43,22 @@ def convert_numpy_types(obj):
         return obj
 
 
-year = 2024
-wucaishen_enriched_with_clusters = [
-    "s3://bituslabs-team-ai/ds-data-kmeans/wucaishen_with_cluster_2024_0.csv",
-    "s3://bituslabs-team-ai/ds-data-kmeans/wucaishen_with_cluster_2024_1.csv",
-    "s3://bituslabs-team-ai/ds-data-kmeans/wucaishen_with_cluster_2024_2.csv",
+year = 2025
+enriched_data_with_clusters = [
+    "s3://bituslabs-team-ai/deepdive_analysis_kmeans/cny_8_month_2025-10-20_17-41-50/output/enriched_data_cluster_0.parquet",
+    "s3://bituslabs-team-ai/deepdive_analysis_kmeans/cny_8_month_2025-10-20_17-41-50/output/enriched_data_cluster_1.parquet",
+    "s3://bituslabs-team-ai/deepdive_analysis_kmeans/cny_8_month_2025-10-20_17-41-50/output/enriched_data_cluster_2.parquet",
 ]
 
+# year = 2024
+# enriched_data_with_clusters = [
+#     "s3://bituslabs-team-ai/ds-data-kmeans/wucaishen_with_cluster_2024_0.csv",
+#     "s3://bituslabs-team-ai/ds-data-kmeans/wucaishen_with_cluster_2024_1.csv",
+#     "s3://bituslabs-team-ai/ds-data-kmeans/wucaishen_with_cluster_2024_2.csv",
+# ]
+
 # year = 2025
-# wucaishen_enriched_with_clusters = [
+# enriched_data_with_clusters = [
 #     "s3://bituslabs-team-ai/ds-data-kmeans/2025_2025-06-18_16-43-44/wucaishen_with_cluster_2025_0.csv",
 #     "s3://bituslabs-team-ai/ds-data-kmeans/2025_2025-06-18_16-43-44/wucaishen_with_cluster_2025_1.csv",
 #     "s3://bituslabs-team-ai/ds-data-kmeans/2025_2025-06-18_16-43-44/wucaishen_with_cluster_2025_2.csv",
@@ -57,10 +66,10 @@ wucaishen_enriched_with_clusters = [
 
 scaler = StandardScaler()
 cluster_stats = {}
-for cluster_index in range(len(wucaishen_enriched_with_clusters)):
+for cluster_index in range(len(enriched_data_with_clusters)):
     data = read_files(
-        [wucaishen_enriched_with_clusters[cluster_index]],
-        local_cache_path=f"{SCRIPT_DIR}/output/wucaishen_enriched_with_clusters_{year}_{cluster_index}.csv",
+        [enriched_data_with_clusters[cluster_index]],
+        local_cache_path=f"{OUTPUT_DIR}/enriched_with_clusters_{year}_{cluster_index}.parquet",
         columns=["basepoint", "account"],
     )
 
@@ -91,8 +100,8 @@ for cluster_index in range(len(wucaishen_enriched_with_clusters)):
 
 # Convert NumPy types to native Python types for JSON serialization
 cluster_stats_serializable = convert_numpy_types(cluster_stats)
-json.dump(cluster_stats_serializable, open(f"{SCRIPT_DIR}/output/cluster_stats.json", "w"), indent=4)
+json.dump(cluster_stats_serializable, open(f"{OUTPUT_DIR}/cluster_stats.json", "w"), indent=4)
 
 time_tag = datetime.datetime.now().strftime("%Y-%m-%d_%H")
-output_key = f"ds-data-kmeans/wucaishen_cluster_stats_{year}_{time_tag}.json"
-upload_file_to_s3(f"{SCRIPT_DIR}/output/cluster_stats.json", S3_BUCKET, output_key)
+output_key = f"deepdive_analysis_kmeans/cny_8_month_2025-10-20_17-41-50/output/cluster_stats_{year}_{time_tag}.json"
+upload_file_to_s3(f"{OUTPUT_DIR}/cluster_stats.json", S3_BUCKET, output_key)

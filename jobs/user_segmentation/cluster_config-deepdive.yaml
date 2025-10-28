@@ -41,7 +41,7 @@ data_loader:
       - "streak"
       - "win_streak"
       - "lose_streak"
-      - "result_clean"
+      # - "result_clean"  # this column is Null in deepdive data.
       - "group_id"
 
   merge_on: ["group_id", "merge_date"]  # Column used to attach cluster index to attach_data.

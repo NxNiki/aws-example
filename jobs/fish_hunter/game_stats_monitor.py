@@ -4,8 +4,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-data_file = "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/Result_13.csv"
+# data_file = "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/Result_13.csv"
+data_file = "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/Result_34.csv"
 output_dir = os.path.dirname(data_file)
+
+# Color palette and markers for strategies
+strategy_colors = {"DEFAULT_FALLBACK": "blue", "BOOST_POOL": "green", "DYNAMIC_RTP": "orange"}
+strategy_markers = {"DEFAULT_FALLBACK": "o", "BOOST_POOL": "s", "DYNAMIC_RTP": "^"}
 
 
 def plot_two_metrics_all_strategies(df, x_col, y1_col, y2_col, title, xlabel, ylabel1, ylabel2):
@@ -19,10 +24,6 @@ def plot_two_metrics_all_strategies(df, x_col, y1_col, y2_col, title, xlabel, yl
     scale_ratio = max(y1_max, y2_max) / min(y1_max, y2_max) if min(y1_max, y2_max) > 0 else 1
 
     fig, ax1 = plt.subplots(figsize=(14, 7))
-
-    # Color palette and markers for strategies
-    strategy_colors = {"DEFAULT_FALLBACK": "blue", "BOOST_POOL": "green", "DYNAMIC_RTP": "orange"}
-    strategy_markers = {"DEFAULT_FALLBACK": "o", "BOOST_POOL": "s", "DYNAMIC_RTP": "^"}
 
     if scale_ratio > 10:
         # Use twin axis
@@ -99,74 +100,97 @@ def plot_two_metrics_all_strategies(df, x_col, y1_col, y2_col, title, xlabel, yl
 def plot_three_metrics_all_strategies(df, x_col, y1_col, y2_col, y3_col, title, xlabel, ylabel1, ylabel2, ylabel3):
     """
     Plot three columns with all strategies in one figure.
-    Uses twin axes if values differ significantly in scale.
+    Uses pairwise comparison to determine optimal grouping for twin axes.
+    Groups the two metrics with the most similar scales on one axis.
     """
-    # Check if we need twin axis by comparing scales across all data
+    # Calculate max values for each metric
     y1_max = abs(df[y1_col]).max()
     y2_max = abs(df[y2_col]).max()
     y3_max = abs(df[y3_col]).max()
 
-    max_values = [y1_max, y2_max, y3_max]
-    max_max = max(max_values)
-    min_max = min(max_values)
-    scale_ratio = max_max / min_max if min_max > 0 else 1
+    # Calculate pairwise scale ratios
+    def calc_scale_ratio(max1, max2):
+        """Calculate scale ratio between two values"""
+        if max1 == 0 or max2 == 0:
+            return float("inf")
+        return max(max1, max2) / min(max1, max2)
+
+    ratio_12 = calc_scale_ratio(y1_max, y2_max)
+    ratio_13 = calc_scale_ratio(y1_max, y3_max)
+    ratio_23 = calc_scale_ratio(y2_max, y3_max)
+
+    # Find the pair with the smallest scale ratio (most similar)
+    min_ratio = min(ratio_12, ratio_13, ratio_23)
+
+    # Determine which metrics to group together
+    # Store (metric_index, left_metrics, right_metrics, left_labels, right_label)
+    if min_ratio == ratio_12:
+        # y1 and y2 are most similar - group them, y3 goes to right axis
+        left_cols = [(y1_col, ylabel1, "-"), (y2_col, ylabel2, "--")]
+        right_col = (y3_col, ylabel3, ":")
+    elif min_ratio == ratio_13:
+        # y1 and y3 are most similar - group them, y2 goes to right axis
+        left_cols = [(y1_col, ylabel1, "-"), (y3_col, ylabel3, ":")]
+        right_col = (y2_col, ylabel2, "--")
+    else:  # ratio_23 is smallest
+        # y2 and y3 are most similar - group them, y1 goes to right axis
+        left_cols = [(y2_col, ylabel2, "--"), (y3_col, ylabel3, ":")]
+        right_col = (y1_col, ylabel1, "-")
+
+    # Check if we need twin axis (threshold = 10x difference)
+    overall_ratio = max(y1_max, y2_max, y3_max) / min(y1_max, y2_max, y3_max)
+    use_twin_axis = overall_ratio > 10
 
     fig, ax1 = plt.subplots(figsize=(14, 7))
 
-    # Color palette and markers for strategies
-    strategy_colors = {"DEFAULT_FALLBACK": "blue", "BOOST_POOL": "green", "DYNAMIC_RTP": "orange"}
-    strategy_markers = {"DEFAULT_FALLBACK": "o", "BOOST_POOL": "s", "DYNAMIC_RTP": "^"}
-
-    if scale_ratio > 10:
-        # Use twin axis - group y1 with either y2 or y3 based on which is closer
-        # Plot y1 on left axis
+    if use_twin_axis:
+        # Plot left axis metrics
         for strategy in df["strategy_name"].unique():
             strategy_df = df[df["strategy_name"] == strategy].sort_values(x_col)
-            if len(strategy_df) > 0:
+            if len(strategy_df) == 0:
+                continue
+            color = strategy_colors.get(strategy, "black")
+            marker = strategy_markers.get(strategy, "o")
+
+            for col, label, linestyle in left_cols:
                 ax1.plot(
                     strategy_df[x_col],
-                    strategy_df[y1_col],
-                    marker=strategy_markers.get(strategy, "o"),
-                    color=strategy_colors.get(strategy, "black"),
-                    linestyle="-",
-                    linewidth=2,
-                    label=f"{strategy} - {ylabel1}",
-                    markersize=6,
+                    strategy_df[col],
+                    color=color,
+                    marker=marker,
+                    linestyle=linestyle,
+                    linewidth=2 if linestyle == "-" else 1,
+                    label=f"{strategy} - {label}",
+                    markersize=6 if linestyle == "-" else 4,
                 )
 
+        # Create right axis labels from left metrics
+        left_labels = " / ".join([label for _, label, _ in left_cols])
         ax1.set_xlabel(xlabel)
-        ax1.set_ylabel(ylabel1, color="b")
+        ax1.set_ylabel(left_labels, color="b")
         ax1.tick_params(axis="y", labelcolor="b")
 
-        # Plot y2 and y3 on right axis
+        # Plot right axis metric
         ax2 = ax1.twinx()
         for strategy in df["strategy_name"].unique():
             strategy_df = df[df["strategy_name"] == strategy].sort_values(x_col)
-            if len(strategy_df) > 0:
-                color = strategy_colors.get(strategy, "black")
-                marker = strategy_markers.get(strategy, "o")
-                ax2.plot(
-                    strategy_df[x_col],
-                    strategy_df[y2_col],
-                    color=color,
-                    marker=marker,
-                    linestyle="--",
-                    linewidth=1,
-                    label=f"{strategy} - {ylabel2}",
-                    markersize=4,
-                )
-                ax2.plot(
-                    strategy_df[x_col],
-                    strategy_df[y3_col],
-                    color=color,
-                    marker=marker,
-                    linestyle=":",
-                    linewidth=1,
-                    label=f"{strategy} - {ylabel3}",
-                    markersize=4,
-                )
+            if len(strategy_df) == 0:
+                continue
+            color = strategy_colors.get(strategy, "black")
+            marker = strategy_markers.get(strategy, "o")
 
-        ax2.set_ylabel(f"{ylabel2} / {ylabel3}", color="r")
+            ax2.plot(
+                strategy_df[x_col],
+                strategy_df[right_col[0]],
+                color=color,
+                marker=marker,
+                linestyle=right_col[2],
+                linewidth=2,
+                label=f"{strategy} - {right_col[1]}",
+                markersize=6,
+            )
+
+        ax2.set_ylabel(right_col[1], color="r")
         ax2.tick_params(axis="y", labelcolor="r")
 
         # Combine legends
@@ -177,39 +201,33 @@ def plot_three_metrics_all_strategies(df, x_col, y1_col, y2_col, y3_col, title, 
         # Plot all on same axis
         for strategy in df["strategy_name"].unique():
             strategy_df = df[df["strategy_name"] == strategy].sort_values(x_col)
-            if len(strategy_df) > 0:
-                color = strategy_colors.get(strategy, "black")
-                marker = strategy_markers.get(strategy, "o")
+            if len(strategy_df) == 0:
+                continue
+            color = strategy_colors.get(strategy, "black")
+            marker = strategy_markers.get(strategy, "o")
+
+            # Plot all three metrics
+            for col, label, linestyle in left_cols:
                 ax1.plot(
                     strategy_df[x_col],
-                    strategy_df[y1_col],
+                    strategy_df[col],
                     color=color,
                     marker=marker,
-                    linestyle="-",
-                    linewidth=2,
-                    label=f"{strategy} - {ylabel1}",
-                    markersize=6,
+                    linestyle=linestyle,
+                    linewidth=2 if linestyle == "-" else 1,
+                    label=f"{strategy} - {label}",
+                    markersize=6 if linestyle == "-" else 4,
                 )
-                ax1.plot(
-                    strategy_df[x_col],
-                    strategy_df[y2_col],
-                    color=color,
-                    marker=marker,
-                    linestyle="--",
-                    linewidth=1,
-                    label=f"{strategy} - {ylabel2}",
-                    markersize=4,
-                )
-                ax1.plot(
-                    strategy_df[x_col],
-                    strategy_df[y3_col],
-                    color=color,
-                    marker=marker,
-                    linestyle=":",
-                    linewidth=1,
-                    label=f"{strategy} - {ylabel3}",
-                    markersize=4,
-                )
+            ax1.plot(
+                strategy_df[x_col],
+                strategy_df[right_col[0]],
+                color=color,
+                marker=marker,
+                linestyle=right_col[2],
+                linewidth=2,
+                label=f"{strategy} - {right_col[1]}",
+                markersize=6,
+            )
 
         ax1.set_xlabel(xlabel)
         ax1.set_ylabel("Value")
@@ -227,6 +245,8 @@ def main():
     print(df[df["date"] > "2025-10-22"].to_markdown())
     df["date"] = pd.to_datetime(df["date"])
     df = df.sort_values(["strategy_name", "date"])
+
+    df = df[df["date"] < "2025-10-29"]
 
     df["retention_ratio_day1"] = df["num_users_day1"] / df["num_users"]
     df["retention_ratio_day3"] = df["num_users_day3"] / df["num_users"]
@@ -299,21 +319,36 @@ def main():
     print("Generated user_metrics_all.png")
 
     # Figure 5: Retention ratios - All strategies together
-    fig5 = plot_three_metrics_all_strategies(
+    fig5 = plot_two_metrics_all_strategies(
         df,
         "date",
-        "num_users",
         "retention_ratio_day1",
         "retention_ratio_day3",
         "User Count and Retention Ratios - All Strategies",
         "Date",
-        "Num Users",
         "Retention Ratio Day 1",
         "Retention Ratio Day 3",
     )
     plt.savefig(f"{output_dir}/retention_ratios_all.png", dpi=300, bbox_inches="tight")
     plt.close(fig5)
     print("Generated retention_ratios_all.png")
+
+    # Figure 6: bullet hit ratio - All strategies together
+    fig5 = plot_three_metrics_all_strategies(
+        df,
+        "date",
+        "num_bullets_per_user",
+        "num_killed_bullets_per_user",
+        "bullets_kill_ratio",
+        "User Count and Retention Ratios - All Strategies",
+        "Date",
+        "Num Bullets Per User",
+        "Num Kill Bullets Per User",
+        "Bullets Kill Ratio",
+    )
+    plt.savefig(f"{output_dir}/bullets_all.png", dpi=300, bbox_inches="tight")
+    plt.close(fig5)
+    print("Generated bullets_all.png")
 
     print("\nAll plots generated successfully!")
 
