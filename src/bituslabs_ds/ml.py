@@ -613,7 +613,7 @@ class ClusterAnalysisPipeline:
         plt.close()
 
         # If n_components > 3, generate a pair plot for the PCA components
-        if n_components > 3:
+        if n_components >= 3:
             df_pca = pd.DataFrame(x_pca, columns=[f"PC{i+1}" for i in range(n_components)])
             df_pca["cluster_label"] = cluster_label
             # Only lower triangle, diagonal = hist; hue as cluster. Disable upper triangle.
@@ -624,10 +624,10 @@ class ClusterAnalysisPipeline:
                 corner=True,
                 palette=palette,
             )
-            pair_grid.map_lower(sns.scatterplot, alpha=0.7)
+            pair_grid.map_lower(sns.scatterplot, alpha=0.7, s=7)
             pair_grid.map_diag(sns.histplot, kde=False, alpha=0.6, stat="density")
             pair_grid.add_legend(title="Cluster", adjust_subtitles=True)
-            plt.suptitle(f"Pair Plot of First {n_components} PCA Components by Cluster", fontsize=26, y=1.01)
+            plt.suptitle(f"Pair Plot of First {n_components} PCA Components by Cluster", fontsize=10, y=0.95)
             plt.tight_layout(rect=(0, 0.03, 1, 0.97))
             plt.savefig(
                 self.output_path
@@ -838,7 +838,7 @@ class ClusterAnalysisPipeline:
                 .groupby("loginname", as_index=False)
                 .first()[["loginname", "slottype"]]
             )
-            slottype_ratio = first_slottype["slottype"].value_counts(normalize=True).to_dict()
+            slottype_ratio = first_slottype["slottype"].value_counts(normalize=False).to_dict()
             stats["slottype_ratio"] = slottype_ratio
 
             cluster_stats[f"cluster_{cluster_index}"] = stats
