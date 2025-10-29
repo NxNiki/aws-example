@@ -802,10 +802,10 @@ class ClusterAnalysisPipeline:
 
         scaler = StandardScaler()
         cluster_stats = {}
-        for cluster_index in self.n_clusters:
+        for cluster_index in range(self.n_clusters):
             data = read_local_cache(
-                local_cache_path=self.output_path / "enriched_data_cluster_{cluster_index}.parquet",
-                columns=["basepoint", "account"],
+                local_cache_path=self.output_path / f"output/enriched_data_cluster_{cluster_index}.parquet",
+                columns=["loginname", "billtime", "basepoint", "account", "slottype"],
             )
 
             scaler.fit(data["basepoint"].to_frame())
@@ -831,11 +831,21 @@ class ClusterAnalysisPipeline:
                 "basepoint_scaler_std": np.sqrt(scaler.var_[0]),
                 "account_counter": Counter(data["account"]),
             }
+
+            # For each loginname, select "slottype" from their earliest "billtime"
+            first_slottype = (
+                data.sort_values(["loginname", "billtime"])
+                .groupby("loginname", as_index=False)
+                .first()[["loginname", "slottype"]]
+            )
+            slottype_ratio = first_slottype["slottype"].value_counts(normalize=True).to_dict()
+            stats["slottype_ratio"] = slottype_ratio
+
             cluster_stats[f"cluster_{cluster_index}"] = stats
 
         # Convert NumPy types to native Python types for JSON serialization
         cluster_stats_serializable = convert_numpy_types(cluster_stats)
-        json.dump(cluster_stats_serializable, open(self.output_path / "cluster_stats.json", "w"), indent=4)
+        json.dump(cluster_stats_serializable, open(self.output_path / "output/cluster_stats.json", "w"), indent=4)
 
 
 def calculate_inertia(x: np.ndarray, y: np.ndarray) -> float:

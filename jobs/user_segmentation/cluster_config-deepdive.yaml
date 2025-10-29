@@ -174,7 +174,7 @@ pipeline:
   fit_cluster_model: false  # Apply trained model to new data
   attach_cluster_label: false  # Attach cluster indices to original data
   get_cluster_stats: true
-  upload_result_to_s3: true  
+  upload_result_to_s3: false  
 
 
 

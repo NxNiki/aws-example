@@ -22,8 +22,8 @@ processor = ScriptProcessor(
     image_uri=image_uri,
     command=["python3"],
     role=role,
-    # instance_type="ml.m5.12xlarge",  # 48 cpu cores, 192 GB memory
-    instance_type="ml.r7i.xlarge",  # 4 cpu cores, 32 GB memory
+    instance_type="ml.m5.12xlarge",  # 48 cpu cores, 192 GB memory
+    # instance_type="ml.r7i.xlarge",  # 4 cpu cores, 32 GB memory
     instance_count=1,
     base_job_name="mahjiang-streak-stats",
     sagemaker_session=session,
@@ -46,7 +46,7 @@ processor.run(
         "--output",
         output_dir,
         "--max_workers",
-        "4",
+        "40",
         "--executor_type",
         "process",
     ],

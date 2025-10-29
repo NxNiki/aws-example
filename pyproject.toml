@@ -32,9 +32,9 @@ diptest = "^0.10.0"
 # imitation = "^1.0.1"
 # giotto-tda = "^0.6.0"
 pyyaml = "^6.0.2"
+pyspark = "3.0.0" # do not build package with pyspark when submit job to AWS EMR
 
 [tool.poetry.group.dev.dependencies]
-pyspark = "3.0.0" # do not build package with pyspark when submit job to AWS EMR
 jupyter = "^1.0"
 isort = "^6.0.1"
 black = "^24.3"

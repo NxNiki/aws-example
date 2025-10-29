@@ -275,11 +275,13 @@ def _read_file(
     return read_to_pandas_df(bucket, file, columns, row_filters, data_types)
 
 
-def read_local_cache(local_cache_path, columns: Optional[List[str]] = None, data_types: Optional[Dict] = None):
+def read_local_cache(
+    local_cache_path: Union[str, Path], columns: Optional[List[str]] = None, data_types: Optional[Dict] = None
+):
     logger.info(f"read data {local_cache_path}.")
-    if local_cache_path.endswith(".csv"):
+    if str(local_cache_path).endswith(".csv"):
         data = pd.read_csv(local_cache_path, usecols=columns, dtype=data_types)
-    elif local_cache_path.endswith(".parquet"):
+    elif str(local_cache_path).endswith(".parquet"):
         data = pd.read_parquet(local_cache_path, columns=columns)
         if data_types:
             data = data.astype(data_types)

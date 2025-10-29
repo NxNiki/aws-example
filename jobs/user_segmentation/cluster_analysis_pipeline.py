@@ -103,8 +103,8 @@ def main(config_path: str):
 
 if __name__ == "__main__":
 
-    # project = "deepdive"
-    project = "wucaishen"
+    project = "deepdive"
+    # project = "wucaishen"
 
     current_path = os.path.abspath(os.path.dirname(__file__))
     parser = argparse.ArgumentParser(description="cluster analysis pipeline")
