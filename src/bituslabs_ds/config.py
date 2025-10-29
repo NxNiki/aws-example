@@ -2,6 +2,7 @@ import logging
 import logging.handlers
 import os
 import sys
+import time
 from datetime import datetime
 from multiprocessing import Process, Queue
 from pathlib import Path
@@ -82,7 +83,8 @@ def listener_process(queue, log_path):
 
     # Keep the listener running until shutdown
     try:
-        listener.join()
+        while True:
+            time.sleep(0.1)  # Small sleep to prevent busy waiting
     except KeyboardInterrupt:
         pass
     finally:

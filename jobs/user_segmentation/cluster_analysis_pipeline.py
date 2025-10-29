@@ -91,6 +91,9 @@ def main(config_path: str):
     if cluster_pipeline.run_attach_cluster_label:
         cluster_pipeline.attach_cluster_label(reload=RELOAD_ATTACH_DATA)
 
+    if cluster_pipeline.run_get_cluster_stats:
+        cluster_pipeline.get_cluster_stats()
+
     if cluster_pipeline.run_upload_result_to_s3:
         upload_folder_to_s3(cluster_pipeline.output_path, S3_BUCKET, f"{cluster_pipeline.s3_prefix}_{time_tag}")
 

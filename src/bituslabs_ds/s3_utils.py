@@ -7,7 +7,6 @@ import os
 import re
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from functools import partial
-from math import e
 from pathlib import Path
 from typing import Callable, Dict, List, Literal, Optional, Tuple, Union
 from urllib.parse import urlparse

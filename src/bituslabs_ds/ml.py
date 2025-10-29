@@ -3,8 +3,10 @@ Machine Learning utilities and clustering analysis classes.
 """
 
 import gc
+import json
 import logging
 import os
+from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pprint import pformat
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -16,6 +18,7 @@ import pandas as pd
 import seaborn as sns
 import yaml
 from joblib import parallel_backend
+from scipy.stats import skew
 from skl2onnx import convert_sklearn
 from skl2onnx.common.data_types import FloatTensorType
 from sklearn.cluster import KMeans
@@ -31,6 +34,7 @@ from bituslabs_ds.s3_utils import list_s3_files, read_files, read_local_cache, s
 from bituslabs_ds.utils import (
     clip_outliers,
     column_iterator,
+    convert_numpy_types,
     df_power_transform,
     keep_numeric_columns,
     remove_outliers,
@@ -793,6 +797,45 @@ class ClusterAnalysisPipeline:
             logger.critical(
                 f"sum of sample size for all clusters: {num_samples} larger than attach data: {len(attach_data)}!"
             )
+
+    def get_cluster_stats(self):
+
+        scaler = StandardScaler()
+        cluster_stats = {}
+        for cluster_index in self.n_clusters:
+            data = read_local_cache(
+                local_cache_path=self.output_path / "enriched_data_cluster_{cluster_index}.parquet",
+                columns=["basepoint", "account"],
+            )
+
+            scaler.fit(data["basepoint"].to_frame())
+
+            _basepoint_clean = data["basepoint"].dropna()
+            stats = {
+                "basepoint_mean": data["basepoint"].mean(),
+                "basepoint_min": data["basepoint"].min(),
+                "basepoint_max": data["basepoint"].max(),
+                "basepoint_p5": np.percentile(_basepoint_clean, 5) if _basepoint_clean.size > 0 else None,
+                "basepoint_p25": np.percentile(_basepoint_clean, 25) if _basepoint_clean.size > 0 else None,
+                "basepoint_p75": np.percentile(_basepoint_clean, 75) if _basepoint_clean.size > 0 else None,
+                "basepoint_p95": np.percentile(_basepoint_clean, 95) if _basepoint_clean.size > 0 else None,
+                "basepoint_median": data["basepoint"].median(),
+                "basepoint_skewness": skew(_basepoint_clean),
+                "basepoint_std": data["basepoint"].std(),
+                "basepoint_count": len(data["basepoint"]),
+                "basepoint_nan_count": len(data["basepoint"]) - len(_basepoint_clean),
+                "basepoint_nan_ratio": (len(data["basepoint"]) - len(_basepoint_clean)) / len(data["basepoint"]),
+                "basepoint_less_than_0_count": (_basepoint_clean < 0).sum(),
+                "basepoint_less_than_0_ratio": (_basepoint_clean < 0).sum() / len(data["basepoint"]),
+                "basepoint_scaler_mean": scaler.mean_[0],
+                "basepoint_scaler_std": np.sqrt(scaler.var_[0]),
+                "account_counter": Counter(data["account"]),
+            }
+            cluster_stats[f"cluster_{cluster_index}"] = stats
+
+        # Convert NumPy types to native Python types for JSON serialization
+        cluster_stats_serializable = convert_numpy_types(cluster_stats)
+        json.dump(cluster_stats_serializable, open(self.output_path / "cluster_stats.json", "w"), indent=4)
 
 
 def calculate_inertia(x: np.ndarray, y: np.ndarray) -> float:
