@@ -35,7 +35,7 @@ time_tag = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 outputs = [
     ProcessingOutput(
         source=f"{output_dir}",
-        destination=f"s3://{S3_BUCKET}/ds-data-mahjiang_streak_stats/2025_{time_tag}/",
+        destination=f"s3://{S3_BUCKET}/ds-data-mahjiang_streak_stats/result_{time_tag}/",
     )
 ]
 
