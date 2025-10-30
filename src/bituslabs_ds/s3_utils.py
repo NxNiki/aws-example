@@ -6,7 +6,7 @@ import logging
 import os
 import re
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-from functools import partial
+from functools import lru_cache, partial
 from pathlib import Path
 from typing import Callable, Dict, List, Literal, Optional, Tuple, Union
 from urllib.parse import urlparse
@@ -20,7 +20,16 @@ from pyspark.sql import DataFrame as SparkDataFrame
 
 from bituslabs_ds.config import DEFAULT_MAX_JOBS, REGION
 
-s3_client = boto3.client("s3")
+
+@lru_cache(maxsize=None)
+def _get_s3_client_for_pid(pid: int):
+    # Lazily create and cache one client per process (fork-safe)
+    return boto3.client("s3")
+
+
+def get_s3_client():
+    # Return the cached client for the current process
+    return _get_s3_client_for_pid(os.getpid())
 
 
 logger = logging.getLogger(__name__)
@@ -79,7 +88,7 @@ def read_to_pandas_df(
     bucket = parse_bucket_name(bucket)
     _, ext = os.path.splitext(key.lower())
     if ext == ".csv":
-        response = s3_client.get_object(Bucket=bucket, Key=key)
+        response = get_s3_client().get_object(Bucket=bucket, Key=key)
         data = pd.read_csv(response["Body"], usecols=columns, low_memory=True, dtype=data_types)
     elif ext == ".parquet":
         s3 = fs.S3FileSystem(region=REGION)
@@ -122,7 +131,7 @@ def write_pandas_to_s3(data: pd.DataFrame, bucket: str, key: str) -> None:
     bucket = parse_bucket_name(bucket)
     csv_buffer = io.StringIO()
     data.to_csv(csv_buffer, index=False)
-    s3_client.put_object(Bucket=bucket, Key=key, Body=csv_buffer.getvalue())
+    get_s3_client().put_object(Bucket=bucket, Key=key, Body=csv_buffer.getvalue())
 
     logger.info(f"Writing {key} to {bucket}")
 
@@ -175,7 +184,7 @@ def upload_file_to_s3(local_path: Union[str, Path], s3_bucket: str, s3_key: str)
 
     try:
         logger.info(f"Uploaded {local_path} to s3://{s3_bucket}/{s3_key}")
-        s3_client.upload_file(local_path, s3_bucket, s3_key, ExtraArgs=extra_args)
+        get_s3_client().upload_file(local_path, s3_bucket, s3_key, ExtraArgs=extra_args)
         return f"s3://{s3_bucket}/{s3_key}"
     except FileNotFoundError:
         logger.error("Error: The specified file was not found.")
@@ -253,7 +262,7 @@ def list_s3_files(bucket: str, prefix: str, pattern: Optional[str] = None) -> Li
     """
     logger.info(f"Listing S3 files in: {bucket}/{prefix}, with pattern: {pattern}")
     matching_keys = []
-    paginator = s3_client.get_paginator("list_objects_v2")
+    paginator = get_s3_client().get_paginator("list_objects_v2")
 
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
         for obj in page.get("Contents", []):

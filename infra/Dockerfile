@@ -25,13 +25,12 @@ RUN pip install sagemaker-training
 # Set up working directory for the builder
 WORKDIR /opt/program
 
-COPY ./pyproject.toml poetry.lock README.md ./
-COPY ./src ./src
-
+COPY ./pyproject.toml poetry.lock ./
 # Use poetry to install dependencies in a clean, isolated environment
 # We install to the system using 'virtualenvs.create false'
-RUN poetry config virtualenvs.create false && poetry install --only main --no-interaction
+RUN poetry config virtualenvs.create false && poetry install --only main --no-interaction --no-root
 
+COPY ./src ./src
 # --- STAGE 2: Runtime Stage (Final Image) ---
 FROM python:3.9-slim AS final
 
@@ -49,7 +48,7 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --from=builder /opt/program/src /opt/program/src
 
 # Set Python environment variables
-ENV PYTHONPATH="/opt/program"
+ENV PYTHONPATH="/opt/program/src"
 
 # ENTRYPOINT ["python3"] # Use the more specific training entrypoint
 ENTRYPOINT ["python3", "-m", "sagemaker_training.cli.train"]

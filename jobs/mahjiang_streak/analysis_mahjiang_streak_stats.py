@@ -516,17 +516,20 @@ def process_single_file(file_path: str, output_path: str) -> Tuple[str, Optional
         if stats_f is None and GET_STATS["Trigger"]:
             stats_f = get_trigger_stats(data)
             trigger_stats_file_f = f"{output_path}/SS03_Trigger_Stats/{basename}.json"
-            json.dump(stats_f, open(trigger_stats_file_f, "w"), indent=4, cls=NumpyEncoder)
+            with open(trigger_stats_file_f, "w") as f:
+                json.dump(stats_f, f, indent=4, cls=NumpyEncoder)
 
         if stats_f_bg is None and GET_STATS["BG"]:
             stats_f_bg = get_item_stats(data, game_type="BG")
             bg_stats_file_f = f"{output_path}/SS03_BG_Items/{basename}.json"
-            json.dump(stats_f_bg, open(bg_stats_file_f, "w"), indent=4, cls=NumpyEncoder)
+            with open(bg_stats_file_f, "w") as f:
+                json.dump(stats_f_bg, f, indent=4, cls=NumpyEncoder)
 
         if stats_f_fg is None and GET_STATS["FG"]:
             stats_f_fg = get_item_stats(data, game_type="FG")
             fg_stats_file_f = f"{output_path}/SS03_FG_Items/{basename}.json"
-            json.dump(stats_f_fg, open(fg_stats_file_f, "w"), indent=4, cls=NumpyEncoder)
+            with open(fg_stats_file_f, "w") as f:
+                json.dump(stats_f_fg, f, indent=4, cls=NumpyEncoder)
 
     return basename, stats_f, stats_f_bg, stats_f_fg
 
@@ -643,10 +646,15 @@ if __name__ == "__main__":
         choices=["thread", "process"],
         help="Type of executor to use: 'thread' for ThreadPoolExecutor or 'process' for ProcessPoolExecutor",
     )
+    parser.add_argument(
+        "--test_mode",
+        action="store_true",
+        help="Run in test mode (e.g., limit files for quicker iteration)",
+    )
     args = parser.parse_args()
 
     time_tag = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    setup_logging(
+    log_listener = setup_logging(
         output_path=args.log_output,
         log_filename=f"analysis_mahjiang_streak_stats_{time_tag}.log",
         multiprocess=args.executor_type == "process",
@@ -662,10 +670,23 @@ if __name__ == "__main__":
         # prefix="processed_parquet/",
         # pattern=r".*/.*.parquet",
     )
-    stats = get_game_stats(
-        files, output_path=args.output, max_workers=int(args.max_workers), executor_type=args.executor_type
-    )
 
-    end_time = time.time()
-    elapsed = end_time - start_time
-    logger.info(f"Program completed in {elapsed:.2f} seconds.")
+    if args.test_mode:
+        files = files[:10]
+        logger.warning("running on test mode with 10 files")
+
+    try:
+        stats = get_game_stats(
+            files, output_path=args.output, max_workers=int(args.max_workers), executor_type=args.executor_type
+        )
+
+        end_time = time.time()
+        elapsed = end_time - start_time
+        logger.info(f"Program completed in {elapsed:.2f} seconds.")
+    finally:
+        # Ensure the logging listener does not keep the process alive
+        if log_listener is not None:
+            try:
+                log_listener.terminate()
+            except Exception:
+                pass

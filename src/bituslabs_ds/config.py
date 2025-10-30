@@ -112,6 +112,8 @@ def setup_logging(
     if multiprocess:
         # 1. Start the separate process that will manage writing to the log file
         log_listener_process = Process(target=listener_process, args=(log_queue, log_path))
+        # Make the listener a daemon so it won't keep containers/instances alive after the main process exits
+        log_listener_process.daemon = True
         log_listener_process.start()
 
         # 2. Configure the main process's root logger and all worker loggers
