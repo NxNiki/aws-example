@@ -811,17 +811,36 @@ class ClusterAnalysisPipeline:
             scaler.fit(data["basepoint"].to_frame())
 
             _basepoint_clean = data["basepoint"].dropna()
+            # remove samples in free spins to match calculation in GAIL model:
+            _basepoint_clean_non_free_spin = data.loc[data["slottype"] != 2, "basepoint"].dropna()
+
             stats = {
-                "basepoint_mean": data["basepoint"].mean(),
-                "basepoint_min": data["basepoint"].min(),
-                "basepoint_max": data["basepoint"].max(),
-                "basepoint_p5": np.percentile(_basepoint_clean, 5) if _basepoint_clean.size > 0 else None,
-                "basepoint_p25": np.percentile(_basepoint_clean, 25) if _basepoint_clean.size > 0 else None,
-                "basepoint_p75": np.percentile(_basepoint_clean, 75) if _basepoint_clean.size > 0 else None,
-                "basepoint_p95": np.percentile(_basepoint_clean, 95) if _basepoint_clean.size > 0 else None,
-                "basepoint_median": data["basepoint"].median(),
-                "basepoint_skewness": skew(_basepoint_clean),
-                "basepoint_std": data["basepoint"].std(),
+                "basepoint_mean": _basepoint_clean_non_free_spin.mean(),
+                "basepoint_min": _basepoint_clean_non_free_spin.min(),
+                "basepoint_max": _basepoint_clean_non_free_spin.max(),
+                "basepoint_p5": (
+                    np.percentile(_basepoint_clean_non_free_spin, 5)
+                    if _basepoint_clean_non_free_spin.size > 0
+                    else None
+                ),
+                "basepoint_p25": (
+                    np.percentile(_basepoint_clean_non_free_spin, 25)
+                    if _basepoint_clean_non_free_spin.size > 0
+                    else None
+                ),
+                "basepoint_p75": (
+                    np.percentile(_basepoint_clean_non_free_spin, 75)
+                    if _basepoint_clean_non_free_spin.size > 0
+                    else None
+                ),
+                "basepoint_p95": (
+                    np.percentile(_basepoint_clean_non_free_spin, 95)
+                    if _basepoint_clean_non_free_spin.size > 0
+                    else None
+                ),
+                "basepoint_median": _basepoint_clean_non_free_spin.median(),
+                "basepoint_skewness": skew(_basepoint_clean_non_free_spin),
+                "basepoint_std": _basepoint_clean_non_free_spin.std(),
                 "basepoint_count": len(data["basepoint"]),
                 "basepoint_nan_count": len(data["basepoint"]) - len(_basepoint_clean),
                 "basepoint_nan_ratio": (len(data["basepoint"]) - len(_basepoint_clean)) / len(data["basepoint"]),
