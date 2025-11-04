@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 
 # data_file = "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/Result_13.csv"
-data_file = "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/Result_34.csv"
+data_file = "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/Result_2.csv"
 output_dir = os.path.dirname(data_file)
 
 # Color palette and markers for strategies
@@ -13,10 +13,34 @@ strategy_colors = {"DEFAULT_FALLBACK": "blue", "BOOST_POOL": "green", "DYNAMIC_R
 strategy_markers = {"DEFAULT_FALLBACK": "o", "BOOST_POOL": "s", "DYNAMIC_RTP": "^"}
 
 
-def plot_two_metrics_all_strategies(df, x_col, y1_col, y2_col, title, xlabel, ylabel1, ylabel2):
+def plot_two_metrics_all_strategies(
+    df,
+    x_col,
+    y1_col,
+    y2_col,
+    title,
+    xlabel,
+    ylabel1,
+    ylabel2,
+    twin_axis=True,
+    log_y=False,
+):
     """
     Plot two columns with all strategies in one figure.
     Uses twin axes if values differ significantly in scale.
+    Optionally allows y-axis (or both y-axes) to be log scale.
+
+    Args:
+        df: DataFrame containing the data
+        x_col: Name of the x-column
+        y1_col: Name of the first y-column (left axis or axis)
+        y2_col: Name of the second y-column (right axis or same axis)
+        title: Title for the plot
+        xlabel: X-axis label
+        ylabel1: Left or primary y-axis label
+        ylabel2: Right or secondary y-axis label
+        twin_axis: Whether to use a twin y-axis (if scale difference is large)
+        log_y: Whether to use log scale for the y-axis/axes (default: False)
     """
     # Check if we need twin axis by comparing scales across all data
     y1_max = abs(df[y1_col]).max()
@@ -25,7 +49,7 @@ def plot_two_metrics_all_strategies(df, x_col, y1_col, y2_col, title, xlabel, yl
 
     fig, ax1 = plt.subplots(figsize=(14, 7))
 
-    if scale_ratio > 10:
+    if scale_ratio > 10 and twin_axis:
         # Use twin axis
         for strategy in df["strategy_name"].unique():
             strategy_df = df[df["strategy_name"] == strategy].sort_values(x_col)
@@ -43,6 +67,9 @@ def plot_two_metrics_all_strategies(df, x_col, y1_col, y2_col, title, xlabel, yl
         ax1.set_ylabel(ylabel1, color="b")
         ax1.tick_params(axis="y", labelcolor="b")
 
+        if log_y:
+            ax1.set_yscale("symlog", linthresh=10)
+
         ax2 = ax1.twinx()
         for strategy in df["strategy_name"].unique():
             strategy_df = df[df["strategy_name"] == strategy].sort_values(x_col)
@@ -58,6 +85,9 @@ def plot_two_metrics_all_strategies(df, x_col, y1_col, y2_col, title, xlabel, yl
 
         ax2.set_ylabel(ylabel2, color="r")
         ax2.tick_params(axis="y", labelcolor="r")
+
+        if log_y:
+            ax2.set_yscale("symlog", linthresh=10)
 
         # Combine legends
         lines1, labels1 = ax1.get_legend_handles_labels()
@@ -89,6 +119,8 @@ def plot_two_metrics_all_strategies(df, x_col, y1_col, y2_col, title, xlabel, yl
 
         ax1.set_xlabel(xlabel)
         ax1.set_ylabel("Value")
+        if log_y:
+            ax1.set_yscale("symlog", linthresh=10)
         ax1.legend(loc="best", fontsize=8)
 
     plt.title(title)
@@ -246,7 +278,7 @@ def main():
     df["date"] = pd.to_datetime(df["date"])
     df = df.sort_values(["strategy_name", "date"])
 
-    df = df[df["date"] < "2025-10-29"]
+    df = df[df["date"] <= "2025-10-31"]
 
     df["retention_ratio_day1"] = df["num_users_day1"] / df["num_users"]
     df["retention_ratio_day3"] = df["num_users_day3"] / df["num_users"]
@@ -302,21 +334,38 @@ def main():
     print("Generated rtp_and_bet_all.png")
 
     # Figure 4: num_users, num_users_day1, num_users_day3 - All strategies together
-    fig4 = plot_three_metrics_all_strategies(
+    fig4 = plot_two_metrics_all_strategies(
         df,
         "date",
         "num_users",
         "num_users_day1",
-        "num_users_day3",
         "User Metrics - All Strategies",
         "Date",
         "Num Users",
         "Num Users Day 1",
-        "Num Users Day 3",
+        twin_axis=False,
+        log_y=True,
     )
-    plt.savefig(f"{output_dir}/user_metrics_all.png", dpi=300, bbox_inches="tight")
+    plt.savefig(f"{output_dir}/user_number_day1_retention.png", dpi=300, bbox_inches="tight")
     plt.close(fig4)
-    print("Generated user_metrics_all.png")
+    print("Generated user_number_day1_retention.png")
+
+    # Figure 4: num_users, num_users_day1, num_users_day3 - All strategies together
+    fig4 = plot_two_metrics_all_strategies(
+        df,
+        "date",
+        "num_users",
+        "num_users_day3",
+        "User Metrics - All Strategies",
+        "Date",
+        "Num Users",
+        "Num Users Day 3",
+        twin_axis=False,
+        log_y=True,
+    )
+    plt.savefig(f"{output_dir}/user_number_day3_retention.png", dpi=300, bbox_inches="tight")
+    plt.close(fig4)
+    print("Generated user_number_day3_retention.png")
 
     # Figure 5: Retention ratios - All strategies together
     fig5 = plot_two_metrics_all_strategies(
@@ -334,16 +383,14 @@ def main():
     print("Generated retention_ratios_all.png")
 
     # Figure 6: bullet hit ratio - All strategies together
-    fig5 = plot_three_metrics_all_strategies(
+    fig5 = plot_two_metrics_all_strategies(
         df,
         "date",
         "num_bullets_per_user",
-        "num_killed_bullets_per_user",
         "bullets_kill_ratio",
         "User Count and Retention Ratios - All Strategies",
         "Date",
         "Num Bullets Per User",
-        "Num Kill Bullets Per User",
         "Bullets Kill Ratio",
     )
     plt.savefig(f"{output_dir}/bullets_all.png", dpi=300, bbox_inches="tight")
