@@ -7,7 +7,7 @@ import time
 import traceback
 from audioop import mul
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, TimeoutError, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -51,6 +51,7 @@ READ_COLUMNS = [
 ]
 
 GET_STATS = {"BG": True, "FG": True, "Trigger": True}
+SINGLE_TASK_TIMEOUT_SECONDS = 1800  # 30 minutes safety timeout per file
 
 # Parallel processing implemented: each file is processed separately using ThreadPoolExecutor and results are combined.
 
@@ -492,9 +493,11 @@ def process_single_file(file_path: str, output_path: str) -> Tuple[str, Optional
     if stats_f is None or stats_f_bg is None or stats_f_fg is None:
         logger.info(f"Processing file: {file_path}")
 
+        # Explicitly disable parallel mode when reading single file inside ProcessPoolExecutor
         data = read_files(
             file_path,
             columns=READ_COLUMNS,
+            parallel_mode="none",  # Disable parallel execution to avoid nested executor issues
         )
 
         # Apply data preprocessing
@@ -590,6 +593,10 @@ def get_game_stats(files, output_path, max_workers=None, executor_type="thread")
     # Process files in parallel
     random.shuffle(files)
     logger.info(f"Processing {len(files)} files with {max_workers} workers using {executor_name}...")
+
+    completed_count = 0
+    failed_count = 0
+
     with executor_class(max_workers=max_workers) as executor:
         # Submit all tasks
         future_to_file = {
@@ -600,14 +607,27 @@ def get_game_stats(files, output_path, max_workers=None, executor_type="thread")
         for future in as_completed(future_to_file):
             file_path = future_to_file[future]
             try:
-                file_name, stats_f, stats_f_bg, stats_f_fg = future.result()
-                logger.info(f"Completed processing: {file_name}")
+                file_name, stats_f, stats_f_bg, stats_f_fg = future.result(timeout=SINGLE_TASK_TIMEOUT_SECONDS)
+                completed_count += 1
+                logger.info(f"Completed processing [{completed_count}/{len(files)}]: {file_name}")
                 update_trigger_stats(stats_trigger, stats_f)
                 update_item_stats(stats_bg, stats_f_bg)
                 update_item_stats(stats_fg, stats_f_fg)
 
+            except TimeoutError as exc:
+                failed_count += 1
+                logger.error(
+                    f"File timed out after {SINGLE_TASK_TIMEOUT_SECONDS}s: {file_path} -> {exc}\n{traceback.format_exc()}"
+                )
             except Exception as exc:
-                logger.error(f"File {file_path} generated an exception: {exc}\n{traceback.format_exc()}")
+                failed_count += 1
+                logger.error(
+                    f"File [{failed_count} failed] {file_path} generated an exception: {exc}\n{traceback.format_exc()}"
+                )
+
+    logger.info(
+        f"Processing summary: {completed_count} succeeded, {failed_count} failed out of {len(files)} total files"
+    )
 
     logger.info("All files processed. Writing final aggregated results...")
 
@@ -635,6 +655,14 @@ def get_game_stats(files, output_path, max_workers=None, executor_type="thread")
 
 if __name__ == "__main__":
 
+    # Use spawn to avoid fork-related deadlocks with boto3/urllib3 in Linux containers
+    try:
+        import multiprocessing as mp
+
+        mp.set_start_method("spawn", force=True)
+    except Exception:
+        pass
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=False, default=str(LOCAL_ROOT / "jobs/output_mahjiang_streak"))
     parser.add_argument("--log_output", required=False, default=str(LOCAL_ROOT / "jobs/log"))
@@ -657,7 +685,8 @@ if __name__ == "__main__":
     log_listener = setup_logging(
         output_path=args.log_output,
         log_filename=f"analysis_mahjiang_streak_stats_{time_tag}.log",
-        multiprocess=args.executor_type == "process",
+        # multiprocess=args.executor_type == "process",
+        multiprocess=False,
     )
     start_time = time.time()
     logger.info("Program started.")

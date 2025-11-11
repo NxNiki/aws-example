@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 
 import boto3
 import pandas as pd
+from botocore.config import Config
 from botocore.exceptions import NoCredentialsError
 from pyarrow import fs
 from pyarrow.dataset import Dataset, dataset
@@ -24,7 +25,8 @@ from bituslabs_ds.config import DEFAULT_MAX_JOBS, REGION
 @lru_cache(maxsize=None)
 def _get_s3_client_for_pid(pid: int):
     # Lazily create and cache one client per process (fork-safe)
-    return boto3.client("s3")
+    cfg = Config(max_pool_connections=50, retries={"max_attempts": 10, "mode": "adaptive"})
+    return boto3.client("s3", config=cfg)
 
 
 def get_s3_client():

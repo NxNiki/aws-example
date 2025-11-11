@@ -46,7 +46,7 @@ processor.run(
         "--output",
         output_dir,
         "--max_workers",
-        "3",
+        "4",
         "--executor_type",
         "process",
         # "--test_mode",
