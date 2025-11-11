@@ -4,8 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-# data_file = "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/Result_13.csv"
-data_file = "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/Result_2.csv"
+data_file = "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/result_daily_stats.csv"
 output_dir = os.path.dirname(data_file)
 
 # Color palette and markers for strategies
@@ -278,7 +277,7 @@ def main():
     df["date"] = pd.to_datetime(df["date"])
     df = df.sort_values(["strategy_name", "date"])
 
-    df = df[df["date"] <= "2025-10-31"]
+    df = df[df["date"] <= "2025-11-05"]
 
     df["retention_ratio_day1"] = df["num_users_day1"] / df["num_users"]
     df["retention_ratio_day3"] = df["num_users_day3"] / df["num_users"]
