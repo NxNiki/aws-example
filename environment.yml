@@ -6,6 +6,7 @@ dependencies:
   - python=3.9
   - pip
   - poetry
+  # - fonts-noto-cjk
 #  - libpython # ensure Python dev headers
 #  - openssl
 #  - libffi

@@ -19,9 +19,7 @@ from sklearn.preprocessing import StandardScaler
 from bituslabs_ds.config import LOCAL_ROOT, S3_BUCKET, setup_logging
 from bituslabs_ds.s3_utils import read_files, upload_file_to_s3
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = LOCAL_ROOT / "jobs/output_deepdive/cluster_stats/"
-
 setup_logging(f"{LOCAL_ROOT}/jobs/log/analysis_gai_simulation_cluster_stats.log")
 
 

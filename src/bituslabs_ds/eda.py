@@ -1509,16 +1509,16 @@ class DataProfiler:
 
         return pos_skewed, neg_skewed
 
-    def transform_skewed_columns(self, pos_suffix: str = "_log", neg_suffix: str = "_exp") -> None:
+    def transform_skewed_columns(self, pos_suffix: Optional[str] = None, neg_suffix: Optional[str] = None) -> None:
         """Transform skewed columns using log or exponential transformations."""
         pos_skewed, neg_skewed = self.get_skewed_columns()
 
-        if pos_suffix == "" or pos_suffix is None:
+        if pos_suffix is None:
             pos_suffix = self._pos_skewed_col_suffix
         else:
             self._pos_skewed_col_suffix = pos_suffix
 
-        if neg_suffix == "" or neg_suffix is None:
+        if neg_suffix is None:
             neg_suffix = self._neg_skewed_col_suffix
         else:
             self._neg_skewed_col_suffix = neg_suffix

@@ -113,5 +113,4 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    # Setup logging
     main(args.config_file)
