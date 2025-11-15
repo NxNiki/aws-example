@@ -126,9 +126,8 @@ class DatabaseBackend(ABC):
         pass
 
 
-# ---------------- Redshift Backend ----------------
+# ---------------- Redshift Backend (redshift_connector) ----------------
 class RedshiftBackend(DatabaseBackend):
-    # NOTE: Function arguments are preserved as requested.
     def __init__(
         self,
         host,
@@ -140,8 +139,7 @@ class RedshiftBackend(DatabaseBackend):
         bastion_user="ubuntu",
         local_port=5433,
     ):
-        # CHANGED: Use self.engine instead of self.conn
-        self.engine = None
+        self.conn = None
         self.ssh = None
         self.tunnel_thread = None
 
@@ -156,19 +154,18 @@ class RedshiftBackend(DatabaseBackend):
         self.local_port = local_port
 
     def connect(self):
-        # Check for the existence of the engine instead of conn
-        if self.engine is None:
-
+        if self.conn is None:
             # --- 1. Establish SSH connection to Bastion ---
             self.ssh = paramiko.SSHClient()
             self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
             try:
                 self.ssh.connect(
-                    hostname=self.bastion_ip, username=self.bastion_user, key_filename=ssh_pkey, timeout=10
+                    hostname=self.bastion_ip,
+                    username=self.bastion_user,
+                    key_filename=ssh_pkey,
+                    timeout=10,
                 )
             except Exception as e:
-                # The exception is raised here if authentication fails.
                 print(f"Error connecting to Bastion host: {e}")
                 raise
 
@@ -176,61 +173,59 @@ class RedshiftBackend(DatabaseBackend):
             self.tunnel_thread = threading.Thread(
                 target=_forward_tunnel,
                 args=(
-                    self.local_port,  # Local port (e.g., 5433)
-                    self.host,  # Remote Redshift Host
-                    self.port,  # Remote Redshift Port
-                    self.ssh.get_transport(),  # SSH transport
+                    self.local_port,
+                    self.host,
+                    self.port,
+                    self.ssh.get_transport(),
                 ),
             )
             self.tunnel_thread.daemon = True
             self.tunnel_thread.start()
-            time.sleep(0.5)
+            time.sleep(1)
 
-            # --- 3. Create SQLAlchemy Engine (FIX for UserWarning) ---
-            # Use the redshift+redshift_connector dialect to connect to the local forwarded address
-            db_url = (
-                f"redshift+redshift_connector://{self.user}:{self.password}@"
-                f"127.0.0.1:{self.local_port}/{self.database}"
-            )
+            # --- 3. Connect using redshift_connector to local forwarded port ---
+            try:
+                self.conn = redshift_connector.connect(
+                    host="127.0.0.1",
+                    port=self.local_port,
+                    database=self.database,
+                    user=self.user,
+                    password=self.password,
+                    ssl=True,
+                )
+            except Exception as e:
+                print(f"Error connecting to Redshift: {e}")
+                raise
 
-            # Use connect_args to ensure SSL is enforced, matching the original redshift_connector behavior
-            self.engine = create_engine(db_url, connect_args={"sslmode": "require"})
-
-        return self.engine  # Return the Engine object, which pandas loves.
+        return self.conn
 
     def execute(self, query, params=None):
-        """Executes DDL/DML or returns raw rows using SQLAlchemy connection."""
-        engine = self.connect()
-        # SQLAlchemy requires using its own text construct for execution
-        with engine.connect() as conn:
+        conn = self.connect()
+        cursor = conn.cursor()
+        try:
             if params:
-                # Execute with parameterized query
-                result = conn.execute(text(query), params)
+                cursor.execute(query, params)
             else:
-                result = conn.execute(text(query))
-
-            # Flush connection
-            conn.commit()
-
-            # Original execute returned rows if available
-            if result.returns_rows:
-                return result.fetchall()
+                cursor.execute(query)
+            if cursor.description:  # If it returns rows
+                return cursor.fetchall()
             else:
-                return []  # Return empty list for DML/DDL operations
+                return []
+        finally:
+            cursor.close()
 
     def query_to_df(self, query, params=None):
-        """Uses SQLAlchemy Engine with pd.read_sql to eliminate the UserWarning."""
-        engine = self.connect()
-        # Pandas works flawlessly with the SQLAlchemy engine
-        return pd.read_sql(query, engine, params=params)
+        conn = self.connect()
+        if params:
+            # redshift_connector does not support parameterized queries with pandas directly
+            # so we interpolate safely (or handle manually)
+            raise NotImplementedError("Parameterized queries not supported for pandas in this backend")
+        return pd.read_sql(query, conn)
 
     def close(self):
-        """Disposes SQLAlchemy engine and closes the SSH connection."""
-        # CHANGED: Dispose of the SQLAlchemy engine
-        if self.engine:
-            self.engine.dispose()
-            self.engine = None
-        # CLOSING SSH CONNECTION IS CRITICAL
+        if self.conn:
+            self.conn.close()
+            self.conn = None
         if self.ssh:
             self.ssh.close()
             self.ssh = None

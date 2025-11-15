@@ -50,7 +50,6 @@ plotly = "^6.3.1"
 dash = "^3.2.0"
 redshift_connector = "^2.0.0"
 paramiko = "^4.0.0"
-sqlalchemy = "^2.0.0"
 types-paramiko = "^3.4.0"
 
 [tool.poetry.group.test.dependencies]
