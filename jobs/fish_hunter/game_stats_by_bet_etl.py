@@ -1,5 +1,6 @@
 from textwrap import dedent
 
+from bituslabs_ds.config import LOCAL_ROOT
 from bituslabs_ds.etl import DataLoader, RedshiftBackend
 
 query = dedent(
@@ -208,6 +209,8 @@ if __name__ == "__main__":
             port=5439,
         )
     )
-    df_rs = redshift_loader.query_to_df("SELECT * FROM public.bullet LIMIT 10;")
+
+    file_path = f"{LOCAL_ROOT}/jobs/output_fish_hunter/bullet_stats_by_index.parquet"
+    df_rs = redshift_loader.query_to_df("SELECT * FROM public.bullet LIMIT 10;", local_cache=file_path)
     print(df_rs)
     redshift_loader.close()

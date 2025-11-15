@@ -5,11 +5,15 @@ import socket
 import threading
 import time
 from abc import ABC, abstractmethod
+from typing import Optional
 
 import boto3
 import pandas as pd
 import paramiko
 import redshift_connector
+from sqlalchemy import create_engine, text
+
+from bituslabs_ds.s3_utils import read_local_cache, save_local_cache
 
 ssh_pkey = os.environ["BASTION_KEY_PATH"]
 
@@ -71,6 +75,8 @@ def _forward_tunnel(local_port, remote_host, remote_port, transport):
 
 # ---------------- Safe Athena Query Builder ----------------
 class SafeAthenaQuery:
+    """Provides SQL injection safe query building for Athena."""
+
     @staticmethod
     def escape(value):
         if value is None:
@@ -82,96 +88,152 @@ class SafeAthenaQuery:
         if isinstance(value, (datetime.date, datetime.datetime)):
             return f"'{value.isoformat()}'"
         if isinstance(value, str):
+            # Escape single quotes by doubling them
             safe_value = value.replace("'", "''")
             return f"'{safe_value}'"
         if isinstance(value, (list, tuple)):
+            # Escape each item and join for IN clauses
             return "(" + ", ".join(SafeAthenaQuery.escape(v) for v in value) + ")"
         raise ValueError(f"Unsupported type: {type(value)}")
 
     @staticmethod
     def build(query_template, params):
+        """
+        Builds a safe query by escaping parameters and formatting the template.
+        Example: build("SELECT * FROM table WHERE id = {user_id}", {"user_id": 123})
+        """
         safe_params = {k: SafeAthenaQuery.escape(v) for k, v in params.items()}
         return query_template.format(**safe_params)
 
 
 # ---------------- Backend Base ----------------
 class DatabaseBackend(ABC):
+    """Abstract base class for all database backends."""
+
     @abstractmethod
-    def execute(self, query, params=None): ...
+    def execute(self, query, params=None):
+        """Executes a query and returns raw results (list of rows/dicts)."""
+        pass
+
     @abstractmethod
-    def query_to_df(self, query, params=None): ...
+    def query_to_df(self, query, params=None):
+        """Executes a query and returns a pandas DataFrame."""
+        pass
+
     @abstractmethod
-    def close(self): ...
+    def close(self):
+        """Closes the connection and cleans up resources."""
+        pass
 
 
 # ---------------- Redshift Backend ----------------
 class RedshiftBackend(DatabaseBackend):
-    def __init__(self, host, database, user, password, port=5439):
-        self.conn = None
+    # NOTE: Function arguments are preserved as requested.
+    def __init__(
+        self,
+        host,
+        database,
+        user,
+        password,
+        port=5439,
+        bastion_ip="13.215.212.244",
+        bastion_user="ubuntu",
+        local_port=5433,
+    ):
+        # CHANGED: Use self.engine instead of self.conn
+        self.engine = None
+        self.ssh = None
+        self.tunnel_thread = None
+
         self.host = host
         self.database = database
         self.user = user
         self.password = password
         self.port = port
-        self.local_port = 5433
+
+        self.bastion_ip = bastion_ip
+        self.bastion_user = bastion_user
+        self.local_port = local_port
 
     def connect(self):
-        # --- 1. Establish SSH connection to Bastion ---
-        self.ssh = paramiko.SSHClient()
-        self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        # Check for the existence of the engine instead of conn
+        if self.engine is None:
 
-        try:
-            self.ssh.connect(hostname="13.215.212.244", username="ubuntu", key_filename=ssh_pkey, timeout=10)
-        except Exception as e:
-            print(f"Error connecting to Bastion host: {e}")
-            raise
+            # --- 1. Establish SSH connection to Bastion ---
+            self.ssh = paramiko.SSHClient()
+            self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-        # --- 2. Start Local Port Forwarding Tunnel in a separate thread (FIX) ---
-        # Uses the custom _forward_tunnel function to replace the broken paramiko.forward.forward_tunnel
-        self.tunnel_thread = threading.Thread(
-            target=_forward_tunnel,
-            args=(
-                self.local_port,
-                self.host,  # Remote Redshift Host
-                self.port,  # Remote Redshift Port
-                self.ssh.get_transport(),  # SSH transport
-            ),
-        )
-        self.tunnel_thread.daemon = True
-        self.tunnel_thread.start()
+            try:
+                self.ssh.connect(
+                    hostname=self.bastion_ip, username=self.bastion_user, key_filename=ssh_pkey, timeout=10
+                )
+            except Exception as e:
+                # The exception is raised here if authentication fails.
+                print(f"Error connecting to Bastion host: {e}")
+                raise
 
-        # Give the tunnel a moment to establish the port binding
-        time.sleep(0.5)
+            # --- 2. Start Local Port Forwarding Tunnel ---
+            self.tunnel_thread = threading.Thread(
+                target=_forward_tunnel,
+                args=(
+                    self.local_port,  # Local port (e.g., 5433)
+                    self.host,  # Remote Redshift Host
+                    self.port,  # Remote Redshift Port
+                    self.ssh.get_transport(),  # SSH transport
+                ),
+            )
+            self.tunnel_thread.daemon = True
+            self.tunnel_thread.start()
+            time.sleep(0.5)
 
-        # --- 3. Connect Redshift to the Local Port ---
-        self.conn = redshift_connector.connect(
-            # Connect to the local forwarded address
-            host="127.0.0.1",
-            database=self.database,
-            user=self.user,
-            password=self.password,
-            port=self.local_port,  # Use the locally forwarded port
-            ssl=True,
-        )
+            # --- 3. Create SQLAlchemy Engine (FIX for UserWarning) ---
+            # Use the redshift+redshift_connector dialect to connect to the local forwarded address
+            db_url = (
+                f"redshift+redshift_connector://{self.user}:{self.password}@"
+                f"127.0.0.1:{self.local_port}/{self.database}"
+            )
 
-        return self.conn
+            # Use connect_args to ensure SSL is enforced, matching the original redshift_connector behavior
+            self.engine = create_engine(db_url, connect_args={"sslmode": "require"})
+
+        return self.engine  # Return the Engine object, which pandas loves.
 
     def execute(self, query, params=None):
-        conn = self.connect()
-        cursor = conn.cursor()
-        cursor.execute(query, params) if params else cursor.execute(query)
-        rows = cursor.fetchall()
-        cursor.close()
-        return rows
+        """Executes DDL/DML or returns raw rows using SQLAlchemy connection."""
+        engine = self.connect()
+        # SQLAlchemy requires using its own text construct for execution
+        with engine.connect() as conn:
+            if params:
+                # Execute with parameterized query
+                result = conn.execute(text(query), params)
+            else:
+                result = conn.execute(text(query))
+
+            # Flush connection
+            conn.commit()
+
+            # Original execute returned rows if available
+            if result.returns_rows:
+                return result.fetchall()
+            else:
+                return []  # Return empty list for DML/DDL operations
 
     def query_to_df(self, query, params=None):
-        conn = self.connect()
-        return pd.read_sql(query, conn, params=params)
+        """Uses SQLAlchemy Engine with pd.read_sql to eliminate the UserWarning."""
+        engine = self.connect()
+        # Pandas works flawlessly with the SQLAlchemy engine
+        return pd.read_sql(query, engine, params=params)
 
     def close(self):
-        if self.conn:
-            self.conn.close()
-            self.conn = None
+        """Disposes SQLAlchemy engine and closes the SSH connection."""
+        # CHANGED: Dispose of the SQLAlchemy engine
+        if self.engine:
+            self.engine.dispose()
+            self.engine = None
+        # CLOSING SSH CONNECTION IS CRITICAL
+        if self.ssh:
+            self.ssh.close()
+            self.ssh = None
 
 
 # ---------------- Athena Backend ----------------
@@ -198,12 +260,19 @@ class AthenaBackend(DatabaseBackend):
             state = status["QueryExecution"]["Status"]["State"]
             if state in ("SUCCEEDED", "FAILED", "CANCELLED"):
                 break
+            time.sleep(1)  # Wait 1 second before polling again
+
         if state != "SUCCEEDED":
-            raise RuntimeError(f"Athena query failed: {state}")
+            reason = status["QueryExecution"]["Status"].get("StateChangeReason", "Unknown reason.")
+            raise RuntimeError(f"Athena query failed: {state}. Reason: {reason}")
 
         # Fetch results
         result = self.client.get_query_results(QueryExecutionId=execution_id)
         rows = result["ResultSet"]["Rows"]
+
+        if len(rows) <= 1:
+            return []
+
         headers = [col["VarCharValue"] for col in rows[0]["Data"]]
         data = [[col.get("VarCharValue") for col in r["Data"]] for r in rows[1:]]
         return [dict(zip(headers, r)) for r in data]
@@ -224,19 +293,23 @@ class DataLoader:
     def execute(self, query, params=None):
         return self.backend.execute(query, params)
 
-    def query_to_df(self, query, params=None):
-        return self.backend.query_to_df(query, params)
+    def query_to_df(self, query, local_cache: Optional[str] = None, reload: bool = False, params=None):
+
+        if local_cache and os.path.exists(local_cache) and not reload:
+            df = read_local_cache(local_cache_path=local_cache)
+        else:
+            df = self.backend.query_to_df(query, params)
+            if local_cache:
+                save_local_cache(df, local_cache_path=local_cache)
+        return df
 
     def close(self):
         self.backend.close()
 
 
-# ============================================================
-# Usage Example
-# ============================================================
-
 if __name__ == "__main__":
-    # ----- Redshift -----
+
+    # ----- Redshift (Bastion Tunnel) -----
     redshift_loader = DataLoader(
         backend=RedshiftBackend(
             host="your-host",
@@ -245,9 +318,6 @@ if __name__ == "__main__":
             password="xxxx",
         )
     )
-    df_rs = redshift_loader.query_to_df("SELECT * FROM your_table LIMIT 10;")
-    print(df_rs)
-    redshift_loader.close()
 
     # ----- Athena -----
     athena_loader = DataLoader(
@@ -256,5 +326,3 @@ if __name__ == "__main__":
             output_location="s3://my-athena-result-bucket/",
         )
     )
-    df_ath = athena_loader.query_to_df("SELECT * FROM my_table LIMIT 10;")
-    print(df_ath)
