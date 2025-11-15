@@ -271,17 +271,16 @@ def plot_three_metrics_all_strategies(df, x_col, y1_col, y2_col, y3_col, title, 
 
 
 def main():
-    # Read the data
     df = pd.read_csv(data_file)
+    df["retention_ratio_day1"] = df["num_users_day1"] / df["num_users"]
+    df["retention_ratio_day3"] = df["num_users_day3"] / df["num_users"]
+    df["total_bet_per_user"] = df["daily_total_bet"] / df["num_users"]
+
     print(df[df["date"] > "2025-10-22"].to_markdown())
     df["date"] = pd.to_datetime(df["date"])
     df = df.sort_values(["strategy_name", "date"])
 
     df = df[df["date"] <= "2025-11-05"]
-
-    df["retention_ratio_day1"] = df["num_users_day1"] / df["num_users"]
-    df["retention_ratio_day3"] = df["num_users_day3"] / df["num_users"]
-    df["total_bet_per_user"] = df["daily_total_bet"] / df["num_users"]
 
     # Strategy colors and markers
     strategy_colors = {"DEFAULT_FALLBACK": "blue", "BOOST_POOL": "green", "DYNAMIC_RTP": "orange"}
