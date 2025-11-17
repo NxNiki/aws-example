@@ -1,6 +1,8 @@
 import datetime
+import logging
 import numbers
 import os
+import re
 import socket
 import threading
 import time
@@ -11,9 +13,11 @@ import boto3
 import pandas as pd
 import paramiko
 import redshift_connector
-from sqlalchemy import create_engine, text
 
 from bituslabs_ds.s3_utils import read_local_cache, save_local_cache
+
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
 
 ssh_pkey = os.environ["BASTION_KEY_PATH"]
 
@@ -128,6 +132,9 @@ class DatabaseBackend(ABC):
 
 # ---------------- Redshift Backend (redshift_connector) ----------------
 class RedshiftBackend(DatabaseBackend):
+
+    WRITE_KEYWORDS = re.compile(r"\b(INSERT|UPDATE|DELETE|MERGE|CREATE|DROP|ALTER|TRUNCATE)\b", re.IGNORECASE)
+
     def __init__(
         self,
         host,
@@ -152,6 +159,11 @@ class RedshiftBackend(DatabaseBackend):
         self.bastion_ip = bastion_ip
         self.bastion_user = bastion_user
         self.local_port = local_port
+
+    def _check_query(self, query):
+
+        if self.WRITE_KEYWORDS.search(query):
+            raise RuntimeError("RedshiftBackend is read-only. Write queries are not allowed.")
 
     def connect(self):
         if self.conn is None:
@@ -200,6 +212,8 @@ class RedshiftBackend(DatabaseBackend):
         return self.conn
 
     def execute(self, query, params=None):
+
+        self._check_query(query)
         conn = self.connect()
         cursor = conn.cursor()
         try:
@@ -215,6 +229,8 @@ class RedshiftBackend(DatabaseBackend):
             cursor.close()
 
     def query_to_df(self, query, params=None):
+
+        self._check_query(query)
         conn = self.connect()
         if params:
             # redshift_connector does not support parameterized queries with pandas directly
@@ -291,9 +307,13 @@ class DataLoader:
     def query_to_df(self, query, local_cache: Optional[str] = None, reload: bool = False, params=None):
 
         if local_cache and os.path.exists(local_cache) and not reload:
+            logger.info(f"Read local cache file: {local_cache}")
             df = read_local_cache(local_cache_path=local_cache)
         else:
+            start_time = time.time()
             df = self.backend.query_to_df(query, params)
+            exec_time = time.time() - start_time
+            logger.info(f"Query execution time: {exec_time:.3f} seconds")
             if local_cache:
                 save_local_cache(df, local_cache_path=local_cache)
         return df
