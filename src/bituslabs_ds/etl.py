@@ -258,28 +258,34 @@ class AthenaBackend(DatabaseBackend):
         if params:
             query = SafeAthenaQuery.build(query, params)
 
-        response = self.client.start_query_execution(
-            QueryString=query,
-            QueryExecutionContext={"Database": self.database},
-            ResultConfiguration={"OutputLocation": self.output_location},
-        )
-        execution_id = response["QueryExecutionId"]
+        execution_id = self.submit_query(query)
+        self.wait_query_finish(execution_id)
 
-        # Wait for completion
+        # === New Pagination Logic Starts Here ===
+        all_rows = []
+        next_token = None
+
+        # Loop until next_token is None, indicating no more pages
         while True:
-            status = self.client.get_query_execution(QueryExecutionId=execution_id)
-            state = status["QueryExecution"]["Status"]["State"]
-            if state in ("SUCCEEDED", "FAILED", "CANCELLED"):
+            args = {"QueryExecutionId": execution_id}
+            if next_token:
+                args["NextToken"] = next_token
+
+            result = self.client.get_query_results(**args)
+            current_rows = result["ResultSet"]["Rows"]
+            if not all_rows:
+                # First page includes the header row
+                all_rows.extend(current_rows)
+            else:
+                # Subsequent pages only include data rows (skip the first element which is an empty or duplicate header)
+                all_rows.extend(current_rows[1:])
+
+            next_token = result.get("NextToken")
+            if not next_token:
                 break
-            time.sleep(1)  # Wait 1 second before polling again
 
-        if state != "SUCCEEDED":
-            reason = status["QueryExecution"]["Status"].get("StateChangeReason", "Unknown reason.")
-            raise RuntimeError(f"Athena query failed: {state}. Reason: {reason}")
-
-        # Fetch results
-        result = self.client.get_query_results(QueryExecutionId=execution_id)
-        rows = result["ResultSet"]["Rows"]
+        rows = all_rows
+        # === Pagination Logic Ends Here ===
 
         if len(rows) <= 1:
             return []
@@ -287,6 +293,35 @@ class AthenaBackend(DatabaseBackend):
         headers = [col["VarCharValue"] for col in rows[0]["Data"]]
         data = [[col.get("VarCharValue") for col in r["Data"]] for r in rows[1:]]
         return [dict(zip(headers, r)) for r in data]
+
+    def submit_query(self, query: str) -> str:
+        response = self.client.start_query_execution(
+            QueryString=query,
+            QueryExecutionContext={"Database": self.database},
+            ResultConfiguration={"OutputLocation": self.output_location},
+        )
+        query_execution_id = response["QueryExecutionId"]
+        logger.info(f"Started query: {query_execution_id}")
+
+        return query_execution_id
+
+    def check_query_status(self, query_execution_id: str) -> str:
+        result = self.client.get_query_execution(QueryExecutionId=query_execution_id)
+        status = result["QueryExecution"]["Status"]["State"]
+        logger.info(f"check query {query_execution_id} status: {status}")
+
+        return status
+
+    def wait_query_finish(self, query_execution_id: str, interval: int = 10):
+        while True:
+            status = self.check_query_status(query_execution_id)
+            if status in ["SUCCEEDED", "FAILED", "CANCELLED"]:
+                break
+            time.sleep(interval)
+
+        logger.info(f"Query finished with status: {status}")
+        if status != "SUCCEEDED":
+            raise Exception(f"Query failed with status: {status}")
 
     def query_to_df(self, query, params=None):
         rows = self.execute(query, params)
@@ -305,6 +340,8 @@ class DataLoader:
         return self.backend.execute(query, params)
 
     def query_to_df(self, query, local_cache: Optional[str] = None, reload: bool = False, params=None):
+
+        logger.info(f"Execute query: \n{query}")
 
         if local_cache and os.path.exists(local_cache) and not reload:
             logger.info(f"Read local cache file: {local_cache}")
