@@ -13,7 +13,7 @@ import logging
 import os
 from datetime import datetime
 from pprint import pformat
-from typing import List, Literal, Union
+from typing import Dict, List, Literal, Union
 
 import joblib
 import matplotlib.pyplot as plt
@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 import yaml
 from matplotlib import font_manager, rcParams
-from sklearn.preprocessing import PowerTransformer, StandardScaler
+from sklearn.preprocessing import MinMaxScaler, PowerTransformer, StandardScaler
 
 from bituslabs_ds.config import LOCAL_ROOT, S3_BUCKET, setup_logging
 from bituslabs_ds.eda import Anova, DataProfiler, DataVisualizer, split_column_by_threshold
@@ -72,24 +72,34 @@ def load_data(config, reload: bool = False) -> pd.DataFrame:
     # print(data.shape)
 
     data = split_column_by_threshold(
-        data, columns=["base_game_win", "free_game_win", "big_win_count", "free_spins_count"], threshold=[0, 0, 0, 9]
+        data,
+        columns=["base_game_win", "free_game_win", "big_win_count", "free_spins_count"],
+        threshold=[0, 0, 0, 9],
     )
 
     return data
 
 
-def process_data(data, metrics, output_path) -> pd.DataFrame:
+def process_data(data, config, output_path) -> pd.DataFrame:
     data = data.copy()
     transformer = PowerTransformer()
+
+    metrics = config["radar_plot_columns"]
     data[metrics] = transformer.fit_transform(data[metrics])
 
+    os.makedirs(output_path, exist_ok=True)
     joblib.dump(transformer, f"{output_path}/power_transformer.joblib")
 
-    scaler = StandardScaler()
+    if config["data_loader"]["scaler"] == "standard":
+        scaler = StandardScaler()
+    elif config["data_loader"]["scaler"] == "minMax":
+        scaler = MinMaxScaler()
+
     data[metrics] = scaler.fit_transform(data[metrics])
     # Save scaler mean and std to a CSV file
-    scaler_stats = pd.DataFrame({"metric": metrics, "mean": scaler.mean_, "std": scaler.scale_})
-    scaler_stats.to_csv(f"{output_path}/scaler_stats.csv", index=False)
+    if config["data_loader"]["scaler"] == "standard":
+        scaler_stats = pd.DataFrame({"metric": metrics, "mean": scaler.mean_, "std": scaler.scale_})
+        scaler_stats.to_csv(f"{output_path}/scaler_stats.csv", index=False)
     # Also save the scaler model for later use
     scaler_filename = f"{output_path}/scaler_model.joblib"
     joblib.dump(scaler, scaler_filename)
@@ -100,8 +110,7 @@ def process_data(data, metrics, output_path) -> pd.DataFrame:
 def make_radar_plot(
     data: pd.DataFrame,
     group: str,
-    metrics: List[str],
-    metrics_rename: List[str],
+    config: Dict,
     agg_method: Literal["mean", "median"],
     title: str,
     output_path: str,
@@ -118,6 +127,9 @@ def make_radar_plot(
         output_path (str): Path to save the resulting radar plot figure (e.g., "output.png").
     """
 
+    metrics = config["radar_plot_columns"]
+    metrics_rename = config["radar_plot_rename"]
+
     # Compute mean values per group for the metrics
     if agg_method == "mean":
         grouped = data.groupby(group)[metrics].mean().reset_index()
@@ -132,10 +144,8 @@ def make_radar_plot(
     angles = np.linspace(0, 2 * np.pi, num_vars, endpoint=False).tolist()
     angles += angles[:1]
 
-    # Initialize figure
     fig, ax = plt.subplots(figsize=(8, 8), subplot_kw=dict(polar=True))
 
-    # Plot each group
     for _, row in grouped.iterrows():
         values = row[metrics].tolist()
         values += values[:1]  # close the polygon
@@ -157,13 +167,22 @@ def make_radar_plot(
             label.set_verticalalignment("top")
 
         label.set_y(label.get_position()[1] + 0.05)
+
+    # --- Set y-axis (radial axis) scale for the radar plot. ---
+    if config["data_loader"]["scaler"] == "minMax":
+        ax.set_ylim(0, 1)
+        num_rgrids = 5
+        grid_values = np.linspace(ax.get_ylim()[0], ax.get_ylim()[1], num_rgrids)
+        ax.set_yticks(grid_values)
+        ax.set_yticklabels([f"{v:.2f}" for v in grid_values], fontsize=10)
+
     if title is None or len(title) == 0:
         title = f"Radar plot by {group}"
     ax.set_title(title, fontsize=14, pad=15, fontproperties=fontP)
     ax.legend(loc="upper right", bbox_to_anchor=(1.3, 1.1))
 
-    # Save and close
     plt.tight_layout()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     plt.savefig(output_path, dpi=300)
     plt.close()
 
@@ -175,21 +194,20 @@ def main(config_file):
     setup_logging(LOCAL_ROOT / "jobs/log", f"simulation_analysis_{project_name}_{time_tag}.log")
 
     config = load_config(config_file)
-    output_path = f"{LOCAL_ROOT}/jobs/{config['work_dir']}"
+    output_path = f"{LOCAL_ROOT}/jobs/{config['work_dir']}/radar_plot_{config['data_loader']['scaler']}"
 
     data = load_data(config, reload=False)
     data_profiler = DataProfiler(data, skewness_threshold=1.5)
 
     # Radar plot for each math table (3 clusters in one plot)
-    metrics = config["radar_plot_columns"]
-    data = process_data(data, metrics, output_path=output_path)
+    data = process_data(data, config, output_path=output_path)
     for math_table in data["machine_id"].unique():
+        logger.info(f"make radar plot for {math_table}")
         for agg_method in ["mean", "median"]:
             make_radar_plot(
                 data[data["machine_id"] == math_table],
                 group="cluster_index",
-                metrics=metrics,
-                metrics_rename=config["radar_plot_rename"],
+                config=config,
                 agg_method=agg_method,
                 title=f"数学表: {math_table}",
                 output_path=f"{output_path}/radar_plot_{math_table}_{agg_method}.png",

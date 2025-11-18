@@ -12,6 +12,7 @@ data_loader:
   local_cache: "wucaishen_simulation_20250905_3e4.parquet"
   row_filters:  # General row filtering (null to disable filtering)
       machine_id: ["dropTower", "giftShop", "rollerCoaster", "newBee"]
+  scaler: "standard"      # Choose one: "standard" | "minMax" 
 
   columns_to_read:
     - "base_game_win"

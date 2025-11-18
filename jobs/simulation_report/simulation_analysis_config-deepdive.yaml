@@ -12,6 +12,7 @@ data_loader:
   local_cache: "deepdive_simulation_20251110.parquet"
   row_filters:  # General row filtering (null to disable filtering)
       machine_id: ["dropTower", "giftShop", "rollerCoaster", "newBee"]
+  scaler: "minMax"      # Choose one: "standard" | "minMax" 
 
   columns_to_read:
     - "base_game_win"
