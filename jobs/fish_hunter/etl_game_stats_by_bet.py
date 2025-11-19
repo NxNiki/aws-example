@@ -67,9 +67,17 @@ query = dedent(
             fish_value,
             multiplier,
             -- Window Metrics
-            SUM(payout) OVER (PARTITION BY user_id, session_id ORDER BY event_timestamp ROWS UNBOUNDED PRECEDING) AS cum_payout,
-            SUM(bet) OVER (PARTITION BY user_id, session_id ORDER BY event_timestamp ROWS UNBOUNDED PRECEDING) AS cum_bet,
-            ROW_NUMBER() OVER (PARTITION BY user_id, session_id ORDER BY event_timestamp) AS bet_index,
+            SUM(payout) OVER (
+                PARTITION BY user_id, session_id 
+                ORDER BY event_timestamp ROWS UNBOUNDED PRECEDING
+            ) AS cum_payout,
+            SUM(bet) OVER (
+                PARTITION BY user_id, session_id 
+                ORDER BY event_timestamp ROWS UNBOUNDED PRECEDING
+            ) AS cum_bet,
+            ROW_NUMBER() OVER (
+                PARTITION BY user_id, session_id ORDER BY event_timestamp
+            ) AS bet_index,
             MIN(event_timestamp) OVER (PARTITION BY user_id, session_id) AS session_start_time
         FROM session_identification
     ),
@@ -87,9 +95,6 @@ query = dedent(
         GROUP BY 1, 2
     ),
 
-    -- THE KEY OPTIMIZATION: 
-    -- Consolidate everything into one filtered dataset for aggregation.
-    -- We never touch public.bullet again after this.
     analysis_base AS (
         SELECT
             e.*,
@@ -107,10 +112,10 @@ query = dedent(
             COUNT(*) AS num_sessions,
             
             -- Basic Averages
-            AVG(NULLIF(payout / bet, 0)) AS rtp_mean,
-            STDDEV(NULLIF(payout / bet, 0)) AS rtp_std,
-            AVG(NULLIF(cum_payout / cum_bet, 0)) AS cum_rtp_mean,
-            STDDEV(NULLIF(cum_payout / cum_bet, 0)) AS cum_rtp_std,
+            AVG(payout / NULLIF(bet, 0)) AS rtp_mean,
+            STDDEV(payout / NULLIF(bet, 0)) AS rtp_std,
+            AVG(cum_payout / NULLIF(cum_bet, 0)) AS cum_rtp_mean,
+            STDDEV(cum_payout / NULLIF(cum_bet, 0)) AS cum_rtp_std,
             
             -- Conditional Aggregates (20-200 range)
             AVG(CASE WHEN fish_value > 19 AND fish_value < 201 THEN payout / NULLIF(bet, 0) END) AS rtp_mean_20_200,
