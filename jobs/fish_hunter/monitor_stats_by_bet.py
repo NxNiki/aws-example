@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from dash import Dash, Input, Output, dcc, html
+from dash import Dash, Input, Output, callback_context, dcc, html, no_update
 from plotly.subplots import make_subplots
 
 from bituslabs_ds.s3_utils import read_local_cache
@@ -14,6 +14,15 @@ box_style = {
     "boxShadow": "0 4px 24px 0 rgba(55,126,184,0.12)",
     "marginBottom": "26px",
     "marginTop": "6px",
+}
+
+check_box_style = {
+    "flex": "1 1 0",
+    "marginRight": "3%",
+    "display": "flex",
+    "flexDirection": "column",
+    "justifyContent": "flex-start",
+    "minWidth": "0",
 }
 
 
@@ -78,17 +87,57 @@ def create_dashboard(df):
                     ),
                     html.Div(
                         [
-                            html.Label("Metrics:", style={"marginTop": "15px"}),
-                            dcc.Checklist(
-                                id="metric-checklist",
-                                options=[{"label": m, "value": m} for m in metrics],
-                                value=[metrics[0]] if metrics else [],
+                            html.Div(
+                                [
+                                    html.Div(
+                                        [
+                                            html.Label("Metrics:", style={"marginTop": "15px"}),
+                                            html.Div(
+                                                dcc.Checklist(
+                                                    id="metric-checklist",
+                                                    options=[{"label": m, "value": m} for m in metrics],
+                                                    value=[metrics[0]] if metrics else [],
+                                                    style={
+                                                        "marginTop": "10px",
+                                                        "marginBottom": "15px",
+                                                        "columnCount": 1,
+                                                    },
+                                                ),
+                                            ),
+                                        ],
+                                        style=check_box_style,
+                                    ),
+                                    html.Div(
+                                        [
+                                            html.Label(
+                                                "Plot on Right Axis", style={"marginTop": "15px", "display": "block"}
+                                            ),
+                                            html.Div(
+                                                dcc.Checklist(
+                                                    id="right-axis-checklist",
+                                                    options=[{"label": "", "value": m} for m in metrics],
+                                                    value=[],
+                                                    style={
+                                                        "marginTop": "10px",
+                                                        "marginBottom": "15px",
+                                                        "columnCount": 1,
+                                                    },
+                                                ),
+                                            ),
+                                        ],
+                                        style=check_box_style,
+                                    ),
+                                ],
                                 style={
+                                    "width": "100%",
+                                    "display": "flex",
+                                    "justifyContent": "space-between",
+                                    "alignItems": "flex-start",  # << key to align tops
                                     "maxHeight": "40vh",
                                     "overflowY": "auto",
-                                    "marginTop": "10px",
-                                    "marginBottom": "15px",
-                                    "columnCount": 2,
+                                    "marginBottom": "10px",
+                                    "border": "1px solid #eee",
+                                    "paddingRight": "10px",  # To make room for scrollbar
                                 },
                             ),
                         ],
@@ -170,9 +219,21 @@ def create_dashboard(df):
             ),
             html.Div(
                 [
-                    dcc.Graph(id="combined-plot", style={"height": "1450px", "marginBottom": "10px"})
-                ],  # increase figure height
-                style={"width": "80%", "height": "150%", "display": "inline-block", "marginBottom": "30px"},
+                    dcc.Graph(
+                        id="combined-plot",
+                        style={
+                            "height": "950px",
+                            "marginBottom": "10px",
+                            "width": "100%",
+                        },
+                    )
+                ],
+                style={
+                    "width": "80%",
+                    "display": "inline-block",
+                    "verticalAlign": "top",
+                    "marginLeft": "0",
+                },
             ),
         ]
     )
@@ -189,6 +250,40 @@ def create_dashboard(df):
         log = np.logspace(np.log10(thresh + 1), np.log10(max(y_max, thresh * 10)), max(2, nticks // 3 * 2))
         return np.unique(np.concatenate([linear, log]))
 
+    # This callback enforces that a value can only exist in ONE list at a time.
+    @app.callback(
+        [Output("metric-checklist", "value"), Output("right-axis-checklist", "value")],
+        [Input("metric-checklist", "value"), Input("right-axis-checklist", "value")],
+        prevent_initial_call=True,
+    )
+    def enforce_mutual_exclusivity(left_values, right_values):
+        ctx = callback_context
+
+        # If no trigger (shouldn't happen due to prevent_initial_call), return current
+        if not ctx.triggered:
+            return no_update, no_update
+
+        # Determine which list was just clicked
+        trigger_id = ctx.triggered[0]["prop_id"].split(".")[0]
+
+        # Handle None types for safe list operations
+        left_values = left_values or []
+        right_values = right_values or []
+
+        if trigger_id == "metric-checklist":
+            # User clicked the LEFT list.
+            # Remove any items selected on the left from the right list.
+            new_right = [item for item in right_values if item not in left_values]
+            return no_update, new_right
+
+        elif trigger_id == "right-axis-checklist":
+            # User clicked the RIGHT list.
+            # Remove any items selected on the right from the left list.
+            new_left = [item for item in left_values if item not in right_values]
+            return new_left, no_update
+
+        return no_update, no_update
+
     @app.callback(
         Output("combined-plot", "figure"),
         Input("session-dropdown", "value"),
@@ -197,36 +292,56 @@ def create_dashboard(df):
         Input("strategy-c-dropdown", "value"),
         Input("strategy-d-dropdown", "value"),
         Input("metric-checklist", "value"),
+        Input("right-axis-checklist", "value"),
         Input("log-check", "value"),
         Input("linear-thresh", "value"),
         Input("filter-check", "value"),
         Input("filter-thresh", "value"),
     )
     def update_plot(
-        session, strat_a, strat_b, strat_c, strat_d, sel_metrics, log_check, log_thresh, filter_check, filter_thresh
+        session,
+        strat_a,
+        strat_b,
+        strat_c,
+        strat_d,
+        sel_metrics,
+        right_axis_metrics,
+        log_check,
+        log_thresh,
+        filter_check,
+        filter_thresh,
     ):
 
         df_sess = df[df["session_start_date"] == session].sort_values("bet_index")
         if filter_check:
             df_sess = df_sess[(df_sess["bet_index"] <= filter_thresh)]
 
-        df_a = df_sess[df_sess["session_group"] == strat_a]
-        df_b = df_sess[df_sess["session_group"] == strat_b]
-        df_c = df_sess[df_sess["session_group"] == strat_c]
-        df_d = df_sess[df_sess["session_group"] == strat_d]
+        df_session = [pd.DataFrame() for _ in range(4)]
+        for i, strat in enumerate([strat_a, strat_b, strat_c, strat_d]):
+            if strat:
+                df_session[i] = df_sess[df_sess["session_group"] == strat]
 
         log_thresh = max(float(log_thresh), 1)
 
-        fig = make_subplots(rows=4, cols=1, shared_xaxes=True, subplot_titles=(strat_a, strat_b, strat_c, strat_d))
+        fig = make_subplots(
+            rows=4,
+            cols=1,
+            shared_xaxes=True,
+            subplot_titles=(strat_a, strat_b, strat_c, strat_d),
+            # Specify secondary_y for each row
+            specs=[[{"secondary_y": True}] for _ in range(4)],
+        )
 
         # Define a fixed color map for metrics
-        colors_hex = ["#E41A1C", "#377EB8", "#4DAF4A", "#FF7F00", "#984EA3"]
-        metric_colors = {metric: colors_hex[i % len(colors_hex)] for i, metric in enumerate(sel_metrics)}
+        colors_hex = ["#E41A1C", "#377EB8", "#4DAF4A", "#FF7F00", "#984EA3", "#A65628", "#F781BF", "#999999"]
+        metrics_all = sel_metrics + right_axis_metrics
+        metric_colors = {metric: colors_hex[i % len(colors_hex)] for i, metric in enumerate(metrics_all)}
 
-        def add_traces(df_group, row):
-            if df_group.empty or len(sel_metrics) == 0:
+        def add_traces(df_group, row, metrics, right_axis=False, log_check=False):
+            if df_group.empty or len(metrics) == 0:
                 return
-            for metric in sel_metrics:
+
+            for metric in metrics:
                 if metric not in df_group.columns:
                     continue
                 y = pd.to_numeric(df_group[metric], errors="coerce").ffill()
@@ -235,25 +350,48 @@ def create_dashboard(df):
                     go.Scatter(
                         x=df_group["bet_index"],
                         y=y_plot,
-                        name=metric,
+                        name=f"{metric} (right)" if right_axis else metric,
                         mode="lines",
                         line=dict(
                             width=2,
                             color=metric_colors.get(metric, "#000000"),
+                            dash="dash" if right_axis else None,
                         ),
                         opacity=0.6,
-                        # For Scatter, overall trace opacity can also be controlled:
-                        # mode="markers",
-                        # marker=dict(size=2.5, color=metric_colors.get(metric, "#000000")),
+                        legendgroup=metric,
+                        showlegend=(row == 1),
+                        # yaxis=f"y{row}2" if row > 1 else "y2",  # Just for completeness; Plotly takes care when using secondary_y
                     ),
                     row=row,
                     col=1,
+                    secondary_y=right_axis,
                 )
 
-        add_traces(df_a, 1)
-        add_traces(df_b, 2)
-        add_traces(df_c, 3)
-        add_traces(df_d, 4)
+        for row in range(1, 5):
+            # --- CRITICAL FIX: PREVENT JS CRASH ---
+            # If Left Axis is empty but Right Axis is used, Plotly JS crashes with "rangemode undefined".
+            # We inject an invisible dummy trace on the Primary Y-axis to initialize it.
+            if not sel_metrics and not df_session[row - 1].empty:
+                fig.add_trace(
+                    go.Scatter(
+                        x=[df_session[row - 1]["bet_index"].iloc[0]],
+                        y=[0],
+                        mode="lines",
+                        marker=dict(opacity=0),  # Invisible
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ),
+                    row=row,
+                    col=1,
+                    secondary_y=False,
+                )
+                fig.update_yaxes(title="", showticklabels=False, showgrid=False, secondary_y=False, row=row, col=1)
+            else:
+                add_traces(df_session[row - 1], row, sel_metrics, log_check)
+                fig.update_yaxes(title="", showticklabels=True, showgrid=True, secondary_y=False, row=row, col=1)
+
+            add_traces(df_session[row - 1], row, right_axis_metrics, right_axis=True, log_check=log_check)
+            fig.update_yaxes(title="", showticklabels=True, showgrid=True, secondary_y=True, row=row, col=1)
 
         # Add session (date) as annotation at the top center of the plot
         fig.add_annotation(
@@ -274,11 +412,7 @@ def create_dashboard(df):
             margin=dict(l=70, r=50, t=80, b=50),  # more margins
         )
 
-        if df_d.empty:
-            range_slider_row = 3
-        else:
-            range_slider_row = 4
-
+        range_slider_row = len(df_session)
         # Show X-axis range slider
         # Only add rangeslider to the last subplot (row=3, col=1), and hide the sent-back curve (set visible=False for the graph)
         fig.update_xaxes(
@@ -292,32 +426,27 @@ def create_dashboard(df):
         for r in range(1, range_slider_row):
             fig.update_xaxes(title_text="bet_index", rangeslider=dict(visible=False), row=r, col=1)
 
-        for r in range(1, 5):
-            fig.update_yaxes(title_text="Value", row=r, col=1)
-
         # Set nice Y ticks for hybrid
         if log_check:
-            if not df_a.empty:
-                yticks = get_ticks(df_a[sel_metrics].values.flatten(), log_thresh)
-                fig.update_yaxes(
-                    tickvals=hybrid_transform(yticks, log_thresh), ticktext=[f"{v:.0f}" for v in yticks], row=1, col=1
-                )
-            if not df_b.empty:
-                yticks = get_ticks(df_b[sel_metrics].values.flatten(), log_thresh)
-                fig.update_yaxes(
-                    tickvals=hybrid_transform(yticks, log_thresh), ticktext=[f"{v:.0f}" for v in yticks], row=2, col=1
-                )
-            if not df_c.empty:
-                yticks = get_ticks(df_c[sel_metrics].values.flatten(), log_thresh)
-                fig.update_yaxes(
-                    tickvals=hybrid_transform(yticks, log_thresh), ticktext=[f"{v:.0f}" for v in yticks], row=3, col=1
-                )
-
-            if not df_d.empty:
-                yticks = get_ticks(df_d[sel_metrics].values.flatten(), log_thresh)
-                fig.update_yaxes(
-                    tickvals=hybrid_transform(yticks, log_thresh), ticktext=[f"{v:.0f}" for v in yticks], row=4, col=1
-                )
+            for i, df_sess in enumerate(df_session):
+                if not df_sess.empty:
+                    if sel_metrics:
+                        yticks = get_ticks(df_sess[sel_metrics].values.flatten(), log_thresh)
+                        fig.update_yaxes(
+                            tickvals=hybrid_transform(yticks, log_thresh),
+                            ticktext=[f"{v:.0f}" for v in yticks],
+                            row=i + 1,
+                            col=1,
+                        )
+                    if right_axis_metrics:
+                        yticks = get_ticks(df_sess[right_axis_metrics].values.flatten(), log_thresh)
+                        fig.update_yaxes(
+                            tickvals=hybrid_transform(yticks, log_thresh),
+                            ticktext=[f"{v:.0f}" for v in yticks],
+                            row=i + 1,
+                            col=1,
+                            secondary_y=True,
+                        )
 
         return fig
 
