@@ -1,6 +1,6 @@
 from textwrap import dedent
 
-from bituslabs_ds.config import LOCAL_ROOT, S3_BUCKET
+from bituslabs_ds.config import LOCAL_ROOT, S3_BUCKET, setup_logging
 from bituslabs_ds.etl import AthenaBackend, DataLoader
 
 query = dedent(
@@ -192,6 +192,7 @@ if __name__ == "__main__":
         )
     )
 
+    setup_logging(f"{LOCAL_ROOT}/jobs/log", log_filename="game_stats_by_bet_etl_pa.log")
     file_path = f"{LOCAL_ROOT}/jobs/output_fish_hunter/bullet_stats_by_index_pa.parquet"
     df_rs = data_loader.query_to_df(query=query, local_cache=file_path, reload=True)
     print(df_rs)

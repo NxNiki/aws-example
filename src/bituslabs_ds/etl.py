@@ -4,6 +4,7 @@ import numbers
 import os
 import re
 import socket
+import sys
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -14,7 +15,7 @@ import pandas as pd
 import paramiko
 import redshift_connector
 
-from bituslabs_ds.s3_utils import read_local_cache, save_local_cache
+from bituslabs_ds.s3_utils import parse_s3_path, read_local_cache, read_to_pandas_df, save_local_cache
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -260,39 +261,8 @@ class AthenaBackend(DatabaseBackend):
 
         execution_id = self.submit_query(query)
         self.wait_query_finish(execution_id)
-
-        # === New Pagination Logic Starts Here ===
-        all_rows = []
-        next_token = None
-
-        # Loop until next_token is None, indicating no more pages
-        while True:
-            args = {"QueryExecutionId": execution_id}
-            if next_token:
-                args["NextToken"] = next_token
-
-            result = self.client.get_query_results(**args)
-            current_rows = result["ResultSet"]["Rows"]
-            if not all_rows:
-                # First page includes the header row
-                all_rows.extend(current_rows)
-            else:
-                # Subsequent pages only include data rows (skip the first element which is an empty or duplicate header)
-                all_rows.extend(current_rows[1:])
-
-            next_token = result.get("NextToken")
-            if not next_token:
-                break
-
-        rows = all_rows
-        # === Pagination Logic Ends Here ===
-
-        if len(rows) <= 1:
-            return []
-
-        headers = [col["VarCharValue"] for col in rows[0]["Data"]]
-        data = [[col.get("VarCharValue") for col in r["Data"]] for r in rows[1:]]
-        return [dict(zip(headers, r)) for r in data]
+        df = self.get_query_result(execution_id)
+        return df
 
     def submit_query(self, query: str) -> str:
         response = self.client.start_query_execution(
@@ -313,19 +283,36 @@ class AthenaBackend(DatabaseBackend):
         return status
 
     def wait_query_finish(self, query_execution_id: str, interval: int = 10):
+        start_time = time.time()
         while True:
             status = self.check_query_status(query_execution_id)
             if status in ["SUCCEEDED", "FAILED", "CANCELLED"]:
                 break
             time.sleep(interval)
 
-        logger.info(f"Query finished with status: {status}")
+        elapsed = time.time() - start_time
+        logger.info(f"Query finished with status: {status}, time: {elapsed:.2} secs")
         if status != "SUCCEEDED":
             raise Exception(f"Query failed with status: {status}")
 
+    def get_query_result(self, query_execution_id: str) -> pd.DataFrame:
+        """
+        Downloads results directly from S3 output file for efficiency.
+        :param query_execution_id: Athena query execution ID.
+        :return: Query results as DataFrame.
+        """
+        logger.info(f"get query result of job: {query_execution_id}")
+
+        # Compose S3 path (remove trailing slash if exists)
+        s3_path = self.output_location.rstrip("/")
+        s3_key = f"{query_execution_id}.csv"
+        s3_path_full = f"{s3_path}/{s3_key}"
+        bucket, key = parse_s3_path(s3_path_full)
+        df = read_to_pandas_df(bucket, key)
+        return df
+
     def query_to_df(self, query, params=None):
-        rows = self.execute(query, params)
-        return pd.DataFrame(rows)
+        return self.execute(query, params)
 
     def close(self):
         pass  # Athena is stateless

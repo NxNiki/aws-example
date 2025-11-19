@@ -1,3 +1,7 @@
+"""
+This is obsolete code, refer the etl.py for query execution on athena and redshift
+"""
+
 import logging
 import os
 import time

@@ -88,6 +88,8 @@ def read_to_pandas_df(
     :return: Pandas DataFrame
     """
     bucket = parse_bucket_name(bucket)
+
+    logger.info(f"read file from s3://{bucket}/{key}")
     _, ext = os.path.splitext(key.lower())
     if ext == ".csv":
         response = get_s3_client().get_object(Bucket=bucket, Key=key)

@@ -4,6 +4,8 @@ import plotly.graph_objects as go
 from dash import Dash, Input, Output, dcc, html
 from plotly.subplots import make_subplots
 
+from bituslabs_ds.s3_utils import read_local_cache
+
 
 def create_dashboard(df):
     # Ensure bet_index is numeric
@@ -11,8 +13,8 @@ def create_dashboard(df):
     df = df.dropna(subset=["bet_index"])
 
     sessions = sorted(df["session_start_date"].unique())
-    strategies = ["BOOST_POOL", "DYNAMIC_RTP", "DEFAULT_FALLBACK", "PA"]
-    metrics = [c for c in df.columns if c not in ["session_start_date", "strategy_name", "bet_index"]]
+    strategies = ["BOOST", "DYNA_RTP", "DEFAULT", "PA"]
+    metrics = [c for c in df.columns if c not in ["session_start_date", "session_group", "bet_index"]]
 
     # Define a fixed color map for metrics
     colors_hex = ["#E41A1C", "#377EB8", "#4DAF4A", "#FF7F00", "#984EA3"]
@@ -129,10 +131,10 @@ def create_dashboard(df):
     )
     def update_plot(session, strat_a, strat_b, strat_c, strat_d, sel_metrics, log_check, thresh):
         df_sess = df[df["session_start_date"] == session].sort_values("bet_index")
-        df_a = df_sess[df_sess["strategy_name"] == strat_a]
-        df_b = df_sess[df_sess["strategy_name"] == strat_b]
-        df_c = df_sess[df_sess["strategy_name"] == strat_c]
-        df_d = df_sess[df_sess["strategy_name"] == strat_d]
+        df_a = df_sess[df_sess["session_group"] == strat_a]
+        df_b = df_sess[df_sess["session_group"] == strat_b]
+        df_c = df_sess[df_sess["session_group"] == strat_c]
+        df_d = df_sess[df_sess["session_group"] == strat_d]
 
         use_hybrid = "log" in log_check
         thresh = max(float(thresh), 1)
@@ -229,13 +231,11 @@ def create_dashboard(df):
 
 if __name__ == "__main__":
 
-    data_file = "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/result_betindex_avg_session_thr_.5hour.csv"
-    data_file2 = (
-        "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/result_betindex_avg_session_thr_.5hour_pa.csv"
-    )
+    data_file = "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_index.parquet"
+    data_file2 = "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_index_pa.parquet"
 
-    data = pd.read_csv(data_file)
-    data2 = pd.read_csv(data_file2)
+    data = read_local_cache(data_file)
+    data2 = read_local_cache(data_file2)
 
     data = pd.concat([data, data2])
 
