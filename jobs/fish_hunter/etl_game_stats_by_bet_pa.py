@@ -138,7 +138,8 @@ query = dedent(
                 THEN (t.account + t.cus_account) / t.account
         END) AS rtp_std_20_200,
 
-        AVG(t.cum_payout / t.cum_bet) AS cum_rtp,
+        AVG(t.cum_payout / t.cum_bet) AS cum_rtp_mean,
+        STDDEV(t.cum_payout / t.cum_bet) AS cum_rtp_std,
         
         ---------------------------------------------------
         -- BETTING/PAYOUT METRICS --

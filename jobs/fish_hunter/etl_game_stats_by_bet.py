@@ -39,7 +39,7 @@ query = dedent(
                 WHEN DATEDIFF(SECOND, prev_event_time, event_timestamp) > 1800 THEN 1
                 ELSE 0
             END AS is_session_start,
-            -- Create Session ID
+            -- Session ID
             SUM(
                 CASE
                     WHEN prev_event_time IS NULL THEN 1
@@ -107,9 +107,10 @@ query = dedent(
             COUNT(*) AS num_sessions,
             
             -- Basic Averages
-            AVG(payout / NULLIF(bet, 0)) AS rtp_mean,
-            STDDEV(payout / NULLIF(bet, 0)) AS rtp_std,
-            AVG(cum_payout / NULLIF(cum_bet, 0)) AS cum_rtp,
+            AVG(NULLIF(payout / bet, 0)) AS rtp_mean,
+            STDDEV(NULLIF(payout / bet, 0)) AS rtp_std,
+            AVG(NULLIF(cum_payout / cum_bet, 0)) AS cum_rtp_mean,
+            STDDEV(NULLIF(cum_payout / cum_bet, 0)) AS cum_rtp_std,
             
             -- Conditional Aggregates (20-200 range)
             AVG(CASE WHEN fish_value > 19 AND fish_value < 201 THEN payout / NULLIF(bet, 0) END) AS rtp_mean_20_200,
