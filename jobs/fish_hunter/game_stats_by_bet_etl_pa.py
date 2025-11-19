@@ -88,6 +88,14 @@ query = dedent(
             ues.cus_account,
             ues.betx,
             ues.fishcost,
+            SUM(account) OVER (
+                PARTITION BY ues.loginname, ues.session_id 
+                ORDER BY ues.billtime, ues.creditseq
+            ) AS cum_bet,
+            SUM(account + cus_account) OVER (
+                PARTITION BY ues.loginname, ues.session_id 
+                ORDER BY ues.billtime, ues.creditseq
+            ) AS cum_payout,
             -- Bet Index: The Nth bet within a specific session for a user
             ROW_NUMBER() OVER (
                 PARTITION BY ues.loginname, ues.session_id 
@@ -129,6 +137,8 @@ query = dedent(
             WHEN t.fishcost / t.betx > 19 AND t.fishcost / t.betx < 201
                 THEN (t.account + t.cus_account) / t.account
         END) AS rtp_std_20_200,
+
+        AVG(t.cum_payout / t.cum_bet) AS cum_rtp,
         
         ---------------------------------------------------
         -- BETTING/PAYOUT METRICS --
@@ -185,6 +195,8 @@ query = dedent(
 
 if __name__ == "__main__":
 
+    setup_logging(f"{LOCAL_ROOT}/jobs/log", log_filename="game_stats_by_bet_etl_pa.log")
+
     data_loader = DataLoader(
         backend=AthenaBackend(
             database="agfish",
@@ -192,7 +204,6 @@ if __name__ == "__main__":
         )
     )
 
-    setup_logging(f"{LOCAL_ROOT}/jobs/log", log_filename="game_stats_by_bet_etl_pa.log")
     file_path = f"{LOCAL_ROOT}/jobs/output_fish_hunter/bullet_stats_by_index_pa.parquet"
     df_rs = data_loader.query_to_df(query=query, local_cache=file_path, reload=True)
     print(df_rs)
