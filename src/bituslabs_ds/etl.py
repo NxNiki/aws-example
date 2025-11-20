@@ -162,8 +162,14 @@ class RedshiftBackend(DatabaseBackend):
         self.local_port = local_port
 
     def _check_query(self, query):
-
-        if self.WRITE_KEYWORDS.search(query):
+        # Remove lines that start with '--' (SQL comment) or '#' (Python/hash comment)
+        query_lines = [
+            line
+            for line in query.splitlines()
+            if not line.lstrip().startswith("--") and not line.lstrip().startswith("#")
+        ]
+        stripped_query = "\n".join(query_lines)
+        if self.WRITE_KEYWORDS.search(stripped_query):
             raise RuntimeError("RedshiftBackend is read-only. Write queries are not allowed.")
 
     def connect(self):

@@ -161,7 +161,7 @@ query = dedent(
         ---------------------------------------------------
         -- Multiplier (betx)
         AVG(t.betx) AS multiplier_mean,
-        SUM(t.betx) AS multiplier_sum, -- Note: This was incorrectly named bullet_level_sum in the original query
+        SUM(t.betx) AS multiplier_sum, 
         MAX(t.betx) AS multiplier_max,
         MIN(t.betx) AS multiplier_min,
 
