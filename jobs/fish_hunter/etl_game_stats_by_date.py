@@ -100,8 +100,9 @@ query = dedent(
             AVG(CASE WHEN t.fish_value > 19 AND t.fish_value < 201 THEN t.fish_value END) AS avg_fish_value_20_200,
             AVG(CASE WHEN t.killed = 1 THEN t.fish_value END) AS avg_killed_fish_value,
             AVG(CASE WHEN t.fish_value > 19 AND t.fish_value < 201 AND t.killed = 1 THEN t.fish_value END) AS avg_killed_fish_value_20_200,
-            AVG(t.profit) AS avg_profit,
-            AVG(CASE WHEN t.killed = 1 THEN t.profit END) AS avg_killed_profit
+            AVG(t.profit) AS bullet_avg_profit,
+            AVG(CASE WHEN t.killed = 1 THEN t.profit END) AS bullet_kill_avg_profit,
+            SUM(t.profit) AS total_profit
         FROM base_data t
         CROSS JOIN params p
         WHERE t.bj_date_raw < p.end_date
@@ -128,8 +129,9 @@ query = dedent(
         t3.avg_fish_value_20_200,
         t3.avg_killed_fish_value,
         t3.avg_killed_fish_value_20_200,
-        t3.avg_profit,
-        t3.avg_killed_profit,
+        t3.bullet_avg_profit,
+        t3.bullet_kill_avg_profit,
+        t3.total_profit,
         ROUND(CAST(t1.num_killed_bullets AS FLOAT) / NULLIF(t1.num_bullets, 0), 3) AS bullet_kill_ratio,
         ROUND(CAST(t1.num_bullets AS FLOAT) / NULLIF(t1.num_users, 0), 3) AS bullets_per_user,
         ROUND(CAST(t1.num_killed_bullets AS FLOAT) / NULLIF(t1.num_users, 0), 3) AS killed_bullets_per_user
