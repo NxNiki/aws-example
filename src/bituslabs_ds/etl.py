@@ -10,6 +10,7 @@ import time
 from abc import ABC, abstractmethod
 from typing import Optional
 
+import awswrangler as wr
 import boto3
 import pandas as pd
 import paramiko
@@ -29,16 +30,13 @@ def _shuttle_data(source, destination):
     """Helper to move data between two socket-like objects/channels."""
     try:
         while True:
-            # Receive up to 1024 bytes
             data = source.recv(1024)
             if not data:
                 break
             destination.sendall(data)
     except Exception:
-        # Expected on connection close
         pass
     finally:
-        # Ensure both sides are closed
         if hasattr(source, "close"):
             source.close()
         if hasattr(destination, "close"):
@@ -53,22 +51,17 @@ def _forward_tunnel(local_port, remote_host, remote_port, transport):
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        # Bind to the local port (e.g., 127.0.0.1:5433)
         sock.bind(("127.0.0.1", local_port))
         sock.listen(5)
 
         while True:
-            # Accept a connection from the local machine (e.g., redshift_connector)
             conn, addr = sock.accept()
-
-            # Open a Paramiko channel through the SSH transport to the remote host
             chan = transport.open_channel("direct-tcpip", (remote_host, remote_port), (addr[0], addr[1]))
 
             if chan is None:
                 conn.close()
                 continue
 
-            # Start two shuttle threads to move data between the local connection and the Paramiko channel
             threading.Thread(target=_shuttle_data, args=(conn, chan), daemon=True).start()
             threading.Thread(target=_shuttle_data, args=(chan, conn), daemon=True).start()
 
@@ -93,20 +86,14 @@ class SafeAthenaQuery:
         if isinstance(value, (datetime.date, datetime.datetime)):
             return f"'{value.isoformat()}'"
         if isinstance(value, str):
-            # Escape single quotes by doubling them
             safe_value = value.replace("'", "''")
             return f"'{safe_value}'"
         if isinstance(value, (list, tuple)):
-            # Escape each item and join for IN clauses
             return "(" + ", ".join(SafeAthenaQuery.escape(v) for v in value) + ")"
         raise ValueError(f"Unsupported type: {type(value)}")
 
     @staticmethod
     def build(query_template, params):
-        """
-        Builds a safe query by escaping parameters and formatting the template.
-        Example: build("SELECT * FROM table WHERE id = {user_id}", {"user_id": 123})
-        """
         safe_params = {k: SafeAthenaQuery.escape(v) for k, v in params.items()}
         return query_template.format(**safe_params)
 
@@ -131,7 +118,7 @@ class DatabaseBackend(ABC):
         pass
 
 
-# ---------------- Redshift Backend (redshift_connector) ----------------
+# ---------------- Redshift Backend ----------------
 class RedshiftBackend(DatabaseBackend):
 
     WRITE_KEYWORDS = re.compile(r"\b(INSERT|UPDATE|DELETE|MERGE|CREATE|DROP|ALTER|TRUNCATE)\b", re.IGNORECASE)
@@ -174,7 +161,7 @@ class RedshiftBackend(DatabaseBackend):
 
     def connect(self):
         if self.conn is None:
-            # --- 1. Establish SSH connection to Bastion ---
+            # 1. Establish SSH connection
             self.ssh = paramiko.SSHClient()
             self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             try:
@@ -188,7 +175,7 @@ class RedshiftBackend(DatabaseBackend):
                 print(f"Error connecting to Bastion host: {e}")
                 raise
 
-            # --- 2. Start Local Port Forwarding Tunnel ---
+            # 2. Start Tunnel
             self.tunnel_thread = threading.Thread(
                 target=_forward_tunnel,
                 args=(
@@ -202,7 +189,7 @@ class RedshiftBackend(DatabaseBackend):
             self.tunnel_thread.start()
             time.sleep(1)
 
-            # --- 3. Connect using redshift_connector to local forwarded port ---
+            # 3. Connect DB via Tunnel
             try:
                 self.conn = redshift_connector.connect(
                     host="127.0.0.1",
@@ -239,11 +226,13 @@ class RedshiftBackend(DatabaseBackend):
 
         self._check_query(query)
         conn = self.connect()
+
         if params:
-            # redshift_connector does not support parameterized queries with pandas directly
-            # so we interpolate safely (or handle manually)
+            # redshift_connector/wrangler doesn't support params with pandas directly easily
             raise NotImplementedError("Parameterized queries not supported for pandas in this backend")
-        return pd.read_sql(query, conn)
+
+        # We pass the existing tunnel connection 'con'
+        return wr.redshift.read_sql_query(query, con=conn)
 
     def close(self):
         if self.conn:
@@ -259,72 +248,35 @@ class AthenaBackend(DatabaseBackend):
     def __init__(self, database, output_location, region="us-west-2"):
         self.database = database
         self.output_location = output_location
-        self.client = boto3.client("athena", region_name=region)
+        # Wrangler manages its own client, but we can keep config if needed
+        self.region = region
 
     def execute(self, query, params=None):
+
+        df = self.query_to_df(query, params)
+        return df.to_dict("records")
+
+    def query_to_df(self, query, params=None):
+
         if params:
             query = SafeAthenaQuery.build(query, params)
 
-        execution_id = self.submit_query(query)
-        self.wait_query_finish(execution_id)
-        df = self.get_query_result(execution_id)
-        return df
+        logger.info("Executing Athena query via awswrangler...")
 
-    def submit_query(self, query: str) -> str:
-        response = self.client.start_query_execution(
-            QueryString=query,
-            QueryExecutionContext={"Database": self.database},
-            ResultConfiguration={"OutputLocation": self.output_location},
+        # Wrangler handles submission, polling (wait loop), and result fetching automatically
+        df = wr.athena.read_sql_query(
+            sql=query,
+            database=self.database,
+            s3_output=self.output_location,
+            ctas_approach=False,  # Standard query, set to True if results are massive
         )
-        query_execution_id = response["QueryExecutionId"]
-        logger.info(f"Started query: {query_execution_id}")
-
-        return query_execution_id
-
-    def check_query_status(self, query_execution_id: str) -> str:
-        result = self.client.get_query_execution(QueryExecutionId=query_execution_id)
-        status = result["QueryExecution"]["Status"]["State"]
-        logger.info(f"check query {query_execution_id} status: {status}")
-
-        return status
-
-    def wait_query_finish(self, query_execution_id: str, interval: int = 10):
-        start_time = time.time()
-        while True:
-            status = self.check_query_status(query_execution_id)
-            if status in ["SUCCEEDED", "FAILED", "CANCELLED"]:
-                break
-            time.sleep(interval)
-
-        elapsed = time.time() - start_time
-        logger.info(f"Query finished with status: {status}, time: {elapsed:.2} secs")
-        if status != "SUCCEEDED":
-            raise Exception(f"Query failed with status: {status}")
-
-    def get_query_result(self, query_execution_id: str) -> pd.DataFrame:
-        """
-        Downloads results directly from S3 output file for efficiency.
-        :param query_execution_id: Athena query execution ID.
-        :return: Query results as DataFrame.
-        """
-        logger.info(f"get query result of job: {query_execution_id}")
-
-        # Compose S3 path (remove trailing slash if exists)
-        s3_path = self.output_location.rstrip("/")
-        s3_key = f"{query_execution_id}.csv"
-        s3_path_full = f"{s3_path}/{s3_key}"
-        bucket, key = parse_s3_path(s3_path_full)
-        df = read_to_pandas_df(bucket, key)
         return df
-
-    def query_to_df(self, query, params=None):
-        return self.execute(query, params)
 
     def close(self):
         pass  # Athena is stateless
 
 
-# ---------------- Unified DataLoader ----------------
+# ---------------- Unified DataLoader  ----------------
 class DataLoader:
     def __init__(self, backend: DatabaseBackend):
         self.backend = backend
@@ -355,14 +307,14 @@ class DataLoader:
 if __name__ == "__main__":
 
     # ----- Redshift (Bastion Tunnel) -----
-    redshift_loader = DataLoader(
-        backend=RedshiftBackend(
-            host="your-host",
-            database="dev",
-            user="awsuser",
-            password="xxxx",
-        )
-    )
+    # redshift_loader = DataLoader(
+    #     backend=RedshiftBackend(
+    #         host="your-host",
+    #         database="dev",
+    #         user="awsuser",
+    #         password="xxxx",
+    #     )
+    # )
 
     # ----- Athena -----
     athena_loader = DataLoader(
