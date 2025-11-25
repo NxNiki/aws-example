@@ -311,7 +311,10 @@ def save_local_cache(data: pd.DataFrame, local_cache_path: str, append: bool = F
         mode = "a" if append else "w"
         data.to_csv(local_cache_path, index=False, mode=mode, header=not append)
     elif local_cache_path.endswith(".parquet"):
-        data.to_parquet(local_cache_path, index=False, engine="fastparquet", append=append)
+        if append:
+            data.to_parquet(local_cache_path, index=False, engine="fastparquet", append=append)
+        else:
+            data.to_parquet(local_cache_path, index=False, engine="auto")
 
 
 def read_files(

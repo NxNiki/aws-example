@@ -248,8 +248,7 @@ class AthenaBackend(DatabaseBackend):
     def __init__(self, database, output_location, region="us-west-2"):
         self.database = database
         self.output_location = output_location
-        # Wrangler manages its own client, but we can keep config if needed
-        self.region = region
+        self.session = boto3.Session(region_name=region)
 
     def execute(self, query, params=None):
 
@@ -269,6 +268,7 @@ class AthenaBackend(DatabaseBackend):
             database=self.database,
             s3_output=self.output_location,
             ctas_approach=False,  # Standard query, set to True if results are massive
+            boto3_session=self.session,
         )
         return df
 
