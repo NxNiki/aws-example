@@ -22,6 +22,7 @@ query = dedent(
     base_data AS (
         SELECT
             b.user_id,
+            b.room_id,
             b.strategy_name,
             b.payout,
             b.bet,
@@ -86,6 +87,7 @@ query = dedent(
                     THEN u.user_id
                 END
             ) AS num_return_users,
+            COUNT(DISTINCT b.user_id || '-' || b.room_id) AS total_num_rooms,
             COUNT(b.user_id) AS num_bullets,
             SUM(b.bet) AS daily_total_bet,
             SUM(b.killed) AS num_killed_bullets,
@@ -125,6 +127,7 @@ query = dedent(
         TO_CHAR(t1.bj_date_raw, 'YYYY-mm-dd') AS bj_date,
         t1.num_users,
         t1.num_return_users,
+        t1.total_num_rooms,
         t1.num_bullets,
         t1.daily_total_bet,
         t1.num_killed_bullets,
