@@ -8,7 +8,6 @@ import logging
 import os
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-from pprint import pformat
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import joblib
@@ -16,7 +15,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-import yaml
 from joblib import parallel_backend
 from scipy.stats import skew
 from skl2onnx import convert_sklearn
@@ -37,6 +35,7 @@ from bituslabs_ds.utils import (
     convert_numpy_types,
     df_power_transform,
     keep_numeric_columns,
+    load_config,
     remove_outliers,
     save_list,
 )
@@ -60,7 +59,7 @@ class ClusterAnalysisPipeline:
         """
 
         self._config_file = config_file
-        self._config = self._load_config(config_file)
+        self._config = load_config(config_file)
         self.project_name = self._config["project_name"]
         self.valid_sample_file = ""
         self._setup_directories()
@@ -74,16 +73,6 @@ class ClusterAnalysisPipeline:
         self._attach_data_files = list_s3_files(
             attach_data_config["bucket"], attach_data_config["prefix"], attach_data_config["pattern"]
         )
-
-    def _load_config(self, config_file: str) -> Dict[str, Any]:
-        """Load configuration from YAML file."""
-
-        with open(config_file, "r") as f:
-            config = yaml.safe_load(f)
-
-        logger.info(f"Loaded config from {config_file}:")
-        logger.info(f"config: \n {pformat(config)} \n")
-        return config
 
     def _setup_directories(self) -> None:
         """Create necessary directories for the project."""

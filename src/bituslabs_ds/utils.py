@@ -6,10 +6,12 @@ import shutil
 import subprocess
 from collections import Counter
 from collections.abc import Sequence
-from typing import Any, Iterable, Iterator, List, Literal, Optional, Tuple, Union
+from pprint import pformat
+from typing import Any, Dict, Iterable, Iterator, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
+import yaml
 from numpy.core.defchararray import upper
 from scipy.stats import zscore
 from sklearn.base import BaseEstimator, TransformerMixin
@@ -132,6 +134,17 @@ def save_list(items: List[Any], filepath: str, output_format: Literal["json", "p
         message = f"Unsupported format: '{output_format}' in save_string_list. Expected 'json' or 'python'."
         logger.error(message)
         raise ValueError(message)
+
+
+def load_config(config_file: str) -> Dict[str, Any]:
+    """Load configuration from YAML file."""
+
+    with open(config_file, "r") as f:
+        config = yaml.safe_load(f)
+
+    logger.info(f"Loaded config from {config_file}:")
+    logger.info(f"config: \n {pformat(config)} \n")
+    return config
 
 
 def remove_outliers(

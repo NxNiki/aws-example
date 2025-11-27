@@ -1,0 +1,53 @@
+
+groups: [
+  "BOOST", 
+  "DYNA_RTP", 
+  "DEFAULT", 
+  "PA"
+  ]
+
+stats_by_date: 
+  files: [
+    "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_date.parquet",
+    "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_date_pa.parquet"
+  ]
+
+  group_col: "daily_group"
+
+  group1_columns: [
+    "num_users",
+    "num_users_day1",
+    "num_users_day3",
+    "group_num_users",
+    "retention_rate_day1",
+    "retention_rate_day3",
+    "num_users_killed_fish",
+  ]
+
+  group2_columns: [
+    "total_bet_per_user",
+    "daily_group_rtp",
+    "group_rtp",
+    "bullet_avg_profit",
+    "bullet_kill_avg_profit",
+    "daily_total_bet",
+    "total_profit_per_user",
+    "total_profit",
+  ]
+
+  group3_columns: [
+    "avg_fish_value",
+    "avg_fish_value_20_200",
+    "avg_killed_fish_value",
+    "avg_killed_fish_value_20_200",
+    "bullet_kill_ratio",
+    "bullets_per_user",
+    "killed_bullets_per_user",
+  ]
+
+stats_by_bet: 
+  files: [
+    "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_index.parquet",
+    "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_index_pa.parquet"
+  ]
+

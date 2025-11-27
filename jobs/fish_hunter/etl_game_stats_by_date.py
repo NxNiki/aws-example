@@ -145,6 +145,10 @@ query = dedent(
         t3.bullet_avg_profit,
         t3.bullet_kill_avg_profit,
         t3.total_profit,
+        ROUND(CAST(t2.num_users_day1 AS FLOAT) / NULLIF(t2.num_users_day0, 0), 3) AS retention_rate_day1,
+        ROUND(CAST(t2.num_users_day3 AS FLOAT) / NULLIF(t2.num_users_day0, 0), 3) AS retention_rate_day3,
+        ROUND(CAST(t1.daily_total_bet AS FLOAT) / NULLIF(t2.num_users_day0, 0), 3) AS total_bet_per_user,
+        ROUND(CAST(t3.total_profit AS FLOAT) / NULLIF(t2.num_users_day0, 0), 3) AS total_profit_per_user,
         ROUND(CAST(t1.num_killed_bullets AS FLOAT) / NULLIF(t1.num_bullets, 0), 3) AS bullet_kill_ratio,
         ROUND(CAST(t1.num_bullets AS FLOAT) / NULLIF(t1.num_users, 0), 3) AS bullets_per_user,
         ROUND(CAST(t1.num_killed_bullets AS FLOAT) / NULLIF(t1.num_users, 0), 3) AS killed_bullets_per_user

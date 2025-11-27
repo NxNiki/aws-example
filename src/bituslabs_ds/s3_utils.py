@@ -307,6 +307,8 @@ def read_local_cache(
 
 def save_local_cache(data: pd.DataFrame, local_cache_path: str, append: bool = False):
 
+    os.makedirs(os.path.dirname(local_cache_path), exist_ok=True)
+
     if local_cache_path.endswith(".csv"):
         mode = "a" if append else "w"
         data.to_csv(local_cache_path, index=False, mode=mode, header=not append)

@@ -12,6 +12,7 @@ from plotly.subplots import make_subplots
 
 from bituslabs_ds.config import LOCAL_ROOT, setup_logging
 from bituslabs_ds.s3_utils import read_local_cache
+from bituslabs_ds.utils import load_config
 
 # ==========================================
 # 1. Styling & Constants
@@ -84,67 +85,40 @@ class Styles:
 # ==========================================
 
 
-class FishHunterDashboard:
-    def __init__(self, df_bet: pd.DataFrame, df_date: pd.DataFrame, host_ip: str = "127.0.0.1"):
+class GameStatsDashboard:
+    def __init__(self, config_file: str, host_ip: str = "127.0.0.1"):
         self.host_ip = host_ip
+        self.config = load_config(config_file)
+        self.groups: List[str] = self.config["groups"]
 
         # --- 1. Process Bet Data (Granular) ---
-        self.df_bet = df_bet.copy()
-        self.df_bet["bet_index"] = pd.to_numeric(self.df_bet["bet_index"], errors="coerce")
-        self.df_bet = self.df_bet.dropna(subset=["bet_index"])
-        self.sessions: List[str] = sorted(self.df_bet["session_start_date"].astype(str).unique())
-        self.bet_strategies: List[str] = ["BOOST", "DYNA_RTP", "DEFAULT", "PA"]
+        bet_data = []
+        for f in self.config["stats_by_bet"]["files"]:
+            bet_data.append(read_local_cache(f))
+
+        if bet_data:
+            self.df_bet = pd.concat(bet_data)
+            self.df_bet["bet_index"] = pd.to_numeric(self.df_bet["bet_index"], errors="coerce")
+            self.df_bet = self.df_bet.dropna(subset=["bet_index"])
+            self.sessions: List[str] = sorted(self.df_bet["session_start_date"].astype(str).unique())
+            exclude_bet_cols = ["session_start_date", "session_group", "bet_index"]
+            self.bet_metrics: List[str] = [c for c in self.df_bet.columns if c not in exclude_bet_cols]
 
         # --- 2. Process Date Data (Aggregated) ---
-        self.df_date = df_date.copy()
+        daily_data = []
+        for f in self.config["stats_by_date"]["files"]:
+            daily_data.append(read_local_cache(f))
 
-        if "num_users_day0" in self.df_date.columns:
-            if any(self.df_date["num_users"] != self.df_date["num_users_day0"]):
-                logger.critical("values in num_users not equal to num_users_day0, check query to fetch data!")
-            self.df_date.drop(columns="num_users_day0", inplace=True)
+        if daily_data:
+            self.df_date = pd.concat(daily_data)
 
-        self.df_date["bj_date"] = pd.to_datetime(self.df_date["bj_date"])
-        self.df_date["retention_ratio_day1"] = self.df_date["num_users_day1"] / self.df_date["num_users"]
-        self.df_date["retention_ratio_day3"] = self.df_date["num_users_day3"] / self.df_date["num_users"]
-
-        self.df_date["total_bet_per_user"] = self.df_date["daily_total_bet"] / self.df_date["num_users"]
-        self.df_date["total_profit_per_user"] = self.df_date["total_profit"] / self.df_date["num_users"]
-
-        # --- 3. Identify Metrics for each dataset ---
-        exclude_bet_cols = ["session_start_date", "session_group", "bet_index"]
-        self.bet_metrics: List[str] = [c for c in self.df_bet.columns if c not in exclude_bet_cols]
+            self.df_date["bj_date"] = pd.to_datetime(self.df_date["bj_date"])
 
         # Exclude grouping columns for date stats
         self.date_metrics = {}
-        self.date_metrics["g1"] = [
-            "num_users",
-            "num_users_day1",
-            "num_users_day3",
-            "group_num_users",
-            "retention_ratio_day1",
-            "retention_ratio_day3",
-            "num_users_killed_fish",
-        ]
-        self.date_metrics["g2"] = [
-            "total_bet_per_user",
-            "daily_group_rtp",
-            "group_rtp",
-            "bullet_avg_profit",
-            "bullet_kill_avg_profit",
-            "daily_total_bet",
-            "total_profit_per_user",
-            "total_profit",
-            "",
-        ]
-        self.date_metrics["g3"] = [
-            "avg_fish_value",
-            "avg_fish_value_20_200",
-            "avg_killed_fish_value",
-            "avg_killed_fish_value_20_200",
-            "bullet_kill_ratio",
-            "bullets_per_user",
-            "killed_bullets_per_user",
-        ]
+        self.date_metrics["g1"] = self.config["stats_by_date"]["group1_columns"]
+        self.date_metrics["g2"] = self.config["stats_by_date"]["group2_columns"]
+        self.date_metrics["g3"] = self.config["stats_by_date"]["group3_columns"]
 
         self.app = Dash(__name__, suppress_callback_exceptions=True)
         self._build_main_layout()
@@ -310,8 +284,8 @@ class FishHunterDashboard:
                                 html.Label("Compare Strategies:", style={"marginBottom": "10px"}),
                                 dcc.Checklist(
                                     id="strategy-checklist",
-                                    options=[{"label": s, "value": s} for s in self.bet_strategies],
-                                    value=self.bet_strategies[:4],  # Select up to the first 4 strategies by default
+                                    options=[{"label": s, "value": s} for s in self.groups],
+                                    value=self.groups[:4],  # Select up to the first 4 strategies by default
                                     labelStyle={"display": "block", "marginBottom": "5px"},
                                     style={"marginBottom": "10px"},
                                 ),
@@ -433,7 +407,7 @@ class FishHunterDashboard:
         """
         Generates a plot using self.df_date.
         X-axis = bj_date
-        Series = Grouped by 'daily_group'
+        Series = Grouped by the specified group column
         """
         if not left_metrics and not right_metrics:
             return go.Figure()
@@ -443,14 +417,14 @@ class FishHunterDashboard:
 
         fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-        if "daily_group" not in self.df_date.columns:
-            # Fallback just in case,
-            df_base = self.df_date.copy()
-            df_base["daily_group"] = df_base["strategy_name"]
-        else:
-            df_base = self.df_date
+        group_col = self.config["stats_by_date"]["group_col"]
 
-        strategies = self.df_date["daily_group"].unique()
+        df_date = self.df_date.copy()
+        if group_col == "":
+            df_date["group"] = "All"
+            group_col = "group"
+
+        strategies = df_date[group_col].unique()
         color_map = {
             f"{s}:{m}": Styles.COLORS[j % len(Styles.COLORS)]
             for i, m in enumerate(left_metrics + right_metrics)
@@ -465,7 +439,7 @@ class FishHunterDashboard:
 
         for strat in strategies:
             # Filter by daily_group
-            df_strat = df_base[df_base["daily_group"] == strat].sort_values("bj_date")
+            df_strat = df_date[df_date[group_col] == strat].sort_values("bj_date")
 
             if df_strat.empty:
                 continue
@@ -800,17 +774,7 @@ if __name__ == "__main__":
 
     setup_logging(f"{LOCAL_ROOT}/jobs/log", log_filename=os.path.splitext(os.path.basename(__file__))[0] + ".log")
 
-    data_file: str = "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_index.parquet"
-    data_file2: str = "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_index_pa.parquet"
-
-    data: pd.DataFrame = read_local_cache(data_file)
-    data2: pd.DataFrame = read_local_cache(data_file2)
-
-    stats_by_bet = pd.concat([data, data2])
-
-    data_file3: str = "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_date.parquet"
-    stats_by_date: pd.DataFrame = read_local_cache(data_file3)
-
-    # Initialize with BOTH datasets
-    dashboard = FishHunterDashboard(stats_by_bet, stats_by_date)
+    # config_file = "/Users/niuxin/Documents/aws-example/src/dashboards/dashboard_config-fishhunter.yaml"
+    config_file = "/Users/niuxin/Documents/aws-example/src/dashboards/dashboard_config-ss01.yaml"
+    dashboard = GameStatsDashboard(config_file)
     dashboard.run()
