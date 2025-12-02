@@ -1,7 +1,9 @@
 import logging
 import os
+import re
 import socket
 from math import inf
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -86,15 +88,75 @@ class Styles:
 
 
 class GameStatsDashboard:
-    def __init__(self, config_file: str, host_ip: str = "127.0.0.1"):
+    def __init__(self, config_dir: str, host_ip: str = "127.0.0.1"):
         self.host_ip = host_ip
-        self.config = load_config(config_file)
-        self.groups: List[str] = self.config["groups"]
+        self.config_dir = config_dir
+
+        # Find all dashboard config files
+        self.config_files = self._find_config_files()
+
+        self._reset_state()
+
+        # Load initial config and data
+        self.config = load_config(self.config_files[0]["value"])
+        self._load_data()
+
+        self.app = Dash(__name__, suppress_callback_exceptions=True)
+        self._build_main_layout()
+        self._register_callbacks()
+
+    def _reset_state(self):
+
+        self.config = {}
+        self.df_date = pd.DataFrame()
+        self.df_bet = pd.DataFrame()
+        self.df_date_groups = []
+        self.df_bet_groups = []
+        self.df_date_group_col = ""
+        self.df_bet_group_col = ""
+        self.bet_metrics = []
+        self.date_metrics = []
+
+    def _find_config_files(self) -> List[Dict[str, str]]:
+        """Find all dashboard_config*.yaml files in the config directory."""
+        config_files = []
+        config_dir_path = Path(self.config_dir)
+
+        if not config_dir_path.exists() or not config_dir_path.is_dir():
+            # Fallback to current file's directory
+            config_dir_path = Path(__file__).parent
+
+        pattern = re.compile(r"^dashboard_config.*\.yaml$")
+        for file_path in config_dir_path.glob("*.yaml"):
+            if pattern.match(file_path.name):
+                # Load config to get title
+                try:
+                    temp_config = load_config(str(file_path))
+                    title = temp_config.get("title", file_path.stem)
+                    config_files.append({"label": title, "value": str(file_path.absolute())})  # Use absolute path
+                except Exception as e:
+                    logger.warning(f"Could not load config {file_path}: {e}")
+                    config_files.append(
+                        {"label": file_path.stem, "value": str(file_path.absolute())}  # Use absolute path
+                    )
+
+        return sorted(config_files, key=lambda x: x["label"])
+
+    def _load_data(self):
+        """Load all data based on current config."""
 
         # --- 1. Process Bet Data (Granular) ---
+        self._load_bet_data()
+
+        # --- 2. Process Date Data (Aggregated) ---
+        self._load_date_data()
+
+    def _load_bet_data(self):
+        """Load bet-level data from config."""
         bet_data = []
         for f in self.config["stats_by_bet"]["files"]:
-            bet_data.append(read_local_cache(f))
+            if f:  # Skip empty file paths
+                bet_data.append(read_local_cache(f))
 
         if bet_data:
             self.df_bet = pd.concat(bet_data)
@@ -103,16 +165,23 @@ class GameStatsDashboard:
             self.sessions: List[str] = sorted(self.df_bet["session_start_date"].astype(str).unique())
             exclude_bet_cols = ["session_start_date", "session_group", "bet_index"]
             self.bet_metrics: List[str] = [c for c in self.df_bet.columns if c not in exclude_bet_cols]
+        else:
+            self.df_bet = pd.DataFrame()
+            self.sessions = []
+            self.bet_metrics = []
 
-        # --- 2. Process Date Data (Aggregated) ---
+    def _load_date_data(self):
+        """Load date-level data from config."""
         daily_data = []
         for f in self.config["stats_by_date"]["files"]:
-            daily_data.append(read_local_cache(f))
+            if f:  # Skip empty file paths
+                daily_data.append(read_local_cache(f))
 
         if daily_data:
             self.df_date = pd.concat(daily_data)
-
             self.df_date["bj_date"] = pd.to_datetime(self.df_date["bj_date"])
+        else:
+            self.df_date = pd.DataFrame()
 
         # Exclude grouping columns for date stats
         self.date_metrics = {}
@@ -120,9 +189,10 @@ class GameStatsDashboard:
         self.date_metrics["g2"] = self.config["stats_by_date"]["group2_columns"]
         self.date_metrics["g3"] = self.config["stats_by_date"]["group3_columns"]
 
-        self.app = Dash(__name__, suppress_callback_exceptions=True)
-        self._build_main_layout()
-        self._register_callbacks()
+    def _reload_config(self, config_file: str):
+        """Reload config and data from a new config file."""
+        self.config = load_config(config_file)
+        self._load_data()
 
     # ------------------------------------------------------------------
     # Layout Builders
@@ -134,39 +204,50 @@ class GameStatsDashboard:
                 # --- Header / Navigator ---
                 html.Div(
                     [
-                        html.Div(
-                            [
-                                html.H2(
-                                    "Fish Hunter Analytics",
-                                    style={"margin": "0", "paddingBottom": "10px", "color": "#333", "fontSize": "24px"},
+                        dcc.Dropdown(
+                            id="config-dropdown",
+                            options=self.config_files,
+                            value=self.config_files[0]["value"],
+                            clearable=False,
+                            style={
+                                "width": "250px",
+                                "marginRight": "50px",
+                                "marginLeft": "8px",
+                                "marginTop": "2px",
+                                "marginBottom": "0px",
+                            },
+                        ),
+                        dcc.Tabs(
+                            id="navigator-tabs",
+                            value="tab-date",
+                            children=[
+                                dcc.Tab(
+                                    label="Stats by Date",
+                                    value="tab-date",
+                                    style=Styles.NAV_TAB,
+                                    selected_style=Styles.NAV_TAB_SELECTED,
                                 ),
-                                # Adjusted Navigator: Width 40%, Min Width 400px for portability
-                                html.Div(
-                                    dcc.Tabs(
-                                        id="navigator-tabs",
-                                        value="tab-date",
-                                        children=[
-                                            dcc.Tab(
-                                                label="Stats by Date",
-                                                value="tab-date",
-                                                style=Styles.NAV_TAB,
-                                                selected_style=Styles.NAV_TAB_SELECTED,
-                                            ),
-                                            dcc.Tab(
-                                                label="Stats by Bet",
-                                                value="tab-bet",
-                                                style=Styles.NAV_TAB,
-                                                selected_style=Styles.NAV_TAB_SELECTED,
-                                            ),
-                                        ],
-                                    ),
-                                    style={"width": "40%", "minWidth": "400px"},
+                                dcc.Tab(
+                                    label="Stats by Bet",
+                                    value="tab-bet",
+                                    style=Styles.NAV_TAB,
+                                    selected_style=Styles.NAV_TAB_SELECTED,
                                 ),
                             ],
-                            style={"padding": "20px 20px 0 20px"},
-                        )
+                            style={"width": "1050px"},
+                        ),
                     ],
-                    style={"backgroundColor": "white", "borderBottom": "1px solid #eee", "marginBottom": "20px"},
+                    style={
+                        "width": "100%",
+                        "minWidth": "330px",
+                        "display": "flex",
+                        "flexDirection": "row",
+                        "justifyContent": "flex-start",
+                        "alignItems": "flex-start",
+                        "borderBottom": "1px solid #eee",
+                        "marginBottom": "20px",
+                        "marginLeft": "0px",
+                    },
                 ),
                 # --- Main Content Area ---
                 html.Div(
@@ -208,6 +289,7 @@ class GameStatsDashboard:
                                         options=[{"label": m, "value": m} for m in self.date_metrics[group_id]],
                                         value=[self.date_metrics[group_id][0]] if self.date_metrics[group_id] else [],
                                         multi=True,
+                                        style={"minWidth": "180px"},
                                     ),
                                     html.Label("Right Axis Metrics:", style={"marginTop": "10px"}),
                                     dcc.Dropdown(
@@ -215,6 +297,7 @@ class GameStatsDashboard:
                                         options=[{"label": m, "value": m} for m in self.date_metrics[group_id]],
                                         value=[],
                                         multi=True,
+                                        style={"minWidth": "180px"},
                                     ),
                                     html.Div(
                                         [
@@ -231,6 +314,20 @@ class GameStatsDashboard:
                                                 value=10,
                                                 style={"width": "60px"},
                                             ),
+                                        ],
+                                        style={"marginTop": "10px"},
+                                    ),
+                                    html.Div(
+                                        [
+                                            dcc.Checklist(
+                                                id=f"date-{group_id}-group",
+                                                options=[{"label": s, "value": s} for s in self.df_date_groups],
+                                                value=self.df_date_groups[
+                                                    :4
+                                                ],  # Select up to the first 4 strategies by default
+                                                labelStyle={"display": "block", "marginBottom": "5px"},
+                                                style={"marginBottom": "10px"},
+                                            )
                                         ],
                                         style={"marginTop": "10px"},
                                     ),
@@ -284,8 +381,8 @@ class GameStatsDashboard:
                                 html.Label("Compare Strategies:", style={"marginBottom": "10px"}),
                                 dcc.Checklist(
                                     id="strategy-checklist",
-                                    options=[{"label": s, "value": s} for s in self.groups],
-                                    value=self.groups[:4],  # Select up to the first 4 strategies by default
+                                    options=[{"label": s, "value": s} for s in self.df_bet_groups],
+                                    value=self.df_bet_groups[:4],  # Select up to the first 4 strategies by default
                                     labelStyle={"display": "block", "marginBottom": "5px"},
                                     style={"marginBottom": "10px"},
                                 ),
@@ -361,14 +458,27 @@ class GameStatsDashboard:
     # ------------------------------------------------------------------
 
     def _register_callbacks(self):
-        # 1. Tab Switcher
-        @self.app.callback(Output("page-content", "children"), Input("navigator-tabs", "value"))
+        # 0. Config Dropdown - Reload data when config changes
+        @self.app.callback(
+            Output("page-content", "children", allow_duplicate=True),
+            Input("config-dropdown", "value"),
+            State("navigator-tabs", "value"),
+            prevent_initial_call=True,
+        )
+        def update_config(selected_config, current_tab):
+            """Reload data when config changes."""
+            self._reset_state()
+            self._reload_config(selected_config)
+            return self._render_tab_content(current_tab)
+
+        # 1. Tab Switcher - only updates page content
+        @self.app.callback(
+            Output("page-content", "children"),
+            Input("navigator-tabs", "value"),
+            prevent_initial_call=False,
+        )
         def render_content(tab):
-            if tab == "tab-date":
-                return self._layout_stats_by_date()
-            elif tab == "tab-bet":
-                return self._layout_stats_by_bet()
-            return html.Div("404 Error")
+            return self._render_tab_content(tab)
 
         # 2. Stats by Bet - Main Plot
         self.app.callback(
@@ -387,7 +497,7 @@ class GameStatsDashboard:
             ],
         )(self.update_bet_plot)
 
-        # 3. Stats by Date - Group Plots
+        # 3. Stats by Date - Group Plots (always g1, g2, g3)
         for i in range(1, 4):
             self.app.callback(
                 Output(f"date-g{i}-plot", "figure"),
@@ -396,14 +506,32 @@ class GameStatsDashboard:
                     Input(f"date-g{i}-right-metrics", "value"),
                     Input(f"date-g{i}-log", "value"),
                     Input(f"date-g{i}-thresh", "value"),
+                    Input(f"date-g{i}-group", "value"),
                 ],
             )(self.update_date_group_plot)
+
+    def _render_tab_content(self, current_tab):
+
+        if self.config["stats_by_date"]["group_col"]:
+            self.df_date_group_col = self.config["stats_by_date"]["group_col"]
+            self.df_date_groups: List[str] = self.df_date[self.df_date_group_col].unique().tolist()
+
+        if self.config["stats_by_bet"]["group_col"]:
+            self.df_bet_group_col = self.config["stats_by_bet"]["group_col"]
+            self.df_bet_groups: List[str] = self.df_bet[self.df_bet_group_col].unique().tolist()
+
+        if current_tab == "tab-date":
+            return self._layout_stats_by_date()
+        elif current_tab == "tab-bet":
+            return self._layout_stats_by_bet()
+        else:
+            return html.Div("404 Error")
 
     # ------------------------------------------------------------------
     # Plot Logic
     # ------------------------------------------------------------------
 
-    def update_date_group_plot(self, left_metrics, right_metrics, log_val, log_thresh):
+    def update_date_group_plot(self, left_metrics, right_metrics, log_val, log_thresh, groups):
         """
         Generates a plot using self.df_date.
         X-axis = bj_date
@@ -417,27 +545,39 @@ class GameStatsDashboard:
 
         fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-        group_col = self.config["stats_by_date"]["group_col"]
-
         df_date = self.df_date.copy()
-        if group_col == "":
-            df_date["group"] = "All"
+        if self.df_date_group_col == "" or self.df_date_group_col not in df_date.columns:
             group_col = "group"
+            df_date["group"] = "total"
+            groups = ["total"]
 
-        strategies = df_date[group_col].unique()
-        color_map = {
-            f"{s}:{m}": Styles.COLORS[j % len(Styles.COLORS)]
-            for i, m in enumerate(left_metrics + right_metrics)
-            for j, s in enumerate(strategies)
-        }
+            color_map = {
+                f"{s}:{m}": Styles.COLORS[i % len(Styles.COLORS)]
+                for i, m in enumerate(left_metrics + right_metrics)
+                for j, s in enumerate(groups)
+            }
 
-        line_style_map = {
-            f"{s}:{m}": Styles.LINE_SHAPE[i % len(Styles.LINE_SHAPE)]
-            for i, m in enumerate(left_metrics + right_metrics)
-            for j, s in enumerate(strategies)
-        }
+            line_style_map = {
+                f"{s}:{m}": Styles.LINE_SHAPE[0]
+                for i, m in enumerate(left_metrics + right_metrics)
+                for j, s in enumerate(groups)
+            }
 
-        for strat in strategies:
+        else:
+            group_col = self.df_date_group_col
+            color_map = {
+                f"{s}:{m}": Styles.COLORS[j % len(Styles.COLORS)]
+                for i, m in enumerate(left_metrics + right_metrics)
+                for j, s in enumerate(groups)
+            }
+
+            line_style_map = {
+                f"{s}:{m}": Styles.LINE_SHAPE[i % len(Styles.LINE_SHAPE)]
+                for i, m in enumerate(left_metrics + right_metrics)
+                for j, s in enumerate(groups)
+            }
+
+        for strat in groups:
             # Filter by daily_group
             df_strat = df_date[df_date[group_col] == strat].sort_values("bj_date")
 
@@ -546,6 +686,10 @@ class GameStatsDashboard:
         filter_check,
         filter_thresh,
     ):
+
+        if self.df_bet.empty:
+            return go.Figure()
+
         # -- 1. Setup Flags --
         share_left_y = "ON" in (share_left or [])
         share_right_y = "ON" in (share_right or [])
@@ -577,7 +721,26 @@ class GameStatsDashboard:
             self.compute_axis_range(df_groups, right_metrics, log_scale, log_thresh) if share_right_y else None
         )
 
-        # -- 5. Add Traces --
+        # -- 5. Add dummy trace for left axis if only right metrics are selected
+        if not left_metrics and right_metrics:
+            # Add a single invisible dummy trace to initialize the left y-axis
+            fig.add_trace(
+                go.Scatter(
+                    x=np.array([0]),
+                    y=np.array([0]),
+                    name="",
+                    mode="lines",
+                    line=dict(width=0),
+                    legendgroup=None,
+                    showlegend=False,
+                    hoverinfo="skip",
+                ),
+                row=1,
+                col=1,
+                secondary_y=False,
+            )
+
+        # -- 6. Add Traces --
         for i, df_g in enumerate(df_groups):
             if df_g.empty:
                 continue
@@ -646,24 +809,7 @@ class GameStatsDashboard:
 
     def _add_traces_to_fig(self, fig, df, strat, metrics, colors, log_scale, thresh, is_right, y_range):
         if not metrics:
-            if not is_right:
-                # Fix for Plotly bug: When only the right y-axis has metrics and the left does not, Plotly errors with
-                # "TypeError: Cannot read properties of undefined (reading 'rangemode')". Adding an invisible dummy trace
-                # ensures the left y-axis is instantiated so the right axis renders without error.
-                fig.add_trace(
-                    go.Scatter(
-                        x=np.array([0]),
-                        y=np.array([0]),
-                        name="",
-                        mode="lines",
-                        line=dict(width=0.5),
-                        legendgroup=None,
-                        showlegend=False,
-                    ),
-                    row=1,
-                    col=1,
-                )
-                pass
+            # Don't add dummy traces here - handle it at the plot level
             return
 
         y_max_local = -inf
@@ -774,7 +920,6 @@ if __name__ == "__main__":
 
     setup_logging(f"{LOCAL_ROOT}/jobs/log", log_filename=os.path.splitext(os.path.basename(__file__))[0] + ".log")
 
-    # config_file = "/Users/niuxin/Documents/aws-example/src/dashboards/dashboard_config-fishhunter.yaml"
-    config_file = "/Users/niuxin/Documents/aws-example/src/dashboards/dashboard_config-ss01.yaml"
-    dashboard = GameStatsDashboard(config_file)
+    config_dir = "/Users/niuxin/Documents/aws-example/src/dashboards"
+    dashboard = GameStatsDashboard(config_dir)
     dashboard.run()

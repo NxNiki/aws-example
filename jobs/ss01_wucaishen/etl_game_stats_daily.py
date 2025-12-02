@@ -4,6 +4,9 @@ from textwrap import dedent
 from bituslabs_ds.config import LOCAL_ROOT, setup_logging
 from bituslabs_ds.etl import DataLoader, RedshiftBackend
 
+# TODO:
+# add max/min user daily profit
+
 query = dedent(
     """
     WITH target_settings AS (
@@ -110,7 +113,7 @@ query = dedent(
 
 
         ROUND(COALESCE(m.total_bet * 1.0 / NULLIF(m.total_users, 0), 0), 3) AS total_bet_per_user,
-        ROUND(COALESCE(m.total_payout - m.total_bet * 1.0 / NULLIF(m.total_users, 0), 0), 3) AS total_profit_per_user
+        ROUND(COALESCE((m.total_payout - m.total_bet) * 1.0 / NULLIF(m.total_users, 0), 0), 3) AS total_profit_per_user
 
     FROM daily_metrics AS m
     INNER JOIN retention_data AS r

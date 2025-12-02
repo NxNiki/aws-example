@@ -1,13 +1,5 @@
 title: "SS01 (wucaishen) Analytics"
 
-groups: [
-  "cluster1",
-  "cluster2",
-  "cluster3",
-  "default",
-  "total",
-  ]
-
 stats_by_date: 
   files: [
     "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_date.parquet",
@@ -39,4 +31,6 @@ stats_by_bet:
   files: [
     
   ]
+
+  group_col: ""
 

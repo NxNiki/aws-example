@@ -5,7 +5,7 @@ from bituslabs_ds.config import LOCAL_ROOT, setup_logging
 from bituslabs_ds.etl import DataLoader, RedshiftBackend
 
 DATE_START = "2025-10-20"
-DATE_END = "2025-12-1"
+DATE_END = "2027-12-1"
 
 query = dedent(
     f"""

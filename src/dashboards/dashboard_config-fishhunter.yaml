@@ -1,10 +1,4 @@
-
-groups: [
-  "BOOST", 
-  "DYNA_RTP", 
-  "DEFAULT", 
-  "PA"
-  ]
+title: "Fish Hunter Analytics"
 
 stats_by_date: 
   files: [
@@ -50,4 +44,6 @@ stats_by_bet:
     "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_index.parquet",
     "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_index_pa.parquet"
   ]
+
+  group_col: "session_group"
 
