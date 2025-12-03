@@ -123,7 +123,6 @@ query = dedent(
     -- 6. FINAL JOIN & FORMATTING
     SELECT
         t1.daily_group,
-        -- CONVERT TO STRING HERE AT THE END
         TO_CHAR(t1.bj_date_raw, 'YYYY-mm-dd') AS bj_date,
         t1.num_users,
         t1.num_return_users,
@@ -133,9 +132,11 @@ query = dedent(
         t1.num_killed_bullets,
         t1.num_users_killed_fish,
         t1.daily_group_rtp,
+
         t2.num_users_day0,
         t2.num_users_day1,
         t2.num_users_day3,
+
         t3.group_num_users,
         t3.group_rtp,
         t3.avg_fish_value,
@@ -145,10 +146,14 @@ query = dedent(
         t3.bullet_avg_profit,
         t3.bullet_kill_avg_profit,
         t3.total_profit,
+
         ROUND(CAST(t2.num_users_day1 AS FLOAT) / NULLIF(t2.num_users_day0, 0), 3) AS retention_rate_day1,
         ROUND(CAST(t2.num_users_day3 AS FLOAT) / NULLIF(t2.num_users_day0, 0), 3) AS retention_rate_day3,
+
         ROUND(CAST(t1.daily_total_bet AS FLOAT) / NULLIF(t2.num_users_day0, 0), 3) AS total_bet_per_user,
         ROUND(CAST(t3.total_profit AS FLOAT) / NULLIF(t2.num_users_day0, 0), 3) AS total_profit_per_user,
+        ROUND(CAST(t1.total_num_rooms AS FLOAT) / NULLIF(t2.num_users_day0, 0), 3) AS total_rooms_per_user,
+
         ROUND(CAST(t1.num_killed_bullets AS FLOAT) / NULLIF(t1.num_bullets, 0), 3) AS bullet_kill_ratio,
         ROUND(CAST(t1.num_bullets AS FLOAT) / NULLIF(t1.num_users, 0), 3) AS bullets_per_user,
         ROUND(CAST(t1.num_killed_bullets AS FLOAT) / NULLIF(t1.num_users, 0), 3) AS killed_bullets_per_user

@@ -10,6 +10,7 @@ stats_by_date:
 
   group1_columns: [
     "num_users",
+    num_return_users,
     "num_users_day1",
     "num_users_day3",
     "group_num_users",
@@ -27,6 +28,8 @@ stats_by_date:
     "daily_total_bet",
     "total_profit_per_user",
     "total_profit",
+    "total_num_rooms",
+    "total_rooms_per_user",
   ]
 
   group3_columns: [
