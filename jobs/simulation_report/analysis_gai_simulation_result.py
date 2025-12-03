@@ -199,57 +199,59 @@ def main(config_file):
     data = load_data(config, reload=False)
     data_profiler = DataProfiler(data, skewness_threshold=1.5)
 
-    # Radar plot for each math table (3 clusters in one plot)
-    data = process_data(data, config, output_path=output_path)
-    for math_table in data["machine_id"].unique():
-        logger.info(f"make radar plot for {math_table}")
-        for agg_method in ["mean", "median"]:
-            make_radar_plot(
-                data[data["machine_id"] == math_table],
-                group="cluster_index",
-                config=config,
-                agg_method=agg_method,
-                title=f"数学表: {math_table}",
-                output_path=f"{output_path}/radar_plot_{math_table}_{agg_method}.png",
-            )
-    return
+    # # Radar plot for each math table (3 clusters in one plot)
+    # data = process_data(data, config, output_path=output_path)
+    # for math_table in data["machine_id"].unique():
+    #     logger.info(f"make radar plot for {math_table}")
+    #     for agg_method in ["mean", "median"]:
+    #         make_radar_plot(
+    #             data[data["machine_id"] == math_table],
+    #             group="cluster_index",
+    #             config=config,
+    #             agg_method=agg_method,
+    #             title=f"数学表: {math_table}",
+    #             output_path=f"{output_path}/radar_plot_{math_table}_{agg_method}.png",
+    #         )
 
     data_profiler.transform_skewed_columns(pos_suffix="", neg_suffix="")
+    output_path = f"{LOCAL_ROOT}/jobs/{config['work_dir']}/anova_result"
+    os.makedirs(output_path, exist_ok=True)
 
-    viz = DataVisualizer(data_profiler)
-    # Plot distributions with distribution statistics
-    viz.create_figure(
-        layout_cols=data_profiler.processed_numerical_columns, group_col="cluster_index", n_cols=5, fig_size=(7, 3.5)
-    )
-    viz.add_histogram(show_distribution_stats=True, kde=True)
-    viz.figure.subplots_adjust(left=0.05, bottom=0.05, top=0.95, right=0.97, wspace=0.2, hspace=0.25)
-    viz.display()
-    viz.save(f"{output_path}/gai_simulation_distribution_transformed.png")
+    # viz = DataVisualizer(data_profiler)
 
-    # Plot correlation heatmap
-    viz.create_figure(fig_title="Correlation for: cluster 2", fig_size=(12, 7))
-    viz.add_correlation_heatmap(cbar="Red")
-    viz.figure.subplots_adjust(left=0.15, bottom=0.15, top=0.90, right=0.97)
-    viz.display()
-    viz.save(f"{output_path}/gai_simulation_correlation.png")
+    # # Plot distributions with distribution statistics
+    # viz.create_figure(
+    #     layout_cols=data_profiler.processed_numerical_columns, group_col="cluster_index", n_cols=5, fig_size=(7, 3.5)
+    # )
+    # viz.add_histogram(show_distribution_stats=True, kde=True)
+    # viz.figure.subplots_adjust(left=0.05, bottom=0.05, top=0.95, right=0.97, wspace=0.2, hspace=0.25)
+    # viz.display()
+    # viz.save(f"{output_path}/gai_simulation_distribution_transformed.png")
 
-    # Plot correlation heatmap for machine_id
-    viz.create_figure(layout_cols=["machine_id"], fig_title="Correlation for: cluster 2", fig_size=(12, 7))
-    viz.add_correlation_heatmap(cbar="Red")
-    viz.figure.subplots_adjust(left=0.15, bottom=0.15, top=0.90, right=0.97, wspace=0.25, hspace=0.35)
-    viz.display()
-    viz.save(f"{output_path}/gai_simulation_correlation_machine_id.png")
+    # # Plot correlation heatmap
+    # viz.create_figure(fig_title="Correlation for: cluster 2", fig_size=(12, 7))
+    # viz.add_correlation_heatmap(cbar="Red")
+    # viz.figure.subplots_adjust(left=0.15, bottom=0.15, top=0.90, right=0.97)
+    # viz.display()
+    # viz.save(f"{output_path}/gai_simulation_correlation.png")
+
+    # # Plot correlation heatmap for machine_id
+    # viz.create_figure(layout_cols=["machine_id"], fig_title="Correlation for: cluster 2", fig_size=(12, 7))
+    # viz.add_correlation_heatmap(cbar="Red")
+    # viz.figure.subplots_adjust(left=0.15, bottom=0.15, top=0.90, right=0.97, wspace=0.25, hspace=0.35)
+    # viz.display()
+    # viz.save(f"{output_path}/gai_simulation_correlation_machine_id.png")
 
     # ANOVA:
     anova_between_vars = ["machine_id", "cluster_index"]
     # anova_between_vars = ["machine_id"]
 
-    data_profiler.augment_columns(
-        columns=config["data_loader"]["pca_columns"], col_name="compound_metric", method=["pca"]
-    )
+    data_profiler.augment_columns(columns=config["pca_columns"], col_name="compound_metric", method=["pca"])
 
-    remove_cols: set = set([])
-    anova_dv = [col for col in data_profiler.processed_numerical_columns if col not in remove_cols] + [
+    anova_dv = [
+        "total_bet",
+        "total_spins",
+        "total_profit",
         "compound_metric_pca1",
         "compound_metric_pca2",
         "compound_metric_pca3",
@@ -257,8 +259,9 @@ def main(config_file):
 
     res = data_profiler.show_group_stats(
         group_cols=["machine_id", "cluster_index"],
-        var_columns=["total_spins", "total_bet", "total_profit"],
+        var_columns=anova_dv,
         transpose=False,
+        agg_stats=["mean", "median", "std"],
     )
     res.to_csv(f"{output_path}/report_selected_features.csv")
 
@@ -275,17 +278,17 @@ def main(config_file):
 
     anova.run_post_hoc_analysis(anova_dv, effects="main", p_thresh=0.05)
 
-    # if len(anova_between_vars) > 1:
-    #     anova.run_post_hoc_analysis(anova_dv, effects="interaction", group_var="cluster_index", p_thresh=0.05)
-    #     anova.show_box_plot(
-    #         x_col="cluster_index",
-    #         group_col="machine_id",
-    #         output_path=output_path,
-    #         fig_title="boxplot_two_factors",
-    #         stripplot_kws={"size": 2},
-    #     )
-    # else:
-    #     anova.show_box_plot(x_col="machine_id", output_path=output_path, fig_title="boxplot_machine_id")
+    if len(anova_between_vars) > 1:
+        anova.run_post_hoc_analysis(anova_dv, effects="interaction", group_var="cluster_index", p_thresh=0.05)
+        # anova.show_box_plot(
+        #     x_col="cluster_index",
+        #     group_col="machine_id",
+        #     output_path=output_path,
+        #     fig_title="boxplot_two_factors",
+        #     stripplot_kws={"size": 2},
+        # )
+    else:
+        anova.show_box_plot(x_col="machine_id", output_path=output_path, fig_title="boxplot_machine_id")
 
 
 if __name__ == "__main__":

@@ -1576,12 +1576,16 @@ class DataProfiler:
 
         return data
 
-    def show_group_stats(self, group_cols: List[str], var_columns: List[str], transpose: bool = False) -> pd.DataFrame:
-        return self.show_df_group_stats(self.df, group_cols, var_columns, transpose)
+    def show_group_stats(self, group_cols: List[str], var_columns: List[str], **kwargs) -> pd.DataFrame:
+        return self.show_df_group_stats(self.df, group_cols, var_columns, **kwargs)
 
     @staticmethod
     def show_df_group_stats(
-        data: pd.DataFrame, group_cols: List[str], var_columns: List[str], transpose: bool = False
+        data: pd.DataFrame,
+        group_cols: List[str],
+        var_columns: List[str],
+        transpose: bool = False,
+        agg_stats: List[str] = ["mean", "median", "std", "min", "max", "count"],
     ) -> pd.DataFrame:
         """
         Display group statistics for specified columns.
@@ -1594,7 +1598,13 @@ class DataProfiler:
         grouped = data.groupby(group_cols)[var_columns]
 
         # Calculate statistics
-        stats = grouped.agg(["count", "median", "mean", "std", "min", "max"])
+        stats = grouped.agg(agg_stats)
+
+        for var in var_columns:
+            stats_var = stats[var]
+            logger.info(
+                f"Group Statistics: {var}:\n {stats_var.sort_values(by=stats_var.columns[0], ascending=False).reset_index().to_markdown(index=False)}"
+            )
 
         if transpose:
             stats = stats.T
