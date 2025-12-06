@@ -44,7 +44,8 @@ query = dedent(
         SELECT DISTINCT
             t.activity_date,
             t.user_id,
-            t.ab_group_id
+            t.ab_group_id,
+            t.mathtable
         FROM
             user_bets AS t
     ),
@@ -55,9 +56,22 @@ query = dedent(
             COUNT(DISTINCT CASE WHEN t1.ab_group_id != 'jojpin-9mokha-rexQug' THEN t1.user_id END) AS day0_num_users,
             COUNT(DISTINCT CASE WHEN t1.ab_group_id != 'jojpin-9mokha-rexQug' THEN t2.user_id END) AS day1_num_users,
             COUNT(DISTINCT CASE WHEN t1.ab_group_id != 'jojpin-9mokha-rexQug' THEN t3.user_id END) AS day3_num_users,
+
             COUNT(DISTINCT CASE WHEN t1.ab_group_id = 'jojpin-9mokha-rexQug' THEN t1.user_id END) AS ai_day0_num_users,
             COUNT(DISTINCT CASE WHEN t1.ab_group_id = 'jojpin-9mokha-rexQug' THEN t2.user_id END) AS ai_day1_num_users,
-            COUNT(DISTINCT CASE WHEN t1.ab_group_id = 'jojpin-9mokha-rexQug' THEN t3.user_id END) AS ai_day3_num_users
+            COUNT(DISTINCT CASE WHEN t1.ab_group_id = 'jojpin-9mokha-rexQug' THEN t3.user_id END) AS ai_day3_num_users,
+
+            COUNT(DISTINCT CASE WHEN t1.ab_group_id = 'jojpin-9mokha-rexQug' AND t1.mathtable = 'giftShop' THEN t1.user_id END) AS ai_giftshop_day0_num_users,
+            COUNT(DISTINCT CASE WHEN t1.ab_group_id = 'jojpin-9mokha-rexQug' AND t1.mathtable = 'giftShop' THEN t2.user_id END) AS ai_giftshop_day1_num_users,
+            COUNT(DISTINCT CASE WHEN t1.ab_group_id = 'jojpin-9mokha-rexQug' AND t1.mathtable = 'giftShop' THEN t3.user_id END) AS ai_giftshop_day3_num_users,
+
+            COUNT(DISTINCT CASE WHEN t1.ab_group_id = 'jojpin-9mokha-rexQug' AND t1.mathtable = 'newBee' THEN t1.user_id END) AS ai_newbee_day0_num_users,
+            COUNT(DISTINCT CASE WHEN t1.ab_group_id = 'jojpin-9mokha-rexQug' AND t1.mathtable = 'newBee' THEN t2.user_id END) AS ai_newbee_day1_num_users,
+            COUNT(DISTINCT CASE WHEN t1.ab_group_id = 'jojpin-9mokha-rexQug' AND t1.mathtable = 'newBee' THEN t3.user_id END) AS ai_newbee_day3_num_users,
+
+            COUNT(DISTINCT CASE WHEN t1.ab_group_id = 'jojpin-9mokha-rexQug' AND t1.mathtable = 'carousels' THEN t1.user_id END) AS ai_carousels_day0_num_users,
+            COUNT(DISTINCT CASE WHEN t1.ab_group_id = 'jojpin-9mokha-rexQug' AND t1.mathtable = 'carousels' THEN t2.user_id END) AS ai_carousels_day1_num_users,
+            COUNT(DISTINCT CASE WHEN t1.ab_group_id = 'jojpin-9mokha-rexQug' AND t1.mathtable = 'carousels' THEN t3.user_id END) AS ai_carousels_day3_num_users
         FROM
             daily_login AS t1
         LEFT JOIN daily_login AS t2
@@ -226,7 +240,7 @@ query = dedent(
         ds.default_total_payout_fg,
         ds.ai_total_payout,
 
-        -- Per-User Bet
+        -- total payout
         ds.ai_total_payout_bg,
         ds.ai_total_payout_fg,
 
@@ -236,12 +250,6 @@ query = dedent(
         ds.avg_delta_t_seconds,
         ds.default_avg_delta_t,
         ds.ai_avg_delta_t,
-        ur.day0_num_users,
-        ur.day1_num_users,
-        ur.day3_num_users,
-        ur.ai_day0_num_users,
-        ur.ai_day1_num_users,
-        ur.ai_day3_num_users,
 
         -- free game ratio
         ds.default_num_bets_fg * 1.0 / NULLIF(ds.default_num_bets, 0) AS default_fg_ratio,
@@ -266,6 +274,27 @@ query = dedent(
         (ds.default_total_payout - ds.default_total_bet) AS default_total_profit,
 
         -- Retention:
+        ur.day0_num_users,
+        ur.day1_num_users,
+        ur.day3_num_users,
+
+        ur.ai_day0_num_users,
+        ur.ai_day1_num_users,
+        ur.ai_day3_num_users,
+
+        ai_giftshop_day0_num_users,
+        ai_giftshop_day1_num_users,
+        ai_giftshop_day3_num_users,
+
+        ai_newbee_day0_num_users,
+        ai_newbee_day1_num_users,
+        ai_newbee_day3_num_users,
+
+        ai_carousels_day0_num_users,
+        ai_carousels_day1_num_users,
+        ai_carousels_day3_num_users,
+
+
         (ds.ai_total_payout - ds.ai_total_bet) AS ai_total_profit,
         (ds.ai0_giftshop_total_payout - ds.ai0_giftshop_total_bet) AS ai0_giftshop_total_profit,
         (ds.ai1_newbee_total_payout - ds.ai1_newbee_total_bet) AS ai1_newbee_total_profit,
@@ -300,6 +329,7 @@ def generate_daily_report(df: pd.DataFrame, row=1):
         | \U0001F4CA 统计指标 (Metric) | \U0001F9EA 对照组 (Control) | \U0001F916 AI组 (AI) |
         | :--- | :--- | :--- |
         | 玩家数量（投注次数 >= 40）| {df['total_daily_users'][row]} | {df['ai_group_users'][row]} |
+        | 玩家数量（All）| {df['day0_num_users'][row]} | {df['ai_day0_num_users'][row]} |
         | 前一日留存玩家数量 (Day 1 Retention) | {df['day1_num_users'][row+1]} | {df['ai_day1_num_users'][row+1]} |
         | 玩家平均投注次数 (Avg. Bets/User) | {df['default_num_bets_per_user'][row]} | {df['ai_num_bets_per_user'][row]} |
         | 玩家平均投注总额度 (Avg. Total Bet/User) | {df['default_total_bet_per_user'][row]} | {df['ai_total_bet_per_user'][row]} |
