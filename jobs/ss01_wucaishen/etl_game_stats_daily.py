@@ -196,19 +196,19 @@ query = dedent(
                 AS ai2_carousels_total_payout,
             SUM(CASE WHEN t.ab_group_id = 'jojpin-9mokha-rexQug' AND t.mathtable = 'newBee' THEN t.payout END)
                 AS ai1_newbee_total_payout,
-            AVG(CASE WHEN EXTRACT(EPOCH FROM t.delta_t) BETWEEN 1 AND 86400 THEN EXTRACT(EPOCH FROM t.delta_t) END)
+            AVG(CASE WHEN EXTRACT(EPOCH FROM t.delta_t) BETWEEN 0 AND 86400 THEN EXTRACT(EPOCH FROM t.delta_t) END)
                 AS avg_delta_t_seconds,
             AVG(
                 CASE
                     WHEN
-                        EXTRACT(EPOCH FROM t.delta_t) BETWEEN 1 AND 86400 AND t.ab_group_id != 'jojpin-9mokha-rexQug'
+                        EXTRACT(EPOCH FROM t.delta_t) BETWEEN 0 AND 86400 AND t.ab_group_id != 'jojpin-9mokha-rexQug'
                         THEN EXTRACT(EPOCH FROM t.delta_t)
                 END
             ) AS default_avg_delta_t,
             AVG(
                 CASE
                     WHEN
-                        EXTRACT(EPOCH FROM t.delta_t) BETWEEN 1 AND 86400 AND t.ab_group_id = 'jojpin-9mokha-rexQug'
+                        EXTRACT(EPOCH FROM t.delta_t) BETWEEN 0 AND 86400 AND t.ab_group_id = 'jojpin-9mokha-rexQug'
                         THEN EXTRACT(EPOCH FROM t.delta_t)
                 END
             ) AS ai_avg_delta_t
