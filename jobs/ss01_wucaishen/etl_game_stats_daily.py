@@ -40,278 +40,150 @@ query = dedent(
         AND t.op_code != 'B26'
     ),
 
+    user_bets_group AS (
+        SELECT
+            t.activity_date,
+            t.user_id,
+            t.bet_amount,
+            t.payout,
+            t.bet_type,
+            t.profit,
+            t.delta_t,
+            t.user_bet_count,
+            CASE
+                WHEN t.ab_group_id != 'jojpin-9mokha-rexQug' THEN 'Default'
+                ELSE 'AI'
+            END AS ai_group
+        FROM
+            user_bets AS t
+
+        UNION DISTINCT
+
+        SELECT
+            t.activity_date,
+            t.user_id,
+            t.bet_amount,
+            t.payout,
+            t.bet_type,
+            t.profit,
+            t.delta_t,
+            t.user_bet_count,
+            t.mathtable AS ai_group
+        FROM
+            user_bets AS t
+        WHERE
+            t.ab_group_id = 'jojpin-9mokha-rexQug'
+    ),
+
     daily_login AS (
         SELECT DISTINCT
             t.activity_date,
             t.user_id,
-            t.ab_group_id,
-            t.mathtable
+            t.ai_group
         FROM
-            user_bets AS t
+            user_bets_group AS t
     ),
 
     user_retention AS (
         SELECT
             t1.activity_date,
-            COUNT(DISTINCT CASE WHEN t1.ab_group_id != 'jojpin-9mokha-rexQug' THEN t1.user_id END) AS day0_num_users,
-            COUNT(DISTINCT CASE WHEN t1.ab_group_id != 'jojpin-9mokha-rexQug' THEN t2.user_id END) AS day1_num_users,
-            COUNT(DISTINCT CASE WHEN t1.ab_group_id != 'jojpin-9mokha-rexQug' THEN t3.user_id END) AS day3_num_users,
-
-            COUNT(DISTINCT CASE WHEN t1.ab_group_id = 'jojpin-9mokha-rexQug' THEN t1.user_id END) AS ai_day0_num_users,
-            COUNT(DISTINCT CASE WHEN t1.ab_group_id = 'jojpin-9mokha-rexQug' THEN t2.user_id END) AS ai_day1_num_users,
-            COUNT(DISTINCT CASE WHEN t1.ab_group_id = 'jojpin-9mokha-rexQug' THEN t3.user_id END) AS ai_day3_num_users,
-
-            COUNT(DISTINCT CASE WHEN t1.ab_group_id = 'jojpin-9mokha-rexQug' AND t1.mathtable = 'giftShop' THEN t1.user_id END) AS ai_giftshop_day0_num_users,
-            COUNT(DISTINCT CASE WHEN t1.ab_group_id = 'jojpin-9mokha-rexQug' AND t1.mathtable = 'giftShop' THEN t2.user_id END) AS ai_giftshop_day1_num_users,
-            COUNT(DISTINCT CASE WHEN t1.ab_group_id = 'jojpin-9mokha-rexQug' AND t1.mathtable = 'giftShop' THEN t3.user_id END) AS ai_giftshop_day3_num_users,
-
-            COUNT(DISTINCT CASE WHEN t1.ab_group_id = 'jojpin-9mokha-rexQug' AND t1.mathtable = 'newBee' THEN t1.user_id END) AS ai_newbee_day0_num_users,
-            COUNT(DISTINCT CASE WHEN t1.ab_group_id = 'jojpin-9mokha-rexQug' AND t1.mathtable = 'newBee' THEN t2.user_id END) AS ai_newbee_day1_num_users,
-            COUNT(DISTINCT CASE WHEN t1.ab_group_id = 'jojpin-9mokha-rexQug' AND t1.mathtable = 'newBee' THEN t3.user_id END) AS ai_newbee_day3_num_users,
-
-            COUNT(DISTINCT CASE WHEN t1.ab_group_id = 'jojpin-9mokha-rexQug' AND t1.mathtable = 'carousels' THEN t1.user_id END) AS ai_carousels_day0_num_users,
-            COUNT(DISTINCT CASE WHEN t1.ab_group_id = 'jojpin-9mokha-rexQug' AND t1.mathtable = 'carousels' THEN t2.user_id END) AS ai_carousels_day1_num_users,
-            COUNT(DISTINCT CASE WHEN t1.ab_group_id = 'jojpin-9mokha-rexQug' AND t1.mathtable = 'carousels' THEN t3.user_id END) AS ai_carousels_day3_num_users
+            t1.ai_group,
+            COUNT(t1.user_id) AS day0_num_users,
+            COUNT(t2.user_id) AS day1_num_users,
+            COUNT(t3.user_id) AS day3_num_users
         FROM
             daily_login AS t1
         LEFT JOIN daily_login AS t2
             ON t2.activity_date = DATE_ADD('day', 1, t1.activity_date) AND t1.user_id = t2.user_id
         LEFT JOIN daily_login AS t3
             ON t3.activity_date = DATE_ADD('day', 3, t1.activity_date) AND t1.user_id = t3.user_id
-        GROUP BY t1.activity_date
+        GROUP BY t1.activity_date, t1.ai_group
     ),
 
     daily_stats AS (
         SELECT
             t.activity_date,
-
-            -- number of users:
-            COUNT(DISTINCT t.user_id) AS total_daily_users,
-            COUNT(DISTINCT CASE WHEN t.ab_group_id != 'jojpin-9mokha-rexQug' THEN t.user_id END) AS default_group_users,
-            COUNT(DISTINCT CASE WHEN t.ab_group_id = 'jojpin-9mokha-rexQug' THEN t.user_id END) AS ai_group_users,
-            COUNT(
-                DISTINCT CASE WHEN t.ab_group_id = 'jojpin-9mokha-rexQug' AND t.mathtable = 'giftShop' THEN t.user_id END
-            ) AS ai0_giftshop_users,
-            COUNT(
-                DISTINCT CASE WHEN t.ab_group_id = 'jojpin-9mokha-rexQug' AND t.mathtable = 'carousels' THEN t.user_id END
-            ) AS ai2_carousels_users,
-            COUNT(DISTINCT CASE WHEN t.ab_group_id = 'jojpin-9mokha-rexQug' AND t.mathtable = 'newBee' THEN t.user_id END)
-                AS ai1_newbee_users,
+            t.ai_group,
+            t.user_id,
 
             -- total number of bets:
-            COUNT(CASE WHEN t.ab_group_id != 'jojpin-9mokha-rexQug' THEN t.user_id END) AS default_num_bets,
-            COUNT(CASE WHEN t.ab_group_id = 'jojpin-9mokha-rexQug' THEN t.user_id END) AS ai_num_bets,
-            COUNT(CASE WHEN t.ab_group_id = 'jojpin-9mokha-rexQug' AND t.mathtable = 'giftShop' THEN t.user_id END)
-                AS ai0_giftshop_num_bets,
-            COUNT(CASE WHEN t.ab_group_id = 'jojpin-9mokha-rexQug' AND t.mathtable = 'carousels' THEN t.user_id END)
-                AS ai2_carousels_num_bets,
-            COUNT(CASE WHEN t.ab_group_id = 'jojpin-9mokha-rexQug' AND t.mathtable = 'newBee' THEN t.user_id END)
-                AS ai1_newbee_num_bets,
-
-            COUNT(CASE WHEN t.ab_group_id != 'jojpin-9mokha-rexQug' AND t.bet_type = 'BASE' THEN t.user_id END)
-                AS default_num_bets_bg,
-            COUNT(CASE WHEN t.ab_group_id = 'jojpin-9mokha-rexQug' AND t.bet_type = 'BASE' THEN t.user_id END)
-                AS ai_num_bets_bg,
-            COUNT(
-                CASE
-                    WHEN
-                        t.ab_group_id = 'jojpin-9mokha-rexQug' AND t.bet_type = 'BASE' AND t.mathtable = 'giftShop'
-                        THEN t.user_id
-                END
-            )
-                AS ai0_giftshop_num_bets_bg,
-            COUNT(
-                CASE
-                    WHEN
-                        t.ab_group_id = 'jojpin-9mokha-rexQug' AND t.bet_type = 'BASE' AND t.mathtable = 'carousels'
-                        THEN t.user_id
-                END
-            )
-                AS ai2_carousels_num_bets_bg,
-            COUNT(
-                CASE
-                    WHEN
-                        t.ab_group_id = 'jojpin-9mokha-rexQug' AND t.bet_type = 'BASE' AND t.mathtable = 'newBee'
-                        THEN t.user_id
-                END
-            )
-                AS ai1_newbee_num_bets_bg,
-
-            COUNT(CASE WHEN t.ab_group_id != 'jojpin-9mokha-rexQug' AND t.bet_type = 'FREE' THEN t.user_id END)
-                AS default_num_bets_fg,
-            COUNT(CASE WHEN t.ab_group_id = 'jojpin-9mokha-rexQug' AND t.bet_type = 'FREE' THEN t.user_id END)
-                AS ai_num_bets_fg,
-            COUNT(
-                CASE
-                    WHEN
-                        t.ab_group_id = 'jojpin-9mokha-rexQug' AND t.bet_type = 'FREE' AND t.mathtable = 'giftShop'
-                        THEN t.user_id
-                END
-            )
-                AS ai0_giftshop_num_bets_fg,
-            COUNT(
-                CASE
-                    WHEN
-                        t.ab_group_id = 'jojpin-9mokha-rexQug' AND t.bet_type = 'FREE' AND t.mathtable = 'carousels'
-                        THEN t.user_id
-                END
-            )
-                AS ai2_carousels_num_bets_fg,
-            COUNT(
-                CASE
-                    WHEN
-                        t.ab_group_id = 'jojpin-9mokha-rexQug' AND t.bet_type = 'FREE' AND t.mathtable = 'newBee'
-                        THEN t.user_id
-                END
-            )
-                AS ai1_newbee_num_bets_fg,
+            COUNT(t.user_id) AS num_bets,
+            COUNT(CASE WHEN t.bet_type = 'BASE' THEN t.user_id END) AS num_bets_bg,
+            COUNT(CASE WHEN t.bet_type = 'FREE' THEN t.user_id END) AS num_bets_fg,
 
             -- total bet amount:
             SUM(t.bet_amount) AS total_bet,
             SUM(CASE WHEN t.bet_type = 'BASE' THEN t.bet_amount END) AS total_bet_bg,
-            SUM(CASE WHEN t.ab_group_id != 'jojpin-9mokha-rexQug' THEN t.bet_amount END) AS default_total_bet,
-            SUM(CASE WHEN t.ab_group_id = 'jojpin-9mokha-rexQug' THEN t.bet_amount END) AS ai_total_bet,
-            SUM(CASE WHEN t.ab_group_id = 'jojpin-9mokha-rexQug' AND t.mathtable = 'giftShop' THEN t.bet_amount END)
-                AS ai0_giftshop_total_bet,
-            SUM(CASE WHEN t.ab_group_id = 'jojpin-9mokha-rexQug' AND t.mathtable = 'carousels' THEN t.bet_amount END)
-                AS ai2_carousels_total_bet,
-            SUM(CASE WHEN t.ab_group_id = 'jojpin-9mokha-rexQug' AND t.mathtable = 'newBee' THEN t.bet_amount END)
-                AS ai1_newbee_total_bet,
 
             -- total payout amount:
             SUM(t.payout) AS total_payout,
-            SUM(CASE WHEN t.ab_group_id != 'jojpin-9mokha-rexQug' THEN t.payout END) AS default_total_payout,
-            SUM(CASE WHEN t.ab_group_id != 'jojpin-9mokha-rexQug' AND t.bet_type = 'BASE' THEN t.payout END)
-                AS default_total_payout_bg,
-            SUM(CASE WHEN t.ab_group_id != 'jojpin-9mokha-rexQug' AND t.bet_type = 'FREE' THEN t.payout END)
-                AS default_total_payout_fg,
-            SUM(CASE WHEN t.ab_group_id = 'jojpin-9mokha-rexQug' THEN t.payout END) AS ai_total_payout,
-            SUM(CASE WHEN t.ab_group_id = 'jojpin-9mokha-rexQug' AND t.bet_type = 'BASE' THEN t.payout END)
-                AS ai_total_payout_bg,
-            SUM(CASE WHEN t.ab_group_id = 'jojpin-9mokha-rexQug' AND t.bet_type = 'FREE' THEN t.payout END)
-                AS ai_total_payout_fg,
-            SUM(CASE WHEN t.ab_group_id = 'jojpin-9mokha-rexQug' AND t.mathtable = 'giftShop' THEN t.payout END)
-                AS ai0_giftshop_total_payout,
-            SUM(CASE WHEN t.ab_group_id = 'jojpin-9mokha-rexQug' AND t.mathtable = 'carousels' THEN t.payout END)
-                AS ai2_carousels_total_payout,
-            SUM(CASE WHEN t.ab_group_id = 'jojpin-9mokha-rexQug' AND t.mathtable = 'newBee' THEN t.payout END)
-                AS ai1_newbee_total_payout,
+            SUM(CASE WHEN t.bet_type = 'BASE' THEN t.payout END) AS total_payout_bg,
+            SUM(CASE WHEN t.bet_type = 'FREE' THEN t.payout END) AS total_payout_fg,
+
             AVG(CASE WHEN EXTRACT(EPOCH FROM t.delta_t) BETWEEN 0 AND 86400 THEN EXTRACT(EPOCH FROM t.delta_t) END)
-                AS avg_delta_t_seconds,
-            AVG(
-                CASE
-                    WHEN
-                        EXTRACT(EPOCH FROM t.delta_t) BETWEEN 0 AND 86400 AND t.ab_group_id != 'jojpin-9mokha-rexQug'
-                        THEN EXTRACT(EPOCH FROM t.delta_t)
-                END
-            ) AS default_avg_delta_t,
-            AVG(
-                CASE
-                    WHEN
-                        EXTRACT(EPOCH FROM t.delta_t) BETWEEN 0 AND 86400 AND t.ab_group_id = 'jojpin-9mokha-rexQug'
-                        THEN EXTRACT(EPOCH FROM t.delta_t)
-                END
-            ) AS ai_avg_delta_t
-        FROM user_bets AS t
+                AS avg_delta_t_seconds
+
+        FROM user_bets_group AS t
         WHERE t.user_bet_count >= 40
-        GROUP BY t.activity_date
+        GROUP BY t.activity_date, t.ai_group, t.user_id
+    ),
+
+    daily_users AS (
+        SELECT
+            t.activity_date,
+            t.ai_group,
+            COUNT(DISTINCT t.user_id) AS num_active_users
+        FROM user_bets_group AS t
+        WHERE t.user_bet_count >= 40
+        GROUP BY t.activity_date, t.ai_group
     )
 
     SELECT
         ds.activity_date,
-        ds.total_daily_users,
-        ds.ai_group_users,
-        ds.default_group_users,
-        ds.ai0_giftshop_users,
-        ds.ai1_newbee_users,
-        ds.ai2_carousels_users,
+        ds.ai_group,
+        ds.user_id,
+
+        du.num_active_users,
+
+        ds.num_bets,
+        ds.num_bets_bg,
+        ds.num_bets_fg,
 
         ds.total_bet,
         ds.total_bet_bg,
-        ds.default_total_bet,
-        ds.ai_total_bet,
-        ds.ai0_giftshop_total_bet,
-        ds.ai1_newbee_total_bet,
-        ds.ai2_carousels_total_bet,
 
         ds.total_payout,
-        ds.default_total_payout,
-        ds.default_total_payout_bg,
-        ds.default_total_payout_fg,
-        ds.ai_total_payout,
-        ds.ai_total_payout_bg,
-        ds.ai_total_payout_fg,
-        ds.ai0_giftshop_total_payout,
-        ds.ai1_newbee_total_payout,
-        ds.ai2_carousels_total_payout,
+        ds.total_payout_bg,
+        ds.total_payout_fg,
 
         ds.avg_delta_t_seconds,
-        ds.default_avg_delta_t,
-        ds.ai_avg_delta_t,
 
         -- free game ratio
-        ds.default_num_bets_fg * 1.0 / NULLIF(ds.default_num_bets, 0) AS default_fg_ratio,
-        ds.ai_num_bets_fg * 1.0 / NULLIF(ds.ai_num_bets, 0) AS ai_fg_ratio,
-        ds.ai0_giftshop_num_bets_fg * 1.0 / NULLIF(ds.ai0_giftshop_num_bets, 0) AS ai0_fiftshop_fg_ratio,
-
-        -- Profit Calculations
-        ds.ai1_newbee_num_bets_fg * 1.0 / NULLIF(ds.ai1_newbee_num_bets, 0) AS ai1_newbee_fg_ratio,
-        ds.ai2_carousels_num_bets_fg * 1.0 / NULLIF(ds.ai2_carousels_num_bets, 0) AS ai2_carousels_fg_ratio,
-        
-        -- Number of bets per user:
-        ds.default_num_bets / NULLIF(ds.default_group_users, 0) AS default_num_bets_per_user,
-        ds.ai_num_bets / NULLIF(ds.ai_group_users, 0) AS ai_num_bets_per_user,
-        ds.ai0_giftshop_num_bets / NULLIF(ds.ai0_giftshop_users, 0) AS ai0_giftshop_num_bets_per_user,
-
-        -- Per-User Profit
-        ds.ai1_newbee_num_bets / NULLIF(ds.ai1_newbee_users, 0) AS ai1_newbee_num_bets_per_user,
-        ds.ai2_carousels_num_bets / NULLIF(ds.ai2_carousels_users, 0) AS ai2_carousels_num_bets_per_user,
-
-        ds.default_total_bet / NULLIF(ds.default_group_users, 0) AS default_total_bet_per_user,
-        ds.ai_total_bet / NULLIF(ds.ai_group_users, 0) AS ai_total_bet_per_user,
-        (ds.default_total_payout - ds.default_total_bet) AS default_total_profit,
-
-        -- Retention:
         ur.day0_num_users,
+
+        -- Number of bets and total bet per user:
         ur.day1_num_users,
         ur.day3_num_users,
 
-        ur.ai_day0_num_users,
-        ur.ai_day1_num_users,
-        ur.ai_day3_num_users,
+        -- Profit Calculations
+        ds.num_bets_fg * 1.0 / NULLIF(ds.num_bets, 0) AS fg_ratio,
 
-        ai_giftshop_day0_num_users,
-        ai_giftshop_day1_num_users,
-        ai_giftshop_day3_num_users,
-
-        ai_newbee_day0_num_users,
-        ai_newbee_day1_num_users,
-        ai_newbee_day3_num_users,
-
-        ai_carousels_day0_num_users,
-        ai_carousels_day1_num_users,
-        ai_carousels_day3_num_users,
-
-
-        (ds.ai_total_payout - ds.ai_total_bet) AS ai_total_profit,
-        (ds.ai0_giftshop_total_payout - ds.ai0_giftshop_total_bet) AS ai0_giftshop_total_profit,
-        (ds.ai1_newbee_total_payout - ds.ai1_newbee_total_bet) AS ai1_newbee_total_profit,
-        (ds.ai2_carousels_total_payout - ds.ai2_carousels_total_bet) AS ai2_carousels_total_profit,
-        (ds.default_total_payout - ds.default_total_bet) / NULLIF(ds.default_group_users, 0) AS default_profit_per_user,
-        (ds.ai_total_payout - ds.ai_total_bet) / NULLIF(ds.ai_group_users, 0) AS ai_profit_per_user,
+        -- Retention:
+        ds.num_bets / NULLIF(du.num_active_users, 0) AS num_bets_per_user,
+        ds.total_bet / NULLIF(du.num_active_users, 0) AS total_bet_per_user,
+        (ds.total_payout - ds.total_bet) AS total_profit,
 
         -- RTP (Return to Player) Calculations (Fix: NULLIF for bet amounts AND RTP numerator error)
-        ds.default_total_payout / NULLIF(ds.default_total_bet, 0) AS default_rtp,
+        ds.total_payout / NULLIF(ds.total_bet, 0) AS rtp,
         -- total bet for base game is same to total bet and free game has 0 bet amount:
-        ds.default_total_payout_bg / NULLIF(ds.default_total_bet, 0) AS default_rtp_bg,
-
-        ds.ai_total_payout / NULLIF(ds.ai_total_bet, 0) AS ai_rtp,
-        ds.ai_total_payout_bg / NULLIF(ds.ai_total_bet, 0) AS ai_rtp_bg
+        ds.total_payout_bg / NULLIF(ds.total_bet, 0) AS rtp_bg
 
     FROM daily_stats AS ds
+    INNER JOIN daily_users AS du
+        ON ds.activity_date = du.activity_date AND ds.ai_group = du.ai_group
     INNER JOIN user_retention AS ur
-        ON ds.activity_date = ur.activity_date
-    ORDER BY ds.activity_date DESC;
+        ON ds.activity_date = ur.activity_date AND ds.ai_group = ur.ai_group
+    ORDER BY ds.activity_date DESC, ds.ai_group DESC, ds.user_id DESC;
 
     """
 )
@@ -333,6 +205,22 @@ if __name__ == "__main__":
 
     file_path = f"{LOCAL_ROOT}/jobs/output_ss01_wucaishen/stats_by_date.parquet"
     df_rs = redshift_loader.query_to_df(query=query, local_cache=file_path, reload=True)
-    print(df_rs)
+    print(
+        df_rs[
+            [
+                "activity_date",
+                "user_id",
+                "ai_group",
+                "num_active_users",
+                "num_bets_per_user",
+                "total_bet_per_user",
+                "rtp",
+                "rtp_bg",
+                "day0_num_users",
+                "day1_num_users",
+                "day3_num_users",
+            ]
+        ]
+    )
 
     redshift_loader.close()
