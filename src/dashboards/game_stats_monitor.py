@@ -99,7 +99,7 @@ class GameStatsDashboard:
 
         # Load initial config and data
         self.config = load_config(self.config_files[0]["value"])
-        self._load_data()
+        self._load_date_data()
 
         self.app = Dash(__name__, suppress_callback_exceptions=True)
         self._build_main_layout()
@@ -154,6 +154,9 @@ class GameStatsDashboard:
 
     def _load_bet_data(self):
         """Load bet-level data from config."""
+        if not self.df_bet.empty:
+            return
+
         bet_data = []
         for f in self.config["stats_by_bet"]["files"]:
             if f:  # Skip empty file paths
@@ -194,7 +197,7 @@ class GameStatsDashboard:
     def _reload_config(self, config_file: str):
         """Reload config and data from a new config file."""
         self.config = load_config(config_file)
-        self._load_data()
+        self._load_date_data()
 
     # ------------------------------------------------------------------
     # Layout Builders
@@ -514,17 +517,17 @@ class GameStatsDashboard:
 
     def _render_tab_content(self, current_tab):
 
-        if self.config["stats_by_date"]["group_col"]:
-            self.df_date_group_col = self.config["stats_by_date"]["group_col"]
-            self.df_date_groups: List[str] = self.df_date[self.df_date_group_col].unique().tolist()
-
-        if self.config["stats_by_bet"]["group_col"]:
-            self.df_bet_group_col = self.config["stats_by_bet"]["group_col"]
-            self.df_bet_groups: List[str] = self.df_bet[self.df_bet_group_col].unique().tolist()
-
         if current_tab == "tab-date":
+            if self.config["stats_by_date"]["group_col"]:
+                self.df_date_group_col = self.config["stats_by_date"]["group_col"]
+                self.df_date_groups: List[str] = self.df_date[self.df_date_group_col].unique().tolist()
             return self._layout_stats_by_date()
+
         elif current_tab == "tab-bet":
+            self._load_bet_data()
+            if self.config["stats_by_bet"]["group_col"]:
+                self.df_bet_group_col = self.config["stats_by_bet"]["group_col"]
+                self.df_bet_groups: List[str] = self.df_bet[self.df_bet_group_col].unique().tolist()
             return self._layout_stats_by_bet()
         else:
             return html.Div("404 Error")
@@ -689,6 +692,7 @@ class GameStatsDashboard:
         filter_thresh,
     ):
 
+        self._load_bet_data()
         if self.df_bet.empty:
             return go.Figure()
 
