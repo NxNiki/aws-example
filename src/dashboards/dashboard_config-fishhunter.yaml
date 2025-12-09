@@ -7,6 +7,7 @@ stats_by_date:
   ]
 
   group_col: "daily_group"
+  date_col: "bj_date"
 
   group1_columns: [
     "num_users",
@@ -40,6 +41,7 @@ stats_by_date:
     "bullet_kill_ratio",
     "bullets_per_user",
     "killed_bullets_per_user",
+    "total_rooms_per_user",
   ]
 
 stats_by_bet: 

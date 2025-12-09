@@ -6,21 +6,29 @@ stats_by_date:
   ]
 
   group_col: ""
+  date_col: "activity_date"
 
   group1_columns: [
-    "total_users",
-    "num_users_day1",
-    "num_users_day3",
-    "retention_rate_day1",
-    "retention_rate_day3",
+    "total_daily_users",
+    "ai_group_users",
+    "default_group_users",
+    "day0_num_users",
+    "day1_num_users",
+    "day2_num_users",
+    "ai_day0_num_users",
+    "ai_day1_num_users",
+    "ai_day2_num_users",
   ]
 
   group2_columns: [
-    "rtp",
-    "total_bet",
-    "total_bet_per_user",
-    "total_profit",
-    "total_profit_per_user",
+    "default_rtp",
+    "ai_rtp",
+    "default_num_bets_per_user",
+    "ai_num_bets_per_user",
+    "default_total_bet_per_user",
+    "ai_total_bet_per_user",
+    "default_profit_per_user",
+    "ai_profit_per_user",
   ]
 
   group3_columns: [

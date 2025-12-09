@@ -86,7 +86,7 @@ query = dedent(
     )
 
     SELECT
-        ds.{stats_agg_col},
+        CAST(ds.{stats_agg_col} AS DATE) AS {stats_agg_col},
         ds.total_daily_users,
         
         ds.total_bet,

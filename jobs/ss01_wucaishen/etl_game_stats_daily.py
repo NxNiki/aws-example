@@ -33,7 +33,7 @@ query = dedent(
             AND t.created_at >= m.start_time
             AND (t.created_at <= m.end_time OR m.is_current IS TRUE)
     WHERE
-        CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', t.created_at) >= '2025-12-03 17:00:00'
+        CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', t.created_at) >= '2025-12-01 17:00:00'
         AND t.currency_type = 'CNY'
         AND t.status = 'COMPLETED'
         AND t.game_id = 'SS01'
@@ -231,22 +231,20 @@ query = dedent(
         ds.default_total_bet,
         ds.ai_total_bet,
         ds.ai0_giftshop_total_bet,
-
         ds.ai1_newbee_total_bet,
         ds.ai2_carousels_total_bet,
+
         ds.total_payout,
         ds.default_total_payout,
         ds.default_total_payout_bg,
         ds.default_total_payout_fg,
         ds.ai_total_payout,
-
-        -- total payout
         ds.ai_total_payout_bg,
         ds.ai_total_payout_fg,
-
         ds.ai0_giftshop_total_payout,
         ds.ai1_newbee_total_payout,
         ds.ai2_carousels_total_payout,
+
         ds.avg_delta_t_seconds,
         ds.default_avg_delta_t,
         ds.ai_avg_delta_t,
@@ -319,27 +317,6 @@ query = dedent(
 )
 
 
-def generate_daily_report(df: pd.DataFrame, row=1):
-
-    report = dedent(
-        f"""
-        SS01 AI调控上线后数据跟进 [{df['activity_date'][row]}]
-        统计时间：（北京时间）
-
-        | \U0001F4CA 统计指标 (Metric) | \U0001F9EA 对照组 (Control) | \U0001F916 AI组 (AI) |
-        | :--- | :--- | :--- |
-        | 玩家数量（投注次数 >= 40）| {df['total_daily_users'][row]} | {df['ai_group_users'][row]} |
-        | 玩家数量（All）| {df['day0_num_users'][row]} | {df['ai_day0_num_users'][row]} |
-        | 前一日留存玩家数量 (Day 1 Retention) | {df['day1_num_users'][row+1]} | {df['ai_day1_num_users'][row+1]} |
-        | 玩家平均投注次数 (Avg. Bets/User) | {df['default_num_bets_per_user'][row]} | {df['ai_num_bets_per_user'][row]} |
-        | 玩家平均投注总额度 (Avg. Total Bet/User) | {df['default_total_bet_per_user'][row]} | {df['ai_total_bet_per_user'][row]} |
-        | RTP (Return to Player) | {df['default_rtp'][row]} | {df['ai_rtp'][row]} |
-        """
-    )
-
-    print(report)
-
-
 if __name__ == "__main__":
 
     setup_logging(f"{LOCAL_ROOT}/jobs/log", log_filename=os.path.splitext(os.path.basename(__file__))[0] + ".log")
@@ -358,5 +335,4 @@ if __name__ == "__main__":
     df_rs = redshift_loader.query_to_df(query=query, local_cache=file_path, reload=True)
     print(df_rs)
 
-    generate_daily_report(df_rs, row=1)
     redshift_loader.close()

@@ -116,6 +116,7 @@ class GameStatsDashboard:
         self.df_bet_group_col = ""
         self.bet_metrics = []
         self.date_metrics = []
+        self.date_col = ""
 
     def _find_config_files(self) -> List[Dict[str, str]]:
         """Find all dashboard_config*.yaml files in the config directory."""
@@ -179,7 +180,8 @@ class GameStatsDashboard:
 
         if daily_data:
             self.df_date = pd.concat(daily_data)
-            self.df_date["bj_date"] = pd.to_datetime(self.df_date["bj_date"])
+            self.date_col = self.config["stats_by_date"]["date_col"]
+            self.df_date[self.date_col] = pd.to_datetime(self.df_date[self.date_col])
         else:
             self.df_date = pd.DataFrame()
 
@@ -534,7 +536,7 @@ class GameStatsDashboard:
     def update_date_group_plot(self, left_metrics, right_metrics, log_val, log_thresh, groups):
         """
         Generates a plot using self.df_date.
-        X-axis = bj_date
+        X-axis = date
         Series = Grouped by the specified group column
         """
         if not left_metrics and not right_metrics:
@@ -579,13 +581,13 @@ class GameStatsDashboard:
 
         for strat in groups:
             # Filter by daily_group
-            df_strat = df_date[df_date[group_col] == strat].sort_values("bj_date")
+            df_strat = df_date[df_date[group_col] == strat].sort_values(self.date_col)
 
             if df_strat.empty:
                 continue
 
-            # UPDATED: Use 'bj_date' for X-axis
-            x_vals = df_strat["bj_date"]
+            # UPDATED: Use date_col for X-axis
+            x_vals = df_strat[self.date_col]
 
             # Plot Left Axis Metrics
             if left_metrics:
@@ -640,7 +642,7 @@ class GameStatsDashboard:
             template="plotly_white",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=0.90),
             hovermode="x unified",
-            xaxis_title="Date (bj_date)",
+            xaxis_title="Date (Beijing)",
             font=dict(size=16),  # Increase global font size for the plot
             xaxis=dict(title_font=dict(size=18), tickfont=dict(size=15)),
             yaxis=dict(title_font=dict(size=18), tickfont=dict(size=15)),
