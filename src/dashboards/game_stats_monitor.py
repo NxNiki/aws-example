@@ -6,6 +6,7 @@ from math import inf
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import matplotlib.colors as mcolors
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -198,6 +199,13 @@ class GameStatsDashboard:
         """Reload config and data from a new config file."""
         self.config = load_config(config_file)
         self._load_date_data()
+
+    @staticmethod
+    def to_rgba(color, alpha=0.2):
+        try:
+            return "rgba" + str(tuple(int(c * 255) for c in mcolors.to_rgb(color)) + (alpha,))
+        except Exception:
+            return f"rgba(0,0,0,{alpha})"
 
     # ------------------------------------------------------------------
     # Layout Builders
@@ -597,12 +605,34 @@ class GameStatsDashboard:
                 for m in left_metrics:
                     if m not in df_strat.columns:
                         continue
-                    y_raw = df_strat[m]
-                    y_plot = self.hybrid_transform(y_raw, thresh) if log_scale else y_raw
 
+                    # Compute mean and confidence interval for each date
+                    if self.date_col in df_strat.columns:
+                        grouped = df_strat.groupby(self.date_col)[m]
+                        mean_vals = grouped.mean()
+                        std_vals = grouped.std()
+                        count_vals = grouped.count()
+                        ci_95 = 1.96 * (std_vals / (count_vals**0.5)).fillna(0)
+
+                        y_raw = mean_vals
+                        y_lower = (mean_vals - ci_95).fillna(mean_vals)
+                        y_upper = (mean_vals + ci_95).fillna(mean_vals)
+                        x = mean_vals.index
+                        y_plot = self.hybrid_transform(y_raw, thresh) if log_scale else y_raw
+                        y_lower_plot = self.hybrid_transform(y_lower, thresh) if log_scale else y_lower
+                        y_upper_plot = self.hybrid_transform(y_upper, thresh) if log_scale else y_upper
+                    else:
+                        # Fallback: original handling if for some reason grouping isn't possible
+                        y_raw = df_strat[m]
+                        y_plot = self.hybrid_transform(y_raw, thresh) if log_scale else y_raw
+                        x = x_vals
+                        y_lower_plot = y_plot
+                        y_upper_plot = y_plot
+
+                    # Plot main line (mean)
                     fig.add_trace(
                         go.Scatter(
-                            x=x_vals,
+                            x=x,
                             y=y_plot,
                             name=f"{strat}:{m}",
                             mode="lines+markers",
@@ -614,6 +644,24 @@ class GameStatsDashboard:
                         ),
                         secondary_y=False,
                     )
+
+                    # Plot confidence interval as a filled area
+                    if any((y_lower_plot != y_upper_plot)):
+                        base_color = color_map.get(f"{strat}:{m}", "black")
+                        fig.add_trace(
+                            go.Scatter(
+                                x=list(x) + list(x[::-1]),
+                                y=list(y_upper_plot) + list(y_lower_plot[::-1]),
+                                fill="toself",
+                                fillcolor=self.to_rgba(base_color, 0.1),
+                                line=dict(color="rgba(255,255,255,0)"),  # No border
+                                hoverinfo="skip",
+                                showlegend=False,
+                                legendgroup=strat,
+                                name=f"{strat}:{m} 95% CI",
+                            ),
+                            secondary_y=False,
+                        )
 
             # Plot Right Axis Metrics
             if right_metrics:

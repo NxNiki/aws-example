@@ -100,90 +100,109 @@ query = dedent(
         GROUP BY t1.activity_date, t1.ai_group
     ),
 
-    daily_stats AS (
+    user_stats AS (
         SELECT
             t.activity_date,
             t.ai_group,
             t.user_id,
 
             -- total number of bets:
-            COUNT(t.user_id) AS num_bets,
-            COUNT(CASE WHEN t.bet_type = 'BASE' THEN t.user_id END) AS num_bets_bg,
-            COUNT(CASE WHEN t.bet_type = 'FREE' THEN t.user_id END) AS num_bets_fg,
+            COUNT(t.user_id) AS user_num_bets,
+            COUNT(CASE WHEN t.bet_type = 'BASE' THEN t.user_id END) AS user_num_bets_bg,
+            COUNT(CASE WHEN t.bet_type = 'FREE' THEN t.user_id END) AS user_num_bets_fg,
 
             -- total bet amount:
-            SUM(t.bet_amount) AS total_bet,
-            SUM(CASE WHEN t.bet_type = 'BASE' THEN t.bet_amount END) AS total_bet_bg,
+            SUM(t.bet_amount) AS user_total_bet,
+            SUM(CASE WHEN t.bet_type = 'BASE' THEN t.bet_amount END) AS user_total_bet_bg,
 
             -- total payout amount:
-            SUM(t.payout) AS total_payout,
-            SUM(CASE WHEN t.bet_type = 'BASE' THEN t.payout END) AS total_payout_bg,
-            SUM(CASE WHEN t.bet_type = 'FREE' THEN t.payout END) AS total_payout_fg,
+            SUM(t.payout) AS user_total_payout,
+            SUM(CASE WHEN t.bet_type = 'BASE' THEN t.payout END) AS user_total_payout_bg,
+            SUM(CASE WHEN t.bet_type = 'FREE' THEN t.payout END) AS user_total_payout_fg,
 
             AVG(CASE WHEN EXTRACT(EPOCH FROM t.delta_t) BETWEEN 0 AND 86400 THEN EXTRACT(EPOCH FROM t.delta_t) END)
-                AS avg_delta_t_seconds
+                AS user_avg_delta_t_seconds
 
         FROM user_bets_group AS t
         WHERE t.user_bet_count >= 40
         GROUP BY t.activity_date, t.ai_group, t.user_id
     ),
 
-    daily_users AS (
+    group_stats AS (
         SELECT
             t.activity_date,
             t.ai_group,
-            COUNT(DISTINCT t.user_id) AS num_active_users
+            COUNT(DISTINCT t.user_id) AS num_active_users,
+            COUNT(t.user_id) AS total_num_bets,
+            COUNT(CASE WHEN t.bet_type = 'BASE' THEN t.user_id END) AS total_num_bets_bg,
+            COUNT(CASE WHEN t.bet_type = 'FREE' THEN t.user_id END) AS total_num_bets_fg,
+
+            -- total bet amount:
+            SUM(t.bet_amount) AS total_bet,
+            SUM(CASE WHEN t.bet_type = 'BASE' THEN t.bet_amount END) AS total_bet_bg,
+
+            SUM(t.payout) AS total_payout,
+            SUM(CASE WHEN t.bet_type = 'BASE' THEN t.payout END) AS total_payout_bg,
+            SUM(CASE WHEN t.bet_type = 'FREE' THEN t.payout END) AS total_payout_fg
         FROM user_bets_group AS t
         WHERE t.user_bet_count >= 40
         GROUP BY t.activity_date, t.ai_group
     )
 
     SELECT
-        ds.activity_date,
-        ds.ai_group,
-        ds.user_id,
+        us.activity_date,
+        us.ai_group,
+        us.user_id,
 
-        du.num_active_users,
+        gs.num_active_users,
 
-        ds.num_bets,
-        ds.num_bets_bg,
-        ds.num_bets_fg,
+        gs.total_num_bets,
+        gs.total_num_bets_bg,
+        gs.total_num_bets_fg,
 
-        ds.total_bet,
-        ds.total_bet_bg,
+        gs.total_bet,
+        gs.total_bet_bg,
 
-        ds.total_payout,
-        ds.total_payout_bg,
-        ds.total_payout_fg,
+        gs.total_payout,
+        gs.total_payout_bg,
+        gs.total_payout_fg,
 
-        ds.avg_delta_t_seconds,
-
-        -- free game ratio
-        ur.day0_num_users,
-
-        -- Number of bets and total bet per user:
-        ur.day1_num_users,
-        ur.day3_num_users,
-
-        -- Profit Calculations
-        ds.num_bets_fg * 1.0 / NULLIF(ds.num_bets, 0) AS fg_ratio,
+        us.user_avg_delta_t_seconds,
 
         -- Retention:
-        ds.num_bets / NULLIF(du.num_active_users, 0) AS num_bets_per_user,
-        ds.total_bet / NULLIF(du.num_active_users, 0) AS total_bet_per_user,
-        (ds.total_payout - ds.total_bet) AS total_profit,
+        ur.day0_num_users,
+        ur.day1_num_users,
+        ur.day3_num_users,
+        ur.day1_num_users * 1.0 / NULLIF(ur.day0_num_users, 0) AS retention_rate_day1,
+        ur.day3_num_users * 1.0 / NULLIF(ur.day0_num_users, 0) AS retention_rate_day3,
+
+        -- free game ratio
+        gs.total_num_bets_fg * 1.0 / NULLIF(gs.total_num_bets, 0) AS fg_ratio,
+
+        -- Number of bets and total bet per user:
+        us.user_num_bets,
+        us.user_num_bets_bg,
+        us.user_num_bets_fg,
+
+        us.user_total_bet,
+
+        -- Profit Calculations
+        (gs.total_payout - gs.total_bet) AS total_profit,
+        (us.user_total_payout - us.user_total_bet) AS user_total_profit,
 
         -- RTP (Return to Player) Calculations (Fix: NULLIF for bet amounts AND RTP numerator error)
-        ds.total_payout / NULLIF(ds.total_bet, 0) AS rtp,
+        gs.total_payout / NULLIF(gs.total_bet, 0) AS rtp,
         -- total bet for base game is same to total bet and free game has 0 bet amount:
-        ds.total_payout_bg / NULLIF(ds.total_bet, 0) AS rtp_bg
+        gs.total_payout_bg / NULLIF(gs.total_bet, 0) AS rtp_bg,
+        us.user_total_payout / NULLIF(us.user_total_bet, 0) AS user_rtp,
+        us.user_total_payout_bg / NULLIF(us.user_total_bet, 0) AS user_rtp_bg
 
-    FROM daily_stats AS ds
-    INNER JOIN daily_users AS du
-        ON ds.activity_date = du.activity_date AND ds.ai_group = du.ai_group
+    FROM user_stats AS us
+    INNER JOIN group_stats AS gs
+        ON us.activity_date = gs.activity_date AND us.ai_group = gs.ai_group
     INNER JOIN user_retention AS ur
-        ON ds.activity_date = ur.activity_date AND ds.ai_group = ur.ai_group
-    ORDER BY ds.activity_date DESC, ds.ai_group DESC, ds.user_id DESC;
+        ON us.activity_date = ur.activity_date AND us.ai_group = ur.ai_group
+    ORDER BY us.activity_date DESC, us.ai_group DESC, us.user_id DESC;
 
     """
 )
@@ -212,8 +231,8 @@ if __name__ == "__main__":
                 "user_id",
                 "ai_group",
                 "num_active_users",
-                "num_bets_per_user",
-                "total_bet_per_user",
+                "user_num_bets",
+                "user_total_bet",
                 "rtp",
                 "rtp_bg",
                 "day0_num_users",
