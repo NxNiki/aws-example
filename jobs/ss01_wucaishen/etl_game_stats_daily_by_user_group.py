@@ -57,7 +57,7 @@ query = dedent(
         FROM
             user_bets AS t
 
-        UNION DISTINCT
+        UNION ALL
 
         SELECT
             t.activity_date,
@@ -94,9 +94,9 @@ query = dedent(
         FROM
             daily_login AS t1
         LEFT JOIN daily_login AS t2
-            ON t2.activity_date = DATE_ADD('day', 1, t1.activity_date) AND t1.user_id = t2.user_id
+            ON t2.activity_date = DATE_ADD('day', -1, t1.activity_date) AND t1.user_id = t2.user_id
         LEFT JOIN daily_login AS t3
-            ON t3.activity_date = DATE_ADD('day', 3, t1.activity_date) AND t1.user_id = t3.user_id
+            ON t3.activity_date = DATE_ADD('day', -3, t1.activity_date) AND t1.user_id = t3.user_id
         GROUP BY t1.activity_date, t1.ai_group
     ),
 
@@ -203,7 +203,7 @@ if __name__ == "__main__":
         )
     )
 
-    file_path = f"{LOCAL_ROOT}/jobs/output_ss01_wucaishen/stats_by_date.parquet"
+    file_path = f"{LOCAL_ROOT}/jobs/output_ss01_wucaishen/stats_by_date_user.parquet"
     df_rs = redshift_loader.query_to_df(query=query, local_cache=file_path, reload=True)
     print(
         df_rs[

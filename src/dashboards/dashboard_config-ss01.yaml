@@ -5,7 +5,7 @@ stats_by_date:
     "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_date.parquet",
   ]
 
-  group_col: ""
+  group_col: "ai_group"
   date_col: "activity_date"
 
   group1_columns: [
