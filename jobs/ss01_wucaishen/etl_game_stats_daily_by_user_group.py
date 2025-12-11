@@ -9,8 +9,8 @@ from bituslabs_ds.etl import DataLoader, RedshiftBackend
 # TODO:
 # add max/min user daily profit
 
-stats_agg_col = "activity_week"
-output_file = "stats_by_week_user"
+stats_agg_col = "activity_date"
+output_file = "stats_by_date_user"
 
 query = dedent(
     f"""
@@ -27,7 +27,12 @@ query = dedent(
         CAST(DATE_TRUNC('month', CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at)) AS DATE) AS activity_month,
         t.partition_ab[0] AS ab_group_id,
         t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.created_at) AS delta_t,
-        COUNT(t.user_id) OVER (PARTITION BY t.user_id) AS user_bet_count
+        COUNT(t.user_id) OVER (PARTITION BY t.user_id) AS user_bet_count,
+        CASE
+            WHEN LAG(m.mathtable) OVER (PARTITION BY t.user_id ORDER BY t.created_at) IS NULL THEN 0
+            WHEN LAG(m.mathtable) OVER (PARTITION BY t.user_id ORDER BY t.created_at) <> m.mathtable THEN 1
+            ELSE 0
+        END AS mathtable_change
     FROM
         public.fct_bet_orders AS t
     LEFT JOIN
@@ -57,6 +62,7 @@ query = dedent(
             t.profit,
             t.delta_t,
             t.user_bet_count,
+            t.mathtable_change,
             CASE
                 WHEN t.ab_group_id != 'jojpin-9mokha-rexQug' THEN 'Default'
                 ELSE 'AI'
@@ -77,6 +83,7 @@ query = dedent(
             t.profit,
             t.delta_t,
             t.user_bet_count,
+            t.mathtable_change,
             t.mathtable AS ai_group
         FROM
             user_bets AS t
@@ -132,7 +139,9 @@ query = dedent(
             SUM(CASE WHEN t.bet_type = 'FREE' THEN t.payout END) AS user_total_payout_fg,
 
             AVG(CASE WHEN EXTRACT(EPOCH FROM t.delta_t) BETWEEN 0 AND 86400 THEN EXTRACT(EPOCH FROM t.delta_t) END)
-                AS user_avg_delta_t_seconds
+                AS user_avg_delta_t_seconds,
+
+            SUM(t.mathtable_change) AS user_mathtable_change
 
         FROM user_bets_group AS t
         WHERE t.user_bet_count >= 40
@@ -165,6 +174,7 @@ query = dedent(
         us.{stats_agg_col} AS activity_date,
         us.ai_group,
         us.user_id,
+        us.user_mathtable_change,
 
         gs.num_active_users,
 
@@ -242,6 +252,7 @@ if __name__ == "__main__":
                 "activity_date",
                 "user_id",
                 "ai_group",
+                "user_mathtable_change",
                 "num_active_users",
                 "user_num_bets",
                 "user_total_bet",

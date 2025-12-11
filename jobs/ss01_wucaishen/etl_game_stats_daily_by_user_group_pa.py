@@ -3,8 +3,8 @@ from textwrap import dedent
 from bituslabs_ds.config import LOCAL_ROOT, S3_BUCKET, setup_logging
 from bituslabs_ds.etl import AthenaBackend, DataLoader
 
-stats_agg_col = "activity_week"
-output_file = "stats_by_week_user_pa"
+stats_agg_col = "activity_date"
+output_file = "stats_by_date_user_pa"
 
 query = dedent(
     f"""
@@ -114,6 +114,7 @@ query = dedent(
         DATE_ADD('year', 1, CAST(us.{stats_agg_col} AS DATE)) AS "activity_date",
         'PA' AS ai_group,
         us.user_id,
+        0 AS user_mathtable_change,
 
         gs.num_active_users,
 

@@ -26,17 +26,18 @@ stats_by_date:
 
   group2_label: "User RTP and Profit"
   group2_columns: [
-    "user_rtp",
+    "user_mathtable_change",
     "user_num_bets",
     "user_total_bet",
+    "user_rtp",
     "user_profit",
   ]
 
   group3_label: "Group RTP and Profit"
   group3_columns: [
-    "rtp",
     "total_num_bets",
     "total_bet",
+    "rtp",
     "total_profit",
   ]
 
