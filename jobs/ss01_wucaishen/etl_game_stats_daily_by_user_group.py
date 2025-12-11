@@ -9,8 +9,11 @@ from bituslabs_ds.etl import DataLoader, RedshiftBackend
 # TODO:
 # add max/min user daily profit
 
+stats_agg_col = "activity_week"
+output_file = "stats_by_week_user"
+
 query = dedent(
-    """
+    f"""
     WITH user_bets AS (
     SELECT
         t.user_id,
@@ -20,6 +23,8 @@ query = dedent(
         t.bet_type,
         t.actual_payout - t.bet_amount AS profit,
         TRUNC(CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at)) AS activity_date,
+        CAST(DATE_TRUNC('week', CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at)) AS DATE) AS activity_week,
+        CAST(DATE_TRUNC('month', CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at)) AS DATE) AS activity_month,
         t.partition_ab[0] AS ab_group_id,
         t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.created_at) AS delta_t,
         COUNT(t.user_id) OVER (PARTITION BY t.user_id) AS user_bet_count
@@ -43,6 +48,8 @@ query = dedent(
     user_bets_group AS (
         SELECT
             t.activity_date,
+            t.activity_week,
+            t.activity_month,
             t.user_id,
             t.bet_amount,
             t.payout,
@@ -61,6 +68,8 @@ query = dedent(
 
         SELECT
             t.activity_date,
+            t.activity_week,
+            t.activity_month,
             t.user_id,
             t.bet_amount,
             t.payout,
@@ -78,6 +87,8 @@ query = dedent(
     daily_login AS (
         SELECT DISTINCT
             t.activity_date,
+            t.activity_week,
+            t.activity_month,
             t.user_id,
             t.ai_group
         FROM
@@ -86,7 +97,7 @@ query = dedent(
 
     user_retention AS (
         SELECT
-            t1.activity_date,
+            t1.{stats_agg_col},
             t1.ai_group,
             COUNT(t1.user_id) AS day0_num_users,
             COUNT(t2.user_id) AS day1_num_users,
@@ -97,12 +108,12 @@ query = dedent(
             ON t2.activity_date = DATE_ADD('day', -1, t1.activity_date) AND t1.user_id = t2.user_id
         LEFT JOIN daily_login AS t3
             ON t3.activity_date = DATE_ADD('day', -3, t1.activity_date) AND t1.user_id = t3.user_id
-        GROUP BY t1.activity_date, t1.ai_group
+        GROUP BY t1.{stats_agg_col}, t1.ai_group
     ),
 
     user_stats AS (
         SELECT
-            t.activity_date,
+            t.{stats_agg_col},
             t.ai_group,
             t.user_id,
 
@@ -125,13 +136,14 @@ query = dedent(
 
         FROM user_bets_group AS t
         WHERE t.user_bet_count >= 40
-        GROUP BY t.activity_date, t.ai_group, t.user_id
+        GROUP BY t.{stats_agg_col}, t.ai_group, t.user_id
     ),
 
     group_stats AS (
         SELECT
-            t.activity_date,
+            t.{stats_agg_col},
             t.ai_group,
+
             COUNT(DISTINCT t.user_id) AS num_active_users,
             COUNT(t.user_id) AS total_num_bets,
             COUNT(CASE WHEN t.bet_type = 'BASE' THEN t.user_id END) AS total_num_bets_bg,
@@ -146,11 +158,11 @@ query = dedent(
             SUM(CASE WHEN t.bet_type = 'FREE' THEN t.payout END) AS total_payout_fg
         FROM user_bets_group AS t
         WHERE t.user_bet_count >= 40
-        GROUP BY t.activity_date, t.ai_group
+        GROUP BY t.{stats_agg_col}, t.ai_group
     )
 
     SELECT
-        us.activity_date,
+        us.{stats_agg_col} AS activity_date,
         us.ai_group,
         us.user_id,
 
@@ -199,10 +211,10 @@ query = dedent(
 
     FROM user_stats AS us
     INNER JOIN group_stats AS gs
-        ON us.activity_date = gs.activity_date AND us.ai_group = gs.ai_group
+        ON us.{stats_agg_col} = gs.{stats_agg_col} AND us.ai_group = gs.ai_group
     INNER JOIN user_retention AS ur
-        ON us.activity_date = ur.activity_date AND us.ai_group = ur.ai_group
-    ORDER BY us.activity_date DESC, us.ai_group DESC, us.user_id DESC;
+        ON us.{stats_agg_col} = ur.{stats_agg_col} AND us.ai_group = ur.ai_group
+    ORDER BY us.{stats_agg_col} DESC, us.ai_group DESC, us.user_id DESC;
 
     """
 )
@@ -222,7 +234,7 @@ if __name__ == "__main__":
         )
     )
 
-    file_path = f"{LOCAL_ROOT}/jobs/output_ss01_wucaishen/stats_by_date_user.parquet"
+    file_path = f"{LOCAL_ROOT}/jobs/output_ss01_wucaishen/{output_file}.parquet"
     df_rs = redshift_loader.query_to_df(query=query, local_cache=file_path, reload=True)
     print(
         df_rs[

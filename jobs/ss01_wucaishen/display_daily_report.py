@@ -6,7 +6,7 @@ import pandas as pd
 from bituslabs_ds.config import LOCAL_ROOT
 
 
-def generate_daily_report(df: pd.DataFrame, dates: List[str]) -> None:
+def generate_daily_report(df: pd.DataFrame) -> None:
 
     def get_group_value(df, group, col):
         vals = df.loc[df["ai_group"] == group, col]
@@ -22,8 +22,10 @@ def generate_daily_report(df: pd.DataFrame, dates: List[str]) -> None:
         ("RTP (Return to Player)", "rtp"),
     ]
 
-    for date in dates:
-        df_date = df[df["activity_date"].astype(str) == date]
+    dates = sorted(df["activity_date"].unique(), reverse=True)
+
+    for date in dates[1:4]:
+        df_date = df[df["activity_date"] == date]
 
         rows = []
         for metric_cn, col in metrics:
@@ -40,7 +42,7 @@ def generate_daily_report(df: pd.DataFrame, dates: List[str]) -> None:
             "| :--- | :--- | :--- | :--- |",
         ] + rows
 
-        report = "\n".join([line.strip() for line in lines])
+        report = "\n" + "\n".join([line.strip() for line in lines]) + "\n"
 
         print(report)
 
@@ -49,4 +51,4 @@ if __name__ == "__main__":
     file_path = f"{LOCAL_ROOT}/jobs/output_ss01_wucaishen/stats_by_date.parquet"
     df_hg = pd.read_parquet(file_path)
 
-    generate_daily_report(df_hg, dates=["2025-12-09"])
+    generate_daily_report(df_hg)

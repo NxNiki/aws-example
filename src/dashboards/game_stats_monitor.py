@@ -89,27 +89,24 @@ class Styles:
 
 
 class GameStatsDashboard:
+
     def __init__(self, config_dir: str, host_ip: str = "127.0.0.1"):
         self.host_ip = host_ip
         self.config_dir = config_dir
 
-        # Find all dashboard config files
         self.config_files = self._find_config_files()
-
         self._reset_state()
-
-        # Load initial config and data
         self.config = load_config(self.config_files[0]["value"])
-        self._load_date_data()
 
         self.app = Dash(__name__, suppress_callback_exceptions=True)
         self._build_main_layout()
         self._register_callbacks()
+        self._load_date_data()
 
     def _reset_state(self):
 
         self.config = {}
-        self.df_date = pd.DataFrame()
+        self.df_date = {}
         self.df_bet = pd.DataFrame()
         self.df_date_groups = []
         self.df_bet_groups = []
@@ -177,17 +174,21 @@ class GameStatsDashboard:
 
     def _load_date_data(self):
         """Load date-level data from config."""
-        daily_data = []
-        for f in self.config["stats_by_date"]["files"]:
-            if f:  # Skip empty file paths
-                daily_data.append(read_local_cache(f))
+        for gran, file_paths in self.date_files_config.items():
+            daily_data = []
+            if isinstance(file_paths, str):
+                file_paths = [file_paths]
 
-        if daily_data:
-            self.df_date = pd.concat(daily_data)
-            self.date_col = self.config["stats_by_date"]["date_col"]
-            self.df_date[self.date_col] = pd.to_datetime(self.df_date[self.date_col])
-        else:
-            self.df_date = pd.DataFrame()
+            for f in file_paths:
+                if f:  # Skip empty file paths
+                    daily_data.append(read_local_cache(f))
+
+            if daily_data:
+                self.df_date[gran] = pd.concat(daily_data)
+                self.date_col = self.config["stats_by_date"]["date_col"]
+                self.df_date[gran][self.date_col] = pd.to_datetime(self.df_date[gran][self.date_col])
+            else:
+                self.df_date[gran] = pd.DataFrame()
 
         # Exclude grouping columns for date stats
         self.date_metrics = {}
@@ -206,6 +207,37 @@ class GameStatsDashboard:
             return "rgba" + str(tuple(int(c * 255) for c in mcolors.to_rgb(color)) + (alpha,))
         except Exception:
             return f"rgba(0,0,0,{alpha})"
+
+    @property
+    def date_range(self) -> Tuple[Any, Any]:
+        """
+        Returns (min_date, max_date) from the current df_date.
+        Returns (None, None) if dataframe is empty.
+        """
+        # Ensure we are returning Python date objects or strings, not Timestamps
+        # This helps Dash serialize the data correctly.
+        min_date = None
+        max_date = None
+        for _, df_date in self.df_date.items():
+            if df_date.empty or self.date_col not in df_date.columns:
+                continue
+            cur_min = df_date[self.date_col].min()
+            cur_max = df_date[self.date_col].max()
+            if min_date is None or (cur_min is not None and cur_min < min_date):
+                min_date = cur_min
+            if max_date is None or (cur_max is not None and cur_max > max_date):
+                max_date = cur_max
+
+        return min_date, max_date
+
+    @property
+    def date_files_config(self):
+        files_config = self.config["stats_by_date"].get("files", {})
+
+        if isinstance(files_config, list):
+            files_config = {"day": files_config}
+
+        return files_config
 
     # ------------------------------------------------------------------
     # Layout Builders
@@ -273,6 +305,53 @@ class GameStatsDashboard:
     def _layout_stats_by_date(self):
         """Layout for the date view with 3 group plots."""
 
+        min_date, max_date = self.date_range
+        date_picker = html.Div(
+            [
+                html.Div(
+                    [
+                        html.Label("Filter Date Range:", style={"fontWeight": "bold", "marginRight": "10px"}),
+                        dcc.DatePickerRange(
+                            id="date-picker-range",
+                            min_date_allowed=min_date,
+                            max_date_allowed=max_date,
+                            initial_visible_month=min_date,
+                            start_date=min_date,
+                            end_date=max_date,
+                            display_format="YYYY-MM-DD",
+                            style={"verticalAlign": "middle", "marginRight": "20px"},
+                        ),
+                        # Add spacing between components
+                        html.Div(style={"width": "30px"}),
+                        html.Label("Select Date Granularity:", style={"fontWeight": "bold", "marginRight": "10px"}),
+                        dcc.Dropdown(
+                            id="date-granularity",
+                            options=list(self.date_files_config.keys()),
+                            value=list(self.date_files_config.keys())[0],
+                            clearable=False,
+                            # Ensure the dropdown has a defined width so it doesn't collapse
+                            style={"width": "150px"},
+                        ),
+                    ],
+                    # Use Flexbox to align all children horizontally and vertically ***
+                    style={
+                        "display": "flex",
+                        "flexDirection": "row",
+                        "alignItems": "center",  # Vertically aligns items in the center
+                        "justifyContent": "flex-start",  # Aligns items to the left
+                    },
+                ),
+            ],
+            # Outer box styling remains the same
+            style={
+                "marginBottom": "20px",
+                "padding": "15px",
+                "backgroundColor": "white",
+                "borderRadius": "8px",
+                "border": "1px solid #e0e0e0",
+            },
+        )
+
         # Define the download configuration once to reuse it
         download_config = {
             "toImageButtonOptions": {
@@ -302,7 +381,7 @@ class GameStatsDashboard:
                                         options=[{"label": m, "value": m} for m in self.date_metrics[group_id]],
                                         value=[self.date_metrics[group_id][0]] if self.date_metrics[group_id] else [],
                                         multi=True,
-                                        style={"minWidth": "180px"},
+                                        style={"minWidth": "200px"},
                                     ),
                                     html.Label("Right Axis Metrics:", style={"marginTop": "10px"}),
                                     dcc.Dropdown(
@@ -310,7 +389,7 @@ class GameStatsDashboard:
                                         options=[{"label": m, "value": m} for m in self.date_metrics[group_id]],
                                         value=[],
                                         multi=True,
-                                        style={"minWidth": "180px"},
+                                        style={"minWidth": "200px"},
                                     ),
                                     html.Div(
                                         [
@@ -365,9 +444,10 @@ class GameStatsDashboard:
 
         return html.Div(
             [
-                create_group_panel("g1", "Date Metrics: DAU and Retention"),
-                create_group_panel("g2", "Date Metrics: RTP and Profit"),
-                create_group_panel("g3", "Date Metrics: Bullets and Fish"),
+                date_picker,
+                create_group_panel("g1", f"Date Metrics: {self.config['stats_by_date']['group1_label']}"),
+                create_group_panel("g2", f"Date Metrics: {self.config['stats_by_date']['group2_label']}"),
+                create_group_panel("g3", f"Date Metrics: {self.config['stats_by_date']['group3_label']}"),
             ]
         )
 
@@ -520,15 +600,19 @@ class GameStatsDashboard:
                     Input(f"date-g{i}-log", "value"),
                     Input(f"date-g{i}-thresh", "value"),
                     Input(f"date-g{i}-group", "value"),
+                    Input("date-granularity", "value"),
+                    Input("date-picker-range", "start_date"),
+                    Input("date-picker-range", "end_date"),
                 ],
             )(self.update_date_group_plot)
 
     def _render_tab_content(self, current_tab):
 
         if current_tab == "tab-date":
+            default_gran = list(self.date_files_config.keys())[0]
             if self.config["stats_by_date"]["group_col"]:
                 self.df_date_group_col = self.config["stats_by_date"]["group_col"]
-                self.df_date_groups: List[str] = self.df_date[self.df_date_group_col].unique().tolist()
+                self.df_date_groups: List[str] = self.df_date[default_gran][self.df_date_group_col].unique().tolist()
             return self._layout_stats_by_date()
 
         elif current_tab == "tab-bet":
@@ -544,7 +628,9 @@ class GameStatsDashboard:
     # Plot Logic
     # ------------------------------------------------------------------
 
-    def update_date_group_plot(self, left_metrics, right_metrics, log_val, log_thresh, groups):
+    def update_date_group_plot(
+        self, left_metrics, right_metrics, log_val, log_thresh, groups, date_granularity, start_date, end_date
+    ):
         """
         Generates a plot using self.df_date.
         X-axis = date
@@ -558,7 +644,9 @@ class GameStatsDashboard:
 
         fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-        df_date = self.df_date.copy()
+        df_date = self.df_date[date_granularity]
+        df_date = df_date[(df_date[self.date_col] >= start_date) & (df_date[self.date_col] <= end_date)].copy()
+
         if self.df_date_group_col == "" or self.df_date_group_col not in df_date.columns:
             group_col = "group"
             df_date["group"] = "total"
@@ -591,9 +679,8 @@ class GameStatsDashboard:
             }
 
         for strat in groups:
-            # Filter by daily_group
-            df_strat = df_date[df_date[group_col] == strat].sort_values(self.date_col)
 
+            df_strat = df_date[df_date[group_col] == strat].sort_values(self.date_col)
             if df_strat.empty:
                 continue
 

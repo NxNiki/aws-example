@@ -1,14 +1,16 @@
 title: "Fish Hunter Analytics"
 
 stats_by_date: 
-  files: [
-    "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_date.parquet",
-    "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_date_pa.parquet"
-  ]
+  files: 
+    day: [
+      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_date.parquet",
+      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_date_pa.parquet"
+    ]
 
   group_col: "daily_group"
   date_col: "bj_date"
 
+  group1_label: "DAU and Retention"
   group1_columns: [
     "num_users",
     num_return_users,
@@ -20,6 +22,7 @@ stats_by_date:
     "num_users_killed_fish",
   ]
 
+  group2_label: "Bet and RTP"
   group2_columns: [
     "total_bet_per_user",
     "daily_group_rtp",
@@ -33,6 +36,7 @@ stats_by_date:
     "total_rooms_per_user",
   ]
 
+  group3_label: "Fish Value and Bullets"
   group3_columns: [
     "avg_fish_value",
     "avg_fish_value_20_200",
