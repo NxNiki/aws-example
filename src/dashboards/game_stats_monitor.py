@@ -201,13 +201,6 @@ class GameStatsDashboard:
         self.config = load_config(config_file)
         self._load_date_data()
 
-    @staticmethod
-    def to_rgba(color, alpha=0.2):
-        try:
-            return "rgba" + str(tuple(int(c * 255) for c in mcolors.to_rgb(color)) + (alpha,))
-        except Exception:
-            return f"rgba(0,0,0,{alpha})"
-
     @property
     def date_range(self) -> Tuple[Any, Any]:
         """
@@ -238,6 +231,30 @@ class GameStatsDashboard:
             files_config = {"day": files_config}
 
         return files_config
+
+    @staticmethod
+    def to_rgba(color, alpha=0.2):
+        try:
+            return "rgba" + str(tuple(int(c * 255) for c in mcolors.to_rgb(color)) + (alpha,))
+        except Exception:
+            return f"rgba(0,0,0,{alpha})"
+
+    @staticmethod
+    def bootstrap_ci(arr, n_boot=1000, ci_level=0.95):
+        arr = arr.dropna().values
+        if len(arr) == 0:
+            return np.nan, np.nan
+
+        if min(arr) == max(arr):
+            return arr[0], arr[0]
+
+        boot_means = []
+        for _ in range(n_boot):
+            samples = np.random.choice(arr, size=len(arr), replace=True)
+            boot_means.append(float(np.mean(samples)))
+        lower = np.percentile(boot_means, (1 - ci_level) / 2 * 100)
+        upper = np.percentile(boot_means, (1 + ci_level) / 2 * 100)
+        return lower, upper
 
     # ------------------------------------------------------------------
     # Layout Builders
@@ -697,13 +714,19 @@ class GameStatsDashboard:
                     if self.date_col in df_strat.columns:
                         grouped = df_strat.groupby(self.date_col)[m]
                         mean_vals = grouped.mean()
-                        std_vals = grouped.std()
-                        count_vals = grouped.count()
-                        ci_95 = 1.96 * (std_vals / (count_vals**0.5)).fillna(0)
 
+                        # Bootstrapped 95% confidence interval
                         y_raw = mean_vals
-                        y_lower = (mean_vals - ci_95).fillna(mean_vals)
-                        y_upper = (mean_vals + ci_95).fillna(mean_vals)
+                        y_lower = y_raw.copy()
+                        y_upper = y_raw.copy()
+                        for date_idx in mean_vals.index:
+                            arr = grouped.get_group(date_idx)
+                            lower, upper = self.bootstrap_ci(arr)
+                            y_lower.loc[date_idx] = lower
+                            y_upper.loc[date_idx] = upper
+                        y_lower = y_lower.fillna(y_raw)
+                        y_upper = y_upper.fillna(y_raw)
+
                         x = mean_vals.index
                         y_plot = self.hybrid_transform(y_raw, thresh) if log_scale else y_raw
                         y_lower_plot = self.hybrid_transform(y_lower, thresh) if log_scale else y_lower
