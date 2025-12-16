@@ -10,6 +10,10 @@ stats_by_date:
       "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_week_user.parquet",
       "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_week_user_pa.parquet",
     ]
+    month: [
+      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_month_user.parquet",
+      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_month_user_pa.parquet",
+    ]
 
   group_col: "ai_group"
   date_col: "activity_date"
@@ -29,16 +33,18 @@ stats_by_date:
     "user_mathtable_change",
     "user_num_bets",
     "user_total_bet",
+    "user_total_profit",
     "user_rtp",
-    "user_profit",
+    "user_fg_ratio",
   ]
 
   group3_label: "Group RTP and Profit"
   group3_columns: [
     "total_num_bets",
     "total_bet",
-    "rtp",
     "total_profit",
+    "rtp",
+    "fg_ratio",
   ]
 
 

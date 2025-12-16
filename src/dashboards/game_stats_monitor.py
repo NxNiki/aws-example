@@ -695,106 +695,84 @@ class GameStatsDashboard:
                 for j, s in enumerate(groups)
             }
 
+        def add_scatter_plot(metrics, strat, df_strat, secondary_y):
+            x_vals = df_strat[self.date_col]
+
+            for m in metrics:
+                if m not in df_strat.columns:
+                    continue
+
+                # Compute mean and confidence interval for each date
+                if self.date_col in df_strat.columns:
+                    grouped = df_strat.groupby(self.date_col)[m]
+                    mean_vals = grouped.mean()
+
+                    # Bootstrapped 95% confidence interval
+                    y_raw = mean_vals
+                    y_lower = y_raw.copy()
+                    y_upper = y_raw.copy()
+                    for date_idx in mean_vals.index:
+                        arr = grouped.get_group(date_idx)
+                        lower, upper = self.bootstrap_ci(arr)
+                        y_lower.loc[date_idx] = lower
+                        y_upper.loc[date_idx] = upper
+                    y_lower = y_lower.fillna(y_raw)
+                    y_upper = y_upper.fillna(y_raw)
+
+                    x = mean_vals.index
+                    y_plot = self.hybrid_transform(y_raw, thresh) if log_scale else y_raw
+                    y_lower_plot = self.hybrid_transform(y_lower, thresh) if log_scale else y_lower
+                    y_upper_plot = self.hybrid_transform(y_upper, thresh) if log_scale else y_upper
+                else:
+                    # Fallback: original handling if for some reason grouping isn't possible
+                    y_raw = df_strat[m]
+                    y_plot = self.hybrid_transform(y_raw, thresh) if log_scale else y_raw
+                    x = x_vals
+                    y_lower_plot = y_plot
+                    y_upper_plot = y_plot
+
+                # Plot main line (mean)
+                fig.add_trace(
+                    go.Scatter(
+                        x=x,
+                        y=y_plot,
+                        name=f"{strat}:{m}",
+                        mode="lines+markers",
+                        line=dict(
+                            color=color_map.get(f"{strat}:{m}", "black"),
+                            dash=line_style_map.get(f"{strat}:{m}", "solid"),
+                        ),
+                        legendgroup=strat,
+                    ),
+                    secondary_y=secondary_y,
+                )
+
+                # Plot confidence interval as a filled area
+                if any((y_lower_plot != y_upper_plot)):
+                    base_color = color_map.get(f"{strat}:{m}", "black")
+                    fig.add_trace(
+                        go.Scatter(
+                            x=list(x) + list(x[::-1]),
+                            y=list(y_upper_plot) + list(y_lower_plot[::-1]),
+                            fill="toself",
+                            fillcolor=self.to_rgba(base_color, 0.1),
+                            line=dict(color="rgba(255,255,255,0)"),  # No border
+                            hoverinfo="skip",
+                            showlegend=False,
+                            legendgroup=strat,
+                            name=f"{strat}:{m} 95% CI",
+                        ),
+                        secondary_y=secondary_y,
+                    )
+
         for strat in groups:
 
             df_strat = df_date[df_date[group_col] == strat].sort_values(self.date_col)
             if df_strat.empty:
                 continue
 
-            # UPDATED: Use date_col for X-axis
-            x_vals = df_strat[self.date_col]
-
-            # Plot Left Axis Metrics
-            if left_metrics:
-                for m in left_metrics:
-                    if m not in df_strat.columns:
-                        continue
-
-                    # Compute mean and confidence interval for each date
-                    if self.date_col in df_strat.columns:
-                        grouped = df_strat.groupby(self.date_col)[m]
-                        mean_vals = grouped.mean()
-
-                        # Bootstrapped 95% confidence interval
-                        y_raw = mean_vals
-                        y_lower = y_raw.copy()
-                        y_upper = y_raw.copy()
-                        for date_idx in mean_vals.index:
-                            arr = grouped.get_group(date_idx)
-                            lower, upper = self.bootstrap_ci(arr)
-                            y_lower.loc[date_idx] = lower
-                            y_upper.loc[date_idx] = upper
-                        y_lower = y_lower.fillna(y_raw)
-                        y_upper = y_upper.fillna(y_raw)
-
-                        x = mean_vals.index
-                        y_plot = self.hybrid_transform(y_raw, thresh) if log_scale else y_raw
-                        y_lower_plot = self.hybrid_transform(y_lower, thresh) if log_scale else y_lower
-                        y_upper_plot = self.hybrid_transform(y_upper, thresh) if log_scale else y_upper
-                    else:
-                        # Fallback: original handling if for some reason grouping isn't possible
-                        y_raw = df_strat[m]
-                        y_plot = self.hybrid_transform(y_raw, thresh) if log_scale else y_raw
-                        x = x_vals
-                        y_lower_plot = y_plot
-                        y_upper_plot = y_plot
-
-                    # Plot main line (mean)
-                    fig.add_trace(
-                        go.Scatter(
-                            x=x,
-                            y=y_plot,
-                            name=f"{strat}:{m}",
-                            mode="lines+markers",
-                            line=dict(
-                                color=color_map.get(f"{strat}:{m}", "black"),
-                                dash=line_style_map.get(f"{strat}:{m}", "solid"),
-                            ),
-                            legendgroup=strat,
-                        ),
-                        secondary_y=False,
-                    )
-
-                    # Plot confidence interval as a filled area
-                    if any((y_lower_plot != y_upper_plot)):
-                        base_color = color_map.get(f"{strat}:{m}", "black")
-                        fig.add_trace(
-                            go.Scatter(
-                                x=list(x) + list(x[::-1]),
-                                y=list(y_upper_plot) + list(y_lower_plot[::-1]),
-                                fill="toself",
-                                fillcolor=self.to_rgba(base_color, 0.1),
-                                line=dict(color="rgba(255,255,255,0)"),  # No border
-                                hoverinfo="skip",
-                                showlegend=False,
-                                legendgroup=strat,
-                                name=f"{strat}:{m} 95% CI",
-                            ),
-                            secondary_y=False,
-                        )
-
-            # Plot Right Axis Metrics
-            if right_metrics:
-                for m in right_metrics:
-                    if m not in df_strat.columns:
-                        continue
-                    y_raw = df_strat[m]
-                    y_plot = self.hybrid_transform(y_raw, thresh) if log_scale else y_raw
-
-                    fig.add_trace(
-                        go.Scatter(
-                            x=x_vals,
-                            y=y_plot,
-                            name=f"{strat}:{m}(R)",
-                            mode="lines+markers",
-                            line=dict(
-                                color=color_map.get(f"{strat}:{m}", "black"),
-                                dash=line_style_map.get(f"{strat}:{m}", "solid"),
-                            ),
-                            legendgroup=strat,
-                        ),
-                        secondary_y=True,
-                    )
+            add_scatter_plot(left_metrics, strat, df_strat, False)
+            add_scatter_plot(right_metrics, strat, df_strat, True)
 
         # Formatting
         fig.update_layout(
