@@ -4,7 +4,7 @@ from bituslabs_ds.config import LOCAL_ROOT, S3_BUCKET, setup_logging
 from bituslabs_ds.etl import AthenaBackend, DataLoader
 
 stats_agg_col = "activity_date"
-output_file = "bet_stats_by_day_pa"
+output_file = "stats_by_day_pa"
 
 query = dedent(
     f"""
@@ -49,9 +49,9 @@ query = dedent(
         FROM
             daily_login AS t1
         LEFT JOIN daily_login AS t2
-            ON t2.activity_date = DATE_ADD('day', 1, t1.activity_date) AND t1.user_id = t2.user_id
+            ON t2.activity_date = DATE_ADD('day', -1, t1.activity_date) AND t1.user_id = t2.user_id
         LEFT JOIN daily_login AS t3
-            ON t3.activity_date = DATE_ADD('day', 3, t1.activity_date) AND t1.user_id = t3.user_id
+            ON t3.activity_date = DATE_ADD('day', -3, t1.activity_date) AND t1.user_id = t3.user_id
         GROUP BY t1.{stats_agg_col}
     ),
 
