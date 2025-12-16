@@ -236,7 +236,7 @@ def generate_query(stats_agg_col: str):
     return query
 
 
-def execute_query(output_file, stats_agg_col):
+def execute_query(redshift_loader, output_file, stats_agg_col):
 
     file_path = f"{LOCAL_ROOT}/jobs/output_ss01_wucaishen/{output_file}.parquet"
     query = generate_query(stats_agg_col)
@@ -275,8 +275,8 @@ if __name__ == "__main__":
         )
     )
 
-    execute_query("stats_by_date_user", "activity_date")
-    execute_query("stats_by_week_user", "activity_week")
-    execute_query("stats_by_month_user", "activity_month")
+    execute_query(redshift_loader, "stats_by_date_user", "activity_date")
+    execute_query(redshift_loader, "stats_by_week_user", "activity_week")
+    execute_query(redshift_loader, "stats_by_month_user", "activity_month")
 
     redshift_loader.close()
