@@ -5,7 +5,7 @@ from bituslabs_ds.config import LOCAL_ROOT, S3_BUCKET, setup_logging
 from bituslabs_ds.etl import AthenaBackend, DataLoader
 
 DATE_START = "2025-10-20"
-DATE_END = "2025-12-1"
+DATE_END = "2027-12-1"
 
 return_user_days = 30
 retention_days = 3
@@ -64,10 +64,10 @@ def generate_query(stats_agg_col):
             FROM user_daily_map t1
             LEFT JOIN user_daily_map t2
                 ON t1.user_id = t2.user_id
-                AND t2.activity_date = DATE_ADD('day', 1, t1.activity_date)
+                AND t2.activity_date = DATE_ADD('day', -1, t1.activity_date)
             LEFT JOIN user_daily_map t3
                 ON t1.user_id = t3.user_id
-                AND t3.activity_date = DATE_ADD('day', 3, t1.activity_date)
+                AND t3.activity_date = DATE_ADD('day', -3, t1.activity_date)
             GROUP BY t1.{stats_agg_col}
         ),
 
@@ -118,7 +118,7 @@ def generate_query(stats_agg_col):
         -- 6. FINAL JOIN & FORMATTING
         SELECT
             'PA' AS daily_group,
-            date_format(t1.{stats_agg_col}, '%Y-%m-%d') AS bj_date,
+            date_format(t1.{stats_agg_col}, '%Y-%m-%d') AS activity_date,
             t1.num_users,
             t1.num_return_users,
             t1.total_num_rooms,
@@ -175,7 +175,7 @@ def execute_query(output_file, stats_agg_col):
     file_path = f"{LOCAL_ROOT}/jobs/output_fish_hunter/{output_file}.parquet"
     query = generate_query(stats_agg_col)
     df_rs = data_loader.query_to_df(query=query, local_cache=file_path, reload=True)
-    print(df_rs)
+    print(df_rs.head(10))
     data_loader.close()
 
 

@@ -4,11 +4,22 @@ stats_by_date:
   files: 
     day: [
       "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_date.parquet",
-      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_date_pa.parquet"
+      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_date_pa.parquet",
+    ]
+
+    week: [
+      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_week.parquet",
+      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_week_pa.parquet",
+    ]
+
+    month: [
+      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_month.parquet",
+      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_month_pa.parquet",
+
     ]
 
   group_col: "daily_group"
-  date_col: "bj_date"
+  date_col: "activity_date"
 
   group1_label: "DAU and Retention"
   group1_columns: [
