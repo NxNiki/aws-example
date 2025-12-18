@@ -20,7 +20,10 @@ def generate_query(stats_agg_col):
             SELECT
                 b.user_id,
                 b.room_id,
-                b.strategy_name,
+                CASE
+                    WHEN b.partition_ab[0] = 'c2mta7-ls8vqx-HyJf5k-event' AND b.strategy_name = 'BOOST_POOL' THEN 'BOOST_POOL_2'
+                    ELSE b.strategy_name
+                END AS strategy_name,
                 b.payout,
                 b.bet,
                 b.fish_value,
@@ -46,6 +49,7 @@ def generate_query(stats_agg_col):
                 activity_month,
                 CASE
                     WHEN SUM(CASE WHEN strategy_name = 'BOOST_POOL' THEN 1 ELSE 0 END) > 0 THEN 'BOOST_POOL'
+                    WHEN SUM(CASE WHEN strategy_name = 'BOOST_POOL_2' THEN 1 ELSE 0 END) > 0 THEN 'BOOST_POOL_2'
                     WHEN SUM(CASE WHEN strategy_name = 'DYNAMIC_RTP' THEN 1 ELSE 0 END) > 0 THEN 'DYNAMIC_RTP'
                     ELSE 'DEFAULT_FALLBACK'
                 END AS daily_group,
