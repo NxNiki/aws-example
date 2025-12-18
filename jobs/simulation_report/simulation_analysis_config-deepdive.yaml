@@ -7,11 +7,11 @@ work_dir: "output_simulation_deepdive"  # Base working directory, where local ca
 
 data_loader:
   bucket: "bituslabs-team-ai"  # S3 bucket for input data
-  prefix: "gail_simulator_data_raw/results_inference_script_v20251109/test02/sim_20251110-190947/summary/" # S3 prefix for input data
+  prefix: "gail_simulator_data_raw/results_inference_script_v20251118/" # S3 prefix for input data
   pattern: ".*_sessions_summary.csv$"  # Pattern for grouped data files
-  local_cache: "deepdive_simulation_20251110.parquet"
+  local_cache: "deepdive_simulation_20251119.parquet"
   row_filters:  # General row filtering (null to disable filtering)
-      machine_id: ["dropTower", "giftShop", "rollerCoaster", "newBee"]
+      machine_id: ["fast1", "fast2", "fast3", "fast4", "medium1", "medium2", "medium3", "medium4", "slow1", "slow2", "risky"]
   scaler: "minMax"      # Choose one: "standard" | "minMax" 
 
   columns_to_read:

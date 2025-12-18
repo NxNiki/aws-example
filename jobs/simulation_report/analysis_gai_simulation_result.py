@@ -200,18 +200,18 @@ def main(config_file):
     data_profiler = DataProfiler(data, skewness_threshold=1.5)
 
     # # Radar plot for each math table (3 clusters in one plot)
-    # data = process_data(data, config, output_path=output_path)
-    # for math_table in data["machine_id"].unique():
-    #     logger.info(f"make radar plot for {math_table}")
-    #     for agg_method in ["mean", "median"]:
-    #         make_radar_plot(
-    #             data[data["machine_id"] == math_table],
-    #             group="cluster_index",
-    #             config=config,
-    #             agg_method=agg_method,
-    #             title=f"数学表: {math_table}",
-    #             output_path=f"{output_path}/radar_plot_{math_table}_{agg_method}.png",
-    #         )
+    data = process_data(data, config, output_path=output_path)
+    for math_table in data["machine_id"].unique():
+        logger.info(f"make radar plot for {math_table}")
+        for agg_method in ["mean", "median"]:
+            make_radar_plot(
+                data[data["machine_id"] == math_table],
+                group="cluster_index",
+                config=config,
+                agg_method=agg_method,
+                title=f"数学表: {math_table}",
+                output_path=f"{output_path}/radar_plot_{math_table}_{agg_method}.png",
+            )
 
     data_profiler.transform_skewed_columns(pos_suffix="", neg_suffix="")
     output_path = f"{LOCAL_ROOT}/jobs/{config['work_dir']}/anova_result"
@@ -280,21 +280,21 @@ def main(config_file):
 
     if len(anova_between_vars) > 1:
         anova.run_post_hoc_analysis(anova_dv, effects="interaction", group_var="cluster_index", p_thresh=0.05)
-        # anova.show_box_plot(
-        #     x_col="cluster_index",
-        #     group_col="machine_id",
-        #     output_path=output_path,
-        #     fig_title="boxplot_two_factors",
-        #     stripplot_kws={"size": 2},
-        # )
+        anova.show_box_plot(
+            x_col="cluster_index",
+            group_col="machine_id",
+            output_path=output_path,
+            fig_title="boxplot_two_factors",
+            stripplot_kws={"size": 2},
+        )
     else:
         anova.show_box_plot(x_col="machine_id", output_path=output_path, fig_title="boxplot_machine_id")
 
 
 if __name__ == "__main__":
 
-    # project = "deepdive"
-    project = "wucaishen"
+    project = "deepdive"
+    # project = "wucaishen"
 
     current_path = os.path.abspath(os.path.dirname(__file__))
     parser = argparse.ArgumentParser(description="simulation analysis pipeline")
