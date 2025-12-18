@@ -22,10 +22,12 @@ processor = ScriptProcessor(
     image_uri=image_uri,
     command=["python3"],
     role=role,
-    instance_type="ml.m5.12xlarge",
+    # instance_type="ml.m5.12xlarge",  # 48 cpu cores, 192 GB memory
+    instance_type="ml.r7i.xlarge",  # 4 cpu cores, 32 GB memory
     instance_count=1,
     base_job_name="mahjiang-streak-stats",
     sagemaker_session=session,
+    max_runtime_in_seconds=10 * 60 * 60,
 )
 
 
@@ -33,7 +35,7 @@ time_tag = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 outputs = [
     ProcessingOutput(
         source=f"{output_dir}",
-        destination=f"s3://{S3_BUCKET}/ds-data-mahjiang_streak_stats/2025_{time_tag}/",
+        destination=f"s3://{S3_BUCKET}/ds-data-mahjiang_streak_stats/result_{time_tag}/",
     )
 ]
 
@@ -44,9 +46,10 @@ processor.run(
         "--output",
         output_dir,
         "--max_workers",
-        "38",
+        "4",
         "--executor_type",
         "process",
+        # "--test_mode",
     ],
     wait=False,
 )

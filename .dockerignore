@@ -1,0 +1,11 @@
+# 1. Exclude the cache directories themselves (most effective)
+**/__pycache__
+
+# 2. Exclude any stray .pyc files at any depth (universal coverage)
+**/*.pyc 
+
+# Recommended additions to keep the build context clean and fast
+.venv
+.git
+.mypy_cache
+.pytest_cache

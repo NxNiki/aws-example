@@ -6,14 +6,14 @@ import logging
 import os
 import re
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-from functools import partial
-from math import e
+from functools import lru_cache, partial
 from pathlib import Path
 from typing import Callable, Dict, List, Literal, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 import boto3
 import pandas as pd
+from botocore.config import Config
 from botocore.exceptions import NoCredentialsError
 from pyarrow import fs
 from pyarrow.dataset import Dataset, dataset
@@ -21,7 +21,17 @@ from pyspark.sql import DataFrame as SparkDataFrame
 
 from bituslabs_ds.config import DEFAULT_MAX_JOBS, REGION
 
-s3_client = boto3.client("s3")
+
+@lru_cache(maxsize=None)
+def _get_s3_client_for_pid(pid: int):
+    # Lazily create and cache one client per process (fork-safe)
+    cfg = Config(max_pool_connections=50, retries={"max_attempts": 10, "mode": "adaptive"})
+    return boto3.client("s3", config=cfg)
+
+
+def get_s3_client():
+    # Return the cached client for the current process
+    return _get_s3_client_for_pid(os.getpid())
 
 
 logger = logging.getLogger(__name__)
@@ -78,9 +88,11 @@ def read_to_pandas_df(
     :return: Pandas DataFrame
     """
     bucket = parse_bucket_name(bucket)
+
+    logger.info(f"read file from s3://{bucket}/{key}")
     _, ext = os.path.splitext(key.lower())
     if ext == ".csv":
-        response = s3_client.get_object(Bucket=bucket, Key=key)
+        response = get_s3_client().get_object(Bucket=bucket, Key=key)
         data = pd.read_csv(response["Body"], usecols=columns, low_memory=True, dtype=data_types)
     elif ext == ".parquet":
         s3 = fs.S3FileSystem(region=REGION)
@@ -123,7 +135,7 @@ def write_pandas_to_s3(data: pd.DataFrame, bucket: str, key: str) -> None:
     bucket = parse_bucket_name(bucket)
     csv_buffer = io.StringIO()
     data.to_csv(csv_buffer, index=False)
-    s3_client.put_object(Bucket=bucket, Key=key, Body=csv_buffer.getvalue())
+    get_s3_client().put_object(Bucket=bucket, Key=key, Body=csv_buffer.getvalue())
 
     logger.info(f"Writing {key} to {bucket}")
 
@@ -176,7 +188,7 @@ def upload_file_to_s3(local_path: Union[str, Path], s3_bucket: str, s3_key: str)
 
     try:
         logger.info(f"Uploaded {local_path} to s3://{s3_bucket}/{s3_key}")
-        s3_client.upload_file(local_path, s3_bucket, s3_key, ExtraArgs=extra_args)
+        get_s3_client().upload_file(local_path, s3_bucket, s3_key, ExtraArgs=extra_args)
         return f"s3://{s3_bucket}/{s3_key}"
     except FileNotFoundError:
         logger.error("Error: The specified file was not found.")
@@ -254,7 +266,7 @@ def list_s3_files(bucket: str, prefix: str, pattern: Optional[str] = None) -> Li
     """
     logger.info(f"Listing S3 files in: {bucket}/{prefix}, with pattern: {pattern}")
     matching_keys = []
-    paginator = s3_client.get_paginator("list_objects_v2")
+    paginator = get_s3_client().get_paginator("list_objects_v2")
 
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
         for obj in page.get("Contents", []):
@@ -276,14 +288,18 @@ def _read_file(
     return read_to_pandas_df(bucket, file, columns, row_filters, data_types)
 
 
-def read_local_cache(local_cache_path, columns: Optional[List[str]] = None, data_types: Optional[Dict] = None):
+def read_local_cache(
+    local_cache_path: Union[str, Path], columns: Optional[List[str]] = None, data_types: Optional[Dict] = None
+):
     logger.info(f"read data {local_cache_path}.")
-    if local_cache_path.endswith(".csv"):
+    if str(local_cache_path).endswith(".csv"):
         data = pd.read_csv(local_cache_path, usecols=columns, dtype=data_types)
-    elif local_cache_path.endswith(".parquet"):
+    elif str(local_cache_path).endswith(".parquet"):
         data = pd.read_parquet(local_cache_path, columns=columns)
         if data_types:
             data = data.astype(data_types)
+    else:
+        raise ValueError(f"read_local_cache: unsupport file type: {local_cache_path}")
 
     logger.info("read data finished.")
     return data
@@ -291,11 +307,16 @@ def read_local_cache(local_cache_path, columns: Optional[List[str]] = None, data
 
 def save_local_cache(data: pd.DataFrame, local_cache_path: str, append: bool = False):
 
+    os.makedirs(os.path.dirname(local_cache_path), exist_ok=True)
+
     if local_cache_path.endswith(".csv"):
         mode = "a" if append else "w"
         data.to_csv(local_cache_path, index=False, mode=mode, header=not append)
     elif local_cache_path.endswith(".parquet"):
-        data.to_parquet(local_cache_path, index=False, engine="fastparquet", append=append)
+        if append:
+            data.to_parquet(local_cache_path, index=False, engine="fastparquet", append=append)
+        else:
+            data.to_parquet(local_cache_path, index=False, engine="auto")
 
 
 def read_files(

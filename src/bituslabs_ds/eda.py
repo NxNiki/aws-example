@@ -1509,16 +1509,16 @@ class DataProfiler:
 
         return pos_skewed, neg_skewed
 
-    def transform_skewed_columns(self, pos_suffix: str = "_log", neg_suffix: str = "_exp") -> None:
+    def transform_skewed_columns(self, pos_suffix: Optional[str] = None, neg_suffix: Optional[str] = None) -> None:
         """Transform skewed columns using log or exponential transformations."""
         pos_skewed, neg_skewed = self.get_skewed_columns()
 
-        if pos_suffix == "" or pos_suffix is None:
+        if pos_suffix is None:
             pos_suffix = self._pos_skewed_col_suffix
         else:
             self._pos_skewed_col_suffix = pos_suffix
 
-        if neg_suffix == "" or neg_suffix is None:
+        if neg_suffix is None:
             neg_suffix = self._neg_skewed_col_suffix
         else:
             self._neg_skewed_col_suffix = neg_suffix
@@ -1576,12 +1576,16 @@ class DataProfiler:
 
         return data
 
-    def show_group_stats(self, group_cols: List[str], var_columns: List[str], transpose: bool = False) -> pd.DataFrame:
-        return self.show_df_group_stats(self.df, group_cols, var_columns, transpose)
+    def show_group_stats(self, group_cols: List[str], var_columns: List[str], **kwargs) -> pd.DataFrame:
+        return self.show_df_group_stats(self.df, group_cols, var_columns, **kwargs)
 
     @staticmethod
     def show_df_group_stats(
-        data: pd.DataFrame, group_cols: List[str], var_columns: List[str], transpose: bool = False
+        data: pd.DataFrame,
+        group_cols: List[str],
+        var_columns: List[str],
+        transpose: bool = False,
+        agg_stats: List[str] = ["mean", "median", "std", "min", "max", "count"],
     ) -> pd.DataFrame:
         """
         Display group statistics for specified columns.
@@ -1594,7 +1598,13 @@ class DataProfiler:
         grouped = data.groupby(group_cols)[var_columns]
 
         # Calculate statistics
-        stats = grouped.agg(["count", "median", "mean", "std", "min", "max"])
+        stats = grouped.agg(agg_stats)
+
+        for var in var_columns:
+            stats_var = stats[var]
+            logger.info(
+                f"Group Statistics: {var}:\n {stats_var.sort_values(by=stats_var.columns[0], ascending=False).reset_index().to_markdown(index=False)}"
+            )
 
         if transpose:
             stats = stats.T

@@ -1,0 +1,57 @@
+title: "SS01 (wucaishen) Analytics"
+
+stats_by_date: 
+  files: 
+    day: [
+      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_date_user.parquet",
+      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_date_user_pa.parquet",
+    ]
+    week: [
+      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_week_user.parquet",
+      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_week_user_pa.parquet",
+    ]
+    month: [
+      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_month_user.parquet",
+      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_month_user_pa.parquet",
+    ]
+
+  group_col: "ai_group"
+  date_col: "activity_date"
+
+  group1_label: "DAU and Retention"
+  group1_columns: [
+    "num_active_users",
+    "day0_num_users",
+    "day1_num_users",
+    "day2_num_users",
+    retention_rate_day1,
+    retention_rate_day3,
+  ]
+
+  group2_label: "User RTP and Profit"
+  group2_columns: [
+    "user_mathtable_change",
+    "user_num_bets",
+    "user_total_bet",
+    "user_total_profit",
+    "user_rtp",
+    "user_fg_ratio",
+  ]
+
+  group3_label: "Group RTP and Profit"
+  group3_columns: [
+    "total_num_bets",
+    "total_bet",
+    "total_profit",
+    "rtp",
+    "fg_ratio",
+  ]
+
+
+stats_by_bet: 
+  files: [
+    
+  ]
+
+  group_col: ""
+

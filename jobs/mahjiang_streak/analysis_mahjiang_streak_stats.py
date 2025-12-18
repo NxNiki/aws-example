@@ -3,8 +3,11 @@ import json
 import logging
 import os
 import random
+import time
+import traceback
+from audioop import mul
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, TimeoutError, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -35,8 +38,20 @@ REMOVE_RARE_PAYOUT_THRESHOLD = 0
 REMOVE_RARE_COMPOSITION_THRESHOLD = 0
 SUBSAMPLE_RATIO = 1
 MIN_SUBSAMPLE_COUNT = 100
+READ_COLUMNS = [
+    "loginname",
+    "bet_num",
+    "payout",
+    "account",
+    "game_type",
+    "elimination_num",
+    "free_elimination_num",
+    # "year_first_bet",
+    # "month_first_bet",
+]
 
 GET_STATS = {"BG": True, "FG": True, "Trigger": True}
+SINGLE_TASK_TIMEOUT_SECONDS = 1800  # 30 minutes safety timeout per file
 
 # Parallel processing implemented: each file is processed separately using ThreadPoolExecutor and results are combined.
 
@@ -49,7 +64,7 @@ GET_STATS = {"BG": True, "FG": True, "Trigger": True}
 # issue: there are very rare cases where free game round is odd number.
 
 
-def remove_first_and_last_n_bets(data, n=1):
+def remove_first_n_bets(data, n=1):
     # Remove rows where bet_num is the minimum for each loginname
 
     data = data.sort_values(by=["loginname", "bet_num", "elimination_num"])
@@ -58,11 +73,21 @@ def remove_first_and_last_n_bets(data, n=1):
         lambda x: sorted(set(x))[n - 1] if len(set(x)) > n else max(x)
     )
     data = data[data["bet_num"] > min_betnum_per_login].copy()
+    logger.info(f"remove first {n} bets done!")
+
+    return data
+
+
+def remove_last_n_bets(data, n=1):
+    # Remove rows where bet_num is the maximum for each loginname
+
+    data = data.sort_values(by=["loginname", "bet_num", "elimination_num"])
 
     max_betnum_per_login = data.groupby("loginname")["bet_num"].transform(
         lambda x: sorted(set(x))[-n] if len(set(x)) > n else min(x)
     )
     data = data[data["bet_num"] < max_betnum_per_login].copy()
+    logger.info(f"remove last {n} bets done!")
 
     return data
 
@@ -72,6 +97,10 @@ def sample_bet_rounds(data, ratio=SUBSAMPLE_RATIO, min_count=MIN_SUBSAMPLE_COUNT
     Randomly sample bet rounds from the DataFrame.
     All rows with the same ("loginname", "bet_num") will be either selected or not selected.
     """
+    if ratio >= 1:
+        logger.info(f"skip sampling bet rounds with ratio: {ratio}")
+        return data
+
     # Identify unique bet rounds by ("loginname", "bet_num")
     bet_rounds = data[["loginname", "bet_num"]].drop_duplicates()
     n_sample = max(int(len(bet_rounds) * ratio), 1)
@@ -80,6 +109,7 @@ def sample_bet_rounds(data, ratio=SUBSAMPLE_RATIO, min_count=MIN_SUBSAMPLE_COUNT
         logger.info(f"n_sample is less than {min_count}, no sampling will be performed")
         return data
 
+    logger.info(f"sample data with ratio: {ratio}")
     sampled_rounds = bet_rounds.sample(n=n_sample, random_state=42)
     sampled_data = data.merge(sampled_rounds, on=["loginname", "bet_num"], how="inner")
     return sampled_data
@@ -223,7 +253,6 @@ def get_item_stats(data, game_type=None):
 
     game_rounds = len(data[group_cols].drop_duplicates())
     stats["Total_Count"] = game_rounds
-
     stats["Zero_Count"] = game_rounds - get_hit_count(data, game_type=game_type, group_cols=group_cols)
     stats["Nonzero_Payouts"] = get_payout_stats(data, group_cols)
 
@@ -330,7 +359,7 @@ def check_existing_file(file_name):
 def update_trigger_stats(stats_total: Dict, stats: Dict) -> Dict:
 
     if not stats:
-        return {}
+        return stats_total
 
     stats_total["Total_Game_Rounds"] += stats["Total_Game_Rounds"]
     stats_total["Hit_Count"] += stats["Hit_Count"]
@@ -347,7 +376,7 @@ def update_trigger_stats(stats_total: Dict, stats: Dict) -> Dict:
 def update_item_stats(stats_total, stats):
 
     if not stats:
-        return {}
+        return stats_total
 
     stats_total["Total_Count"] += stats["Total_Count"]
     stats_total["Zero_Count"] += stats["Zero_Count"]
@@ -429,7 +458,7 @@ def get_max_level(stats) -> int:
     return max_level
 
 
-def process_single_file(file_path: str, output_path: str) -> Tuple[str, Dict, Dict, Dict]:
+def process_single_file(file_path: str, output_path: str) -> Tuple[str, Optional[Dict], Optional[Dict], Optional[Dict]]:
     """
     Process a single file and return its statistics.
 
@@ -443,9 +472,9 @@ def process_single_file(file_path: str, output_path: str) -> Tuple[str, Dict, Di
     basename = Path(file_path).stem
 
     # Initialize stats dictionaries
-    stats_f = {}
-    stats_f_bg = {}
-    stats_f_fg = {}
+    stats_f = None
+    stats_f_bg = None
+    stats_f_fg = None
 
     # Check for existing files
     if GET_STATS["Trigger"]:
@@ -464,21 +493,24 @@ def process_single_file(file_path: str, output_path: str) -> Tuple[str, Dict, Di
     if stats_f is None or stats_f_bg is None or stats_f_fg is None:
         logger.info(f"Processing file: {file_path}")
 
+        # Explicitly disable parallel mode when reading single file inside ProcessPoolExecutor
         data = read_files(
             file_path,
-            columns=[
-                "loginname",
-                "bet_num",
-                "payout",
-                "account",
-                "game_type",
-                "elimination_num",
-                "free_elimination_num",
-            ],
+            columns=READ_COLUMNS,
+            parallel_mode="none",  # Disable parallel execution to avoid nested executor issues
         )
 
         # Apply data preprocessing
-        data = remove_first_and_last_n_bets(data)
+        if ("year_first_bet" not in data.columns) or (
+            data["year_first_bet"].iloc[0] == 2024 and data["month_first_bet"].iloc[0] == 8
+        ):
+            data = remove_first_n_bets(data)
+
+        if ("year_first_bet" not in data.columns) or (
+            data["year_first_bet"].iloc[0] == 2025 and data["month_first_bet"].iloc[0] == 8
+        ):
+            data = remove_last_n_bets(data)
+
         data = sample_bet_rounds(data)
         data = remove_bet_rounds_with_short_free_game(data)
         data = add_base_account(data)
@@ -487,17 +519,20 @@ def process_single_file(file_path: str, output_path: str) -> Tuple[str, Dict, Di
         if stats_f is None and GET_STATS["Trigger"]:
             stats_f = get_trigger_stats(data)
             trigger_stats_file_f = f"{output_path}/SS03_Trigger_Stats/{basename}.json"
-            json.dump(stats_f, open(trigger_stats_file_f, "w"), indent=4, cls=NumpyEncoder)
+            with open(trigger_stats_file_f, "w") as f:
+                json.dump(stats_f, f, indent=4, cls=NumpyEncoder)
 
         if stats_f_bg is None and GET_STATS["BG"]:
             stats_f_bg = get_item_stats(data, game_type="BG")
             bg_stats_file_f = f"{output_path}/SS03_BG_Items/{basename}.json"
-            json.dump(stats_f_bg, open(bg_stats_file_f, "w"), indent=4, cls=NumpyEncoder)
+            with open(bg_stats_file_f, "w") as f:
+                json.dump(stats_f_bg, f, indent=4, cls=NumpyEncoder)
 
         if stats_f_fg is None and GET_STATS["FG"]:
             stats_f_fg = get_item_stats(data, game_type="FG")
             fg_stats_file_f = f"{output_path}/SS03_FG_Items/{basename}.json"
-            json.dump(stats_f_fg, open(fg_stats_file_f, "w"), indent=4, cls=NumpyEncoder)
+            with open(fg_stats_file_f, "w") as f:
+                json.dump(stats_f_fg, f, indent=4, cls=NumpyEncoder)
 
     return basename, stats_f, stats_f_bg, stats_f_fg
 
@@ -558,6 +593,10 @@ def get_game_stats(files, output_path, max_workers=None, executor_type="thread")
     # Process files in parallel
     random.shuffle(files)
     logger.info(f"Processing {len(files)} files with {max_workers} workers using {executor_name}...")
+
+    completed_count = 0
+    failed_count = 0
+
     with executor_class(max_workers=max_workers) as executor:
         # Submit all tasks
         future_to_file = {
@@ -568,16 +607,27 @@ def get_game_stats(files, output_path, max_workers=None, executor_type="thread")
         for future in as_completed(future_to_file):
             file_path = future_to_file[future]
             try:
-                basename, stats_f, stats_f_bg, stats_f_fg = future.result()
-                logger.info(f"Completed processing: {basename}")
-
-                # Combine results
+                file_name, stats_f, stats_f_bg, stats_f_fg = future.result(timeout=SINGLE_TASK_TIMEOUT_SECONDS)
+                completed_count += 1
+                logger.info(f"Completed processing [{completed_count}/{len(files)}]: {file_name}")
                 update_trigger_stats(stats_trigger, stats_f)
                 update_item_stats(stats_bg, stats_f_bg)
                 update_item_stats(stats_fg, stats_f_fg)
 
+            except TimeoutError as exc:
+                failed_count += 1
+                logger.error(
+                    f"File timed out after {SINGLE_TASK_TIMEOUT_SECONDS}s: {file_path} -> {exc}\n{traceback.format_exc()}"
+                )
             except Exception as exc:
-                logger.error(f"File {file_path} generated an exception: {exc}")
+                failed_count += 1
+                logger.error(
+                    f"File [{failed_count} failed] {file_path} generated an exception: {exc}\n{traceback.format_exc()}"
+                )
+
+    logger.info(
+        f"Processing summary: {completed_count} succeeded, {failed_count} failed out of {len(files)} total files"
+    )
 
     logger.info("All files processed. Writing final aggregated results...")
 
@@ -605,6 +655,14 @@ def get_game_stats(files, output_path, max_workers=None, executor_type="thread")
 
 if __name__ == "__main__":
 
+    # Use spawn to avoid fork-related deadlocks with boto3/urllib3 in Linux containers
+    try:
+        import multiprocessing as mp
+
+        mp.set_start_method("spawn", force=True)
+    except Exception:
+        pass
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=False, default=str(LOCAL_ROOT / "jobs/output_mahjiang_streak"))
     parser.add_argument("--log_output", required=False, default=str(LOCAL_ROOT / "jobs/log"))
@@ -616,11 +674,48 @@ if __name__ == "__main__":
         choices=["thread", "process"],
         help="Type of executor to use: 'thread' for ThreadPoolExecutor or 'process' for ProcessPoolExecutor",
     )
+    parser.add_argument(
+        "--test_mode",
+        action="store_true",
+        help="Run in test mode (e.g., limit files for quicker iteration)",
+    )
     args = parser.parse_args()
 
     time_tag = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    setup_logging(output_path=args.log_output, log_filename=f"analysis_mahjiang_streak_stats_{time_tag}.log")
-    files = list_s3_files(bucket="bituslabs-team-ai", prefix="processed_parquet", pattern=r".*/.*.parquet")
-    stats = get_game_stats(
-        files, output_path=args.output, max_workers=int(args.max_workers), executor_type=args.executor_type
+    log_listener = setup_logging(
+        output_path=args.log_output,
+        log_filename=f"analysis_mahjiang_streak_stats_{time_tag}.log",
+        # multiprocess=args.executor_type == "process",
+        multiprocess=False,
     )
+    start_time = time.time()
+    logger.info("Program started.")
+
+    files = list_s3_files(
+        bucket="bituslabs-tsplayerai",
+        prefix="dsProcessedData/majianghule_enrich_data/",
+        pattern=r".*/.*.parquet",
+        # bucket="bituslabs-team-ai",
+        # prefix="processed_parquet/",
+        # pattern=r".*/.*.parquet",
+    )
+
+    if args.test_mode:
+        files = files[:10]
+        logger.warning("running on test mode with 10 files")
+
+    try:
+        stats = get_game_stats(
+            files, output_path=args.output, max_workers=int(args.max_workers), executor_type=args.executor_type
+        )
+
+        end_time = time.time()
+        elapsed = end_time - start_time
+        logger.info(f"Program completed in {elapsed:.2f} seconds.")
+    finally:
+        # Ensure the logging listener does not keep the process alive
+        if log_listener is not None:
+            try:
+                log_listener.terminate()
+            except Exception:
+                pass

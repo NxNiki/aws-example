@@ -3,10 +3,11 @@ Machine Learning utilities and clustering analysis classes.
 """
 
 import gc
+import json
 import logging
 import os
+from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-from pprint import pformat
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import joblib
@@ -14,8 +15,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-import yaml
 from joblib import parallel_backend
+from scipy.stats import skew
 from skl2onnx import convert_sklearn
 from skl2onnx.common.data_types import FloatTensorType
 from sklearn.cluster import KMeans
@@ -31,8 +32,10 @@ from bituslabs_ds.s3_utils import list_s3_files, read_files, read_local_cache, s
 from bituslabs_ds.utils import (
     clip_outliers,
     column_iterator,
+    convert_numpy_types,
     df_power_transform,
     keep_numeric_columns,
+    load_config,
     remove_outliers,
     save_list,
 )
@@ -56,7 +59,7 @@ class ClusterAnalysisPipeline:
         """
 
         self._config_file = config_file
-        self._config = self._load_config(config_file)
+        self._config = load_config(config_file)
         self.project_name = self._config["project_name"]
         self.valid_sample_file = ""
         self._setup_directories()
@@ -70,16 +73,6 @@ class ClusterAnalysisPipeline:
         self._attach_data_files = list_s3_files(
             attach_data_config["bucket"], attach_data_config["prefix"], attach_data_config["pattern"]
         )
-
-    def _load_config(self, config_file: str) -> Dict[str, Any]:
-        """Load configuration from YAML file."""
-
-        with open(config_file, "r") as f:
-            config = yaml.safe_load(f)
-
-        logger.info(f"Loaded config from {config_file}:")
-        logger.info(f"config: \n {pformat(config)} \n")
-        return config
 
     def _setup_directories(self) -> None:
         """Create necessary directories for the project."""
@@ -153,6 +146,10 @@ class ClusterAnalysisPipeline:
     @property
     def run_attach_cluster_label(self):
         return self._config["pipeline"]["attach_cluster_label"]
+
+    @property
+    def run_get_cluster_stats(self):
+        return self._config["pipeline"]["get_cluster_stats"]
 
     @property
     def run_upload_result_to_s3(self):
@@ -605,7 +602,7 @@ class ClusterAnalysisPipeline:
         plt.close()
 
         # If n_components > 3, generate a pair plot for the PCA components
-        if n_components > 3:
+        if n_components >= 3:
             df_pca = pd.DataFrame(x_pca, columns=[f"PC{i+1}" for i in range(n_components)])
             df_pca["cluster_label"] = cluster_label
             # Only lower triangle, diagonal = hist; hue as cluster. Disable upper triangle.
@@ -616,10 +613,10 @@ class ClusterAnalysisPipeline:
                 corner=True,
                 palette=palette,
             )
-            pair_grid.map_lower(sns.scatterplot, alpha=0.7)
+            pair_grid.map_lower(sns.scatterplot, alpha=0.7, s=7)
             pair_grid.map_diag(sns.histplot, kde=False, alpha=0.6, stat="density")
             pair_grid.add_legend(title="Cluster", adjust_subtitles=True)
-            plt.suptitle(f"Pair Plot of First {n_components} PCA Components by Cluster", fontsize=26, y=1.01)
+            plt.suptitle(f"Pair Plot of First {n_components} PCA Components by Cluster", fontsize=10, y=0.95)
             plt.tight_layout(rect=(0, 0.03, 1, 0.97))
             plt.savefig(
                 self.output_path
@@ -789,6 +786,74 @@ class ClusterAnalysisPipeline:
             logger.critical(
                 f"sum of sample size for all clusters: {num_samples} larger than attach data: {len(attach_data)}!"
             )
+
+    def get_cluster_stats(self):
+
+        scaler = StandardScaler()
+        cluster_stats = {}
+        for cluster_index in range(self.n_clusters):
+            data = read_local_cache(
+                local_cache_path=self.output_path / f"output/enriched_data_cluster_{cluster_index}.parquet",
+                columns=["loginname", "billtime", "basepoint", "account", "slottype"],
+            )
+
+            scaler.fit(data["basepoint"].to_frame())
+
+            _basepoint_clean = data["basepoint"].dropna()
+            # remove samples in free spins to match calculation in GAIL model:
+            _basepoint_clean_non_free_spin = data.loc[data["slottype"] != 2, "basepoint"].dropna()
+
+            stats = {
+                "basepoint_mean": _basepoint_clean_non_free_spin.mean(),
+                "basepoint_min": _basepoint_clean_non_free_spin.min(),
+                "basepoint_max": _basepoint_clean_non_free_spin.max(),
+                "basepoint_p5": (
+                    np.percentile(_basepoint_clean_non_free_spin, 5)
+                    if _basepoint_clean_non_free_spin.size > 0
+                    else None
+                ),
+                "basepoint_p25": (
+                    np.percentile(_basepoint_clean_non_free_spin, 25)
+                    if _basepoint_clean_non_free_spin.size > 0
+                    else None
+                ),
+                "basepoint_p75": (
+                    np.percentile(_basepoint_clean_non_free_spin, 75)
+                    if _basepoint_clean_non_free_spin.size > 0
+                    else None
+                ),
+                "basepoint_p95": (
+                    np.percentile(_basepoint_clean_non_free_spin, 95)
+                    if _basepoint_clean_non_free_spin.size > 0
+                    else None
+                ),
+                "basepoint_median": _basepoint_clean_non_free_spin.median(),
+                "basepoint_skewness": skew(_basepoint_clean_non_free_spin),
+                "basepoint_std": _basepoint_clean_non_free_spin.std(),
+                "basepoint_count": len(data["basepoint"]),
+                "basepoint_nan_count": len(data["basepoint"]) - len(_basepoint_clean),
+                "basepoint_nan_ratio": (len(data["basepoint"]) - len(_basepoint_clean)) / len(data["basepoint"]),
+                "basepoint_less_than_0_count": (_basepoint_clean < 0).sum(),
+                "basepoint_less_than_0_ratio": (_basepoint_clean < 0).sum() / len(data["basepoint"]),
+                "basepoint_scaler_mean": scaler.mean_[0],
+                "basepoint_scaler_std": np.sqrt(scaler.var_[0]),
+                "account_counter": Counter(data["account"]),
+            }
+
+            # For each loginname, select "slottype" from their earliest "billtime"
+            first_slottype = (
+                data.sort_values(["loginname", "billtime"])
+                .groupby("loginname", as_index=False)
+                .first()[["loginname", "slottype"]]
+            )
+            slottype_ratio = first_slottype["slottype"].value_counts(normalize=False).to_dict()
+            stats["slottype_ratio"] = slottype_ratio
+
+            cluster_stats[f"cluster_{cluster_index}"] = stats
+
+        # Convert NumPy types to native Python types for JSON serialization
+        cluster_stats_serializable = convert_numpy_types(cluster_stats)
+        json.dump(cluster_stats_serializable, open(self.output_path / "output/cluster_stats.json", "w"), indent=4)
 
 
 def calculate_inertia(x: np.ndarray, y: np.ndarray) -> float:

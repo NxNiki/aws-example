@@ -1,0 +1,102 @@
+
+# Wucaishen Simulation Analysis Configuration
+# This file contains configuration specific to the wucaishen simulation project
+
+project_name: "wucaishen_simulation"  # Current analysis environment
+work_dir: "output_simulation_wucaishen"  # Base working directory, where local cache of the input data will be saved.
+
+data_loader:
+  bucket: "bituslabs-team-ai"  # S3 bucket for input data
+  prefix: "gail_simulator_data_raw/results_v20250827/sim_20250905_3e4/" # S3 prefix for input data
+  pattern: ".*_sessions_summary.csv$"  # Pattern for grouped data files
+  local_cache: "wucaishen_simulation_20250905_3e4.parquet"
+  row_filters:  # General row filtering (null to disable filtering)
+      machine_id: ["dropTower", "giftShop", "rollerCoaster", "newBee", "carousels", "risky"]
+  scaler: "standard"      # Choose one: "standard" | "minMax" 
+
+  columns_to_read:
+    - "base_game_win"
+    - "big_win_count"
+    - "bonus_triggered"
+    - "duration"
+    - "end_reason"
+    - "final_balance"
+    - "first_bet"
+    - "free_game_win"
+    - "free_spins_count"
+    - "initial_balance"
+    - "machine_id"
+    - "max_lose_streak"
+    - "max_win_streak"
+    - "player_id"
+    - "return_to_player"
+    - "session_id"
+    - "sim_duration"
+    - "streak"
+    - "total_bet"
+    - "total_profit"
+    - "total_spins"
+    - "total_win"
+    - "win_count"
+    - "win_rate"
+
+pca_columns:
+  - "base_game_win"
+  - "big_win_count"
+  - "duration"
+  - "final_balance"
+  - "first_bet"
+  - "free_game_win"
+  - "free_spins_count"
+  - "initial_balance"
+  - "max_lose_streak"
+  - "max_win_streak"
+  - "return_to_player"
+  - "sim_duration"
+  - "streak"
+  - "total_bet"
+  - "total_profit"
+  - "total_spins"
+  - "total_win"
+  - "win_count"
+  - "win_rate"
+
+radar_plot_columns:
+  - "base_game_win"
+  - "free_game_win"
+  - "big_win_count"
+  - "duration"
+  - "initial_balance"
+  - "final_balance"
+  - "first_bet"
+  - "free_spins_count"
+  - "streak"
+  - "max_lose_streak"
+  - "max_win_streak"
+  - "return_to_player"
+  - "total_bet"
+  - "total_profit"
+  - "total_spins"
+  - "total_win"
+  - "win_count"
+  - "win_rate"
+
+radar_plot_rename:
+  - "基础游戏盈利"      # base_game_win
+  - "免费游戏盈利"      # free_game_win
+  - "大奖次数"        # big_win_count
+  - "游戏时长"        # duration
+  - "初始账户余额"     # initial_balance
+  - "最终账户余额"     # final_balance
+  - "第一次投注额"     # first_bet
+  - "免费游戏次数"     # free_spins_count
+  - "连续投注次数"   # streak
+  - "最大连败次数"     # max_lose_streak
+  - "最大连胜次数"     # max_win_streak
+  - "返奖率"       # return_to_player
+  - "总投注"           # total_bet
+  - "总盈利"           # total_profit
+  - "总旋转次数"       # total_spins
+  - "总中奖金额"       # total_win
+  - "中奖次数"         # win_count
+  - "中奖率"           # win_rate

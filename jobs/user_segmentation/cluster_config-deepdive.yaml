@@ -41,7 +41,7 @@ data_loader:
       - "streak"
       - "win_streak"
       - "lose_streak"
-      - "result_clean"
+      # - "result_clean"  # this column is Null in deepdive data.
       - "group_id"
 
   merge_on: ["group_id", "merge_date"]  # Column used to attach cluster index to attach_data.
@@ -173,7 +173,8 @@ pipeline:
   cluster_analysis: false  # Run cluster analysis with selected features and n_clusters  
   fit_cluster_model: false  # Apply trained model to new data
   attach_cluster_label: false  # Attach cluster indices to original data
-  upload_result_to_s3: true  
+  get_cluster_stats: true 
+  upload_result_to_s3: false  
 
 
 

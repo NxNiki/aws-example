@@ -1,0 +1,69 @@
+title: "Fish Hunter Analytics"
+
+stats_by_date: 
+  files: 
+    day: [
+      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_date.parquet",
+      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_date_pa.parquet",
+    ]
+
+    week: [
+      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_week.parquet",
+      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_week_pa.parquet",
+    ]
+
+    month: [
+      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_month.parquet",
+      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_month_pa.parquet",
+
+    ]
+
+  group_col: "daily_group"
+  date_col: "activity_date"
+
+  group1_label: "DAU and Retention"
+  group1_columns: [
+    "num_users",
+    num_return_users,
+    "num_users_day1",
+    "num_users_day3",
+    "group_num_users",
+    "retention_rate_day1",
+    "retention_rate_day3",
+    "num_users_killed_fish",
+  ]
+
+  group2_label: "Bet and RTP"
+  group2_columns: [
+    "total_bet_per_user",
+    "daily_group_rtp",
+    "group_rtp",
+    "bullet_avg_profit",
+    "bullet_kill_avg_profit",
+    "daily_total_bet",
+    "total_profit_per_user",
+    "total_profit",
+    "total_num_rooms",
+    "total_rooms_per_user",
+  ]
+
+  group3_label: "Fish Value and Bullets"
+  group3_columns: [
+    "avg_fish_value",
+    "avg_fish_value_20_200",
+    "avg_killed_fish_value",
+    "avg_killed_fish_value_20_200",
+    "bullet_kill_ratio",
+    "bullets_per_user",
+    "killed_bullets_per_user",
+    "total_rooms_per_user",
+  ]
+
+stats_by_bet: 
+  files: [
+    "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_index.parquet",
+    "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_index_pa.parquet"
+  ]
+
+  group_col: "session_group"
+
