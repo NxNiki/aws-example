@@ -15,32 +15,45 @@ def generate_query(stats_agg_col):
 
     query = dedent(
         f"""
-        -- 1. FETCH RAW DATA (Keep Date as Date Object)
+        -- 1. FETCH RAW DATA (Keep strictly RAW columns to enable Index Scans)
         WITH base_data AS (
             SELECT
                 b.user_id,
                 b.room_id,
-                CASE
-                    WHEN b.partition_ab[0] = 'c2mta7-ls8vqx-HyJf5k-event' AND b.strategy_name = 'BOOST_POOL' THEN 'BOOST_POOL_2'
-                    ELSE b.strategy_name
-                END AS strategy_name,
+                b.strategy_name, -- Keep Raw
+                b.partition_ab[0] as partition_val, -- Extract partition once here
                 b.payout,
                 b.bet,
                 b.fish_value,
                 b.killed,
                 b.profit,
-                -- Convert to Beijing time and truncate to date object 
                 DATE_TRUNC('day', CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at)) AS activity_date,
                 DATE_TRUNC('week', CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at)) AS activity_week,
                 DATE_TRUNC('month', CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at)) AS activity_month
             FROM public.bullet b
             WHERE
                 b.currency_type = 'CNY'
-                AND DATEADD(day, {return_user_days}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at))  >= '{DATE_START}'
-                AND DATEADD(day, -{retention_days}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at))  < '{DATE_END}'
+                -- AND DATEADD(day, {return_user_days}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at))  >= '{DATE_START}'
+                -- AND DATEADD(day, -{retention_days}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at))  < '{DATE_END}'
+
+                -- ---------------------------------------------------------
+                -- FAST FILTERING: Transform the INPUTS, not the COLUMN
+                -- ---------------------------------------------------------
+                
+                -- 1. Reverse the date math for START
+                -- Logic: We want events where (EventTime + UserDays) >= Start
+                -- So: EventTime >= Start - UserDays
+                AND b.created_at >= CONVERT_TIMEZONE('Asia/Shanghai', 'UTC', 
+                       DATEADD(day, -{return_user_days}, CAST('{DATE_START}' AS TIMESTAMP)))
+
+                -- 2. Reverse the date math for END
+                -- Logic: We want events where (EventTime - RetentionDays) < End
+                -- So: EventTime < End + RetentionDays
+                AND b.created_at < CONVERT_TIMEZONE('Asia/Shanghai', 'UTC', 
+                       DATEADD(day, {retention_days}, CAST('{DATE_END}' AS TIMESTAMP)))
         ),
 
-        -- 2. DETERMINE USER DAILY GROUP
+        -- 2. DETERMINE USER DAILY GROUP (Logic applied inside SUM)
         user_daily_map AS (
             SELECT
                 user_id,
@@ -48,8 +61,9 @@ def generate_query(stats_agg_col):
                 activity_week,
                 activity_month,
                 CASE
+                    -- Performance fix: Check Raw Strategy + Partition Value here
+                    WHEN SUM(CASE WHEN strategy_name = 'BOOST_POOL' AND partition_val = 'c2mta7-ls8vqx-HyJf5k-event' THEN 1 ELSE 0 END) > 0 THEN 'BOOST_POOL_2'
                     WHEN SUM(CASE WHEN strategy_name = 'BOOST_POOL' THEN 1 ELSE 0 END) > 0 THEN 'BOOST_POOL'
-                    WHEN SUM(CASE WHEN strategy_name = 'BOOST_POOL_2' THEN 1 ELSE 0 END) > 0 THEN 'BOOST_POOL_2'
                     WHEN SUM(CASE WHEN strategy_name = 'DYNAMIC_RTP' THEN 1 ELSE 0 END) > 0 THEN 'DYNAMIC_RTP'
                     ELSE 'DEFAULT_FALLBACK'
                 END AS daily_group,
@@ -98,11 +112,18 @@ def generate_query(stats_agg_col):
             GROUP BY u.daily_group, b.{stats_agg_col}
         ),
 
-        -- 5. AGGREGATE STATS BY RAW STRATEGY NAME
+        -- 5. AGGREGATE STATS BY RAW STRATEGY NAME (Optimized Grouping)
         stats_by_strategy AS (
             SELECT
-                t.strategy_name,
+                -- 1. Performance fix: Apply Logic Here
+                CASE
+                    WHEN t.partition_val = 'c2mta7-ls8vqx-HyJf5k-event' AND t.strategy_name = 'BOOST_POOL' THEN 'BOOST_POOL_2'
+                    ELSE t.strategy_name
+                END AS strategy_name,
+                
+                -- 2. Aggregation Column
                 t.{stats_agg_col},
+                
                 COUNT(DISTINCT t.user_id) AS group_num_users,
                 ROUND(CAST(SUM(t.payout) AS FLOAT) / NULLIF(SUM(t.bet), 0), 3) AS group_rtp,
                 AVG(t.fish_value) AS avg_fish_value,
@@ -113,10 +134,11 @@ def generate_query(stats_agg_col):
                 AVG(CASE WHEN t.killed = 1 THEN t.profit END) AS bullet_kill_avg_profit,
                 SUM(t.profit) AS total_profit
             FROM base_data t
-            GROUP BY t.{stats_agg_col}, t.strategy_name
+            -- Use Ordinals (1, 2) to avoid "partition_val not in group by" error
+            GROUP BY 1, 2
         )
 
-        -- 6. FINAL JOIN & FORMATTING
+        -- 6. FINAL JOIN & FORMATTING (Fully Restored)
         SELECT
             t1.daily_group,
             t1.{stats_agg_col} AS activity_date,
@@ -160,7 +182,8 @@ def generate_query(stats_agg_col):
         INNER JOIN stats_by_strategy t3 
             ON t1.{stats_agg_col} = t3.{stats_agg_col} 
             AND t1.daily_group = t3.strategy_name
-        ORDER BY t1.{stats_agg_col}, t1.daily_group;
+        ORDER BY t1.{stats_agg_col}, t1.daily_group
+        ;
 
         """
     )
