@@ -12,7 +12,7 @@ query = dedent(
     WITH user_bets AS (
     SELECT
         t.user_id,
-        m.mathtable,
+        t.script_id AS mathtable,
         t.bet_amount,
         t.actual_payout AS payout,
         t.bet_type,
@@ -23,13 +23,6 @@ query = dedent(
         COUNT(t.user_id) OVER (PARTITION BY t.user_id) AS user_bet_count
     FROM
         public.fct_bet_orders AS t
-    LEFT JOIN
-        public.dim_math_talbes AS m
-        ON
-            t.user_id = m.user_id
-            AND t.game_id = m.game_id
-            AND t.created_at >= m.start_time
-            AND (t.created_at <= m.end_time OR m.is_current IS TRUE)
     WHERE
         CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', t.created_at) >= '2025-12-01 17:00:00'
         AND t.currency_type = 'CNY'
