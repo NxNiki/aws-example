@@ -27,9 +27,9 @@ def generate_query(stats_agg_col):
                 b.fish_value,
                 b.killed,
                 b.profit,
-                DATE_TRUNC('day', CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at)) AS activity_date,
-                DATE_TRUNC('week', CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at)) AS activity_week,
-                DATE_TRUNC('month', CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at)) AS activity_month
+                DATE_TRUNC('day', DATEADD(hour, -6, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at))) AS activity_date,
+                DATE_TRUNC('week', DATEADD(hour, -6, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at))) AS activity_week,
+                DATE_TRUNC('month', DATEADD(hour, -6, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at))) AS activity_month
             FROM public.bullet b
             WHERE
                 b.currency_type = 'CNY'

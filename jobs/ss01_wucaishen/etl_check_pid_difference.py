@@ -64,6 +64,7 @@ if __name__ == "__main__":
     data_loader.close()
 
     pids_to_ignore = {
+        "B26",  # test server
         "LV1",
         "E52",
         "ER5",
@@ -149,4 +150,4 @@ if __name__ == "__main__":
     # Get the elements in df_pa, but not in df, both have only one column named 'product_id'
     diff_product_ids = set(df_pa["product_id"]) - set(df["product_id"]) - pids_to_ignore
     print("Product IDs in df_pa but not in df:")
-    print(diff_product_ids)
+    print(sorted(diff_product_ids))

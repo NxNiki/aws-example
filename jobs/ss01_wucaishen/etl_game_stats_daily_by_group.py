@@ -17,14 +17,14 @@ query = dedent(
         t.actual_payout AS payout,
         t.bet_type,
         t.actual_payout - t.bet_amount AS profit,
-        TRUNC(CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at)) AS activity_date,
+        TRUNC(DATEADD(hour, -6, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS activity_date,
         t.partition_ab[0] AS ab_group_id,
         t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.created_at) AS delta_t,
         COUNT(t.user_id) OVER (PARTITION BY t.user_id) AS user_bet_count
     FROM
         public.fct_bet_orders AS t
     WHERE
-        CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', t.created_at) >= '2025-12-01 17:00:00'
+        CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', t.created_at) >= '2025-12-20 17:00:00'
         AND t.currency_type = 'CNY'
         AND t.status = 'COMPLETED'
         AND t.game_id = 'SS01'
