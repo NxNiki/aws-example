@@ -149,7 +149,7 @@ query = dedent(
         -- Profit Calculations
         ds.num_bets_fg * 1.0 / NULLIF(ds.num_bets, 0) AS fg_ratio,
 
-        -- Retention:
+        -- Per-User Bet
         ds.num_bets / NULLIF(ds.num_active_users, 0) AS num_bets_per_user,
         ds.total_bet / NULLIF(ds.num_active_users, 0) AS total_bet_per_user,
         (ds.total_payout - ds.total_bet) AS total_profit,

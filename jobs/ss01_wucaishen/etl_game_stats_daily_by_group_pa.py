@@ -88,7 +88,7 @@ query = dedent(
     SELECT
         CAST(ds.{stats_agg_col} AS DATE) AS {stats_agg_col},
         'PA' AS ai_group,
-        ds.total_daily_users,
+        ds.total_daily_users AS num_active_users,
         
         ds.total_bet,
         ds.total_bet_bg,
