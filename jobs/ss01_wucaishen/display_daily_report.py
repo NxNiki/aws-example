@@ -37,11 +37,14 @@ def generate_daily_report(df: pd.DataFrame, df_pa: pd.DataFrame) -> None:
         df_pa_date = df_pa[df_pa["activity_date"] == pa_date]
 
         rows = []
-        for metric_cn, col in metrics:
+        for i, (metric_cn, col) in enumerate(metrics):
             default_val = get_value(df_date, col, "Default")
             ai_val = get_value(df_date, col, "AI")
             pa_val = get_value(df_pa_date, col)
-            rows.append(f"| {metric_cn} | {default_val} | {ai_val} | {pa_val:.4f} |")
+            if i > 4:
+                rows.append(f"| {metric_cn} | {default_val} | {ai_val} | {pa_val:.4f} |")
+            else:
+                rows.append(f"| {metric_cn} | {default_val} | {ai_val} | {pa_val} |")
 
         # Remove extra leading/trailing spaces in header lines and ensure no extra leading spaces in the first n rows
         # Add 6 hours to date and pa_date for display in report
