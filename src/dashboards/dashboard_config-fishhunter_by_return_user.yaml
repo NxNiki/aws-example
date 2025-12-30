@@ -34,7 +34,6 @@ stats_by_date:
 
   group2_label: "Bet and RTP"
   group2_columns: [
-    "total_bet",
     "rtp",
     "daily_total_bet",
     "num_rooms",

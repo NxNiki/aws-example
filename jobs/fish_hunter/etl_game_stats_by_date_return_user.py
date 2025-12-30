@@ -4,7 +4,7 @@ from textwrap import dedent
 from bituslabs_ds.config import LOCAL_ROOT, setup_logging
 from bituslabs_ds.etl import DataLoader, RedshiftBackend
 
-DATE_START = "2025-10-20"
+DATE_START = "2025-10-31"
 DATE_END = "2027-12-1"
 
 return_user_days = 30
@@ -106,12 +106,21 @@ def generate_query(stats_agg_col):
                 SUM(b.killed) AS num_killed_bullets,
                 SUM(b.profit) AS total_profit,
                 MAX(b.profit) AS max_profit,
-                MAX(CASE WHEN b.killed >= 1 THEN 1 ELSE 0 END) AS user_killed_fish,
                 ROUND(CAST(SUM(b.payout) AS FLOAT) / NULLIF(SUM(b.bet), 0), 3) AS rtp,
-                STDDEV(b.profit) / NULLIF(AVG(b.profit), 0) AS profit_coef_var
+                STDDEV(b.profit) / NULLIF(ABS(AVG(b.profit)), 0) AS profit_coef_var
             FROM base_data AS b
             INNER JOIN retention_users AS r ON b.user_id = r.user_id AND b.activity_date = r.activity_date
             GROUP BY b.activity_date, r.user_id, r.return_user
+            HAVING MAX(b.killed) > 0
+        ),
+
+        user_kill_fish AS (
+            SELECT
+                b.user_id,
+                b.activity_date,
+                MAX(CASE WHEN b.killed >= 1 THEN 1 ELSE 0 END) AS user_killed_fish
+            FROM base_data AS b
+            GROUP BY b.activity_date, b.user_id
         )
 
         -- 6. FINAL JOIN & FORMATTING (Fully Restored)
@@ -129,10 +138,11 @@ def generate_query(stats_agg_col):
             t1.rtp,
             t1.profit_coef_var,
         --     SUM(t3.is_30_day_return_user) OVER (PARTITION BY t1.activity_date, t1.return_user) AS num_30_day_return_user,
-            SUM(t1.user_killed_fish) OVER (PARTITION BY t1.activity_date, t1.return_user) AS num_users_killed_fish,
+            SUM(t3.user_killed_fish) OVER (PARTITION BY t1.activity_date, t1.return_user) AS num_users_killed_fish,
             ROUND(CAST(t1.num_killed_bullets AS FLOAT) / NULLIF(t1.num_bullets, 0), 3) AS bullet_kill_ratio
         FROM user_daily_stats AS t1
         INNER JOIN daily_stats AS t2 ON t1.activity_date = t2.activity_date AND t1.return_user = t2.return_user
+        INNER JOIN user_kill_fish AS t3 ON t1.activity_date = t3.activity_date AND t1.user_id = t3.user_id
         -- INNER JOIN retention_users AS t3 ON t1.activity_date = t3.activity_date AND t1.return_user = t3.return_user
         ORDER BY t1.activity_date, t1.user_id, t1.return_user
         ;
