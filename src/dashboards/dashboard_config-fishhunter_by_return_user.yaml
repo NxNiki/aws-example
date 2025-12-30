@@ -1,0 +1,57 @@
+title: "Fish Hunter Analytics (return user)"
+
+stats_by_date: 
+  files: 
+    day: [
+      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_date_return_user.parquet",
+      # "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_date_pa.parquet",
+    ]
+
+    # week: [
+    #   "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_week.parquet",
+    #   "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_week_pa.parquet",
+    # ]
+
+    # month: [
+    #   "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_month.parquet",
+    #   "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_month_pa.parquet",
+
+    # ]
+
+  group_col: "return_user"
+  date_col: "activity_date"
+
+  group1_label: "DAU and Retention"
+  group1_columns: [
+    "num_users",
+    # num_30_day_return_user,
+    # "num_users_day1",
+    # "num_users_day3",
+    # "retention_rate_day1",
+    # "retention_rate_day3",
+    "num_users_killed_fish",
+  ]
+
+  group2_label: "Bet and RTP"
+  group2_columns: [
+    "total_bet",
+    "rtp",
+    "daily_total_bet",
+    "num_rooms",
+    "num_bullets",
+  ]
+
+  group3_label: "Profit"
+  group3_columns: [
+    "total_profit",
+    "max_profit",
+    "profit_coef_var",
+  ]
+
+stats_by_bet: 
+  files: [
+
+  ]
+
+  group_col: "session_group"
+
