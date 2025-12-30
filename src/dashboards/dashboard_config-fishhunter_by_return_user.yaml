@@ -24,12 +24,8 @@ stats_by_date:
   group1_label: "DAU and Retention"
   group1_columns: [
     "num_users",
-    # num_30_day_return_user,
-    # "num_users_day1",
-    # "num_users_day3",
-    # "retention_rate_day1",
-    # "retention_rate_day3",
     "num_users_killed_fish",
+    "num_users_pos_profit",
   ]
 
   group2_label: "Bet and RTP"
@@ -37,6 +33,7 @@ stats_by_date:
     "rtp",
     "daily_total_bet",
     "num_rooms",
+    "num_bet_sessions",
     "num_bullets",
   ]
 

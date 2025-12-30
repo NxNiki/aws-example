@@ -4,11 +4,12 @@ from textwrap import dedent
 from bituslabs_ds.config import LOCAL_ROOT, setup_logging
 from bituslabs_ds.etl import DataLoader, RedshiftBackend
 
-DATE_START = "2025-10-31"
+DATE_START = "2025-12-26"
 DATE_END = "2027-12-1"
 
 return_user_days = 30
 retention_days = 3
+bet_session_thresh = 60
 
 
 def generate_query(stats_agg_col):
@@ -27,6 +28,8 @@ def generate_query(stats_agg_col):
                 b.fish_value,
                 b.killed,
                 b.profit,
+                b.event_timestamp AS bet_time,
+                LAG(b.event_timestamp) OVER (PARTITION BY b.user_id ORDER BY b.event_timestamp) AS prev_bet_time,
                 DATE_TRUNC('day', DATEADD(hour, -6, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at))) AS activity_date
             FROM public.bullet b
             WHERE
@@ -44,7 +47,6 @@ def generate_query(stats_agg_col):
                     DATEADD(day, {retention_days}, CAST('{DATE_END}' AS TIMESTAMP)))
                 AND b.strategy_name = 'DEFAULT_FALLBACK'
         ),
-
         
         -- 2. DETERMINE USER DAILY GROUP (Logic applied inside SUM)
         user_activity AS (
@@ -54,11 +56,11 @@ def generate_query(stats_agg_col):
             FROM base_data
         ),
 
-        user_last_bet AS (
+        user_next_bet_date AS (
             SELECT
                 user_id,
                 activity_date,
-                LAG(activity_date) OVER (PARTITION BY user_id ORDER BY activity_date) AS last_bet_date
+                LEAD(activity_date) OVER (PARTITION BY user_id ORDER BY activity_date) AS next_bet_date
             FROM user_activity
         ),
 
@@ -67,21 +69,12 @@ def generate_query(stats_agg_col):
             SELECT
                 t1.activity_date,
                 t1.user_id,
-        --         CASE
-        --             WHEN DATEDIFF('day', t1.last_bet_date, t1.activity_date) > 30 THEN 1
-        --             ELSE 0
-        --         END AS is_30_day_return_user,
-                CASE
-                    WHEN COUNT(t2.user_id) > 0 THEN 'return'
-                    ELSE 'non-return'
+                CASE 
+                    WHEN next_bet_date IS NOT NULL AND next_bet_date <= DATEADD(day, 7, activity_date) 
+                    THEN 'return' 
+                    ELSE 'non-return' 
                 END AS return_user
-            FROM user_last_bet AS t1
-            LEFT JOIN user_last_bet AS t2
-                ON
-                    t1.user_id = t2.user_id
-                    AND t1.activity_date < t2.activity_date
-                    AND t2.activity_date <= DATEADD(DAY, 7, t1.activity_date)
-            GROUP BY t1.user_id, t1.activity_date, t1.last_bet_date
+            FROM user_next_bet_date AS t1
         ),
 
         -- 4. AGGREGATE STATS BY ASSIGNED DAILY GROUP
@@ -97,21 +90,22 @@ def generate_query(stats_agg_col):
 
         user_daily_stats AS (
             SELECT
-                r.user_id,
-                b.activity_date,
-                r.return_user,
-                COUNT(DISTINCT b.room_id) AS num_rooms,
-                COUNT(b.user_id) AS num_bullets,
-                SUM(b.bet) AS daily_total_bet,
-                SUM(b.killed) AS num_killed_bullets,
-                SUM(b.profit) AS total_profit,
-                MAX(b.profit) AS max_profit,
-                ROUND(CAST(SUM(b.payout) AS FLOAT) / NULLIF(SUM(b.bet), 0), 3) AS rtp,
-                STDDEV(b.profit) / NULLIF(ABS(AVG(b.profit)), 0) AS profit_coef_var
-            FROM base_data AS b
-            INNER JOIN retention_users AS r ON b.user_id = r.user_id AND b.activity_date = r.activity_date
-            GROUP BY b.activity_date, r.user_id, r.return_user
-            HAVING MAX(b.killed) > 0
+                t2.user_id,
+                t1.activity_date,
+                t2.return_user,
+                COUNT(DISTINCT t1.room_id) AS num_rooms,
+                COUNT(t1.user_id) AS num_bullets,
+                SUM(t1.bet) AS daily_total_bet,
+                SUM(t1.killed) AS num_killed_bullets,
+                SUM(t1.profit) AS total_profit,
+                MAX(t1.profit) AS max_profit,
+                ROUND(CAST(SUM(t1.payout) AS FLOAT) / NULLIF(SUM(t1.bet), 0), 3) AS rtp,
+                STDDEV(t1.profit) / NULLIF(ABS(AVG(t1.profit)), 0) AS profit_coef_var
+
+            FROM base_data AS t1
+            INNER JOIN retention_users AS t2 ON t1.user_id = t2.user_id AND t1.activity_date = t2.activity_date
+            GROUP BY t1.activity_date, t2.user_id, t2.return_user
+            HAVING MAX(t1.killed) > 0
         ),
 
         user_kill_fish AS (
@@ -121,6 +115,47 @@ def generate_query(stats_agg_col):
                 MAX(CASE WHEN b.killed >= 1 THEN 1 ELSE 0 END) AS user_killed_fish
             FROM base_data AS b
             GROUP BY b.activity_date, b.user_id
+        ),
+
+        user_delta_t AS (
+            SELECT
+                t.activity_date,
+                t.user_id,
+                t.bet_time,
+                t.bet_time - t.prev_bet_time AS delta_bet_time
+            FROM base_data t
+        ),
+
+        user_session_id AS (
+            SELECT
+                t.activity_date,
+                t.user_id,
+                t.bet_time,
+                SUM(CASE WHEN t.delta_bet_time < {bet_session_thresh} THEN 0 ELSE 1 END) OVER (PARTITION BY t.activity_date, t.user_id ORDER BY t.bet_time ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS session_id
+            FROM user_delta_t t
+        ),
+
+        user_session_length AS (
+            SELECT
+                t.activity_date,
+                t.user_id,
+                t.session_id,
+                COUNT(t.user_id) AS session_length
+            FROM user_session_id t
+            GROUP BY t.user_id, t.activity_date, t.session_id
+        ),
+
+        user_session_stats AS (
+            SELECT
+                t.activity_date,
+                t.user_id,
+                COUNT(DISTINCT t.session_id) AS num_bet_sessions,
+                AVG(t.session_length) AS avg_session_length,
+                MAX(t.session_length) AS max_session_length,
+                MIN(t.session_length) AS min_session_length
+
+            FROM user_session_length t
+            GROUP BY t.user_id, t.activity_date
         )
 
         -- 6. FINAL JOIN & FORMATTING (Fully Restored)
@@ -137,13 +172,21 @@ def generate_query(stats_agg_col):
             t1.max_profit,
             t1.rtp,
             t1.profit_coef_var,
-        --     SUM(t3.is_30_day_return_user) OVER (PARTITION BY t1.activity_date, t1.return_user) AS num_30_day_return_user,
+            
+            SUM(CASE WHEN t1.total_profit > 1 THEN 1 END) OVER (PARTITION BY t1.activity_date, t1.return_user) AS num_users_pos_profit,
+            ROUND(CAST(t1.num_killed_bullets AS FLOAT) / NULLIF(t1.num_bullets, 0), 3) AS bullet_kill_ratio,
+
             SUM(t3.user_killed_fish) OVER (PARTITION BY t1.activity_date, t1.return_user) AS num_users_killed_fish,
-            ROUND(CAST(t1.num_killed_bullets AS FLOAT) / NULLIF(t1.num_bullets, 0), 3) AS bullet_kill_ratio
+
+            t4.num_bet_sessions,
+            t4.avg_session_length,
+            t4.max_session_length,
+            t4.min_session_length
+
         FROM user_daily_stats AS t1
         INNER JOIN daily_stats AS t2 ON t1.activity_date = t2.activity_date AND t1.return_user = t2.return_user
         INNER JOIN user_kill_fish AS t3 ON t1.activity_date = t3.activity_date AND t1.user_id = t3.user_id
-        -- INNER JOIN retention_users AS t3 ON t1.activity_date = t3.activity_date AND t1.return_user = t3.return_user
+        INNER JOIN user_session_stats AS t4 ON t1.activity_date = t4.activity_date AND t1.user_id = t4.user_id
         ORDER BY t1.activity_date, t1.user_id, t1.return_user
         ;
 
