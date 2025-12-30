@@ -4,7 +4,7 @@ from textwrap import dedent
 from bituslabs_ds.config import LOCAL_ROOT, setup_logging
 from bituslabs_ds.etl import DataLoader, RedshiftBackend
 
-DATE_START = "2025-12-26"
+DATE_START = "2025-10-31"
 DATE_END = "2027-12-1"
 
 return_user_days = 30
@@ -70,7 +70,7 @@ def generate_query(stats_agg_col):
                 t1.activity_date,
                 t1.user_id,
                 CASE 
-                    WHEN next_bet_date IS NOT NULL AND next_bet_date <= DATEADD(day, 7, activity_date) 
+                    WHEN next_bet_date <= DATEADD(day, 7, activity_date) 
                     THEN 'return' 
                     ELSE 'non-return' 
                 END AS return_user
@@ -90,7 +90,7 @@ def generate_query(stats_agg_col):
 
         user_daily_stats AS (
             SELECT
-                t2.user_id,
+                t1.user_id,
                 t1.activity_date,
                 t2.return_user,
                 COUNT(DISTINCT t1.room_id) AS num_rooms,
@@ -100,21 +100,13 @@ def generate_query(stats_agg_col):
                 SUM(t1.profit) AS total_profit,
                 MAX(t1.profit) AS max_profit,
                 ROUND(CAST(SUM(t1.payout) AS FLOAT) / NULLIF(SUM(t1.bet), 0), 3) AS rtp,
-                STDDEV(t1.profit) / NULLIF(ABS(AVG(t1.profit)), 0) AS profit_coef_var
+                STDDEV(t1.profit) / NULLIF(ABS(AVG(t1.profit)), 0) AS profit_coef_var,
+                MAX(CASE WHEN t1.killed >= 1 THEN 1 ELSE 0 END) AS user_killed_fish
 
             FROM base_data AS t1
             INNER JOIN retention_users AS t2 ON t1.user_id = t2.user_id AND t1.activity_date = t2.activity_date
-            GROUP BY t1.activity_date, t2.user_id, t2.return_user
+            GROUP BY t1.activity_date, t1.user_id, t2.return_user
             HAVING MAX(t1.killed) > 0
-        ),
-
-        user_kill_fish AS (
-            SELECT
-                b.user_id,
-                b.activity_date,
-                MAX(CASE WHEN b.killed >= 1 THEN 1 ELSE 0 END) AS user_killed_fish
-            FROM base_data AS b
-            GROUP BY b.activity_date, b.user_id
         ),
 
         user_delta_t AS (
@@ -176,17 +168,16 @@ def generate_query(stats_agg_col):
             SUM(CASE WHEN t1.total_profit > 1 THEN 1 END) OVER (PARTITION BY t1.activity_date, t1.return_user) AS num_users_pos_profit,
             ROUND(CAST(t1.num_killed_bullets AS FLOAT) / NULLIF(t1.num_bullets, 0), 3) AS bullet_kill_ratio,
 
-            SUM(t3.user_killed_fish) OVER (PARTITION BY t1.activity_date, t1.return_user) AS num_users_killed_fish,
+            SUM(t1.user_killed_fish) OVER (PARTITION BY t1.activity_date, t1.return_user) AS num_users_killed_fish,
 
-            t4.num_bet_sessions,
-            t4.avg_session_length,
-            t4.max_session_length,
-            t4.min_session_length
+            t3.num_bet_sessions,
+            t3.avg_session_length,
+            t3.max_session_length,
+            t3.min_session_length
 
         FROM user_daily_stats AS t1
         INNER JOIN daily_stats AS t2 ON t1.activity_date = t2.activity_date AND t1.return_user = t2.return_user
-        INNER JOIN user_kill_fish AS t3 ON t1.activity_date = t3.activity_date AND t1.user_id = t3.user_id
-        INNER JOIN user_session_stats AS t4 ON t1.activity_date = t4.activity_date AND t1.user_id = t4.user_id
+        INNER JOIN user_session_stats AS t3 ON t1.activity_date = t3.activity_date AND t1.user_id = t3.user_id
         ORDER BY t1.activity_date, t1.user_id, t1.return_user
         ;
 
