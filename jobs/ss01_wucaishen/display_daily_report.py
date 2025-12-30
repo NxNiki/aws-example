@@ -44,6 +44,9 @@ def generate_daily_report(df: pd.DataFrame, df_pa: pd.DataFrame) -> None:
             rows.append(f"| {metric_cn} | {default_val} | {ai_val} | {pa_val:.4f} |")
 
         # Remove extra leading/trailing spaces in header lines and ensure no extra leading spaces in the first n rows
+        # Add 6 hours to date and pa_date for display in report
+        date = date + pd.Timedelta(hours=6)
+        pa_date = pa_date + pd.Timedelta(hours=6)
         lines = [
             f"SS01 AI调控上线后数据跟进 [{date}]",
             "统计时间：（北京时间）",
