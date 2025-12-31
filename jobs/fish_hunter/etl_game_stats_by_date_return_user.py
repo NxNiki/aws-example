@@ -38,7 +38,7 @@ def generate_query(stats_agg_col):
                 -- ---------------------------------------------------------
                 -- Logic: We want events where (EventTime + UserDays) >= Start
                 -- So: EventTime >= Start - UserDays
-                AND b.created_at >= CONVERT_TIMEZONE('Asia/Shanghai', 'UTC', CAST('{DATE_START}' AS TIMESTAMP)))
+                AND b.created_at >= CONVERT_TIMEZONE('Asia/Shanghai', 'UTC', CAST('{DATE_START}' AS TIMESTAMP))
                 -- Logic: We want events where (EventTime - RetentionDays) < End
                 -- So: EventTime < End + RetentionDays
                 AND b.created_at < CONVERT_TIMEZONE('Asia/Shanghai', 'UTC',
