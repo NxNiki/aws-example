@@ -48,7 +48,7 @@ def generate_query(stats_agg_col):
                 AND b.strategy_name = 'DEFAULT_FALLBACK'
         ),
         
-        -- 2. DETERMINE USER DAILY GROUP (Logic applied inside SUM)
+        -- 2. DETERMINE  RETURN/NON-RETURN USERS
         user_activity AS (
             SELECT DISTINCT
                 user_id,
@@ -64,7 +64,6 @@ def generate_query(stats_agg_col):
             FROM user_activity
         ),
 
-        -- 3. CALCULATE RETENTION (Pure Date Math)
         retention_users AS (
             SELECT
                 t1.activity_date,
@@ -77,7 +76,7 @@ def generate_query(stats_agg_col):
             FROM user_next_bet_date AS t1
         ),
 
-        -- 4. AGGREGATE STATS BY ASSIGNED DAILY GROUP
+        -- 3. AGGREGATE STATS BY ASSIGNED DAILY GROUP
         daily_stats AS (
             SELECT
                 b.activity_date,
@@ -109,22 +108,21 @@ def generate_query(stats_agg_col):
             HAVING MAX(t1.killed) > 0
         ),
 
-        user_delta_t AS (
-            SELECT
-                t.activity_date,
-                t.user_id,
-                t.bet_time,
-                t.bet_time - t.prev_bet_time AS delta_bet_time
-            FROM base_data t
-        ),
-
+        -- 4. GET BET SESSION STATS:
         user_session_id AS (
             SELECT
                 t.activity_date,
                 t.user_id,
                 t.bet_time,
-                SUM(CASE WHEN t.delta_bet_time < {bet_session_thresh} THEN 0 ELSE 1 END) OVER (PARTITION BY t.activity_date, t.user_id ORDER BY t.bet_time ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS session_id
-            FROM user_delta_t t
+                SUM(CASE 
+                        WHEN (t.bet_time - t.prev_bet_time) < {bet_session_thresh} THEN 0 
+                        ELSE 1 
+                    END) OVER (
+                        PARTITION BY t.activity_date, t.user_id 
+                        ORDER BY t.bet_time 
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                    ) AS session_id
+            FROM base_data t
         ),
 
         user_session_length AS (
@@ -142,7 +140,7 @@ def generate_query(stats_agg_col):
                 t.activity_date,
                 t.user_id,
                 COUNT(DISTINCT t.session_id) AS num_bet_sessions,
-                AVG(t.session_length) AS avg_session_length,
+                AVG(CAST(t.session_length AS FLOAT)) AS avg_session_length,
                 MAX(t.session_length) AS max_session_length,
                 MIN(t.session_length) AS min_session_length
 
