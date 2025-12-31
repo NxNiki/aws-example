@@ -7,8 +7,7 @@ from bituslabs_ds.etl import DataLoader, RedshiftBackend
 DATE_START = "2025-10-31"
 DATE_END = "2027-12-1"
 
-return_user_days = 30
-retention_days = 3
+retention_days = 7
 bet_session_thresh = 60
 
 
@@ -39,8 +38,7 @@ def generate_query(stats_agg_col):
                 -- ---------------------------------------------------------
                 -- Logic: We want events where (EventTime + UserDays) >= Start
                 -- So: EventTime >= Start - UserDays
-                AND b.created_at >= CONVERT_TIMEZONE('Asia/Shanghai', 'UTC',
-                    DATEADD(day, -{return_user_days}, CAST('{DATE_START}' AS TIMESTAMP)))
+                AND b.created_at >= CONVERT_TIMEZONE('Asia/Shanghai', 'UTC', CAST('{DATE_START}' AS TIMESTAMP)))
                 -- Logic: We want events where (EventTime - RetentionDays) < End
                 -- So: EventTime < End + RetentionDays
                 AND b.created_at < CONVERT_TIMEZONE('Asia/Shanghai', 'UTC',
@@ -69,7 +67,7 @@ def generate_query(stats_agg_col):
                 t1.activity_date,
                 t1.user_id,
                 CASE 
-                    WHEN next_bet_date <= DATEADD(day, 7, activity_date) 
+                    WHEN next_bet_date <= DATEADD(day, {retention_days}, activity_date) 
                     THEN 'return' 
                     ELSE 'non-return' 
                 END AS return_user
