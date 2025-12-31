@@ -139,10 +139,10 @@ def generate_query(stats_agg_col):
             SELECT
                 t.activity_date,
                 t.user_id,
-                COUNT(DISTINCT t.session_id) AS num_bet_sessions,
-                AVG(CAST(t.session_length AS FLOAT)) AS avg_session_length,
-                MAX(t.session_length) AS max_session_length,
-                MIN(t.session_length) AS min_session_length
+                COUNT(DISTINCT t.session_id) AS num_streak_sessions,
+                AVG(CAST(t.session_length AS FLOAT)) AS avg_streak_length,
+                MAX(t.session_length) AS max_streak_length,
+                MIN(t.session_length) AS min_streak_length
 
             FROM user_session_length t
             GROUP BY t.user_id, t.activity_date
@@ -168,10 +168,10 @@ def generate_query(stats_agg_col):
 
             SUM(t1.user_killed_fish) OVER (PARTITION BY t1.activity_date, t1.return_user) AS num_users_killed_fish,
 
-            t3.num_bet_sessions,
-            t3.avg_session_length,
-            t3.max_session_length,
-            t3.min_session_length
+            t3.num_streak_sessions,
+            t3.avg_streak_length,
+            t3.max_streak_length,
+            t3.min_streak_length
 
         FROM user_daily_stats AS t1
         INNER JOIN daily_stats AS t2 ON t1.activity_date = t2.activity_date AND t1.return_user = t2.return_user

@@ -32,9 +32,12 @@ stats_by_date:
   group2_columns: [
     "rtp",
     "daily_total_bet",
-    "num_rooms",
-    "num_bet_sessions",
     "num_bullets",
+    "num_rooms",
+    "num_streak_sessions",
+    "avg_streak_length",
+    "max_streak_length",
+    "min_streak_length",
   ]
 
   group3_label: "Profit"
