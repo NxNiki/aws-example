@@ -6,7 +6,7 @@ import pandas as pd
 from bituslabs_ds.config import LOCAL_ROOT
 
 
-def generate_daily_report(df: pd.DataFrame, df_pa: pd.DataFrame) -> None:
+def generate_daily_report(df: pd.DataFrame, df_pa: pd.DataFrame, n_days=6) -> None:
     # Convert activity_date columns to datetime if they aren't already
     df["activity_date"] = pd.to_datetime(df["activity_date"])
     df_pa["activity_date"] = pd.to_datetime(df_pa["activity_date"])
@@ -30,7 +30,7 @@ def generate_daily_report(df: pd.DataFrame, df_pa: pd.DataFrame) -> None:
 
     dates = sorted(df["activity_date"].unique(), reverse=True)
 
-    for date in dates[1:4]:
+    for date in dates[1 : n_days + 1]:
         df_date = df[df["activity_date"] == date]
         # Subtract one year from the target date for df_pa selection
         pa_date = date - pd.DateOffset(years=1)
