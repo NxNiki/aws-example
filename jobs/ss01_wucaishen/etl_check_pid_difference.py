@@ -27,8 +27,8 @@ query = dedent(
         t.currency_type = 'CNY'
         AND t.status = 'COMPLETED'
         AND t.game_id = 'SS01'
-        AND t.op_code != 'B26'
-        -- AND CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at) < '2025-12-19 06:00:00'
+        AND t.op_code not in ('B26','TST','TSB','TSO') 
+        -- AND CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at) < '2025-12-29 06:00:00'
     """
 )
 
