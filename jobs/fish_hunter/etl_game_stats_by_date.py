@@ -9,6 +9,7 @@ DATE_END = "2027-12-1"
 
 return_user_days = 30
 retention_days = 3
+DATE_START_HOUR = 6
 
 
 def generate_query(stats_agg_col):
@@ -27,9 +28,9 @@ def generate_query(stats_agg_col):
                 b.fish_value,
                 b.killed,
                 b.profit,
-                DATE_TRUNC('day', DATEADD(hour, -6, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at))) AS activity_date,
-                DATE_TRUNC('week', DATEADD(hour, -6, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at))) AS activity_week,
-                DATE_TRUNC('month', DATEADD(hour, -6, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at))) AS activity_month
+                DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at))) AS activity_date,
+                DATE_TRUNC('week', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at))) AS activity_week,
+                DATE_TRUNC('month', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at))) AS activity_month
             FROM public.bullet b
             WHERE
                 b.currency_type = 'CNY'
@@ -79,12 +80,21 @@ def generate_query(stats_agg_col):
                 t1.{stats_agg_col},
                 COUNT(DISTINCT t1.user_id) AS num_users_day0,
                 COUNT(DISTINCT t2.user_id) AS num_users_day1,
-                COUNT(DISTINCT t3.user_id) AS num_users_day3
+                COUNT(DISTINCT t3.user_id) AS num_users_day3,
+                COUNT(DISTINCT t4.user_id) AS num_users_day7
+                -- COUNT(DISTINCT t5.user_id) AS num_users_week1,
+                -- COUNT(DISTINCT t6.user_id) AS num_users_month1
             FROM user_daily_map t1
             LEFT JOIN user_daily_map t2
                 ON t1.user_id = t2.user_id AND t2.activity_date = DATEADD(day, -1, t1.activity_date)
             LEFT JOIN user_daily_map t3
                 ON t1.user_id = t3.user_id AND t3.activity_date = DATEADD(day, -3, t1.activity_date)
+            LEFT JOIN user_daily_map t4
+                ON t1.user_id = t4.user_id AND t4.activity_date = DATEADD(day, -7, t1.activity_date)
+            -- LEFT JOIN user_daily_map t5
+            --    ON t1.user_id = t5.user_id AND t5.activity_week = DATEADD(week, -1, t1.activity_week)
+            -- LEFT JOIN user_daily_map t6
+            --    ON t1.user_id = t6.user_id AND t6.activity_month = DATEADD(month, -1, t1.activity_month)
             GROUP BY t1.daily_group, t1.{stats_agg_col}
         ),
 
@@ -154,6 +164,9 @@ def generate_query(stats_agg_col):
             t2.num_users_day0,
             t2.num_users_day1,
             t2.num_users_day3,
+            t2.num_users_day7,
+            -- t2.num_users_week1,
+            -- t2.num_users_month1,
 
             t3.group_num_users,
             t3.group_rtp,
@@ -167,6 +180,7 @@ def generate_query(stats_agg_col):
 
             ROUND(CAST(t2.num_users_day1 AS FLOAT) / NULLIF(t2.num_users_day0, 0), 3) AS retention_rate_day1,
             ROUND(CAST(t2.num_users_day3 AS FLOAT) / NULLIF(t2.num_users_day0, 0), 3) AS retention_rate_day3,
+            ROUND(CAST(t2.num_users_day7 AS FLOAT) / NULLIF(t2.num_users_day0, 0), 3) AS retention_rate_day7,
 
             ROUND(CAST(t1.daily_total_bet AS FLOAT) / NULLIF(t2.num_users_day0, 0), 3) AS total_bet_per_user,
             ROUND(CAST(t3.total_profit AS FLOAT) / NULLIF(t2.num_users_day0, 0), 3) AS total_profit_per_user,

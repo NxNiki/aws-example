@@ -38,13 +38,31 @@ stats_by_date:
     "avg_streak_length",
     "max_streak_length",
     "min_streak_length",
+    "seconds_to_kill_fish",
+    "seconds_to_kill_fish_low",
+    "seconds_to_kill_fish_medium",
+    "seconds_to_kill_fish_high",
+    "seconds_to_kill_fish_ultra",
+    "bets_to_kill_fish",
+    "bets_to_kill_fish_low",
+    "bets_to_kill_fish_medium",
+    "bets_to_kill_fish_high",
+    "bets_to_kill_fish_ultra",
   ]
 
-  group3_label: "Profit"
+  group3_label: "Profit and fish type"
   group3_columns: [
     "total_profit",
     "max_profit",
     "profit_coef_var",
+    "killed_fish_low_ratio",
+    "killed_fish_medium_ratio",
+    "killed_fish_high_ratio",
+    "killed_fish_ultra_ratio",
+    "hits_fish_low_ratio",
+    "hits_fish_medium_ratio",
+    "hits_fish_high_ratio",
+    "hits_fish_ultra_ratio",
   ]
 
 stats_by_bet: 

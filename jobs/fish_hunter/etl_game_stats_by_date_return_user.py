@@ -4,11 +4,12 @@ from textwrap import dedent
 from bituslabs_ds.config import LOCAL_ROOT, setup_logging
 from bituslabs_ds.etl import DataLoader, RedshiftBackend
 
-DATE_START = "2025-10-31"
+DATE_START = "2025-11-30"
 DATE_END = "2027-12-1"
 
 retention_days = 7
-bet_session_thresh = 60
+streak_session_thresh = 60
+streak_kill_thresh = 3  # nearly 10% of all killing intervals.
 
 
 def generate_query(stats_agg_col):
@@ -22,12 +23,18 @@ def generate_query(stats_agg_col):
             SELECT
                 b.user_id,
                 b.room_id,
+                b.event_timestamp AS bet_time,
                 b.payout,
                 b.bet,
                 b.fish_value,
+                CASE
+                    WHEN b.fish_value <= 10 THEN 'low'
+                    WHEN b.fish_value <= 130 THEN 'medium'
+                    WHEN b.fish_value <= 200 THEN 'high'
+                    ELSE 'ultra'
+                END as fish_type,
                 b.killed,
                 b.profit,
-                b.event_timestamp AS bet_time,
                 LAG(b.event_timestamp) OVER (PARTITION BY b.user_id ORDER BY b.event_timestamp) AS prev_bet_time,
                 DATE_TRUNC('day', DATEADD(hour, -6, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at))) AS activity_date
             FROM public.bullet b
@@ -44,6 +51,75 @@ def generate_query(stats_agg_col):
                 AND b.created_at < CONVERT_TIMEZONE('Asia/Shanghai', 'UTC',
                     DATEADD(day, {retention_days}, CAST('{DATE_END}' AS TIMESTAMP)))
                 AND b.strategy_name = 'DEFAULT_FALLBACK'
+        ),
+
+        -- GET KILL STREAK LENGTH:
+
+        base_kills AS (
+            SELECT 
+                user_id, 
+                activity_date, 
+                fish_type, 
+                bet_time
+            FROM base_data 
+            WHERE killed = 1
+        ),
+
+        calculate_islands AS (
+            SELECT 
+                user_id,
+                activity_date,
+                fish_type,
+                bet_time,
+                -- GLOBAL: ignores fish_type. Checks if ANY fish was killed recently.
+                CASE 
+                    WHEN DATEDIFF(SECOND, LAG(bet_time) OVER(PARTITION BY user_id ORDER BY bet_time), bet_time) > {streak_kill_thresh} 
+                        OR LAG(bet_time) OVER(PARTITION BY user_id ORDER BY bet_time) IS NULL 
+                    THEN 1 ELSE 0 
+                END AS is_new_global_streak,
+                
+                -- TYPE-SPECIFIC: isolated by fish_type. Only checks previous kill of SAME type.
+                CASE 
+                    WHEN DATEDIFF(SECOND, LAG(bet_time) OVER(PARTITION BY user_id, fish_type ORDER BY bet_time), bet_time) > {streak_kill_thresh} 
+                        OR LAG(bet_time) OVER(PARTITION BY user_id, fish_type ORDER BY bet_time) IS NULL 
+                    THEN 1 ELSE 0 
+                END AS is_new_type_streak
+            FROM base_kills
+        ),
+
+        streak_ids AS (
+            SELECT
+                user_id,
+                activity_date,
+                fish_type,
+                bet_time,
+                SUM(is_new_global_streak) OVER(PARTITION BY user_id ORDER BY bet_time ROWS UNBOUNDED PRECEDING) AS global_streak_id,
+                SUM(is_new_type_streak) OVER(PARTITION BY user_id, fish_type ORDER BY bet_time ROWS UNBOUNDED PRECEDING) AS type_streak_id
+            FROM calculate_islands
+        ),
+
+        streak_lengths AS (
+            SELECT 
+                user_id, 
+                activity_date,
+                fish_type,
+                -- Calculate the length of the specific streak instance this row belongs to
+                COUNT(*) OVER(PARTITION BY user_id, global_streak_id) AS global_streak_len,
+                COUNT(*) OVER(PARTITION BY user_id, fish_type, type_streak_id) AS type_streak_len
+            FROM streak_ids
+        ),
+
+        max_kill_streak_length AS (
+        SELECT 
+            user_id,
+            activity_date,
+            MAX(global_streak_len) AS max_kill_streak,
+            MAX(CASE WHEN fish_type = 'low' THEN type_streak_len ELSE 0 END) AS max_kill_streak_low,
+            MAX(CASE WHEN fish_type = 'medium' THEN type_streak_len ELSE 0 END) AS max_kill_streak_medium,
+            MAX(CASE WHEN fish_type = 'high' THEN type_streak_len ELSE 0 END) AS max_kill_streak_high,
+            MAX(CASE WHEN fish_type = 'ultra' THEN type_streak_len ELSE 0 END) AS max_kill_streak_ultra
+        FROM streak_lengths
+        GROUP BY user_id, activity_date
         ),
         
         -- 2. DETERMINE  RETURN/NON-RETURN USERS
@@ -91,9 +167,22 @@ def generate_query(stats_agg_col):
                 t1.activity_date,
                 t2.return_user,
                 COUNT(DISTINCT t1.room_id) AS num_rooms,
+
+                -- Bullets info:
                 COUNT(t1.user_id) AS num_bullets,
-                SUM(t1.bet) AS daily_total_bet,
+                SUM(CASE WHEN t1.fish_type = 'low' THEN 1 END) AS num_hits_fish_low,
+                SUM(CASE WHEN t1.fish_type = 'medium' THEN 1 END) AS num_hits_fish_medium,
+                SUM(CASE WHEN t1.fish_type = 'high' THEN 1 END) AS num_hits_fish_high,
+                SUM(CASE WHEN t1.fish_type = 'ultra' THEN 1 END) AS num_hits_fish_ultra,
+
+                -- killed Fish info:
                 SUM(t1.killed) AS num_killed_bullets,
+                SUM(CASE WHEN t1.fish_type = 'low' THEN t1.killed END) AS num_killed_fish_low,
+                SUM(CASE WHEN t1.fish_type = 'medium' THEN t1.killed END) AS num_killed_fish_medium,
+                SUM(CASE WHEN t1.fish_type = 'high' THEN t1.killed END) AS num_killed_fish_high,
+                SUM(CASE WHEN t1.fish_type = 'ultra' THEN t1.killed END) AS num_killed_fish_ultra,
+                
+                SUM(t1.bet) AS daily_total_bet,
                 SUM(t1.profit) AS total_profit,
                 MAX(t1.profit) AS max_profit,
                 ROUND(CAST(SUM(t1.payout) AS FLOAT) / NULLIF(SUM(t1.bet), 0), 3) AS rtp,
@@ -112,14 +201,21 @@ def generate_query(stats_agg_col):
                 t.activity_date,
                 t.user_id,
                 t.bet_time,
+                t.killed,
+                t.fish_type,
                 SUM(CASE 
-                        WHEN (t.bet_time - t.prev_bet_time) < {bet_session_thresh} THEN 0 
+                        WHEN DATEDIFF(SECOND, t.prev_bet_time, t.bet_time) < {streak_session_thresh} THEN 0 
                         ELSE 1 
                     END) OVER (
                         PARTITION BY t.activity_date, t.user_id 
                         ORDER BY t.bet_time 
                         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-                    ) AS session_id
+                    ) AS session_id,
+                ROW_NUMBER() OVER (
+                        PARTITION BY t.activity_date, t.user_id 
+                        ORDER BY t.bet_time 
+                    ) AS bet_index
+                
             FROM base_data t
         ),
 
@@ -128,6 +224,19 @@ def generate_query(stats_agg_col):
                 t.activity_date,
                 t.user_id,
                 t.session_id,
+
+                DATEDIFF(SECOND, MIN(t.bet_time), MIN(CASE WHEN t.killed = 1 THEN t.bet_time END)) AS seconds_to_kill_fish,
+                DATEDIFF(SECOND, MIN(t.bet_time), MIN(CASE WHEN t.killed = 1 AND t.fish_type = 'low' THEN t.bet_time END)) AS seconds_to_kill_fish_low,
+                DATEDIFF(SECOND, MIN(t.bet_time), MIN(CASE WHEN t.killed = 1 AND t.fish_type = 'medium' THEN t.bet_time END)) AS seconds_to_kill_fish_medium,
+                DATEDIFF(SECOND, MIN(t.bet_time), MIN(CASE WHEN t.killed = 1 AND t.fish_type = 'high' THEN t.bet_time END)) AS seconds_to_kill_fish_high,
+                DATEDIFF(SECOND, MIN(t.bet_time), MIN(CASE WHEN t.killed = 1 AND t.fish_type = 'ultra' THEN t.bet_time END)) AS seconds_to_kill_fish_ultra,
+
+                MIN(CASE WHEN t.killed = 1 THEN t.bet_index END) - MIN(bet_index) AS bets_to_kill_fish,
+                MIN(CASE WHEN t.killed = 1 AND t.fish_type = 'low' THEN t.bet_index END) - MIN(bet_index) AS bets_to_kill_fish_low,
+                MIN(CASE WHEN t.killed = 1 AND t.fish_type = 'medium' THEN t.bet_index END) - MIN(bet_index) AS bets_to_kill_fish_medium,
+                MIN(CASE WHEN t.killed = 1 AND t.fish_type = 'high' THEN t.bet_index END) - MIN(bet_index) AS bets_to_kill_fish_high,
+                MIN(CASE WHEN t.killed = 1 AND t.fish_type = 'ultra' THEN t.bet_index END) - MIN(bet_index) AS bets_to_kill_fish_ultra,
+
                 COUNT(t.user_id) AS session_length
             FROM user_session_id t
             GROUP BY t.user_id, t.activity_date, t.session_id
@@ -140,7 +249,19 @@ def generate_query(stats_agg_col):
                 COUNT(DISTINCT t.session_id) AS num_streak_sessions,
                 AVG(CAST(t.session_length AS FLOAT)) AS avg_streak_length,
                 MAX(t.session_length) AS max_streak_length,
-                MIN(t.session_length) AS min_streak_length
+                MIN(t.session_length) AS min_streak_length,
+
+                AVG(seconds_to_kill_fish) AS seconds_to_kill_fish,
+                AVG(seconds_to_kill_fish_low) AS seconds_to_kill_fish_low,
+                AVG(seconds_to_kill_fish_medium) AS seconds_to_kill_fish_medium,
+                AVG(seconds_to_kill_fish_high) AS seconds_to_kill_fish_high,
+                AVG(seconds_to_kill_fish_ultra) AS seconds_to_kill_fish_ultra,
+
+                AVG(bets_to_kill_fish) AS bets_to_kill_fish,
+                AVG(bets_to_kill_fish_low) AS bets_to_kill_fish_low,
+                AVG(bets_to_kill_fish_medium) AS bets_to_kill_fish_medium,
+                AVG(bets_to_kill_fish_high) AS bets_to_kill_fish_high,
+                AVG(bets_to_kill_fish_ultra) AS bets_to_kill_fish_ultra
 
             FROM user_session_length t
             GROUP BY t.user_id, t.activity_date
@@ -153,9 +274,28 @@ def generate_query(stats_agg_col):
             t1.return_user,
             t2.num_users,
             t1.num_rooms,
-            t1.num_bullets,
             t1.daily_total_bet,
+
             t1.num_killed_bullets,
+            t1.num_killed_fish_low,
+            t1.num_killed_fish_medium,
+            t1.num_killed_fish_high,
+            t1.num_killed_fish_ultra,
+            t1.num_killed_fish_low * 1.0 / t1.num_killed_bullets AS killed_fish_low_ratio,
+            t1.num_killed_fish_medium * 1.0 / t1.num_killed_bullets AS killed_fish_medium_ratio,
+            t1.num_killed_fish_high * 1.0 / t1.num_killed_bullets AS killed_fish_high_ratio,
+            t1.num_killed_fish_ultra * 1.0 / t1.num_killed_bullets AS killed_fish_ultra_ratio,
+
+            t1.num_bullets,
+            t1.num_hits_fish_low,
+            t1.num_hits_fish_medium,
+            t1.num_hits_fish_high,
+            t1.num_hits_fish_ultra,
+            t1.num_hits_fish_low * 1.0 / t1.num_bullets AS hits_fish_low_ratio,
+            t1.num_hits_fish_medium * 1.0 / t1.num_bullets AS hits_fish_medium_ratio,
+            t1.num_hits_fish_high * 1.0 / t1.num_bullets AS hits_fish_high_ratio,
+            t1.num_hits_fish_ultra * 1.0 / t1.num_bullets AS hits_fish_ultra_ratio,
+            
             t1.total_profit,
             t1.max_profit,
             t1.rtp,
@@ -169,11 +309,30 @@ def generate_query(stats_agg_col):
             t3.num_streak_sessions,
             t3.avg_streak_length,
             t3.max_streak_length,
-            t3.min_streak_length
+            t3.min_streak_length,
+
+            t3.seconds_to_kill_fish,
+            t3.seconds_to_kill_fish_low,
+            t3.seconds_to_kill_fish_medium,
+            t3.seconds_to_kill_fish_high,
+            t3.seconds_to_kill_fish_ultra,
+
+            t3.bets_to_kill_fish,
+            t3.bets_to_kill_fish_low,
+            t3.bets_to_kill_fish_medium,
+            t3.bets_to_kill_fish_high,
+            t3.bets_to_kill_fish_ultra,
+
+            t4.max_kill_streak,
+            t4.max_kill_streak_low,
+            t4.max_kill_streak_medium,
+            t4.max_kill_streak_high,
+            t4.max_kill_streak_ultra
 
         FROM user_daily_stats AS t1
         INNER JOIN daily_stats AS t2 ON t1.activity_date = t2.activity_date AND t1.return_user = t2.return_user
         INNER JOIN user_session_stats AS t3 ON t1.activity_date = t3.activity_date AND t1.user_id = t3.user_id
+        INNER JOIN max_kill_streak_length AS t4 ON t1.activity_date = t4.activity_date AND t1.user_id = t4.user_id
         ORDER BY t1.activity_date, t1.user_id, t1.return_user
         ;
 
