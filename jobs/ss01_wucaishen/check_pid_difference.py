@@ -39,7 +39,7 @@ if __name__ == "__main__":
 
     data_loader = DataLoader(
         backend=AthenaBackend(
-            database="agfish",
+            database="ag_share_data",
             output_location=f"s3://{S3_BUCKET}/ds-data-ss01/product_id_pa",
         )
     )
