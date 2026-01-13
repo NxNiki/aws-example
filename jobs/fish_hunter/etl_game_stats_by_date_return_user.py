@@ -8,7 +8,7 @@ DATE_START = "2025-11-30"
 DATE_END = "2027-12-1"
 
 retention_days = 7
-streak_session_thresh = 60
+streak_session_thresh = 600
 streak_kill_thresh = 3  # nearly 10% of all killing intervals.
 
 
@@ -40,6 +40,7 @@ def generate_query(stats_agg_col):
             FROM public.bullet b
             WHERE
                 b.currency_type = 'CNY'
+                AND b.op_code not in ('B26', 'TST','TSB','TSO')
                 -- ---------------------------------------------------------
                 -- FAST FILTERING: Transform the INPUTS, not the COLUMN
                 -- ---------------------------------------------------------
@@ -114,10 +115,16 @@ def generate_query(stats_agg_col):
             user_id,
             activity_date,
             MAX(global_streak_len) AS max_kill_streak,
-            MAX(CASE WHEN fish_type = 'low' THEN type_streak_len ELSE 0 END) AS max_kill_streak_low,
-            MAX(CASE WHEN fish_type = 'medium' THEN type_streak_len ELSE 0 END) AS max_kill_streak_medium,
-            MAX(CASE WHEN fish_type = 'high' THEN type_streak_len ELSE 0 END) AS max_kill_streak_high,
-            MAX(CASE WHEN fish_type = 'ultra' THEN type_streak_len ELSE 0 END) AS max_kill_streak_ultra
+            MAX(CASE WHEN fish_type = 'low' THEN type_streak_len END) AS max_kill_streak_low,
+            MAX(CASE WHEN fish_type = 'medium' THEN type_streak_len END) AS max_kill_streak_medium,
+            MAX(CASE WHEN fish_type = 'high' THEN type_streak_len END) AS max_kill_streak_high,
+            MAX(CASE WHEN fish_type = 'ultra' THEN type_streak_len END) AS max_kill_streak_ultra,
+
+            AVG(global_streak_len) AS avg_kill_streak,
+            AVG(CASE WHEN fish_type = 'low' THEN type_streak_len END) AS avg_kill_streak_low,
+            AVG(CASE WHEN fish_type = 'medium' THEN type_streak_len END) AS avg_kill_streak_medium,
+            AVG(CASE WHEN fish_type = 'high' THEN type_streak_len END) AS avg_kill_streak_high,
+            AVG(CASE WHEN fish_type = 'ultra' THEN type_streak_len END) AS avg_kill_streak_ultra
         FROM streak_lengths
         GROUP BY user_id, activity_date
         ),
@@ -327,7 +334,13 @@ def generate_query(stats_agg_col):
             t4.max_kill_streak_low,
             t4.max_kill_streak_medium,
             t4.max_kill_streak_high,
-            t4.max_kill_streak_ultra
+            t4.max_kill_streak_ultra,
+
+            t4.avg_kill_streak,
+            t4.avg_kill_streak_low,
+            t4.avg_kill_streak_medium,
+            t4.avg_kill_streak_high,
+            t4.avg_kill_streak_ultra
 
         FROM user_daily_stats AS t1
         INNER JOIN daily_stats AS t2 ON t1.activity_date = t2.activity_date AND t1.return_user = t2.return_user

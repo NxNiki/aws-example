@@ -34,6 +34,7 @@ def generate_query(stats_agg_col):
             FROM public.bullet b
             WHERE
                 b.currency_type = 'CNY'
+                AND b.op_code not in ('B26', 'TST','TSB','TSO')
                 -- AND DATEADD(day, {return_user_days}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at))  >= '{DATE_START}'
                 -- AND DATEADD(day, -{retention_days}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at))  < '{DATE_END}'
 

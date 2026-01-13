@@ -245,10 +245,11 @@ class RedshiftBackend(DatabaseBackend):
 
 # ---------------- Athena Backend ----------------
 class AthenaBackend(DatabaseBackend):
-    def __init__(self, database, output_location, region="us-west-2"):
+    def __init__(self, database, output_location, region="us-west-2", ctas_approach=False):
         self.database = database
         self.output_location = output_location
         self.session = boto3.Session(region_name=region)
+        self.ctas_approach = ctas_approach
 
     def execute(self, query, params=None):
 
@@ -263,11 +264,12 @@ class AthenaBackend(DatabaseBackend):
         logger.info("Executing Athena query via awswrangler...")
 
         # Wrangler handles submission, polling (wait loop), and result fetching automatically
+        # ctas_approach=True uses CREATE TABLE AS SELECT to avoid 32MB row size limit
         df = wr.athena.read_sql_query(
             sql=query,
             database=self.database,
             s3_output=self.output_location,
-            ctas_approach=False,  # Standard query, set to True if results are massive
+            ctas_approach=self.ctas_approach,
             boto3_session=self.session,
         )
         return df

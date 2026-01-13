@@ -1,10 +1,11 @@
-title: "Fish Hunter Analytics (return user)"
+# WIP... Not finished yet.
+
+title: "Fish Hunter Analytics (retention by time and fish type)"
 
 stats_by_date: 
   files: 
-    day: [
-      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_date_return_user.parquet",
-      # "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_date_pa.parquet",
+    all_time: [
+      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/retention_by_time_fishtype.parquet",
     ]
 
     # week: [
