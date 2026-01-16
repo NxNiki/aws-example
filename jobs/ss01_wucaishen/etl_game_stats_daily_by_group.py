@@ -79,9 +79,9 @@ query = dedent(
         SELECT
             t1.activity_date,
             t1.ai_group,
-            COUNT(t1.user_id) AS day0_num_users,
-            COUNT(t2.user_id) AS day1_num_users,
-            COUNT(t3.user_id) AS day3_num_users
+            COUNT(distinct t1.user_id) AS day0_num_users,
+            COUNT(distinct t2.user_id) AS day1_num_users,
+            COUNT(distinct t3.user_id) AS day3_num_users
         FROM
             daily_login AS t1
         LEFT JOIN daily_login AS t2
