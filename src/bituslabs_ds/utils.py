@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import yaml
 from numpy.core.defchararray import upper
+from pandas.api.types import is_numeric_dtype
 from scipy.stats import zscore
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.preprocessing import power_transform
@@ -275,9 +276,12 @@ def keep_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _transform_column(data_col):
-    if np.issubdtype(data_col.dtype, np.number):
+    col_name = data_col.name
+    # Convert all pandas extension types to their underlying numpy dtype for correct type checking
+    # For pandas extension dtypes (e.g., Int64), use pandas.api.types to check if numeric
+    dtype = data_col.dtype
+    if is_numeric_dtype(dtype):
         data_col = data_col.astype(float).copy()
-        col_name = data_col.name
         data_col = power_transform(data_col.to_frame())
         return (col_name, data_col)
     else:

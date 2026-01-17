@@ -178,6 +178,9 @@ class ClusterAnalysisPipeline:
     def get_scaler():
         return StandardScaler()
 
+    def get_data_types(self, data_source: str) -> Dict[str, str]:
+        return self._config["data_loader"][data_source].get("data_types", {})
+
     def load_raw_data(self, data_label, reload: bool = False) -> pd.DataFrame:
         """
         load preprocessed data from s3.
@@ -188,13 +191,13 @@ class ClusterAnalysisPipeline:
             output_file = self._config["data_loader"]["attach_data"]["local_cache"]
             columns = self._config["data_loader"]["attach_data"]["columns_to_read"]
             row_filters = self._config["data_loader"]["attach_data"]["row_filters"]
-            data_types = self._config["data_loader"]["attach_data"].get("data_types", {})
+            data_types = self.get_data_types("attach_data")
         elif data_label == "cluster_data":
             files = self._cluster_data_files
             output_file = self._config["data_loader"]["cluster_data"]["local_cache"]
             columns = self.key_features + self.normal_features + self.skewed_features
             row_filters = self._config["data_loader"]["cluster_data"]["row_filters"]
-            data_types = self._config["data_loader"]["cluster_data"].get("data_types", {})
+            data_types = self.get_data_types("cluster_data")
 
         if output_file.endswith(".csv"):
             raw_output_file = output_file.replace(".csv", "_raw.csv")
@@ -224,7 +227,7 @@ class ClusterAnalysisPipeline:
 
         if not reload and os.path.exists(local_cache_path):
             logger.info(f"read local attach data: {local_cache_path}")
-            data = read_local_cache(local_cache_path)
+            data = read_local_cache(local_cache_path, data_types=self.get_data_types("attach_data"))
         else:
             data = self.load_raw_data(data_label="attach_data")
             data["merge_date"] = pd.to_datetime(data["billtime"]).dt.strftime("%Y_%m_%d")
@@ -255,7 +258,7 @@ class ClusterAnalysisPipeline:
 
         if not reload and os.path.exists(local_cache_path):
             logger.info(f"read local attach data: {local_cache_path}")
-            data = read_local_cache(local_cache_path)
+            data = read_local_cache(local_cache_path, data_types=self.get_data_types("cluster_data"))
         else:
             data = self.load_raw_data(data_label="cluster_data")
             data = data[data["group_num"] == self.session_length]
@@ -369,13 +372,14 @@ class ClusterAnalysisPipeline:
 
     def _plot_feature_importance(self, feature_importance: pd.DataFrame):
 
-        plt.figure(figsize=(8, 10))
+        plt.figure(figsize=(9, 12))
         colors = sns.color_palette("viridis", len(feature_importance))
         sns.barplot(x="Importance", y="Feature", hue="Feature", data=feature_importance, palette=colors, legend=False)
         plt.title("Feature Importance Rank", fontsize=16)
         plt.xlabel("Importance Score", fontsize=12)
         plt.ylabel("Feature", fontsize=12)
         plt.grid(axis="x", linestyle="--", alpha=0.6)
+        plt.tight_layout(rect=[0.1, 0, 1, 1])  # Increase left margin to show all y-tick labels
         plt.savefig(self.output_path / "figures" / "Feature Importance Rank.png")
         plt.close()
 

@@ -265,18 +265,19 @@ def list_s3_files(bucket: str, prefix: str, pattern: Optional[str] = None) -> Li
     :return: List of matching s3 keys (not including bucket)
     """
     logger.info(f"Listing S3 files in: {bucket}/{prefix}, with pattern: {pattern}")
-    matching_keys = []
     paginator = get_s3_client().get_paginator("list_objects_v2")
+    matching_keys = []
 
-    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-        for obj in page.get("Contents", []):
-            key = obj["Key"]
-            if pattern is None or re.search(pattern, key):
-                s3_uri = f"s3://{bucket}/{key}"
-                matching_keys.append(s3_uri)
-                logging.info(f"Found {s3_uri}")
+    if bucket:
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                key = obj["Key"]
+                if pattern is None or re.search(pattern, key):
+                    s3_uri = f"s3://{bucket}/{key}"
+                    matching_keys.append(s3_uri)
+                    logging.info(f"Found {s3_uri}")
 
-    logger.info(f"Found {len(matching_keys)} S3 keys")
+        logger.info(f"Found {len(matching_keys)} S3 keys")
     return matching_keys
 
 

@@ -36,7 +36,7 @@ def feature_selection(data, cluster_pipeline):
     features = cluster_pipeline.normal_features + cluster_pipeline.skewed_features
     viz = DataVisualizer(data_transformed[features])
     viz.create_figure(fig_title=f"Correlation of features: {cluster_pipeline.project_name}", fig_size=(20, 17))
-    viz.add_correlation_heatmap(annot=False, cmap="coolwarm")
+    viz.add_correlation_heatmap(value_cols=features, annot=False, cmap="coolwarm")
     viz.figure.subplots_adjust(left=0.15, bottom=0.15, top=0.90, right=0.97)
     # viz.display()
     viz.save(str(cluster_pipeline.output_path / "figures" / f"{cluster_pipeline.project_name}_correlation.png"))
@@ -103,8 +103,9 @@ def main(config_path: str):
 
 if __name__ == "__main__":
 
-    project = "deepdive"
+    # project = "deepdive"
     # project = "wucaishen"
+    project = "ss01"
 
     current_path = os.path.abspath(os.path.dirname(__file__))
     parser = argparse.ArgumentParser(description="cluster analysis pipeline")

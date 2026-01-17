@@ -1212,13 +1212,20 @@ class DataVisualizer:
             The axes with heatmaps added
         """
 
-        dropped_cols = heatmap_data.columns[heatmap_data.isna().any()].tolist()
-        if dropped_cols:
-            print(f"Dropping columns with NA values for heatmap: {dropped_cols}")
-        heatmap_data = heatmap_data.dropna(axis=1)
-        if heatmap_data.empty:
-            raise ValueError("No numeric columns left after dropping NA values.")
+        # Only drop columns (or rows) that are all NA, otherwise use available non-NaN pairs for correlation.
+        completely_nan_cols = heatmap_data.columns[heatmap_data.isna().all()].tolist()
+        completely_nan_rows = heatmap_data.index[heatmap_data.isna().all(axis=1)].tolist()
+        if completely_nan_cols:
+            print(f"Dropping columns with all NA values for heatmap: {completely_nan_cols}")
+            heatmap_data = heatmap_data.drop(columns=completely_nan_cols)
+        if completely_nan_rows:
+            print(f"Dropping rows with all NA values for heatmap: {completely_nan_rows}")
+            heatmap_data = heatmap_data.drop(index=completely_nan_rows)
 
+        if heatmap_data.empty:
+            raise ValueError("No numeric columns left after dropping all-NA columns/rows for correlation heatmap.")
+
+        # Pandas' corr() computes correlations using pairwise complete observations (ignoring NaNs).
         correlation_matrix = heatmap_data.corr(method=method)
 
         heatmap = sns.heatmap(
@@ -1232,8 +1239,16 @@ class DataVisualizer:
             axis.set_title(title, fontsize=16, pad=20)
         axis.set_xlabel(None)  # type: ignore[arg-type]
         axis.set_ylabel(None)  # type: ignore[arg-type]
-        plt.setp(axis.get_xticklabels(), rotation=30, ha="right", fontsize=12)
-        plt.setp(axis.get_yticklabels(), rotation=0, fontsize=12)
+        # Ensure all x and y tick labels are displayed
+        axis.set_xticks(range(len(correlation_matrix.columns)))
+        axis.set_xticklabels(correlation_matrix.columns, rotation=90, ha="right", fontsize=10)
+        axis.set_yticks(range(len(correlation_matrix.index)))
+        axis.set_yticklabels(correlation_matrix.index, rotation=0, fontsize=10)
+
+        # Add more space at the bottom so x tick labels are fully displayed
+        fig = axis.get_figure()
+        bottom_pad = 0.25  # adjust as needed
+        fig.subplots_adjust(bottom=bottom_pad)
 
         return axis
 
