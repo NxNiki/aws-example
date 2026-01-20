@@ -105,7 +105,8 @@ if __name__ == "__main__":
 
     # project = "deepdive"
     # project = "wucaishen"
-    project = "ss01"
+    # project = "ss01"
+    project = "ss01_only_normalized"
 
     current_path = os.path.abspath(os.path.dirname(__file__))
     parser = argparse.ArgumentParser(description="cluster analysis pipeline")

@@ -1,7 +1,7 @@
 # Deepdive Cluster Analysis Configuration
 # This file contains configuration specific to the deepdive clustering project
 
-project_name: "ss01_2026"  # Current analysis environment
+project_name: "ss01_2026_normalized_features"  # Current analysis environment
 work_dir: "output_ss01_wucaishen"  # Base working directory, where local cache of the input data will be saved.
 s3_prefix: ""
 
@@ -149,18 +149,22 @@ data_loader:
       - "user_id"
       - "session_group"
       - "agg_group"
+      - "min_created_at"
       - "bet_amount"
       - "payout"
-      - "basepoint"
+      - "balance_after_bet"
       - "delta_t_seconds"
-      - "delta_bet"
-      - "delta_profit"
+      - "delta_bet_amount"
+      - "profit"
       - "delta_payout"
       - "streak"
       - "win_streak"
       - "lose_streak"
 
+    cluster_stats_columns: ["user_id", "min_created_at", "balance_after_bet", "bet_amount", "fg_rounds"]
+
   merge_on: ["user_id", "session_group", "agg_group"]  # Column used to attach cluster index to attach_data.
+
 
 output:
   bucket: "bituslabs-team-ai"  # S3 bucket for output data
@@ -182,73 +186,73 @@ features:
     - "rtp_p25"
     - "rtp_median"
     - "rtp_p75"
-    - "bet_amount_min"
-    - "bet_amount_max"
+    # - "bet_amount_min"
+    # - "bet_amount_max"
     # - "bet_amount_std"
     - "bet_amount_cv"
-    - "bet_amount_avg"
-    - "bet_amount_p25"
-    - "bet_amount_median"
-    - "bet_amount_p75"
+    # - "bet_amount_avg"
+    # - "bet_amount_p25"
+    # - "bet_amount_median"
+    # - "bet_amount_p75"
     - "bet_amount_drawdown_ratio"
     - "bet_amount_spike_ratio"
-    - "delta_bet_amount_min"
-    - "delta_bet_amount_max"
+    # - "delta_bet_amount_min"
+    # - "delta_bet_amount_max"
     # - "delta_bet_amount_std"
     - "delta_bet_amount_cv"
-    - "delta_bet_amount_avg"
-    - "delta_bet_amount_p25"
-    - "delta_bet_amount_median"
-    - "delta_bet_amount_p75"
+    # - "delta_bet_amount_avg"
+    # - "delta_bet_amount_p25"
+    # - "delta_bet_amount_median"
+    # - "delta_bet_amount_p75"
     - "delta_bet_amount_drawdown_ratio"
     - "delta_bet_amount_spike_ratio"
-    - "accum_pos_delta_bet_amount"
-    - "accum_neg_delta_bet_amount"
+    # - "accum_pos_delta_bet_amount"
+    # - "accum_neg_delta_bet_amount"
     - "accum_pos_delta_bet_amount_ratio"
     - "accum_neg_delta_bet_amount_ratio"
-    - "balance_after_bet_min"
-    - "balance_after_bet_max"
-    - "balance_after_bet_avg"
-    - "balance_after_bet_p25"
-    - "balance_after_bet_median"
-    - "balance_after_bet_p75"
+    # - "balance_after_bet_min"
+    # - "balance_after_bet_max"
+    # - "balance_after_bet_avg"
+    # - "balance_after_bet_p25"
+    # - "balance_after_bet_median"
+    # - "balance_after_bet_p75"
     # - "balance_after_bet_std"
     - "balance_after_bet_cv"
     - "balance_after_bet_drawdown_ratio"
     - "balance_after_bet_spike_ratio"
-    - "payout_min"
-    - "payout_max"
-    - "payout_avg"
-    - "payout_p25"
-    - "payout_median"
-    - "payout_p75"
+    # - "payout_min"
+    # - "payout_max"
+    # - "payout_avg"
+    # - "payout_p25"
+    # - "payout_median"
+    # - "payout_p75"
     # - "payout_std"
     - "payout_cv"
     - "payout_drawdown_ratio"
     - "payout_spike_ratio"
-    - "delta_payout_min"
-    - "delta_payout_max"
-    - "delta_payout_avg"
-    - "delta_payout_p25"
-    - "delta_payout_median"
-    - "delta_payout_p75"
+    # - "delta_payout_min"
+    # - "delta_payout_max"
+    # - "delta_payout_avg"
+    # - "delta_payout_p25"
+    # - "delta_payout_median"
+    # - "delta_payout_p75"
     # - "delta_payout_std"
     - "delta_payout_cv"
     - "delta_payout_drawdown_ratio"
     - "delta_payout_spike_ratio"
-    - "profit_min"
-    - "profit_max"
-    - "profit_avg"
-    - "profit_p25"
-    - "profit_median"
-    - "profit_p75"
+    # - "profit_min"
+    # - "profit_max"
+    # - "profit_avg"
+    # - "profit_p25"
+    # - "profit_median"
+    # - "profit_p75"
     # - "profit_std"
     - "profit_cv"
     - "min_profit_ratio"
     - "max_profit_ratio"
-    - "accum_pos_profit"
+    # - "accum_pos_profit"
     - "accum_pos_profit_ratio"
-    - "accum_neg_profit"
+    # - "accum_neg_profit"
     - "accum_neg_profit_ratio"
     # - "delta_t_seconds_avg"
     # - "delta_t_seconds_std"
@@ -286,10 +290,10 @@ features:
     - "lose_streak_p75"
     - "lose_streak_std"
     - "num_deposit"
-    - "accum_deposit"
+    # - "accum_deposit"
     - "accum_deposit_ratio"
     - "num_withdraw"
-    - "accum_withdraw"
+    # - "accum_withdraw"
     - "accum_withdraw_ratio"
   
   normal_features:  # Features that don't need transformation
@@ -309,15 +313,15 @@ cluster_analysis:
   random_state: 42  # Random state for reproducible results
   n_init: 10  # Number of initializations for K-means algorithm
   n_clusters: 3  # Default number of clusters for K-means
-  top_features: 45  # Default number of top features to use
+  top_features: 48  # Default number of top features to use
 
 pipeline:
-  elbow_method: true  # Run elbow method analysis
+  elbow_method: false  # Run elbow method analysis
   cluster_analysis: true  # Run cluster analysis with selected features and n_clusters  
   fit_cluster_model: false  # Apply trained model to new data
-  attach_cluster_label: false  # Attach cluster indices to original data
-  get_cluster_stats: false 
-  upload_result_to_s3: false  
+  attach_cluster_label: true  # Attach cluster indices to original data
+  get_cluster_stats: true 
+  upload_result_to_s3: true 
 
 
 

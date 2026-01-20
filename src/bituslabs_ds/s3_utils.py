@@ -303,6 +303,7 @@ def read_local_cache(
         raise ValueError(f"read_local_cache: unsupport file type: {local_cache_path}")
 
     logger.info("read data finished.")
+    logger.info(data.head(5))
     return data
 
 
