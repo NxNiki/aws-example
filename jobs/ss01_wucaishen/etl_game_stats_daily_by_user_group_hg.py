@@ -9,6 +9,8 @@ from bituslabs_ds.etl import DataLoader, RedshiftBackend
 # TODO:
 # add max/min user daily profit
 
+DATE_START_HOUR = 6
+
 
 def generate_query(stats_agg_col: str):
 
@@ -23,10 +25,10 @@ def generate_query(stats_agg_col: str):
             t.actual_payout AS payout,
             t.bet_type,
             t.actual_payout - t.bet_amount AS profit,
-            TRUNC(DATEADD(hour, -6, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS activity_date,
-            CAST(DATE_TRUNC('week', DATEADD(hour, -6, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_week,
-            CAST(DATE_TRUNC('month', DATEADD(hour, -6, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_month,
-            t.partition_ab[0] AS ab_group_id,
+            TRUNC(DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS activity_date,
+            CAST(DATE_TRUNC('week', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_week,
+            CAST(DATE_TRUNC('month', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_month,
+            -- t.partition_ab[0] AS ab_group_id,
             t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.created_at) AS delta_t,
             COUNT(t.user_id) OVER (PARTITION BY t.user_id) AS user_bet_count,
             CASE
@@ -46,11 +48,11 @@ def generate_query(stats_agg_col: str):
 
         user_bets_group AS (
             SELECT
-                t.created_at,
                 t.activity_date,
                 t.activity_week,
                 t.activity_month,
                 t.user_id,
+                t.created_at,
                 t.bet_amount,
                 t.payout,
                 t.bet_type,
@@ -58,33 +60,9 @@ def generate_query(stats_agg_col: str):
                 t.delta_t,
                 t.user_bet_count,
                 t.mathtable_change,
-                CASE
-                    WHEN t.ab_group_id != 'jojpin-9mokha-rexQug' THEN 'Default'
-                    ELSE 'AI'
-                END AS ai_group
+                CAST('HG' AS VARCHAR(10)) AS ai_group
             FROM
                 user_bets AS t
-
-            UNION ALL
-
-            SELECT
-                t.created_at,
-                t.activity_date,
-                t.activity_week,
-                t.activity_month,
-                t.user_id,
-                t.bet_amount,
-                t.payout,
-                t.bet_type,
-                t.profit,
-                t.delta_t,
-                t.user_bet_count,
-                t.mathtable_change,
-                t.mathtable AS ai_group
-            FROM
-                user_bets AS t
-            WHERE
-                t.ab_group_id = 'jojpin-9mokha-rexQug'
         ),
 
         daily_login AS (
@@ -185,6 +163,7 @@ def generate_query(stats_agg_col: str):
             gs.total_bet,
             gs.total_bet_bg,
             gs.total_bet * 1.0 / NULLIF(gs.num_active_users, 0) AS total_bet_per_user,
+            gs.total_bet * 1.0 / gs.total_num_bets AS avg_bet_amount,
 
             gs.total_payout,
             gs.total_payout_bg,
@@ -205,6 +184,7 @@ def generate_query(stats_agg_col: str):
             us.user_num_bets_fg,
 
             us.user_total_bet,
+            us.user_total_bet * 1.0 / us.user_num_bets AS user_avg_bet_amount,
 
             -- free game ratio
             us.user_num_bets_fg * 1.0 / NULLIF(us.user_num_bets, 0) AS user_fg_ratio,
@@ -250,6 +230,7 @@ def execute_query(redshift_loader, output_file, stats_agg_col):
                 "num_active_users",
                 "user_num_bets",
                 "user_total_bet",
+                "user_avg_bet_amount",
                 "rtp",
                 "rtp_bg",
                 "day0_num_users",
@@ -274,8 +255,8 @@ if __name__ == "__main__":
         )
     )
 
-    execute_query(redshift_loader, "stats_by_date_user", "activity_date")
-    execute_query(redshift_loader, "stats_by_week_user", "activity_week")
-    execute_query(redshift_loader, "stats_by_month_user", "activity_month")
+    execute_query(redshift_loader, "stats_by_date_user_hg", "activity_date")
+    execute_query(redshift_loader, "stats_by_week_user_hg", "activity_week")
+    execute_query(redshift_loader, "stats_by_month_user_hg", "activity_month")
 
     redshift_loader.close()

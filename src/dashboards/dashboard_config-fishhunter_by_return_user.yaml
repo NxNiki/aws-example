@@ -1,0 +1,84 @@
+title: "Fish Hunter Analytics (return user)"
+
+stats_by_date: 
+  files: 
+    day: [
+      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_date_return_user.parquet",
+      # "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_date_pa.parquet",
+    ]
+
+    # week: [
+    #   "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_week.parquet",
+    #   "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_week_pa.parquet",
+    # ]
+
+    # month: [
+    #   "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_month.parquet",
+    #   "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_month_pa.parquet",
+
+    # ]
+
+  group_col: "return_user"
+  date_col: "activity_date"
+
+  group1_label: "DAU and Retention"
+  group1_columns: [
+    "num_users",
+    "num_users_killed_fish",
+    "num_users_pos_profit",
+  ]
+
+  group2_label: "Bet and RTP"
+  group2_columns: [
+    "rtp",
+    "daily_total_bet",
+    "num_bullets",
+    "num_rooms",
+    "num_streak_sessions",
+    "avg_streak_length",
+    "max_streak_length",
+    "min_streak_length",
+    "seconds_to_kill_fish",
+    "seconds_to_kill_fish_low",
+    "seconds_to_kill_fish_medium",
+    "seconds_to_kill_fish_high",
+    "seconds_to_kill_fish_ultra",
+    "bets_to_kill_fish",
+    "bets_to_kill_fish_low",
+    "bets_to_kill_fish_medium",
+    "bets_to_kill_fish_high",
+    "bets_to_kill_fish_ultra",
+  ]
+
+  group3_label: "Profit and fish type"
+  group3_columns: [
+    "total_profit",
+    "max_profit",
+    "profit_coef_var",
+    "killed_fish_low_ratio",
+    "killed_fish_medium_ratio",
+    "killed_fish_high_ratio",
+    "killed_fish_ultra_ratio",
+    "hits_fish_low_ratio",
+    "hits_fish_medium_ratio",
+    "hits_fish_high_ratio",
+    "hits_fish_ultra_ratio",
+    "max_kill_streak",
+    "max_kill_streak_low",
+    "max_kill_streak_medium",
+    "max_kill_streak_high",
+    "max_kill_streak_ultra",
+    "avg_kill_streak",
+    "avg_kill_streak_low",
+    "avg_kill_streak_medium",
+    "avg_kill_streak_high",
+    "avg_kill_streak_ultra",
+  ]
+
+stats_by_bet: 
+  files: [
+
+  ]
+
+  group_col: "session_group"
+

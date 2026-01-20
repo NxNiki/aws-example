@@ -25,15 +25,15 @@ def generate_query(stats_agg_col):
                 b.hunted AS killed,
                 b.cus_account AS profit,
                 -- Convert to Beijing time and truncate to date object 
-                DATE_TRUNC('day', b.billtime AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Shanghai') AS activity_date,
-                DATE_TRUNC('week', b.billtime AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Shanghai') AS activity_week,
-                DATE_TRUNC('month', b.billtime AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Shanghai') AS activity_month
+                DATE_TRUNC('day', b.billtime AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Shanghai' - INTERVAL '6' HOUR) AS activity_date,
+                DATE_TRUNC('week', b.billtime AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Shanghai' - INTERVAL '6' HOUR) AS activity_week,
+                DATE_TRUNC('month', b.billtime AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Shanghai' - INTERVAL '6' HOUR) AS activity_month
             FROM agfish.hunterorders b
             WHERE
                 b.currency = 'CNY'
                 -- avoid converting billtime to increase speed
-                AND b.billtime >= (TIMESTAMP '{DATE_START} 00:00:00' AT TIME ZONE 'Asia/Shanghai' AT TIME ZONE 'UTC') - INTERVAL '{return_user_days}' DAY
-                AND b.billtime < (TIMESTAMP '{DATE_END} 00:00:00' AT TIME ZONE 'Asia/Shanghai' AT TIME ZONE 'UTC') + INTERVAL '{retention_days}' DAY
+                AND b.billtime >= (TIMESTAMP '{DATE_START} 06:00:00' AT TIME ZONE 'Asia/Shanghai' AT TIME ZONE 'UTC') - INTERVAL '{return_user_days}' DAY
+                AND b.billtime < (TIMESTAMP '{DATE_END} 06:00:00' AT TIME ZONE 'Asia/Shanghai' AT TIME ZONE 'UTC') + INTERVAL '{retention_days}' DAY
                 AND b.gametype = 'HM3D'
                 AND b.account != 0
                 AND b.fishcost != 0

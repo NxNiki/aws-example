@@ -122,6 +122,10 @@ class ClusterAnalysisPipeline:
         return val
 
     @property
+    def cluster_stats_columns(self):
+        return self._config["data_loader"]["attach_data"]["cluster_stats_columns"]
+
+    @property
     def run_elbow_method(self):
         return self._config["pipeline"]["elbow_method"]
 
@@ -161,7 +165,7 @@ class ClusterAnalysisPipeline:
 
     @property
     def s3_prefix(self):
-        return self._config.get("s3_prefix", "cluster_analysis_result")
+        return self._config.get("output", {}).get("prefix", "cluster_analysis_result")
 
     def get_transform_columns(self, data: pd.DataFrame) -> Tuple[List[str], List[int]]:
 
@@ -178,6 +182,9 @@ class ClusterAnalysisPipeline:
     def get_scaler():
         return StandardScaler()
 
+    def get_data_types(self, data_source: str) -> Dict[str, str]:
+        return self._config["data_loader"][data_source].get("data_types", {})
+
     def load_raw_data(self, data_label, reload: bool = False) -> pd.DataFrame:
         """
         load preprocessed data from s3.
@@ -188,13 +195,13 @@ class ClusterAnalysisPipeline:
             output_file = self._config["data_loader"]["attach_data"]["local_cache"]
             columns = self._config["data_loader"]["attach_data"]["columns_to_read"]
             row_filters = self._config["data_loader"]["attach_data"]["row_filters"]
-            data_types = self._config["data_loader"]["attach_data"].get("data_types", {})
+            data_types = self.get_data_types("attach_data")
         elif data_label == "cluster_data":
             files = self._cluster_data_files
             output_file = self._config["data_loader"]["cluster_data"]["local_cache"]
             columns = self.key_features + self.normal_features + self.skewed_features
             row_filters = self._config["data_loader"]["cluster_data"]["row_filters"]
-            data_types = self._config["data_loader"]["cluster_data"].get("data_types", {})
+            data_types = self.get_data_types("cluster_data")
 
         if output_file.endswith(".csv"):
             raw_output_file = output_file.replace(".csv", "_raw.csv")
@@ -224,7 +231,7 @@ class ClusterAnalysisPipeline:
 
         if not reload and os.path.exists(local_cache_path):
             logger.info(f"read local attach data: {local_cache_path}")
-            data = read_local_cache(local_cache_path)
+            data = read_local_cache(local_cache_path, data_types=self.get_data_types("attach_data"))
         else:
             data = self.load_raw_data(data_label="attach_data")
             data["merge_date"] = pd.to_datetime(data["billtime"]).dt.strftime("%Y_%m_%d")
@@ -255,7 +262,7 @@ class ClusterAnalysisPipeline:
 
         if not reload and os.path.exists(local_cache_path):
             logger.info(f"read local attach data: {local_cache_path}")
-            data = read_local_cache(local_cache_path)
+            data = read_local_cache(local_cache_path, data_types=self.get_data_types("cluster_data"))
         else:
             data = self.load_raw_data(data_label="cluster_data")
             data = data[data["group_num"] == self.session_length]
@@ -369,13 +376,14 @@ class ClusterAnalysisPipeline:
 
     def _plot_feature_importance(self, feature_importance: pd.DataFrame):
 
-        plt.figure(figsize=(8, 10))
+        plt.figure(figsize=(9, 12))
         colors = sns.color_palette("viridis", len(feature_importance))
         sns.barplot(x="Importance", y="Feature", hue="Feature", data=feature_importance, palette=colors, legend=False)
         plt.title("Feature Importance Rank", fontsize=16)
         plt.xlabel("Importance Score", fontsize=12)
         plt.ylabel("Feature", fontsize=12)
         plt.grid(axis="x", linestyle="--", alpha=0.6)
+        plt.tight_layout(rect=[0.1, 0, 1, 1])  # Increase left margin to show all y-tick labels
         plt.savefig(self.output_path / "figures" / "Feature Importance Rank.png")
         plt.close()
 
@@ -794,42 +802,31 @@ class ClusterAnalysisPipeline:
         for cluster_index in range(self.n_clusters):
             data = read_local_cache(
                 local_cache_path=self.output_path / f"output/enriched_data_cluster_{cluster_index}.parquet",
-                columns=["loginname", "billtime", "basepoint", "account", "slottype"],
+                columns=self.cluster_stats_columns,
             )
 
+            # Only set columns if the number of columns matches expected
+            expected_columns = ["loginname", "billtime", "basepoint", "account", "fg_rounds"]
+            if len(data.columns) == len(expected_columns):
+                data.columns = expected_columns
+            else:
+                logger.error(
+                    f"Number of columns in cluster data ({len(data.columns)}) does not match expected ({len(expected_columns)}). Skipping column rename."
+                )
             scaler.fit(data["basepoint"].to_frame())
-
-            _basepoint_clean = data["basepoint"].dropna()
-            # remove samples in free spins to match calculation in GAIL model:
-            _basepoint_clean_non_free_spin = data.loc[data["slottype"] != 2, "basepoint"].dropna()
+            _basepoint_clean = data["basepoint"].dropna().astype(float)
 
             stats = {
-                "basepoint_mean": _basepoint_clean_non_free_spin.mean(),
-                "basepoint_min": _basepoint_clean_non_free_spin.min(),
-                "basepoint_max": _basepoint_clean_non_free_spin.max(),
-                "basepoint_p5": (
-                    np.percentile(_basepoint_clean_non_free_spin, 5)
-                    if _basepoint_clean_non_free_spin.size > 0
-                    else None
-                ),
-                "basepoint_p25": (
-                    np.percentile(_basepoint_clean_non_free_spin, 25)
-                    if _basepoint_clean_non_free_spin.size > 0
-                    else None
-                ),
-                "basepoint_p75": (
-                    np.percentile(_basepoint_clean_non_free_spin, 75)
-                    if _basepoint_clean_non_free_spin.size > 0
-                    else None
-                ),
-                "basepoint_p95": (
-                    np.percentile(_basepoint_clean_non_free_spin, 95)
-                    if _basepoint_clean_non_free_spin.size > 0
-                    else None
-                ),
-                "basepoint_median": _basepoint_clean_non_free_spin.median(),
-                "basepoint_skewness": skew(_basepoint_clean_non_free_spin),
-                "basepoint_std": _basepoint_clean_non_free_spin.std(),
+                "basepoint_mean": _basepoint_clean.mean(),
+                "basepoint_min": _basepoint_clean.min(),
+                "basepoint_max": _basepoint_clean.max(),
+                "basepoint_p5": (np.percentile(_basepoint_clean, 5) if _basepoint_clean.size > 0 else None),
+                "basepoint_p25": (np.percentile(_basepoint_clean, 25) if _basepoint_clean.size > 0 else None),
+                "basepoint_p75": (np.percentile(_basepoint_clean, 75) if _basepoint_clean.size > 0 else None),
+                "basepoint_p95": (np.percentile(_basepoint_clean, 95) if _basepoint_clean.size > 0 else None),
+                "basepoint_median": _basepoint_clean.median(),
+                "basepoint_skewness": skew(_basepoint_clean),
+                "basepoint_std": _basepoint_clean.std(),
                 "basepoint_count": len(data["basepoint"]),
                 "basepoint_nan_count": len(data["basepoint"]) - len(_basepoint_clean),
                 "basepoint_nan_ratio": (len(data["basepoint"]) - len(_basepoint_clean)) / len(data["basepoint"]),
@@ -840,14 +837,14 @@ class ClusterAnalysisPipeline:
                 "account_counter": Counter(data["account"]),
             }
 
-            # For each loginname, select "slottype" from their earliest "billtime"
+            # For each loginname, select "fg_rounds" from their earliest "billtime"
             first_slottype = (
                 data.sort_values(["loginname", "billtime"])
                 .groupby("loginname", as_index=False)
-                .first()[["loginname", "slottype"]]
+                .first()[["loginname", "fg_rounds"]]
             )
-            slottype_ratio = first_slottype["slottype"].value_counts(normalize=False).to_dict()
-            stats["slottype_ratio"] = slottype_ratio
+            fg_rounds_ratio = first_slottype["fg_rounds"].value_counts(normalize=False).to_dict()
+            stats["fg_rounds_ratio"] = fg_rounds_ratio
 
             cluster_stats[f"cluster_{cluster_index}"] = stats
 

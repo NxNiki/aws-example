@@ -12,26 +12,19 @@ query = dedent(
     WITH user_bets AS (
     SELECT
         t.user_id,
-        m.mathtable,
+        t.script_id AS mathtable,
         t.bet_amount,
         t.actual_payout AS payout,
         t.bet_type,
         t.actual_payout - t.bet_amount AS profit,
-        TRUNC(CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at)) AS activity_date,
+        TRUNC(DATEADD(hour, -6, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS activity_date,
         t.partition_ab[0] AS ab_group_id,
         t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.created_at) AS delta_t,
         COUNT(t.user_id) OVER (PARTITION BY t.user_id) AS user_bet_count
     FROM
         public.fct_bet_orders AS t
-    LEFT JOIN
-        public.dim_math_talbes AS m
-        ON
-            t.user_id = m.user_id
-            AND t.game_id = m.game_id
-            AND t.created_at >= m.start_time
-            AND (t.created_at <= m.end_time OR m.is_current IS TRUE)
     WHERE
-        CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', t.created_at) >= '2025-12-01 17:00:00'
+        CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', t.created_at) >= '2026-01-10 06:00:00'
         AND t.currency_type = 'CNY'
         AND t.status = 'COMPLETED'
         AND t.game_id = 'SS01'
@@ -86,9 +79,9 @@ query = dedent(
         SELECT
             t1.activity_date,
             t1.ai_group,
-            COUNT(t1.user_id) AS day0_num_users,
-            COUNT(t2.user_id) AS day1_num_users,
-            COUNT(t3.user_id) AS day3_num_users
+            COUNT(distinct t1.user_id) AS day0_num_users,
+            COUNT(distinct t2.user_id) AS day1_num_users,
+            COUNT(distinct t3.user_id) AS day3_num_users
         FROM
             daily_login AS t1
         LEFT JOIN daily_login AS t2
@@ -156,7 +149,7 @@ query = dedent(
         -- Profit Calculations
         ds.num_bets_fg * 1.0 / NULLIF(ds.num_bets, 0) AS fg_ratio,
 
-        -- Retention:
+        -- Per-User Bet
         ds.num_bets / NULLIF(ds.num_active_users, 0) AS num_bets_per_user,
         ds.total_bet / NULLIF(ds.num_active_users, 0) AS total_bet_per_user,
         (ds.total_payout - ds.total_bet) AS total_profit,

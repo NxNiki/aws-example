@@ -5,14 +5,17 @@ stats_by_date:
     day: [
       "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_date_user.parquet",
       "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_date_user_pa.parquet",
+      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_date_user_hg.parquet",
     ]
     week: [
       "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_week_user.parquet",
       "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_week_user_pa.parquet",
+      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_week_user_hg.parquet",
     ]
     month: [
       "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_month_user.parquet",
       "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_month_user_pa.parquet",
+      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_month_user_hg.parquet",
     ]
 
   group_col: "ai_group"

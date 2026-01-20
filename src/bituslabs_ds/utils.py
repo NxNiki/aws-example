@@ -6,6 +6,7 @@ import shutil
 import subprocess
 from collections import Counter
 from collections.abc import Sequence
+from decimal import Decimal
 from pprint import pformat
 from typing import Any, Dict, Iterable, Iterator, List, Literal, Optional, Tuple, Union
 
@@ -13,6 +14,7 @@ import numpy as np
 import pandas as pd
 import yaml
 from numpy.core.defchararray import upper
+from pandas.api.types import is_numeric_dtype
 from scipy.stats import zscore
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.preprocessing import power_transform
@@ -275,9 +277,12 @@ def keep_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _transform_column(data_col):
-    if np.issubdtype(data_col.dtype, np.number):
+    col_name = data_col.name
+    # Convert all pandas extension types to their underlying numpy dtype for correct type checking
+    # For pandas extension dtypes (e.g., Int64), use pandas.api.types to check if numeric
+    dtype = data_col.dtype
+    if is_numeric_dtype(dtype):
         data_col = data_col.astype(float).copy()
-        col_name = data_col.name
         data_col = power_transform(data_col.to_frame())
         return (col_name, data_col)
     else:
@@ -501,18 +506,43 @@ def convert_to_list(arg: Any) -> List[Any]:
 
 
 def convert_numpy_types(obj):
-    """Convert NumPy types to native Python types for JSON serialization."""
-    if isinstance(obj, np.integer):
-        return int(obj)
-    elif isinstance(obj, np.floating):
-        return float(obj)
-    elif isinstance(obj, np.ndarray):
-        return obj.tolist()
-    elif isinstance(obj, Counter):
-        return dict[Any, int](obj)
-    elif isinstance(obj, dict):
-        return {key: convert_numpy_types(value) for key, value in obj.items()}
-    elif isinstance(obj, list):
+    """Recursively convert NumPy types, Decimals, and dict keys for JSON."""
+
+    # Handle Dictionaries
+    if isinstance(obj, dict):
+        new_dict = {}
+        for k, v in obj.items():
+            # Convert the KEY to string if it's a Decimal or non-standard type
+            if isinstance(k, (Decimal, np.integer, np.floating)):
+                new_key = str(k)
+            else:
+                new_key = k
+
+            # Recursively convert the VALUE
+            new_dict[new_key] = convert_numpy_types(v)
+        return new_dict
+
+    # Handle Lists/Tuples
+    elif isinstance(obj, (list, tuple)):
         return [convert_numpy_types(item) for item in obj]
+
+    # Handle NumPy Arrays
+    elif isinstance(obj, np.ndarray):
+        return convert_numpy_types(obj.tolist())
+
+    # Handle Counters
+    elif isinstance(obj, Counter):
+        return convert_numpy_types(dict(obj))
+
+    # Handle Individual Scalars
+    elif isinstance(obj, (np.integer, np.int64)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, np.float64)):
+        return float(obj)
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    elif isinstance(obj, Decimal):
+        return float(obj)
+
     else:
         return obj
