@@ -19,7 +19,8 @@ from joblib import parallel_backend
 from scipy.stats import skew
 from skl2onnx import convert_sklearn
 from skl2onnx.common.data_types import FloatTensorType
-from sklearn.cluster import KMeans
+from sklearn.base import ClusterMixin
+from sklearn.cluster import AgglomerativeClustering, KMeans
 from sklearn.compose import ColumnTransformer
 from sklearn.decomposition import PCA
 from sklearn.feature_selection import VarianceThreshold
@@ -82,6 +83,10 @@ class ClusterAnalysisPipeline:
         # Create directories
         for dir_name in ["output", "features", "figures", "models"]:
             os.makedirs(self.output_path / dir_name, exist_ok=True)
+
+    @property
+    def cluster_model(self):
+        return self._config["cluster_analysis"].get("cluster_model", "kmeans")
 
     @property
     def key_features(self):
@@ -383,9 +388,29 @@ class ClusterAnalysisPipeline:
         plt.xlabel("Importance Score", fontsize=12)
         plt.ylabel("Feature", fontsize=12)
         plt.grid(axis="x", linestyle="--", alpha=0.6)
-        plt.tight_layout(rect=[0.1, 0, 1, 1])  # Increase left margin to show all y-tick labels
+        plt.tight_layout(rect=(0.1, 0, 1, 1))  # Increase left margin to show all y-tick labels
         plt.savefig(self.output_path / "figures" / "Feature Importance Rank.png")
         plt.close()
+
+    def create_cluster_model(self, n_clusters: int) -> ClusterMixin:
+        if self.cluster_model == "kmeans":
+            return KMeans(
+                n_clusters=n_clusters,
+                random_state=self._config["cluster_analysis"]["random_state"],
+                n_init=self._config["cluster_analysis"].get("n_init", 10),
+            )
+        elif self.cluster_model == "hierarchical":
+            # AgglomerativeClustering does not use random_state or n_init
+            return AgglomerativeClustering(
+                n_clusters=n_clusters, linkage=self._config["cluster_analysis"].get("linkage", "ward")
+            )
+        else:
+            logger.critical(f"{self.cluster_model} not supported, fallback to kmeans")
+            return KMeans(
+                n_clusters=n_clusters,
+                random_state=self._config["cluster_analysis"]["random_state"],
+                n_init=self._config["cluster_analysis"].get("n_init", 10),
+            )
 
     def create_clustering_pipeline(
         self,
@@ -415,13 +440,13 @@ class ClusterAnalysisPipeline:
             pipeline_steps.append(("power_transform", preprocessor))
 
         # avoid robust scaler as it gives werid data pattern and destroys clustering analyis.
-        pipeline_steps.extend(
-            [("scaler", self.get_scaler()), ("cluster", KMeans(n_clusters=n_clusters, random_state=42))]
-        )
+        cluster_model = self.create_cluster_model(n_clusters)
+        pipeline_steps.extend([("scaler", self.get_scaler()), ("cluster", cluster_model)])
         pipeline = Pipeline(pipeline_steps)
 
         logger.info(f"Created clustering pipeline with {len(pipeline_steps)} steps")
         logger.info(f"Pipeline steps: {[step[0] for step in pipeline_steps]}")
+        logger.info(f"clustering algorithm: {self.cluster_model}")
         logger.info(f"n_clusters: {n_clusters}")
 
         return pipeline
