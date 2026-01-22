@@ -78,7 +78,7 @@ class ClusterAnalysisPipeline:
     def _setup_directories(self) -> None:
         """Create necessary directories for the project."""
         self.work_dir = LOCAL_ROOT / "jobs" / self._config["work_dir"]
-        self.output_path = self.work_dir / self._config["project_name"]
+        self.output_path = self.work_dir / self._config["project_name"] / self.cluster_model
 
         # Create directories
         for dir_name in ["output", "features", "figures", "models"]:
@@ -86,7 +86,7 @@ class ClusterAnalysisPipeline:
 
     @property
     def cluster_model(self):
-        return self._config["cluster_analysis"].get("cluster_model", "kmeans")
+        return self._config["cluster_analysis"].get("model", "kmeans")
 
     @property
     def key_features(self):
@@ -475,7 +475,10 @@ class ClusterAnalysisPipeline:
                     n_clusters=k, transform_columns_index=transform_columns_index
                 )
                 labels = cluster_pipeline.fit_predict(df_x)
-                inertia_val = cluster_pipeline.named_steps["cluster"].inertia_
+                if self.cluster_model == "kmeans":
+                    inertia_val = cluster_pipeline.named_steps["cluster"].inertia_
+                else:
+                    inertia_val = np.nan
                 x_transformed = cluster_pipeline[:-1].transform(df_x)
                 silhouette = calculate_silhouette_score(x_transformed, labels)
                 cluster_counts = np.bincount(labels)
@@ -570,12 +573,15 @@ class ClusterAnalysisPipeline:
         logger.info(f"Cluster sizes: {cluster_counts}")
 
         # Save cluster centers
-        centroids_df = pd.DataFrame(pipeline.named_steps["cluster"].cluster_centers_, columns=feature_columns)
-        logger.info(f"Cluster centers:\n{centroids_df}")
-        centroids_df.to_csv(
-            self.output_path / "models" / f"cluster_centers_standardized_{self.n_top_features}_k_{self.n_clusters}.csv",
-            index=False,
-        )
+        if self.cluster_model == "kmeans":
+            centroids_df = pd.DataFrame(pipeline.named_steps["cluster"].cluster_centers_, columns=feature_columns)
+            logger.info(f"Cluster centers:\n{centroids_df}")
+            centroids_df.to_csv(
+                self.output_path
+                / "models"
+                / f"cluster_centers_standardized_{self.n_top_features}_k_{self.n_clusters}.csv",
+                index=False,
+            )
 
         # Save cluster labels:
         data_with_cluster_label = data[self.merge_features].copy()
@@ -727,19 +733,21 @@ class ClusterAnalysisPipeline:
         pickle_model_name = self.pickle_model_name
         joblib.dump(pipeline, self.output_path / "models" / pickle_model_name)
 
-        # Save ONNX model with version from config
-        onnx_opset_version = self.onnx_opset_version
-        logger.info(f"Using ONNX opset version: {onnx_opset_version}")
-        initial_type = [("float_input", FloatTensorType([None, self.n_top_features]))]
-        onnx_model = convert_sklearn(pipeline, initial_types=initial_type, target_opset=onnx_opset_version)
-
-        onnx_model_name = self.onnx_model_name
-        with open(self.output_path / "models" / onnx_model_name, "wb") as f:
-            f.write(onnx_model.SerializeToString())
-
         logger.info(f"Clustering pipeline model saved to: {self.output_path / 'models'}")
         logger.info(f"Pickle model saved as: {pickle_model_name}")
-        logger.info(f"ONNX model saved as: {onnx_model_name}")
+
+        # Save ONNX model with version from config
+        if self.cluster_model == "kmeans":
+            onnx_opset_version = self.onnx_opset_version
+            logger.info(f"Using ONNX opset version: {onnx_opset_version}")
+            initial_type = [("float_input", FloatTensorType([None, self.n_top_features]))]
+            onnx_model = convert_sklearn(pipeline, initial_types=initial_type, target_opset=onnx_opset_version)
+
+            onnx_model_name = self.onnx_model_name
+            with open(self.output_path / "models" / onnx_model_name, "wb") as f:
+                f.write(onnx_model.SerializeToString())
+
+            logger.info(f"ONNX model saved as: {onnx_model_name}")
 
     def set_n_clusters(self, pipeline: Pipeline, n_clusters: int) -> Pipeline:
         """
