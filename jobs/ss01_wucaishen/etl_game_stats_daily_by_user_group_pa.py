@@ -2,10 +2,10 @@ import os
 from textwrap import dedent
 
 from bituslabs_ds.config import LOCAL_ROOT, S3_BUCKET, setup_logging
-from bituslabs_ds.etl import AthenaBackend, DataLoader
+from bituslabs_ds.etl import AthenaBackend, DataLoader, ETLScheduler
 
 
-def generate_query(stats_agg_col):
+def generate_query(stats_agg_col: str, start_date: str) -> str:
     query = dedent(
         f"""
         WITH user_bets AS (
@@ -32,6 +32,9 @@ def generate_query(stats_agg_col):
             t.currency = 'CNY'
             AND gametype = 'SB28' 
             AND flag != -8.0
+            AND date_trunc('day', from_unixtime(t.billtime / 1.0E9)
+                AT TIME ZONE 'UTC' 
+                AT TIME ZONE 'Asia/Shanghai' - INTERVAL '6' HOUR) > CAST('{start_date}' AS timestamp)
         ),
 
         daily_login AS (
@@ -176,23 +179,55 @@ def generate_query(stats_agg_col):
 
 
 def execute_query(output_file, stats_agg_col):
-    data_loader = DataLoader(
-        backend=AthenaBackend(
-            database="agfish",
-            output_location=f"s3://{S3_BUCKET}/ds-data-ss01/{output_file}",
-        )
-    )
+
     file_path = f"{LOCAL_ROOT}/jobs/output_ss01_wucaishen/{output_file}.parquet"
     query = generate_query(stats_agg_col)
     df_rs = data_loader.query_to_df(query=query, local_cache=file_path, reload=True)
     print(df_rs)
-    data_loader.close()
 
 
 if __name__ == "__main__":
 
+    data_loader = DataLoader(
+        backend=AthenaBackend(
+            database="agfish",
+            output_location=f"s3://{S3_BUCKET}/ds-data-pa_wucaishen/",
+        )
+    )
+
     setup_logging(f"{LOCAL_ROOT}/jobs/log", log_filename=os.path.splitext(os.path.basename(__file__))[0] + ".log")
 
-    execute_query("stats_by_date_user_pa", "activity_date")
-    execute_query("stats_by_week_user_pa", "activity_week")
-    execute_query("stats_by_month_user_pa", "activity_month")
+    # Initialize Scheduler
+    scheduler = ETLScheduler(
+        data_loader=data_loader, storage_root=f"{LOCAL_ROOT}/jobs/output_ss01_wucaishen", lookback_days=3
+    )
+
+    scheduler.run_incremental_job(
+        job_name="daily_stats_pa",
+        query_func=lambda start_date: generate_query("activity_date", start_date),
+        key_cols=["activity_date", "user_id", "ai_group"],
+        date_col="activity_date",
+        partition_level="none",
+    )
+
+    # Overrides to 7 days because weekly data takes longer to settle
+    scheduler.run_incremental_job(
+        job_name="weekly_stats_pa",
+        query_func=lambda start_date: generate_query("activity_week", start_date),
+        key_cols=["activity_date", "user_id", "ai_group"],
+        date_col="activity_date",  # Always check max activity_date
+        partition_level="none",
+        lookback=7,
+    )
+
+    # Overrides to 31 days because weekly data takes longer to settle
+    scheduler.run_incremental_job(
+        job_name="monthly_stats_pa",
+        query_func=lambda start_date: generate_query("activity_month", start_date),
+        key_cols=["activity_date", "user_id", "ai_group"],
+        date_col="activity_date",  # Always check max activity_date
+        partition_level="none",
+        lookback=31,
+    )
+
+    data_loader.close()

@@ -1,19 +1,23 @@
-import datetime
 import logging
 import numbers
 import os
 import re
+import shutil
 import socket
 import sys
 import threading
 import time
 from abc import ABC, abstractmethod
-from typing import Optional
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Callable, List, Literal, Optional, Union
 
 import awswrangler as wr
 import boto3
 import pandas as pd
 import paramiko
+import pyarrow as pa
+import pyarrow.parquet as pq
 import redshift_connector
 
 from bituslabs_ds.s3_utils import parse_s3_path, read_local_cache, read_to_pandas_df, save_local_cache
@@ -23,9 +27,8 @@ logger.addHandler(logging.NullHandler())
 
 ssh_pkey = os.environ["BASTION_KEY_PATH"]
 
+
 # ---------------- Port Forwarding Helpers ----------------
-
-
 def _shuttle_data(source, destination):
     """Helper to move data between two socket-like objects/channels."""
     try:
@@ -304,6 +307,201 @@ class DataLoader:
 
     def close(self):
         self.backend.close()
+
+
+# ---------------- ETL Scheduler   ----------------
+
+# Define the allowed partition levels for type safety
+PartitionLevel = Literal["none", "year", "month", "day"]
+
+
+class ETLScheduler:
+    """
+    A scheduler to manage incremental ETL jobs with partitioned Parquet storage.
+    Supports dynamic watermark detection and customizable lookback windows.
+    """
+
+    def __init__(self, data_loader: DataLoader, storage_root: Union[str, Path], lookback_days: int = 3):
+        self.loader = data_loader
+        self.storage_root = Path(storage_root)
+        self.lookback_days = lookback_days
+        self.default_start_date = "2025-01-01"
+
+        # Ensure storage root exists
+        self.storage_root.mkdir(parents=True, exist_ok=True)
+
+    def _get_partition_cols(self, level: PartitionLevel) -> List[str]:
+        """Maps partition level to actual column names."""
+        mapping = {"none": [], "year": ["year"], "month": ["year", "month"], "day": ["year", "month", "day"]}
+        return mapping.get(level, ["year", "month"])
+
+    def _get_max_date(self, job_path: Path, date_col: str) -> Optional[datetime]:
+        """
+        Scans the partitioned Parquet dataset to find the maximum processed date.
+        """
+        if not job_path.exists() or not any(job_path.iterdir()):
+            return None
+
+        try:
+            # Read only the necessary column from the metadata to save memory/time
+            dataset = pq.ParquetDataset(str(job_path), use_legacy_dataset=False)
+            table = dataset.read(columns=[date_col])
+
+            if table.num_rows == 0:
+                return None
+
+            max_dt = pd.to_datetime(table.to_pandas()[date_col]).max()
+            return max_dt
+        except Exception as e:
+            logger.warning(f"Could not detect watermark in {job_path}: {e}")
+            return None
+
+    def _compact_partitions(self, job_name: str, key_cols: List[str], partition_level: PartitionLevel = "month"):
+        """
+        Internal housekeeping: Merges files and removes duplicates using _processed_at.
+        """
+        import pyarrow.dataset as ds  # Import the modern dataset API
+
+        job_path = self.storage_root / job_name
+        if not job_path.exists() or not any(job_path.iterdir()):
+            return
+
+        logger.info(f"[{job_name}] Starting de-duplicating compaction...")
+
+        try:
+            # 1. Load the entire dataset using the modern API
+            # This is more robust against the "Must provide schema" error
+            dataset = ds.dataset(str(job_path), format="parquet", partitioning="hive")
+            table = dataset.to_table()
+            df = table.to_pandas()
+
+            if df.empty:
+                return
+
+            # 2. De-duplication Logic
+            # Ensure sorting columns exist before sorting
+            sort_cols = key_cols + ["_processed_at"] if "_processed_at" in df.columns else key_cols
+            df = df.sort_values(by=sort_cols, ascending=True)
+            df = df.drop_duplicates(subset=key_cols, keep="last")
+
+            # 3. Temporary storage for the "clean" write
+            temp_path = job_path.with_suffix(".tmp")
+            if temp_path.exists():
+                shutil.rmtree(temp_path)
+
+            # 4. Write back using pyarrow table to preserve the original schema
+            # We use preserve_index=False to keep the parquet files clean
+            clean_table = pa.Table.from_pandas(df, preserve_index=False)
+
+            pq.write_to_dataset(
+                clean_table,
+                root_path=str(temp_path),
+                partition_cols=self._get_partition_cols(partition_level),
+                basename_template="compact_part_{i}.parquet",
+                existing_data_behavior="overwrite_or_ignore",
+            )
+
+            # 5. Atomic Swap
+            shutil.rmtree(job_path)
+            temp_path.rename(job_path)
+
+            logger.info(f"[{job_name}] Compaction complete. Partitions consolidated and de-duplicated.")
+        except Exception as e:
+            logger.error(f"[{job_name}] Compaction failed: {e}")
+
+    def run_incremental_job(
+        self,
+        job_name: str,
+        query_func: Callable[[str], str],
+        key_cols: List[str],
+        date_col: str = "activity_date",
+        lookback: Optional[int] = None,
+        partition_level: PartitionLevel = "month",
+    ) -> None:
+        """
+        Executes an incremental ETL job.
+
+        Args:
+            job_name: The directory name for the specific ETL output.
+            query_func: A function that takes a start_date string and returns a SQL query.
+            date_col: The column used to determine the watermark (max date).
+            lookback: Override for the default class lookback_days.
+            partition_cols: Columns to use for Parquet partitioning on disk.
+        """
+        job_path = self.storage_root / job_name
+        days_to_lookback = lookback if lookback is not None else self.lookback_days
+
+        # 1. Detect Watermark
+        last_date = self._get_max_date(job_path, date_col)
+
+        if last_date:
+            # Shift back to handle late-arriving data
+            start_dt_obj = last_date - timedelta(days=days_to_lookback)
+            start_date_str = start_dt_obj.strftime("%Y-%m-%d")
+            logger.info(f"[{job_name}] Incremental start: {start_date_str} (Lookback: {days_to_lookback}d)")
+        else:
+            # Initial Load
+            start_date_str = self.default_start_date
+            logger.info(f"[{job_name}] No existing data found. Starting full load from {start_date_str}")
+
+        # 2. Fetch Data via the provided Loader
+        try:
+            sql = query_func(start_date_str)
+            df = self.loader.query_to_df(query=sql)
+        except Exception as e:
+            logger.error(f"[{job_name}] Failed to fetch data from database: {e}")
+            return
+
+        if df is None or df.empty:
+            logger.info(f"[{job_name}] No new records to process.")
+            return
+
+        # 3. Data Preparation & Partitioning
+        # Ensure date_col is datetime objects for extraction
+        df[date_col] = pd.to_datetime(df[date_col])
+        df["_processed_at"] = datetime.now()
+
+        partition_cols = self._get_partition_cols(partition_level)
+
+        if "year" in partition_cols:
+            df["year"] = df[date_col].dt.year
+        if "month" in partition_cols:
+            df["month"] = df[date_col].dt.month
+        if "day" in partition_cols:
+            df["day"] = df[date_col].dt.day
+
+        # --- Type Conversion and Error Handling ---
+        for col in df.columns:
+            # We check for 'object' because SQL Decimals arrive in Pandas as Objects
+            if df[col].dtype == "object":
+                try:
+                    # pd.to_numeric handles Decimals, Strings, and Integers efficiently
+                    df[col] = pd.to_numeric(df[col], errors="raise")
+                except Exception as e:
+                    # We use 'errors=raise' above to catch the specific column that fails
+                    # Then we log a warning but keep 'object' to prevent the whole job from crashing
+                    logger.warning(
+                        f"[{job_name}] Column '{col}' could not be converted to numeric. "
+                        f"Type remains 'object'. Error: {e}"
+                    )
+                    # Optional: Print the first few values to see what the problem is
+                    # logger.debug(f"Sample values for {col}: {df[col].head(3).tolist()}")
+
+        # 4. Atomic Write with Partitioning
+        # Note: 'overwrite_or_ignore' prevents file accumulation within existing partitions
+        try:
+            df.to_parquet(
+                path=str(job_path),
+                index=False,
+                engine="pyarrow",
+                partition_cols=partition_cols,
+                existing_data_behavior="overwrite_or_ignore",
+            )
+            logger.info(f"[{job_name}] Successfully updated partitions. New max date: {df[date_col].max().date()}")
+        except Exception as e:
+            logger.error(f"[{job_name}] Failed to save parquet data: {e}")
+
+        self._compact_partitions(job_name=job_name, key_cols=key_cols, partition_level=partition_level)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ from textwrap import dedent
 import pandas as pd
 
 from bituslabs_ds.config import LOCAL_ROOT, setup_logging
-from bituslabs_ds.etl import DataLoader, RedshiftBackend
+from bituslabs_ds.etl import DataLoader, ETLScheduler, RedshiftBackend
 
 # TODO:
 # add max/min user daily profit
@@ -12,7 +12,7 @@ from bituslabs_ds.etl import DataLoader, RedshiftBackend
 DATE_START_HOUR = 6
 
 
-def generate_query(stats_agg_col: str):
+def generate_query(stats_agg_col: str, start_date: str):
 
     query = dedent(
         f"""
@@ -39,7 +39,7 @@ def generate_query(stats_agg_col: str):
         FROM
             public.fct_bet_orders AS t
         WHERE
-            CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', t.created_at) >= '2025-12-01 06:00:00'
+            CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at) >= '{start_date}'
             AND t.currency_type = 'CNY'
             AND t.status = 'COMPLETED'
             AND t.game_id = 'SS01'
@@ -215,32 +215,6 @@ def generate_query(stats_agg_col: str):
     return query
 
 
-def execute_query(redshift_loader, output_file, stats_agg_col):
-
-    file_path = f"{LOCAL_ROOT}/jobs/output_ss01_wucaishen/{output_file}.parquet"
-    query = generate_query(stats_agg_col)
-    df_rs = redshift_loader.query_to_df(query=query, local_cache=file_path, reload=True)
-    print(
-        df_rs[
-            [
-                "activity_date",
-                "user_id",
-                "ai_group",
-                "user_mathtable_change",
-                "num_active_users",
-                "user_num_bets",
-                "user_total_bet",
-                "user_avg_bet_amount",
-                "rtp",
-                "rtp_bg",
-                "day0_num_users",
-                "day1_num_users",
-                "day3_num_users",
-            ]
-        ]
-    )
-
-
 if __name__ == "__main__":
 
     setup_logging(f"{LOCAL_ROOT}/jobs/log", log_filename=os.path.splitext(os.path.basename(__file__))[0] + ".log")
@@ -255,8 +229,35 @@ if __name__ == "__main__":
         )
     )
 
-    execute_query(redshift_loader, "stats_by_date_user_hg", "activity_date")
-    execute_query(redshift_loader, "stats_by_week_user_hg", "activity_week")
-    execute_query(redshift_loader, "stats_by_month_user_hg", "activity_month")
+    # Initialize Scheduler with a default 3-day lookback
+    scheduler = ETLScheduler(redshift_loader, f"{LOCAL_ROOT}/jobs/output_ss01_wucaishen", lookback_days=3)
+
+    scheduler.run_incremental_job(
+        job_name="daily_stats",
+        query_func=lambda start_date: generate_query("activity_date", start_date),
+        key_cols=["activity_date", "user_id", "ai_group"],
+        date_col="activity_date",
+        partition_level="none",
+    )
+
+    # Overrides to 7 days because weekly data takes longer to settle
+    scheduler.run_incremental_job(
+        job_name="weekly_stats",
+        query_func=lambda start_date: generate_query("activity_week", start_date),
+        key_cols=["activity_date", "user_id", "ai_group"],
+        date_col="activity_date",  # Always check max activity_date
+        partition_level="none",
+        lookback=7,
+    )
+
+    # Overrides to 31 days because weekly data takes longer to settle
+    scheduler.run_incremental_job(
+        job_name="monthly_stats",
+        query_func=lambda start_date: generate_query("activity_month", start_date),
+        key_cols=["activity_date", "user_id", "ai_group"],
+        date_col="activity_date",  # Always check max activity_date
+        partition_level="none",
+        lookback=31,
+    )
 
     redshift_loader.close()
