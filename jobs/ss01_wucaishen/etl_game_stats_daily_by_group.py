@@ -24,7 +24,7 @@ query = dedent(
     FROM
         public.fct_bet_orders AS t
     WHERE
-        CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', t.created_at) >= '2026-01-10 06:00:00'
+        CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at) >= DATEADD(day, -7, DATE_TRUNC('day', GETDATE()))
         AND t.currency_type = 'CNY'
         AND t.status = 'COMPLETED'
         AND t.game_id = 'SS01'
