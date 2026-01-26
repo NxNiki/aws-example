@@ -292,6 +292,10 @@ def _read_file(
 def read_local_cache(
     local_cache_path: Union[str, Path], columns: Optional[List[str]] = None, data_types: Optional[Dict] = None
 ):
+    if not os.path.exists(local_cache_path):
+        logger.warning(f"{local_cache_path} does not exist, return empty dataframe.")
+        return pd.DataFrame()
+
     logger.info(f"read data {local_cache_path}.")
     if str(local_cache_path).endswith(".csv"):
         data = pd.read_csv(local_cache_path, usecols=columns, dtype=data_types)

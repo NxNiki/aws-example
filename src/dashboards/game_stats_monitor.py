@@ -103,6 +103,10 @@ class GameStatsDashboard:
         self._register_callbacks()
         self._load_date_data()
 
+    @property
+    def date_col(self):
+        return self.config["stats_by_date"]["date_col"]
+
     def _reset_state(self):
 
         self.config = {}
@@ -114,7 +118,6 @@ class GameStatsDashboard:
         self.df_bet_group_col = ""
         self.bet_metrics = []
         self.date_metrics = []
-        self.date_col = ""
 
     def _find_config_files(self) -> List[Dict[str, str]]:
         """Find all dashboard_config*.yaml files in the config directory."""
@@ -185,8 +188,8 @@ class GameStatsDashboard:
 
             if daily_data:
                 self.df_date[gran] = pd.concat(daily_data)
-                self.date_col = self.config["stats_by_date"]["date_col"]
-                self.df_date[gran][self.date_col] = pd.to_datetime(self.df_date[gran][self.date_col])
+                if self.date_col in self.df_date[gran].columns:
+                    self.df_date[gran][self.date_col] = pd.to_datetime(self.df_date[gran][self.date_col])
             else:
                 self.df_date[gran] = pd.DataFrame()
 
