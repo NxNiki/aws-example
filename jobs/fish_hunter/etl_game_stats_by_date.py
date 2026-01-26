@@ -2,7 +2,7 @@ import os
 from textwrap import dedent
 
 from bituslabs_ds.config import LOCAL_ROOT, setup_logging
-from bituslabs_ds.etl import DataLoader, RedshiftBackend
+from bituslabs_ds.etl import DataLoader, ETLScheduler, RedshiftBackend
 
 DATE_START = "2025-10-20"
 DATE_END = "2027-12-1"
@@ -12,7 +12,7 @@ retention_days = 3
 DATE_START_HOUR = 6
 
 
-def generate_query(stats_agg_col):
+def generate_query(stats_agg_col: str, start_date: str, end_date: str = DATE_END):
 
     query = dedent(
         f"""
@@ -35,8 +35,6 @@ def generate_query(stats_agg_col):
             WHERE
                 b.currency_type = 'CNY'
                 AND b.op_code not in ('B26', 'TST','TSB','TSO')
-                -- AND DATEADD(day, {return_user_days}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at))  >= '{DATE_START}'
-                -- AND DATEADD(day, -{retention_days}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at))  < '{DATE_END}'
 
                 -- ---------------------------------------------------------
                 -- FAST FILTERING: Transform the INPUTS, not the COLUMN
@@ -46,17 +44,17 @@ def generate_query(stats_agg_col):
                 -- Logic: We want events where (EventTime + UserDays) >= Start
                 -- So: EventTime >= Start - UserDays
                 AND b.created_at >= CONVERT_TIMEZONE('Asia/Shanghai', 'UTC', 
-                       DATEADD(day, -{return_user_days}, CAST('{DATE_START}' AS TIMESTAMP)))
+                       DATEADD(day, -{return_user_days}, CAST('{start_date}' AS TIMESTAMP)))
 
                 -- 2. Reverse the date math for END
                 -- Logic: We want events where (EventTime - RetentionDays) < End
                 -- So: EventTime < End + RetentionDays
                 AND b.created_at < CONVERT_TIMEZONE('Asia/Shanghai', 'UTC', 
-                       DATEADD(day, {retention_days}, CAST('{DATE_END}' AS TIMESTAMP)))
+                       DATEADD(day, {retention_days}, CAST('{end_date}' AS TIMESTAMP)))
         ),
 
         -- 2. DETERMINE USER DAILY GROUP (Logic applied inside SUM)
-        user_daily_map AS (
+        user_daily_group AS (
             SELECT
                 user_id,
                 activity_date,
@@ -85,22 +83,22 @@ def generate_query(stats_agg_col):
                 COUNT(DISTINCT t4.user_id) AS num_users_day7
                 -- COUNT(DISTINCT t5.user_id) AS num_users_week1,
                 -- COUNT(DISTINCT t6.user_id) AS num_users_month1
-            FROM user_daily_map t1
-            LEFT JOIN user_daily_map t2
+            FROM user_daily_group t1
+            LEFT JOIN user_daily_group t2
                 ON t1.user_id = t2.user_id AND t2.activity_date = DATEADD(day, -1, t1.activity_date)
-            LEFT JOIN user_daily_map t3
+            LEFT JOIN user_daily_group t3
                 ON t1.user_id = t3.user_id AND t3.activity_date = DATEADD(day, -3, t1.activity_date)
-            LEFT JOIN user_daily_map t4
+            LEFT JOIN user_daily_group t4
                 ON t1.user_id = t4.user_id AND t4.activity_date = DATEADD(day, -7, t1.activity_date)
-            -- LEFT JOIN user_daily_map t5
+            -- LEFT JOIN user_daily_group t5
             --    ON t1.user_id = t5.user_id AND t5.activity_week = DATEADD(week, -1, t1.activity_week)
-            -- LEFT JOIN user_daily_map t6
+            -- LEFT JOIN user_daily_group t6
             --    ON t1.user_id = t6.user_id AND t6.activity_month = DATEADD(month, -1, t1.activity_month)
             GROUP BY t1.daily_group, t1.{stats_agg_col}
         ),
 
         -- 4. AGGREGATE STATS BY ASSIGNED DAILY GROUP
-        stats_by_daily_group AS (
+        stats_by_date AS (
             SELECT
                 u.daily_group,
                 b.{stats_agg_col},
@@ -112,55 +110,52 @@ def generate_query(stats_agg_col):
                         THEN u.user_id
                     END
                 ) AS num_return_users,
-                COUNT(DISTINCT b.user_id || '-' || b.room_id) AS total_num_rooms,
-                COUNT(b.user_id) AS num_bullets,
-                SUM(b.bet) AS daily_total_bet,
-                SUM(b.killed) AS num_killed_bullets,
                 COUNT(DISTINCT CASE WHEN b.killed = 1 THEN b.user_id END) AS num_users_killed_fish,
-                ROUND(CAST(SUM(b.payout) AS FLOAT) / NULLIF(SUM(b.bet), 0), 3) AS daily_group_rtp
+                ROUND(CAST(SUM(b.payout) AS FLOAT) / NULLIF(SUM(b.bet), 0), 3) AS group_rtp
             FROM base_data b
-            JOIN user_daily_map u ON b.user_id = u.user_id AND b.activity_date = u.activity_date
+            JOIN user_daily_group u ON b.user_id = u.user_id AND b.activity_date = u.activity_date
             GROUP BY u.daily_group, b.{stats_agg_col}
         ),
 
-        -- 5. AGGREGATE STATS BY RAW STRATEGY NAME (Optimized Grouping)
-        stats_by_strategy AS (
+        stats_by_user_date AS (
             SELECT
-                -- 1. Performance fix: Apply Logic Here
-                CASE
-                    WHEN t.partition_val = 'c2mta7-ls8vqx-HyJf5k-event' AND t.strategy_name = 'BOOST_POOL' THEN 'BOOST_POOL_2'
-                    ELSE t.strategy_name
-                END AS strategy_name,
-                
-                -- 2. Aggregation Column
-                t.{stats_agg_col},
-                
-                COUNT(DISTINCT t.user_id) AS group_num_users,
-                ROUND(CAST(SUM(t.payout) AS FLOAT) / NULLIF(SUM(t.bet), 0), 3) AS group_rtp,
-                AVG(t.fish_value) AS avg_fish_value,
-                AVG(CASE WHEN t.fish_value > 19 AND t.fish_value < 201 THEN t.fish_value END) AS avg_fish_value_20_200,
-                AVG(CASE WHEN t.killed = 1 THEN t.fish_value END) AS avg_killed_fish_value,
-                AVG(CASE WHEN t.fish_value > 19 AND t.fish_value < 201 AND t.killed = 1 THEN t.fish_value END) AS avg_killed_fish_value_20_200,
-                AVG(t.profit) AS bullet_avg_profit,
-                AVG(CASE WHEN t.killed = 1 THEN t.profit END) AS bullet_kill_avg_profit,
-                SUM(t.profit) AS total_profit
-            FROM base_data t
-            -- Use Ordinals (1, 2) to avoid "partition_val not in group by" error
-            GROUP BY 1, 2
+                b.user_id,
+                u.daily_group,
+                b.{stats_agg_col},
+                COUNT(DISTINCT b.user_id || '-' || b.room_id) AS num_rooms,
+                COUNT(b.user_id) AS num_bullets,
+                SUM(b.bet) AS total_bet,
+                SUM(b.killed) AS num_killed_bullets,
+                ROUND(CAST(SUM(b.payout) AS FLOAT) / NULLIF(SUM(b.bet), 0), 3) AS user_rtp,
+                AVG(b.fish_value) AS avg_fish_value,
+                AVG(CASE WHEN b.fish_value > 19 AND b.fish_value < 201 THEN b.fish_value END) AS avg_fish_value_20_200,
+                AVG(CASE WHEN b.killed = 1 THEN b.fish_value END) AS avg_killed_fish_value,
+                AVG(CASE WHEN b.fish_value > 19 AND b.fish_value < 201 AND b.killed = 1 THEN b.fish_value END) AS avg_killed_fish_value_20_200,
+                AVG(b.profit) AS bullet_avg_profit,
+                AVG(CASE WHEN b.killed = 1 THEN b.profit END) AS bullet_kill_avg_profit,
+                SUM(b.profit) AS total_profit
+            FROM base_data b
+            JOIN user_daily_group u ON b.user_id = u.user_id AND b.activity_date = u.activity_date
+            GROUP BY b.user_id, u.daily_group, b.{stats_agg_col}
         )
 
         -- 6. FINAL JOIN & FORMATTING (Fully Restored)
         SELECT
+            t1.user_id,
             t1.daily_group,
             t1.{stats_agg_col} AS activity_date,
-            t1.num_users,
-            t1.num_return_users,
-            t1.total_num_rooms,
+            t1.num_rooms,
             t1.num_bullets,
-            t1.daily_total_bet,
+            t1.total_bet,
             t1.num_killed_bullets,
-            t1.num_users_killed_fish,
-            t1.daily_group_rtp,
+            t1.user_rtp,
+            t1.avg_fish_value,
+            t1.avg_fish_value_20_200,
+            t1.avg_killed_fish_value,
+            t1.avg_killed_fish_value_20_200,
+            t1.bullet_avg_profit,
+            t1.bullet_kill_avg_profit,
+            t1.total_profit,
 
             t2.num_users_day0,
             t2.num_users_day1,
@@ -169,34 +164,22 @@ def generate_query(stats_agg_col):
             -- t2.num_users_week1,
             -- t2.num_users_month1,
 
-            t3.group_num_users,
+            t3.num_users,
+            t3.num_return_users,
+            t3.num_users_killed_fish,
             t3.group_rtp,
-            t3.avg_fish_value,
-            t3.avg_fish_value_20_200,
-            t3.avg_killed_fish_value,
-            t3.avg_killed_fish_value_20_200,
-            t3.bullet_avg_profit,
-            t3.bullet_kill_avg_profit,
-            t3.total_profit,
 
             ROUND(CAST(t2.num_users_day1 AS FLOAT) / NULLIF(t2.num_users_day0, 0), 3) AS retention_rate_day1,
             ROUND(CAST(t2.num_users_day3 AS FLOAT) / NULLIF(t2.num_users_day0, 0), 3) AS retention_rate_day3,
             ROUND(CAST(t2.num_users_day7 AS FLOAT) / NULLIF(t2.num_users_day0, 0), 3) AS retention_rate_day7,
-
-            ROUND(CAST(t1.daily_total_bet AS FLOAT) / NULLIF(t2.num_users_day0, 0), 3) AS total_bet_per_user,
-            ROUND(CAST(t3.total_profit AS FLOAT) / NULLIF(t2.num_users_day0, 0), 3) AS total_profit_per_user,
-            ROUND(CAST(t1.total_num_rooms AS FLOAT) / NULLIF(t2.num_users_day0, 0), 3) AS total_rooms_per_user,
-
-            ROUND(CAST(t1.num_killed_bullets AS FLOAT) / NULLIF(t1.num_bullets, 0), 3) AS bullet_kill_ratio,
-            ROUND(CAST(t1.num_bullets AS FLOAT) / NULLIF(t1.num_users, 0), 3) AS bullets_per_user,
-            ROUND(CAST(t1.num_killed_bullets AS FLOAT) / NULLIF(t1.num_users, 0), 3) AS killed_bullets_per_user
-        FROM stats_by_daily_group t1
+            ROUND(CAST(t1.num_killed_bullets AS FLOAT) / NULLIF(t1.num_bullets, 0), 3) AS bullet_kill_ratio
+        FROM stats_by_user_date t1
         INNER JOIN retention_stats t2 
             ON t1.{stats_agg_col} = t2.{stats_agg_col} 
             AND t1.daily_group = t2.daily_group
-        INNER JOIN stats_by_strategy t3 
+        INNER JOIN stats_by_date t3 
             ON t1.{stats_agg_col} = t3.{stats_agg_col} 
-            AND t1.daily_group = t3.strategy_name
+            AND t1.daily_group = t3.daily_group
         ORDER BY t1.{stats_agg_col}, t1.daily_group
         ;
 
@@ -204,14 +187,6 @@ def generate_query(stats_agg_col):
     )
 
     return query
-
-
-def execute_query(redshift_loader, stats_agg_col, output_file):
-
-    file_path = f"{LOCAL_ROOT}/jobs/output_fish_hunter/{output_file}.parquet"
-    query = generate_query(stats_agg_col)
-    df_rs = redshift_loader.query_to_df(query=query, local_cache=file_path, reload=True)
-    print(df_rs)
 
 
 if __name__ == "__main__":
@@ -228,8 +203,35 @@ if __name__ == "__main__":
         )
     )
 
-    execute_query(redshift_loader, "activity_date", "bullet_stats_by_date")
-    execute_query(redshift_loader, "activity_week", "bullet_stats_by_week")
-    execute_query(redshift_loader, "activity_month", "bullet_stats_by_month")
+    # Initialize Scheduler with a default 3-day lookback
+    scheduler = ETLScheduler(redshift_loader, f"{LOCAL_ROOT}/jobs/output_fish_hunter", lookback_days=3)
+
+    scheduler.run_incremental_job(
+        job_name="daily_stats",
+        query_func=lambda start_date: generate_query("activity_date", start_date),
+        key_cols=["activity_date", "user_id", "daily_group"],
+        date_col="activity_date",
+        partition_level="none",
+    )
+
+    # Overrides to 7 days because weekly data takes longer to settle
+    scheduler.run_incremental_job(
+        job_name="weekly_stats",
+        query_func=lambda start_date: generate_query("activity_week", start_date),
+        key_cols=["activity_date", "user_id", "daily_group"],
+        date_col="activity_date",  # Always check max activity_date
+        partition_level="none",
+        lookback=7,
+    )
+
+    # Overrides to 31 days because weekly data takes longer to settle
+    scheduler.run_incremental_job(
+        job_name="monthly_stats",
+        query_func=lambda start_date: generate_query("activity_month", start_date),
+        key_cols=["activity_date", "user_id", "daily_group"],
+        date_col="activity_date",  # Always check max activity_date
+        partition_level="none",
+        lookback=31,
+    )
 
     redshift_loader.close()

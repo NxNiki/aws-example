@@ -3,18 +3,18 @@ title: "Fish Hunter Analytics"
 stats_by_date: 
   files: 
     day: [
-      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_date.parquet",
-      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_date_pa.parquet",
+      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/daily_stats/compact_part_0.parquet",
+      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/daily_stats_pa/compact_part_0.parquet",
     ]
 
     week: [
-      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_week.parquet",
-      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_week_pa.parquet",
+      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/weekly_stats/compact_part_0.parquet",
+      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/weekly_stats_pa/compact_part_0.parquet",
     ]
 
     month: [
-      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_month.parquet",
-      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_month_pa.parquet",
+      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/monthly_stats/compact_part_0.parquet",
+      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/monthly_stats_pa/compact_part_0.parquet",
 
     ]
 
@@ -24,7 +24,7 @@ stats_by_date:
   group1_label: "DAU and Retention"
   group1_columns: [
     "num_users",
-    num_return_users,
+    "num_return_users",
     "num_users_day1",
     "num_users_day3",
     "group_num_users",
@@ -35,16 +35,12 @@ stats_by_date:
 
   group2_label: "Bet and RTP"
   group2_columns: [
-    "total_bet_per_user",
-    "daily_group_rtp",
+    "total_bet",
+    "user_rtp",
     "group_rtp",
+    "total_profit",
     "bullet_avg_profit",
     "bullet_kill_avg_profit",
-    "daily_total_bet",
-    "total_profit_per_user",
-    "total_profit",
-    "total_num_rooms",
-    "total_rooms_per_user",
   ]
 
   group3_label: "Fish Value and Bullets"
@@ -53,10 +49,10 @@ stats_by_date:
     "avg_fish_value_20_200",
     "avg_killed_fish_value",
     "avg_killed_fish_value_20_200",
+    "num_bullets",
+    "num_killed_bullets",
     "bullet_kill_ratio",
-    "bullets_per_user",
-    "killed_bullets_per_user",
-    "total_rooms_per_user",
+    "num_rooms",
   ]
 
 stats_by_bet: 

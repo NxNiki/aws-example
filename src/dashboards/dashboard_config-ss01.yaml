@@ -3,19 +3,16 @@ title: "SS01 (wucaishen) Analytics"
 stats_by_date: 
   files: 
     day: [
-      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_date_user.parquet",
-      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_date_user_pa.parquet",
-      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_date_user_hg.parquet",
+      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/daily_stats/compact_part_0.parquet",
+      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/daily_stats_pa/compact_part_0.parquet",
     ]
     week: [
-      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_week_user.parquet",
-      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_week_user_pa.parquet",
-      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_week_user_hg.parquet",
+      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/weekly_stats/compact_part_0.parquet",
+      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/weekly_stats_pa/compact_part_0.parquet",
     ]
     month: [
-      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_month_user.parquet",
-      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_month_user_pa.parquet",
-      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_month_user_hg.parquet",
+      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/monthly_stats/compact_part_0.parquet",
+      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/monthly_stats_pa/compact_part_0.parquet",
     ]
 
   group_col: "ai_group"

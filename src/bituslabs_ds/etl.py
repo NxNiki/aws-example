@@ -248,7 +248,9 @@ class RedshiftBackend(DatabaseBackend):
 
 # ---------------- Athena Backend ----------------
 class AthenaBackend(DatabaseBackend):
-    def __init__(self, database, output_location, region="us-west-2", ctas_approach=False):
+    def __init__(
+        self, database, output_location, region: str = "us-west-2", ctas_approach: bool = False, timeout: int = 300
+    ):
         self.database = database
         self.output_location = output_location
         self.session = boto3.Session(region_name=region)
