@@ -114,7 +114,7 @@ def generate_query(stats_agg_col: str, start_date: str) -> str:
         )
 
         SELECT
-            DATE_ADD('year', 1, CAST(us.{stats_agg_col} AS DATE)) AS "activity_date",
+            CAST(us.{stats_agg_col} AS DATE) AS activity_date,
             'PA' AS ai_group,
             us.user_id,
             0 AS user_mathtable_change,

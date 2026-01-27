@@ -421,7 +421,9 @@ class ETLScheduler:
         partition_level: PartitionLevel = "month",
     ) -> None:
         """
-        Executes an incremental ETL job.
+        Executes an incremental ETL job. We assume if lookback days >= 30, the query get stats by month. So will truncate
+        start date to frist day of month to avoid partial calculation of the month. Similar logic is applied to weekly
+        stats if lookback >= 7.
 
         Args:
             job_name: The directory name for the specific ETL output.
@@ -439,6 +441,13 @@ class ETLScheduler:
         if last_date:
             # Shift back to handle late-arriving data
             start_dt_obj = last_date - timedelta(days=days_to_lookback)
+            if days_to_lookback >= 30:
+                start_dt_obj.replace(day=1)
+                logger.info(f"[{job_name}] truncate query start date to the first day of month: {start_dt_obj}")
+            elif days_to_lookback >= 7:
+                start_dt_obj = start_dt_obj - timedelta(days=start_dt_obj.weekday())
+                logger.info(f"[{job_name}] truncate query start date to the first day of week: {start_dt_obj}")
+
             start_date_str = start_dt_obj.strftime("%Y-%m-%d")
             logger.info(f"[{job_name}] Incremental start: {start_date_str} (Lookback: {days_to_lookback}d)")
         else:
