@@ -46,19 +46,25 @@ def _shuttle_data(source, destination):
             destination.close()
 
 
-def _forward_tunnel(local_port, remote_host, remote_port, transport):
+def _forward_tunnel(local_port, remote_host, remote_port, transport, stop_event):
     """
     Listens on a local port and forwards connections to the remote host
     via the Paramiko SSH transport. Runs indefinitely in a daemon thread.
     """
+    sock = None
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.settimeout(1.0)  # Allow the socket to check the stop_event periodically
         sock.bind(("127.0.0.1", local_port))
         sock.listen(5)
 
-        while True:
-            conn, addr = sock.accept()
+        while not stop_event.is_set():
+            try:
+                conn, addr = sock.accept()
+            except socket.timeout:
+                continue  # Just loop back and check stop_event
+
             chan = transport.open_channel("direct-tcpip", (remote_host, remote_port), (addr[0], addr[1]))
 
             if chan is None:
@@ -150,6 +156,7 @@ class RedshiftBackend(DatabaseBackend):
         self.bastion_ip = bastion_ip
         self.bastion_user = bastion_user
         self.local_port = local_port
+        self._stop_tunnel = threading.Event()  #
 
     def _check_query(self, query):
         # Remove lines that start with '--' (SQL comment) or '#' (Python/hash comment)
@@ -167,6 +174,10 @@ class RedshiftBackend(DatabaseBackend):
             # 1. Establish SSH connection
             self.ssh = paramiko.SSHClient()
             self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+            # Reset the stop event
+            self._stop_tunnel.clear()
+
             try:
                 self.ssh.connect(
                     hostname=self.bastion_ip,
@@ -186,6 +197,7 @@ class RedshiftBackend(DatabaseBackend):
                     self.host,
                     self.port,
                     self.ssh.get_transport(),
+                    self._stop_tunnel,
                 ),
             )
             self.tunnel_thread.daemon = True
@@ -238,12 +250,14 @@ class RedshiftBackend(DatabaseBackend):
         return wr.redshift.read_sql_query(query, con=conn)
 
     def close(self):
+        self._stop_tunnel.set()  # Tell the thread to stop
         if self.conn:
             self.conn.close()
             self.conn = None
         if self.ssh:
             self.ssh.close()
             self.ssh = None
+        time.sleep(1)
 
 
 # ---------------- Athena Backend ----------------
