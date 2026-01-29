@@ -26,7 +26,7 @@ COPY pyproject.toml poetry.lock ./
 
 # Install ONLY the main and etl groups (skips ml, ds, dl, spark, dev)
 # This keeps the environment lean.
-RUN poetry install --only main,etl --no-root && rm -rf $POETRY_CACHE_DIR
+RUN poetry install --only main,etl --no-root --no-cache && rm -rf $POETRY_CACHE_DIR
 
 # --- Stage 2: Runtime ---
 # We use the same slim image for the final runtime

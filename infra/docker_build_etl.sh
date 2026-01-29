@@ -10,8 +10,16 @@ REGION="us-west-2"
 ECR_URL="$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$IMAGE_NAME"
 echo "ECR_URL: $ECR_URL"
 
+# 1. Ensure the repository exists in ECR
+if ! aws ecr describe-repositories --repository-names "$IMAGE_NAME" --region "$REGION" > /dev/null 2>&1; then
+    echo "Creating repository $IMAGE_NAME..."
+    aws ecr create-repository --repository-name "$IMAGE_NAME" --region "$REGION"
+else
+    echo "Repository $IMAGE_NAME already exists. Skipping creation."
+fi
+
 # Login to ECR
-aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin 338568447110.dkr.ecr.us-west-2.amazonaws.com
+aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com"
 
 # Build the Docker image
 docker build --platform linux/amd64 -t $IMAGE_NAME -f infra/Dockerfile.etl ./

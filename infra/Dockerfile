@@ -28,7 +28,7 @@ WORKDIR /opt/program
 COPY ./pyproject.toml poetry.lock ./
 # Use poetry to install dependencies in a clean, isolated environment
 # We install to the system using 'virtualenvs.create false'
-RUN poetry config virtualenvs.create false && poetry install --only main --no-interaction --no-root
+RUN poetry config virtualenvs.create false && poetry install --only main,dl --no-interaction --no-root
 
 COPY ./src ./src
 # --- STAGE 2: Runtime Stage (Final Image) ---
