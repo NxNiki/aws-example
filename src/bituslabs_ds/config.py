@@ -14,6 +14,7 @@ SAGEMAKER_ROLE = "arn:aws:iam::338568447110:role/SageMakerExecutionRole"
 IMAGE_URI = "338568447110.dkr.ecr.us-west-2.amazonaws.com/bituslabs-ds-sagemaker:latest"
 DEFAULT_MAX_JOBS = 4
 DEFAULT_ATHENA_OUTPUT = f"s3://{S3_BUCKET}/athena-results"
+DEFAULT_BASTION_IP = "13.215.212.244"  # for ssh tunnel connection to redshift
 LOCAL_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
@@ -29,8 +30,6 @@ def get_cpu_cores(logical=True, default=1):
     Returns:
         int: Number of CPU cores.
     """
-    import os
-
     try:
         num_cores = os.cpu_count()
         if num_cores is not None:

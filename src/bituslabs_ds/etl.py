@@ -139,7 +139,7 @@ class RedshiftBackend(DatabaseBackend):
         user,
         password,
         port=5439,
-        bastion_ip="13.215.212.244",
+        bastion_ip: Optional[str] = None,
         bastion_user="ubuntu",
         local_port=5433,
     ):
@@ -159,6 +159,9 @@ class RedshiftBackend(DatabaseBackend):
         self._stop_tunnel = threading.Event()  #
 
     def _check_query(self, query):
+        """
+        check if query contains writing operations.
+        """
         # Remove lines that start with '--' (SQL comment) or '#' (Python/hash comment)
         query_lines = [
             line
@@ -170,7 +173,12 @@ class RedshiftBackend(DatabaseBackend):
             raise RuntimeError("RedshiftBackend is read-only. Write queries are not allowed.")
 
     def connect(self):
-        if self.conn is None:
+        if self.conn is not None:
+            return self.conn
+
+        if self.bastion_ip:
+            logger.info(f"Establishing SSH Tunnel via {self.bastion_ip}...")
+
             # 1. Establish SSH connection
             self.ssh = paramiko.SSHClient()
             self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -205,18 +213,25 @@ class RedshiftBackend(DatabaseBackend):
             time.sleep(1)
 
             # 3. Connect DB via Tunnel
-            try:
-                self.conn = redshift_connector.connect(
-                    host="127.0.0.1",
-                    port=self.local_port,
-                    database=self.database,
-                    user=self.user,
-                    password=self.password,
-                    ssl=True,
-                )
-            except Exception as e:
-                print(f"Error connecting to Redshift: {e}")
-                raise
+            host = "127.0.0.1"
+            port = self.local_port
+        else:
+            host = self.host
+            port = self.port
+
+        try:
+            logger.info(f"Connecting to Redshift with host: {host}, port: {port}")
+            self.conn = redshift_connector.connect(
+                host=host,
+                port=port,
+                database=self.database,
+                user=self.user,
+                password=self.password,
+                ssl=True,
+            )
+        except Exception as e:
+            print(f"Error connecting to Redshift: {e}")
+            raise
 
         return self.conn
 
@@ -340,6 +355,7 @@ class ETLScheduler:
     def __init__(self, data_loader: DataLoader, storage_root: Union[str, Path], lookback_days: int = 3):
         self.loader = data_loader
         self.storage_root = Path(storage_root)
+        self.is_s3 = str(storage_root).startswith("s3://")
         self.lookback_days = lookback_days
         self.default_start_date = "2025-01-01"
 
@@ -355,22 +371,34 @@ class ETLScheduler:
         """
         Scans the partitioned Parquet dataset to find the maximum processed date.
         """
-        if not job_path.exists() or not any(job_path.iterdir()):
-            return None
 
-        try:
-            # Read only the necessary column from the metadata to save memory/time
-            dataset = pq.ParquetDataset(str(job_path), use_legacy_dataset=False)
-            table = dataset.read(columns=[date_col])
+        if self.is_s3:
+            try:
+                # Use wrangler to read just the max date from S3
+                df = wr.s3.read_parquet(path=str(job_path), columns=[date_col], dataset=True)
+                if df.empty:
+                    return None
+                return pd.to_datetime(df[date_col]).max()
+            except:
+                return None
+        else:
 
-            if table.num_rows == 0:
+            if not job_path.exists() or not any(job_path.iterdir()):
                 return None
 
-            max_dt = pd.to_datetime(table.to_pandas()[date_col]).max()
-            return max_dt
-        except Exception as e:
-            logger.warning(f"Could not detect watermark in {job_path}: {e}")
-            return None
+            try:
+                # Read only the necessary column from the metadata to save memory/time
+                dataset = pq.ParquetDataset(str(job_path), use_legacy_dataset=False)
+                table = dataset.read(columns=[date_col])
+
+                if table.num_rows == 0:
+                    return None
+
+                max_dt = pd.to_datetime(table.to_pandas()[date_col]).max()
+                return max_dt
+            except Exception as e:
+                logger.warning(f"Could not detect watermark in {job_path}: {e}")
+                return None
 
     def _compact_partitions(self, job_name: str, key_cols: List[str], partition_level: PartitionLevel = "month"):
         """
@@ -378,18 +406,22 @@ class ETLScheduler:
         """
         import pyarrow.dataset as ds  # Import the modern dataset API
 
-        job_path = self.storage_root / job_name
-        if not job_path.exists() or not any(job_path.iterdir()):
-            return
-
         logger.info(f"[{job_name}] Starting de-duplicating compaction...")
 
         try:
             # 1. Load the entire dataset using the modern API
-            # This is more robust against the "Must provide schema" error
-            dataset = ds.dataset(str(job_path), format="parquet", partitioning="hive")
-            table = dataset.to_table()
-            df = table.to_pandas()
+            if self.is_s3:
+                job_path_str = f"{str(self.storage_root)}/{job_name}"
+                # AWS Wrangler is significantly faster for reading partitioned S3 datasets
+                df = wr.s3.read_parquet(path=job_path_str, dataset=True)
+            else:
+                job_path = self.storage_root / job_name
+                if not job_path.exists() or not any(job_path.iterdir()):
+                    return
+                # This is more robust against the "Must provide schema" error
+                dataset = ds.dataset(str(job_path), format="parquet", partitioning="hive")
+                table = dataset.to_table()
+                df = table.to_pandas()
 
             if df.empty:
                 return
@@ -400,26 +432,33 @@ class ETLScheduler:
             df = df.sort_values(by=sort_cols, ascending=True)
             df = df.drop_duplicates(subset=key_cols, keep="last")
 
-            # 3. Temporary storage for the "clean" write
-            temp_path = job_path.with_suffix(".tmp")
-            if temp_path.exists():
-                shutil.rmtree(temp_path)
+            partition_cols = self._get_partition_cols(partition_level)
+            if self.is_s3:
+                # On S3, 'mode="overwrite"' handles the deletion of old files for us
+                wr.s3.to_parquet(
+                    df=df, path=job_path_str, dataset=True, partition_cols=partition_cols, mode="overwrite", index=False
+                )
+            else:
+                # 3. Temporary storage for the "clean" write
+                temp_path = job_path.with_suffix(".tmp")
+                if temp_path.exists():
+                    shutil.rmtree(temp_path)
 
-            # 4. Write back using pyarrow table to preserve the original schema
-            # We use preserve_index=False to keep the parquet files clean
-            clean_table = pa.Table.from_pandas(df, preserve_index=False)
+                # 4. Write back using pyarrow table to preserve the original schema
+                # We use preserve_index=False to keep the parquet files clean
+                clean_table = pa.Table.from_pandas(df, preserve_index=False)
 
-            pq.write_to_dataset(
-                clean_table,
-                root_path=str(temp_path),
-                partition_cols=self._get_partition_cols(partition_level),
-                basename_template="compact_part_{i}.parquet",
-                existing_data_behavior="overwrite_or_ignore",
-            )
+                pq.write_to_dataset(
+                    clean_table,
+                    root_path=str(temp_path),
+                    partition_cols=partition_cols,
+                    basename_template="compact_part_{i}.parquet",
+                    existing_data_behavior="overwrite_or_ignore",
+                )
 
-            # 5. Atomic Swap
-            shutil.rmtree(job_path)
-            temp_path.rename(job_path)
+                # 5. Atomic Swap
+                shutil.rmtree(job_path)
+                temp_path.rename(job_path)
 
             logger.info(f"[{job_name}] Compaction complete. Partitions consolidated and de-duplicated.")
         except Exception as e:
@@ -513,20 +552,25 @@ class ETLScheduler:
                     # logger.debug(f"Sample values for {col}: {df[col].head(3).tolist()}")
 
         # 4. Atomic Write with Partitioning
-        # Note: 'overwrite_or_ignore' prevents file accumulation within existing partitions
-        try:
-            df.to_parquet(
-                path=str(job_path),
-                index=False,
-                engine="pyarrow",
-                partition_cols=partition_cols,
-                existing_data_behavior="overwrite_or_ignore",
+        if self.is_s3:
+            wr.s3.to_parquet(
+                df=df, path=str(job_path), dataset=True, partition_cols=partition_cols, mode="append", index=False
             )
-            logger.info(f"[{job_name}] Successfully updated partitions. New max date: {df[date_col].max().date()}")
-        except Exception as e:
-            logger.error(f"[{job_name}] Failed to save parquet data: {e}")
+        else:
+            # Note: 'overwrite_or_ignore' prevents file accumulation within existing partitions
+            try:
+                df.to_parquet(
+                    path=str(job_path),
+                    index=False,
+                    engine="pyarrow",
+                    partition_cols=partition_cols,
+                    existing_data_behavior="overwrite_or_ignore",
+                )
+                logger.info(f"[{job_name}] Successfully updated partitions. New max date: {df[date_col].max().date()}")
+            except Exception as e:
+                logger.error(f"[{job_name}] Failed to save parquet data: {e}")
 
-        self._compact_partitions(job_name=job_name, key_cols=key_cols, partition_level=partition_level)
+            self._compact_partitions(job_name=job_name, key_cols=key_cols, partition_level=partition_level)
 
 
 if __name__ == "__main__":

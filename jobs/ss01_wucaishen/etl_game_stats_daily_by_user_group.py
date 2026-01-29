@@ -265,6 +265,7 @@ if __name__ == "__main__":
             user="anaylsis_user",
             password="oZ4ztMx0yEXPLbJL733L",
             port=5439,
+            bastion_ip="13.215.212.244",
         )
     )
 
