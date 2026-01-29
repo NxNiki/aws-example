@@ -12,6 +12,7 @@ REGION = "us-west-2"
 S3_BUCKET = "bituslabs-team-ai"
 SAGEMAKER_ROLE = "arn:aws:iam::338568447110:role/SageMakerExecutionRole"
 IMAGE_URI = "338568447110.dkr.ecr.us-west-2.amazonaws.com/bituslabs-ds-sagemaker:latest"
+IMAGE_URI_LTE = "338568447110.dkr.ecr.us-west-2.amazonaws.com/bituslabs-ds-etl:latest"
 DEFAULT_MAX_JOBS = 4
 DEFAULT_ATHENA_OUTPUT = f"s3://{S3_BUCKET}/athena-results"
 DEFAULT_BASTION_IP = "13.215.212.244"  # for ssh tunnel connection to redshift
