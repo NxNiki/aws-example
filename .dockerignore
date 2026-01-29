@@ -9,3 +9,9 @@
 .git
 .mypy_cache
 .pytest_cache
+
+**/*.csv
+**/*.parquet
+**/*.log
+**/*.tmp
+**/output_*/
