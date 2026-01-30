@@ -1,7 +1,7 @@
 import os
 from textwrap import dedent
 
-from bituslabs_ds.config import LOCAL_ROOT, S3_BUCKET, setup_logging
+from bituslabs_ds.config import DEFAULT_BASTION_IP, LOCAL_ROOT, S3_BUCKET, setup_logging
 from bituslabs_ds.etl import AthenaBackend, DataLoader, RedshiftBackend
 
 pids_to_ignore = {
@@ -199,6 +199,7 @@ def run_pid_diff_check(
             user=REDSHIFT_CONFIG["user"],
             password=REDSHIFT_CONFIG["password"],
             port=REDSHIFT_CONFIG["port"],
+            bastion_ip=DEFAULT_BASTION_IP,
         )
     )
 

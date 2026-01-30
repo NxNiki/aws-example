@@ -9,7 +9,7 @@ packages = [{ include = "bituslabs_ds", from = "src" }]
 [tool.poetry.dependencies]
 python = ">=3.10.0.0,<3.13"
 numpy = "^1.26.0"
-pandas = "2.1.0"
+pandas = "^2.2.0"
 boto3 = "1.38.22"
 pyarrow = "^14.0.1"
 fastparquet = "2024.11.0"
@@ -62,7 +62,7 @@ awswrangler = "^3.7.0"
 [tool.poetry.group.spark]
 optional = true
 [tool.poetry.group.spark.dependencies]
-pyspark = "3.0.0"  # do not build package with pyspark when submit job to AWS EMR
+pyspark = "3.5.0"  # do not build package with pyspark when submit job to AWS EMR
 
 [tool.poetry.group.dev.dependencies]
 isort = "^6.0.1"
@@ -71,7 +71,7 @@ mypy = "^1.10"
 flake8 = "^7.0"
 pre-commit = "^4.2.0"
 pyjanitor = "^0.31.0"
-pyspark-stubs = "^3.0.0.post3"
+# pyspark-stubs = "^3.0.0.post3"
 types-pyyaml = "^6.0.12.20250822"
 types-paramiko = "^3.4.0"
 
