@@ -91,6 +91,7 @@ def generate_query():
                 SELECT
                     t.user_id,
                     t.math_policy,
+                    t.activity_date,
                     MIN(t.created_at) as first_bet_time,
                     MAX(t.created_at) as last_bet_time,
                     t.ai_group
@@ -103,6 +104,7 @@ def generate_query():
                 SELECT
                     t1.ai_group,
                     t1.math_policy,
+                    t1.activity_date,
                     COUNT(DISTINCT t1.user_id) AS day0_num_users,
                     COUNT(DISTINCT t2.user_id) AS day1_num_users,
                     COUNT(DISTINCT t3.user_id) AS day3_num_users
@@ -112,7 +114,7 @@ def generate_query():
                                 ON t2.first_bet_time < DATE_ADD('hour', 48, t1.first_bet_time) AND t2.last_bet_time >= DATE_ADD('hour', 24, t1.first_bet_time) AND t1.user_id = t2.user_id
                         LEFT JOIN daily_login AS t3
                                 ON t3.first_bet_time < DATE_ADD('hour', 96, t1.first_bet_time) AND t3.last_bet_time >= DATE_ADD('hour', 72, t1.first_bet_time) AND t1.user_id = t3.user_id
-                GROUP BY t1.ai_group, t1.math_policy
+                GROUP BY t1.ai_group, t1.math_policy, t1.activity_date
             ),
 
             user_stats AS (
@@ -120,6 +122,7 @@ def generate_query():
                     t.ai_group,
                     t.math_policy,
                     t.user_id,
+                    t.activity_date,
 
                     -- total number of bets:
                     COUNT(t.user_id) AS user_num_bets,
@@ -142,13 +145,14 @@ def generate_query():
 
                 FROM user_bets_group AS t
                 WHERE t.user_bet_count >= 40
-                GROUP BY t.ai_group, t.user_id, t.math_policy
+                GROUP BY t.ai_group, t.user_id, t.math_policy, t.activity_date
             ),
 
             group_stats AS (
                 SELECT
                     t.ai_group,
                     t.math_policy,
+                    t.activity_date,
 
                     COUNT(DISTINCT t.user_id) AS num_active_users,
                     COUNT(t.user_id) AS total_num_bets,
@@ -164,13 +168,14 @@ def generate_query():
                     SUM(CASE WHEN t.bet_type = 'FREE' THEN t.payout END) AS total_payout_fg
                 FROM user_bets_group AS t
                 WHERE t.user_bet_count >= 40
-                GROUP BY t.ai_group, t.math_policy
+                GROUP BY t.ai_group, t.math_policy, t.activity_date
             )
 
         SELECT
             us.ai_group,
             us.math_policy,
             us.user_id,
+            us.activity_date,
             us.user_mathtable_change,
 
             gs.num_active_users,
@@ -223,9 +228,9 @@ def generate_query():
             us.user_total_payout_bg / NULLIF(us.user_total_bet, 0) AS user_rtp_bg
 
         FROM user_stats AS us
-            INNER JOIN group_stats AS gs ON us.ai_group = gs.ai_group AND us.math_policy = gs.math_policy
-            INNER JOIN user_retention AS ur ON  us.ai_group = ur.ai_group AND us.math_policy = ur.math_policy
-        ORDER BY us.ai_group DESC, us.user_id DESC, ur.math_policy;
+            INNER JOIN group_stats AS gs ON us.ai_group = gs.ai_group AND us.math_policy = gs.math_policy AND us.activity_date = gs.activity_date
+            INNER JOIN user_retention AS ur ON  us.ai_group = ur.ai_group AND us.math_policy = ur.math_policy AND us.activity_date = ur.activity_date
+        ORDER BY us.ai_group DESC, us.user_id DESC, ur.math_policy, us.activity_date;
 
         """
     )

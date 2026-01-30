@@ -1,15 +1,17 @@
 """
-Script to load CSV file and create multi-group barplots (clustered barplots) with standard error using seaborn's built-in error bars.
+Script to load CSV file and create multi-group barplots (clustered barplots) using seaborn, with 500 bootstrap error bars, and save corresponding boxplots in a separate directory.
 
 Usage:
     python plot_all_user_stats.py
 
 The script will:
     - Automatically detect all numeric columns (excluding group_by_column and user_id)
-    - Filter out rows where ai_group == "newBee"
+    - Filter out rows where ai_group is in FILTER_OUT_VALUE (can remove multiple ai_groups)
     - Create grouped barplots (first group: x axis, second or combined as hue/legend)
     - For group_by_column of >2, combine all but the first as legend label using ':'-join
-    - Use seaborn's standard error (SE) error bars on the barplots
+    - Use seaborn with bootstrap error bars (n_boot=500, ci=68%)
+    - Create boxplots for each numeric column and grouping
+    - Save barplots and boxplots in different subfolders
 """
 
 import os
@@ -25,9 +27,11 @@ import seaborn as sns
 
 CSV_FILE_PATH = "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/all_user_stats.parquet"
 GROUP_BY_COLUMN = ["ai_group", "math_policy"]
-FILTER_OUT_VALUE = None  # "newBee"
+FILTER_OUT_VALUE = ["rollerCoaster", "dropTower"]
 EXCLUDE_COLUMNS: List[str] = []
 OUTPUT_DIR: Optional[str] = "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/all_user_stats_plot"
+BARPLOT_SUBDIR = "barplots"
+BOXPLOT_SUBDIR = "boxplots"
 AGGREGATION = "mean"
 FIG_SIZE = (10, 5)
 
@@ -73,11 +77,12 @@ def load_and_validate_data(
             raise ValueError(f"Group by column '{col}' not found in file.\nAvailable columns: {list(df.columns)}")
 
     filter_col = group_by_cols[0]
+    # Modified filtering to support list of ai_groups for removal
     if FILTER_OUT_VALUE is not None and filter_col in df.columns:
         initial_count = len(df)
-        df = df[df[filter_col] != FILTER_OUT_VALUE]
+        df = df[~df[filter_col].isin(FILTER_OUT_VALUE)]
         filtered_count = len(df)
-        print(f"Filtered out {initial_count - filtered_count} rows where {filter_col} == '{FILTER_OUT_VALUE}'")
+        print(f"Filtered out {initial_count - filtered_count} rows where {filter_col} in {FILTER_OUT_VALUE}")
         print(f"Remaining rows: {filtered_count}")
 
     exclude_set = set(group_by_cols) | {"user_id"} | set(exclude_cols)
@@ -117,9 +122,10 @@ def seaborn_multi_group_barplot(
     output_dir: Optional[str],
     fig_size: tuple,
     legend_palette: Optional[dict] = None,
+    n_boot: int = 500,
 ):
     """
-    Shows/saves a grouped barplot using seaborn, using SE error bars, handling >2 group_by_cols by combining those after the first into a legend label.
+    Shows/saves a grouped barplot using seaborn, using 500 bootstrap error bars, handling >2 group_by_cols by combining those after the first into a legend label.
     """
     group_cols = _ensure_group_is_list(group_by_cols)
     plt.figure(figsize=fig_size)
@@ -155,9 +161,11 @@ def seaborn_multi_group_barplot(
         hue_order=hue_order,
         palette=legend_palette,
         estimator="mean",
-        errorbar="se",
+        ci=95,
+        n_boot=n_boot,
         capsize=0.08,
         edgecolor="black",
+        errorbar=None,  # This disables errorbar argument, as ci/n_boot will be used.
     )
 
     title_str = f"{plot_col} by {group_cols[0]}"
@@ -167,7 +175,7 @@ def seaborn_multi_group_barplot(
     else:
         ax.legend_.remove() if ax.legend_ else None
 
-    plt.title(title_str, fontsize=14, fontweight="bold")
+    plt.title(f"{title_str} (Bootstrap error)", fontsize=14, fontweight="bold")
     plt.xlabel(group_cols[0], fontsize=12)
     plt.ylabel(plot_col, fontsize=12)
     plt.xticks(rotation=45, ha="right")
@@ -179,6 +187,79 @@ def seaborn_multi_group_barplot(
         safe_col_name = plot_col.replace(" ", "_").replace("/", "_")
         safe_group_name = "_".join(group_cols).replace(" ", "_").replace("/", "_")
         output_path = os.path.join(output_dir, f"barplot_{safe_col_name}_by_{safe_group_name}.png")
+        plt.savefig(output_path, dpi=300, bbox_inches="tight")
+        print(f"  Saved: {output_path}")
+    else:
+        plt.show()
+    plt.close()
+
+
+def seaborn_multi_group_boxplot(
+    df: pd.DataFrame,
+    group_by_cols: List[str],
+    plot_col: str,
+    output_dir: Optional[str],
+    fig_size: tuple,
+    legend_palette: Optional[dict] = None,
+):
+    """
+    Shows/saves a grouped boxplot using seaborn, handling >2 group_by_cols by combining those after the first into a legend label.
+    """
+    group_cols = _ensure_group_is_list(group_by_cols)
+    plt.figure(figsize=fig_size)
+    hue = None
+
+    # Build hue column if needed (for multi-group plotting)
+    if len(group_cols) > 1:
+        if len(group_cols) == 2:
+            hue = group_cols[1]
+            hue_legend = group_cols[1]
+            df_to_plot = df
+        else:
+            # Combine all except the first for legend
+            legend_col = "_legend"
+            df_to_plot = df.copy()
+            df_to_plot[legend_col] = df_to_plot[group_cols[1:]].astype(str).agg(":".join, axis=1)
+            hue = legend_col
+            hue_legend = ":".join(group_cols[1:])
+    else:
+        df_to_plot = df
+        hue = None
+        hue_legend = None
+
+    order = sorted(df_to_plot[group_cols[0]].dropna().unique())  # clean up x order
+    hue_order = sorted(df_to_plot[hue].dropna().unique()) if hue is not None else None
+
+    ax = sns.boxplot(
+        x=group_cols[0],
+        y=plot_col,
+        hue=hue,
+        data=df_to_plot,
+        order=order,
+        hue_order=hue_order,
+        palette=legend_palette,
+        showfliers=False,
+    )
+
+    title_str = f"{plot_col} by {group_cols[0]}"
+    if hue_legend:
+        ax.legend(title=hue_legend, bbox_to_anchor=(1.01, 1), loc="upper left")
+        title_str += f" + {hue_legend}"
+    else:
+        ax.legend_.remove() if ax.legend_ else None
+
+    plt.title(f"{title_str} (Boxplot)", fontsize=14, fontweight="bold")
+    plt.xlabel(group_cols[0], fontsize=12)
+    plt.ylabel(plot_col, fontsize=12)
+    plt.xticks(rotation=45, ha="right")
+    plt.grid(axis="y", linestyle="--", alpha=0.6)
+    plt.tight_layout()
+
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+        safe_col_name = plot_col.replace(" ", "_").replace("/", "_")
+        safe_group_name = "_".join(group_cols).replace(" ", "_").replace("/", "_")
+        output_path = os.path.join(output_dir, f"boxplot_{safe_col_name}_by_{safe_group_name}.png")
         plt.savefig(output_path, dpi=300, bbox_inches="tight")
         print(f"  Saved: {output_path}")
     else:
@@ -209,15 +290,28 @@ def main():
             legend_labels = sorted(df[group_by_cols[1:]].astype(str).agg(":".join, axis=1).unique())
         legend_palette = dict(zip(legend_labels, sns.color_palette("viridis", len(legend_labels))))
 
+    barplot_output_dir = os.path.join(OUTPUT_DIR, BARPLOT_SUBDIR) if OUTPUT_DIR else None
+    boxplot_output_dir = os.path.join(OUTPUT_DIR, BOXPLOT_SUBDIR) if OUTPUT_DIR else None
+
     plot_count = 0
 
     for col in valid_plot_cols:
-        print(f"Creating grouped barplot for: {col} (with SE error bars via Seaborn)")
+        print(f"Creating grouped barplot for: {col} (500 bootstrap error bars)")
         seaborn_multi_group_barplot(
             df=df,
             group_by_cols=group_by_cols,
             plot_col=col,
-            output_dir=OUTPUT_DIR,
+            output_dir=barplot_output_dir,
+            fig_size=FIG_SIZE,
+            legend_palette=legend_palette,
+            n_boot=500,
+        )
+        print(f"Creating grouped boxplot for: {col}")
+        seaborn_multi_group_boxplot(
+            df=df,
+            group_by_cols=group_by_cols,
+            plot_col=col,
+            output_dir=boxplot_output_dir,
             fig_size=FIG_SIZE,
             legend_palette=legend_palette,
         )
@@ -225,6 +319,7 @@ def main():
 
     print(f"\nAll plots completed!")
     print(f"  Grouped barplots created: {plot_count}")
+    print(f"  Grouped boxplots created: {plot_count}")
 
 
 if __name__ == "__main__":
