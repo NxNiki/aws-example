@@ -795,7 +795,7 @@ class GameStatsDashboard:
             # Smart Ticks for Date view
             all_y = []
             if left_metrics:
-                all_y.extend(self.df_date[left_metrics].values.flatten())
+                all_y.extend(df_date[left_metrics].values.flatten())
             if all_y:
                 yticks = self.get_ticks(all_y, thresh)
                 fig.update_yaxes(
@@ -806,7 +806,7 @@ class GameStatsDashboard:
 
             all_y_r = []
             if right_metrics:
-                all_y_r.extend(self.df_date[right_metrics].values.flatten())
+                all_y_r.extend(df_date[right_metrics].values.flatten())
             if all_y_r:
                 yticks_r = self.get_ticks(all_y_r, thresh)
                 fig.update_yaxes(
