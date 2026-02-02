@@ -66,6 +66,7 @@ def generate_query(stats_agg_col: str, start_date: str, end_date: str = DATE_END
                     WHEN SUM(CASE WHEN strategy_name = 'BOOST_POOL' AND partition_val = 'c2mta7-ls8vqx-HyJf5k-event' THEN 1 ELSE 0 END) > 0 THEN 'BOOST_POOL_2'
                     WHEN SUM(CASE WHEN strategy_name = 'BOOST_POOL' THEN 1 ELSE 0 END) > 0 THEN 'BOOST_POOL'
                     WHEN SUM(CASE WHEN strategy_name = 'DYNAMIC_RTP' THEN 1 ELSE 0 END) > 0 THEN 'DYNAMIC_RTP'
+                    WHEN SUM(CASE WHEN strategy_name = 'DYNAMIC_RTP_V2' THEN 1 ELSE 0 END) > 0 THEN 'DYNAMIC_RTP_2'
                     ELSE 'DEFAULT_FALLBACK'
                 END AS daily_group,
                 LAG(activity_date) OVER (PARTITION BY user_id ORDER BY activity_date) AS bj_date_last_bet
@@ -223,6 +224,7 @@ if __name__ == "__main__":
         key_cols=["activity_date", "user_id", "daily_group"],
         date_col="activity_date",
         partition_level="none",
+        lookback=7,
     )
 
     # Overrides to 7 days because weekly data takes longer to settle
