@@ -110,7 +110,7 @@ class GameStatsDashboard:
     def _reset_state(self):
 
         self.config = {}
-        self.df_date = {}
+        self.dfs_by_date = {}
         self.df_bet = pd.DataFrame()
         self.df_date_groups = []
         self.df_bet_groups = []
@@ -187,11 +187,11 @@ class GameStatsDashboard:
                     daily_data.append(read_local_cache(f))
 
             if daily_data:
-                self.df_date[gran] = pd.concat(daily_data)
-                if self.date_col in self.df_date[gran].columns:
-                    self.df_date[gran][self.date_col] = pd.to_datetime(self.df_date[gran][self.date_col])
+                self.dfs_by_date[gran] = pd.concat(daily_data)
+                if self.date_col in self.dfs_by_date[gran].columns:
+                    self.dfs_by_date[gran][self.date_col] = pd.to_datetime(self.dfs_by_date[gran][self.date_col])
             else:
-                self.df_date[gran] = pd.DataFrame()
+                self.dfs_by_date[gran] = pd.DataFrame()
 
         # Exclude grouping columns for date stats
         self.date_metrics = {}
@@ -214,7 +214,7 @@ class GameStatsDashboard:
         # This helps Dash serialize the data correctly.
         min_date = None
         max_date = None
-        for _, df_date in self.df_date.items():
+        for _, df_date in self.dfs_by_date.items():
             if df_date.empty or self.date_col not in df_date.columns:
                 continue
             cur_min = df_date[self.date_col].min()
@@ -632,7 +632,9 @@ class GameStatsDashboard:
             default_gran = list(self.date_files_config.keys())[0]
             if self.config["stats_by_date"]["group_col"]:
                 self.df_date_group_col = self.config["stats_by_date"]["group_col"]
-                self.df_date_groups: List[str] = self.df_date[default_gran][self.df_date_group_col].unique().tolist()
+                self.df_date_groups: List[str] = (
+                    self.dfs_by_date[default_gran][self.df_date_group_col].unique().tolist()
+                )
             return self._layout_stats_by_date()
 
         elif current_tab == "tab-bet":
@@ -664,7 +666,7 @@ class GameStatsDashboard:
 
         fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-        df_date = self.df_date[date_granularity]
+        df_date = self.dfs_by_date[date_granularity]
         df_date = df_date[(df_date[self.date_col] >= start_date) & (df_date[self.date_col] <= end_date)].copy()
 
         if self.df_date_group_col == "" or self.df_date_group_col not in df_date.columns:
