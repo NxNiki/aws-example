@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import socket
+from datetime import timedelta
 from math import inf
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -181,20 +182,38 @@ class GameStatsDashboard:
         self.config = load_config(config_file)
         self._load_date_data()
 
+    def _compute_group_date_ranges(self, granularity=None):
+        """
+        For Stats by Group: Compute
+          - min_date: min date in data
+          - max_date: max date in data
+          - group1 range: the two weeks before the most recent two weeks
+          - group2 range: the most recent two weeks
+        Returns: min_date, max_date, group1_start, group1_end, group2_start, group2_end
+        """
+        if granularity is None:
+            granularity = list(self.date_files_config.keys())[0]
+        df_date = self.dfs_by_date.get(granularity, pd.DataFrame())
+        if df_date.empty or self.date_col not in df_date.columns:
+            return None, None, None, None, None, None
+        min_date = pd.to_datetime(df_date[self.date_col].min())
+        max_date = pd.to_datetime(df_date[self.date_col].max())
+        group2_end = max_date
+        group2_start = max(min_date, group2_end - timedelta(days=13))
+        group1_end = group2_start - timedelta(days=1)
+        group1_start = max(min_date, group1_end - timedelta(days=13)) if group1_end >= min_date else None
+        return min_date, max_date, group1_start, group1_end, group2_start, group2_end
+
     @property
     def date_range(self) -> Tuple[Any, Any]:
-        min_date = None
-        max_date = None
-        for _, df_date in self.dfs_by_date.items():
-            if df_date.empty or self.date_col not in df_date.columns:
-                continue
-            cur_min = df_date[self.date_col].min()
-            cur_max = df_date[self.date_col].max()
-            if min_date is None or (cur_min is not None and cur_min < min_date):
-                min_date = cur_min
-            if max_date is None or (cur_max is not None and cur_max > max_date):
-                max_date = cur_max
-        return min_date, max_date
+        # Used for min_date, max_date in the picker
+        granularity = list(self.date_files_config.keys())[0]
+        df_date = self.dfs_by_date.get(granularity, pd.DataFrame())
+        if df_date.empty or self.date_col not in df_date.columns:
+            return None, None
+        min_d = df_date[self.date_col].min()
+        max_d = df_date[self.date_col].max()
+        return min_d, max_d
 
     @property
     def date_files_config(self):
@@ -293,7 +312,13 @@ class GameStatsDashboard:
         )
 
     def _layout_stats_by_date(self):
-        min_date, max_date = self.date_range
+        granularity = list(self.date_files_config.keys())[0]
+        df_date = self.dfs_by_date.get(granularity, pd.DataFrame())
+        min_date = None
+        max_date = None
+        if not df_date.empty and self.date_col in df_date.columns:
+            min_date = df_date[self.date_col].min()
+            max_date = df_date[self.date_col].max()
         date_picker = html.Div(
             [
                 html.Div(
@@ -429,7 +454,7 @@ class GameStatsDashboard:
         )
 
     def _layout_stats_by_group(self):
-        min_date, max_date = self.date_range
+        min_date, max_date, group1_start, group1_end, group2_start, group2_end = self._compute_group_date_ranges()
 
         date_group_picker = html.Div(
             [
@@ -440,9 +465,9 @@ class GameStatsDashboard:
                             id="date-picker-range1",
                             min_date_allowed=min_date,
                             max_date_allowed=max_date,
-                            initial_visible_month=min_date,
-                            start_date=min_date,
-                            end_date=max_date,
+                            initial_visible_month=group1_start if group1_start is not None else min_date,
+                            start_date=group1_start if group1_start is not None else min_date,
+                            end_date=group1_end if group1_end is not None else group1_start,
                             display_format="YYYY-MM-DD",
                             style={"verticalAlign": "middle", "marginRight": "20px"},
                         ),
@@ -452,9 +477,9 @@ class GameStatsDashboard:
                             id="date-picker-range2",
                             min_date_allowed=min_date,
                             max_date_allowed=max_date,
-                            initial_visible_month=min_date,
-                            start_date=None,  # EMPTY by default!
-                            end_date=None,
+                            initial_visible_month=group2_start if group2_start is not None else min_date,
+                            start_date=group2_start if group2_start is not None else min_date,
+                            end_date=group2_end if group2_end is not None else max_date,
                             display_format="YYYY-MM-DD",
                             style={"verticalAlign": "middle", "marginRight": "20px"},
                         ),
@@ -491,6 +516,10 @@ class GameStatsDashboard:
             metric_dropdown_id = f"group-{group_id}-metrics"
             display_toggle_id = f"group-{group_id}-display"
             group_selector_id = f"group-{group_id}-group"
+            # --- CLIP controls:
+            clip_check_id = f"group-{group_id}-clip-enable"
+            clip_min_id = f"group-{group_id}-clip-min"
+            clip_max_id = f"group-{group_id}-clip-max"
             return html.Div(
                 [
                     html.H4(label, style={"marginTop": "0", "color": "#377EB8"}),
@@ -524,6 +553,37 @@ class GameStatsDashboard:
                                         value=self.df_plot_groups[:4],
                                         labelStyle={"display": "block", "marginBottom": "5px"},
                                         style={"marginBottom": "10px"},
+                                    ),
+                                    html.Hr(style={"marginTop": "14px", "marginBottom": "14px"}),
+                                    html.Label(
+                                        "Clip Data (Box/Bar):", style={"fontWeight": "bold", "display": "block"}
+                                    ),
+                                    html.Div(
+                                        [
+                                            dcc.Checklist(
+                                                id=clip_check_id,
+                                                options=[{"label": " Enable Clip", "value": "ON"}],
+                                                value=[],
+                                                style={"display": "inline-block", "marginRight": "10px"},
+                                            ),
+                                            html.Label("Min:", style={"marginLeft": "10px"}),
+                                            dcc.Input(
+                                                id=clip_min_id,
+                                                type="number",
+                                                placeholder="min",
+                                                style={"width": "70px"},
+                                                value=None,
+                                            ),
+                                            html.Label("Max:", style={"marginLeft": "10px"}),
+                                            dcc.Input(
+                                                id=clip_max_id,
+                                                type="number",
+                                                placeholder="max",
+                                                style={"width": "70px"},
+                                                value=None,
+                                            ),
+                                        ],
+                                        style={"marginTop": "6px", "marginBottom": "4px"},
                                     ),
                                 ],
                                 style=Styles.CONTROL_PANEL_CONTAINER,
@@ -659,6 +719,80 @@ class GameStatsDashboard:
         def render_content(tab):
             return self._render_tab_content(tab)
 
+        # For "Stats by Date": update picker to full range on granularity switch
+        @self.app.callback(
+            Output("date-picker-range", "min_date_allowed"),
+            Output("date-picker-range", "max_date_allowed"),
+            Output("date-picker-range", "start_date"),
+            Output("date-picker-range", "end_date"),
+            Output("date-picker-range", "initial_visible_month"),
+            Input("date-granularity", "value"),
+        )
+        def update_date_picker_on_granularity(granularity):
+            gran = granularity
+            gran_df = self.dfs_by_date.get(gran, pd.DataFrame())
+            if gran_df.empty or self.date_col not in gran_df.columns:
+                return [None] * 5
+            min_date = gran_df[self.date_col].min()
+            max_date = gran_df[self.date_col].max()
+            return (
+                min_date,
+                max_date,
+                min_date,
+                max_date,
+                min_date,
+            )
+
+        # For "Stats by Group": set picker2 to most recent 2 weeks, picker1 to previous 2 weeks.
+        @self.app.callback(
+            Output("date-picker-range1", "min_date_allowed"),
+            Output("date-picker-range1", "max_date_allowed"),
+            Output("date-picker-range1", "start_date"),
+            Output("date-picker-range1", "end_date"),
+            Output("date-picker-range1", "initial_visible_month"),
+            Output("date-picker-range2", "min_date_allowed"),
+            Output("date-picker-range2", "max_date_allowed"),
+            Output("date-picker-range2", "start_date"),
+            Output("date-picker-range2", "end_date"),
+            Output("date-picker-range2", "initial_visible_month"),
+            Input("date-granularity", "value"),
+        )
+        def update_group_date_pickers_on_granularity(granularity):
+            min_date, max_date, group1_start, group1_end, group2_start, group2_end = self._compute_group_date_ranges(
+                granularity
+            )
+            # For picker1 (2 weeks before recent 2 weeks), picker2 (most recent 2 weeks)
+            return (
+                min_date,
+                max_date,
+                group1_start if group1_start is not None else min_date,
+                group1_end if group1_end is not None else group1_start,
+                group1_start if group1_start is not None else min_date,
+                min_date,
+                max_date,
+                group2_start if group2_start is not None else min_date,
+                group2_end if group2_end is not None else max_date,
+                group2_start if group2_start is not None else min_date,
+            )
+
+        # Add group-plot callbacks, now with CLIP
+        for i in range(1, 4):
+            self.app.callback(
+                Output(f"group-g{i}-plot", "figure"),
+                [
+                    Input(f"group-g{i}-metrics", "value"),
+                    Input(f"group-g{i}-display", "value"),
+                    Input(f"group-g{i}-group", "value"),
+                    Input("date-picker-range1", "start_date"),
+                    Input("date-picker-range1", "end_date"),
+                    Input("date-picker-range2", "start_date"),
+                    Input("date-picker-range2", "end_date"),
+                    Input(f"group-g{i}-clip-enable", "value"),
+                    Input(f"group-g{i}-clip-min", "value"),
+                    Input(f"group-g{i}-clip-max", "value"),
+                ],
+            )(self.update_group_plot_combined_factory(f"g{i}"))
+
         self.app.callback(
             Output("combined-plot", "figure"),
             [
@@ -689,20 +823,6 @@ class GameStatsDashboard:
                     Input("date-picker-range", "end_date"),
                 ],
             )(self.update_date_plot)
-
-        for i in range(1, 4):
-            self.app.callback(
-                Output(f"group-g{i}-plot", "figure"),
-                [
-                    Input(f"group-g{i}-metrics", "value"),
-                    Input(f"group-g{i}-display", "value"),
-                    Input(f"group-g{i}-group", "value"),
-                    Input("date-picker-range1", "start_date"),
-                    Input("date-picker-range1", "end_date"),
-                    Input("date-picker-range2", "start_date"),
-                    Input("date-picker-range2", "end_date"),
-                ],
-            )(self.update_group_plot_combined_factory(f"g{i}"))
 
     def _render_tab_content(self, current_tab):
         if current_tab == "tab-date":
@@ -1013,9 +1133,21 @@ class GameStatsDashboard:
     def update_group_plot_combined_factory(self, group_id):
         """
         Callback factory: Plots date-group stats for a metric, for both date-range1 and date-range2, in a single figure.
+        Now supports optional data clipping.
         """
 
-        def callback(metric, display_mode, groups, range1_start, range1_end, range2_start, range2_end):
+        def callback(
+            metric,
+            display_mode,
+            groups,
+            range1_start,
+            range1_end,
+            range2_start,
+            range2_end,
+            clip_enable,
+            clip_min,
+            clip_max,
+        ):
             # If invalid input, return blank
             if not metric or not groups or range1_start is None or range1_end is None:
                 return go.Figure()
@@ -1059,6 +1191,10 @@ class GameStatsDashboard:
                     }
                 )
 
+            enable_clip = clip_enable is not None and "ON" in (clip_enable or [])
+            cmin = clip_min if enable_clip and clip_min is not None else None
+            cmax = clip_max if enable_clip and clip_max is not None else None
+
             if display_mode == "box":
                 for gi, group in enumerate(groups):
                     color_base = base_colors[gi % len(base_colors)]
@@ -1069,6 +1205,11 @@ class GameStatsDashboard:
                         df_g = df_date.loc[mask]
                         df_g = df_g[df_g[self.df_date_group_col] == group]
                         vals = df_g[metric].dropna().values
+                        # CLIPPING logic, numpy clip
+                        if enable_clip and (cmin is not None or cmax is not None):
+                            vals = np.clip(
+                                vals, cmin if cmin is not None else -np.inf, cmax if cmax is not None else np.inf
+                            )
                         if len(vals) == 0:
                             continue
                         box_label = _label(group, ri)
@@ -1085,7 +1226,6 @@ class GameStatsDashboard:
                             )
                         )
             else:  # bar, mean+std
-                # For bar: arrange bars side by side for the same group (range1/range2).
                 x_labels = []
                 ydata = []
                 edata = []
@@ -1099,13 +1239,17 @@ class GameStatsDashboard:
                         df_g = df_date.loc[mask]
                         df_g = df_g[df_g[self.df_date_group_col] == group]
                         vals = df_g[metric].dropna().values
+                        # CLIPPING logic, numpy clip
+                        if enable_clip and (cmin is not None or cmax is not None):
+                            vals = np.clip(
+                                vals, cmin if cmin is not None else -np.inf, cmax if cmax is not None else np.inf
+                            )
                         if len(vals) == 0:
                             continue
                         bar_label = _label(group, ri)
                         x_labels.append(bar_label)
                         ydata.append(np.mean(vals))
                         edata.append(np.std(vals))
-                        # Opacity or pattern to distinguish range1/range2
                         if ri == 0:
                             mcolors.append(dict(color=color_base, opacity=1.0, line=dict(color="#333", width=1)))
                         else:
@@ -1144,8 +1288,16 @@ class GameStatsDashboard:
                                 fig.data[i].marker.opacity = [m.get("opacity", 1.0) for m in mcolors]
 
             mode_title = "Box Plot" if display_mode == "box" else "Bar (Mean ± Std)"
+            subtitle = ""
+            if enable_clip:
+                subtitle = f" (Clipped"
+                if cmin is not None:
+                    subtitle += f" min={cmin}"
+                if cmax is not None:
+                    subtitle += f" max={cmax}"
+                subtitle += ")"
             fig.update_layout(
-                title=f"{mode_title}: {metric}",
+                title=f"{mode_title}: {metric}{subtitle}",
                 yaxis_title=metric,
                 template="plotly_white",
                 hovermode="closest",
