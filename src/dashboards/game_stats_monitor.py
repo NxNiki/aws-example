@@ -108,61 +108,44 @@ class GameStatsDashboard:
         return self.config["stats_by_date"]["date_col"]
 
     def _reset_state(self):
-
         self.config = {}
         self.dfs_by_date = {}
         self.df_bet = pd.DataFrame()
-        self.df_date_groups = []
+        self.df_plot_groups = []
         self.df_bet_groups = []
         self.df_date_group_col = ""
         self.df_bet_group_col = ""
         self.bet_metrics = []
-        self.date_metrics = []
+        self.plot_metrics = []
 
     def _find_config_files(self) -> List[Dict[str, str]]:
-        """Find all dashboard_config*.yaml files in the config directory."""
         config_files = []
         config_dir_path = Path(self.config_dir)
-
         if not config_dir_path.exists() or not config_dir_path.is_dir():
-            # Fallback to current file's directory
             config_dir_path = Path(__file__).parent
-
         pattern = re.compile(r"^dashboard_config.*\.yaml$")
         for file_path in config_dir_path.glob("*.yaml"):
             if pattern.match(file_path.name):
-                # Load config to get title
                 try:
                     temp_config = load_config(str(file_path))
                     title = temp_config.get("title", file_path.stem)
-                    config_files.append({"label": title, "value": str(file_path.absolute())})  # Use absolute path
+                    config_files.append({"label": title, "value": str(file_path.absolute())})
                 except Exception as e:
                     logger.warning(f"Could not load config {file_path}: {e}")
-                    config_files.append(
-                        {"label": file_path.stem, "value": str(file_path.absolute())}  # Use absolute path
-                    )
-
+                    config_files.append({"label": file_path.stem, "value": str(file_path.absolute())})
         return sorted(config_files, key=lambda x: x["label"])
 
     def _load_data(self):
-        """Load all data based on current config."""
-
-        # --- 1. Process Bet Data (Granular) ---
         self._load_bet_data()
-
-        # --- 2. Process Date Data (Aggregated) ---
         self._load_date_data()
 
     def _load_bet_data(self):
-        """Load bet-level data from config."""
         if not self.df_bet.empty:
             return
-
         bet_data = []
         for f in self.config["stats_by_bet"]["files"]:
-            if f:  # Skip empty file paths
+            if f:
                 bet_data.append(read_local_cache(f))
-
         if bet_data:
             self.df_bet = pd.concat(bet_data)
             self.df_bet["bet_index"] = pd.to_numeric(self.df_bet["bet_index"], errors="coerce")
@@ -176,42 +159,30 @@ class GameStatsDashboard:
             self.bet_metrics = []
 
     def _load_date_data(self):
-        """Load date-level data from config."""
         for gran, file_paths in self.date_files_config.items():
             daily_data = []
             if isinstance(file_paths, str):
                 file_paths = [file_paths]
-
             for f in file_paths:
-                if f:  # Skip empty file paths
+                if f:
                     daily_data.append(read_local_cache(f))
-
             if daily_data:
                 self.dfs_by_date[gran] = pd.concat(daily_data)
                 if self.date_col in self.dfs_by_date[gran].columns:
                     self.dfs_by_date[gran][self.date_col] = pd.to_datetime(self.dfs_by_date[gran][self.date_col])
             else:
                 self.dfs_by_date[gran] = pd.DataFrame()
-
-        # Exclude grouping columns for date stats
-        self.date_metrics = {}
-        self.date_metrics["g1"] = self.config["stats_by_date"]["group1_columns"]
-        self.date_metrics["g2"] = self.config["stats_by_date"]["group2_columns"]
-        self.date_metrics["g3"] = self.config["stats_by_date"]["group3_columns"]
+        self.plot_metrics = {}
+        self.plot_metrics["g1"] = self.config["stats_by_date"]["group1_columns"]
+        self.plot_metrics["g2"] = self.config["stats_by_date"]["group2_columns"]
+        self.plot_metrics["g3"] = self.config["stats_by_date"]["group3_columns"]
 
     def _reload_config(self, config_file: str):
-        """Reload config and data from a new config file."""
         self.config = load_config(config_file)
         self._load_date_data()
 
     @property
     def date_range(self) -> Tuple[Any, Any]:
-        """
-        Returns (min_date, max_date) from the current df_date.
-        Returns (None, None) if dataframe is empty.
-        """
-        # Ensure we are returning Python date objects or strings, not Timestamps
-        # This helps Dash serialize the data correctly.
         min_date = None
         max_date = None
         for _, df_date in self.dfs_by_date.items():
@@ -223,16 +194,13 @@ class GameStatsDashboard:
                 min_date = cur_min
             if max_date is None or (cur_max is not None and cur_max > max_date):
                 max_date = cur_max
-
         return min_date, max_date
 
     @property
     def date_files_config(self):
         files_config = self.config["stats_by_date"].get("files", {})
-
         if isinstance(files_config, list):
             files_config = {"day": files_config}
-
         return files_config
 
     @staticmethod
@@ -247,10 +215,8 @@ class GameStatsDashboard:
         arr = arr.dropna().values
         if len(arr) == 0:
             return np.nan, np.nan
-
         if min(arr) == max(arr):
             return arr[0], arr[0]
-
         boot_means = []
         for _ in range(n_boot):
             samples = np.random.choice(arr, size=len(arr), replace=True)
@@ -266,7 +232,6 @@ class GameStatsDashboard:
     def _build_main_layout(self):
         self.app.layout = html.Div(
             [
-                # --- Header / Navigator ---
                 html.Div(
                     [
                         dcc.Dropdown(
@@ -293,6 +258,12 @@ class GameStatsDashboard:
                                     selected_style=Styles.NAV_TAB_SELECTED,
                                 ),
                                 dcc.Tab(
+                                    label="Stats by Group",
+                                    value="tab-group",
+                                    style=Styles.NAV_TAB,
+                                    selected_style=Styles.NAV_TAB_SELECTED,
+                                ),
+                                dcc.Tab(
                                     label="Stats by Bet",
                                     value="tab-bet",
                                     style=Styles.NAV_TAB,
@@ -314,7 +285,6 @@ class GameStatsDashboard:
                         "marginLeft": "0px",
                     },
                 ),
-                # --- Main Content Area ---
                 html.Div(
                     id="page-content",
                     style={"padding": "0 20px 20px 20px", "backgroundColor": "#f4f7f6", "minHeight": "100vh"},
@@ -323,8 +293,6 @@ class GameStatsDashboard:
         )
 
     def _layout_stats_by_date(self):
-        """Layout for the date view with 3 group plots."""
-
         min_date, max_date = self.date_range
         date_picker = html.Div(
             [
@@ -341,7 +309,6 @@ class GameStatsDashboard:
                             display_format="YYYY-MM-DD",
                             style={"verticalAlign": "middle", "marginRight": "20px"},
                         ),
-                        # Add spacing between components
                         html.Div(style={"width": "30px"}),
                         html.Label("Select Date Granularity:", style={"fontWeight": "bold", "marginRight": "10px"}),
                         dcc.Dropdown(
@@ -349,20 +316,17 @@ class GameStatsDashboard:
                             options=list(self.date_files_config.keys()),
                             value=list(self.date_files_config.keys())[0],
                             clearable=False,
-                            # Ensure the dropdown has a defined width so it doesn't collapse
                             style={"width": "150px"},
                         ),
                     ],
-                    # Use Flexbox to align all children horizontally and vertically ***
                     style={
                         "display": "flex",
                         "flexDirection": "row",
-                        "alignItems": "center",  # Vertically aligns items in the center
-                        "justifyContent": "flex-start",  # Aligns items to the left
+                        "alignItems": "center",
+                        "justifyContent": "flex-start",
                     },
                 ),
             ],
-            # Outer box styling remains the same
             style={
                 "marginBottom": "20px",
                 "padding": "15px",
@@ -372,41 +336,37 @@ class GameStatsDashboard:
             },
         )
 
-        # Define the download configuration once to reuse it
         download_config = {
             "toImageButtonOptions": {
-                "format": "png",  # one of png, svg, jpeg, webp
-                "height": 600,  # Set the height of the download
-                "width": 1200,  # Set the width of the download
-                "scale": 3,  # Multiply title/legend/axis fonts by 3 (High Res)
+                "format": "png",
+                "height": 600,
+                "width": 1200,
+                "scale": 3,
             },
-            "displaylogo": False,  # Optional: Hide the "Plotly" logo
+            "displaylogo": False,
         }
 
         def create_group_panel(group_id, label):
-
-            download_config["toImageButtonOptions"]["filename"] = f"fh_stats_by_date{label}"
-
+            download_config["toImageButtonOptions"]["filename"] = f"stats_by_date{label}"
             return html.Div(
                 [
                     html.H4(label, style={"marginTop": "0", "color": "#377EB8"}),
                     html.Div(
                         [
-                            # Controls
                             html.Div(
                                 [
                                     html.Label("Left Axis Metrics:"),
                                     dcc.Dropdown(
                                         id=f"date-{group_id}-left-metrics",
-                                        options=[{"label": m, "value": m} for m in self.date_metrics[group_id]],
-                                        value=[self.date_metrics[group_id][0]] if self.date_metrics[group_id] else [],
+                                        options=[{"label": m, "value": m} for m in self.plot_metrics[group_id]],
+                                        value=[self.plot_metrics[group_id][0]] if self.plot_metrics[group_id] else [],
                                         multi=True,
                                         style={"minWidth": "200px"},
                                     ),
                                     html.Label("Right Axis Metrics:", style={"marginTop": "10px"}),
                                     dcc.Dropdown(
                                         id=f"date-{group_id}-right-metrics",
-                                        options=[{"label": m, "value": m} for m in self.date_metrics[group_id]],
+                                        options=[{"label": m, "value": m} for m in self.plot_metrics[group_id]],
                                         value=[],
                                         multi=True,
                                         style={"minWidth": "200px"},
@@ -433,10 +393,8 @@ class GameStatsDashboard:
                                         [
                                             dcc.Checklist(
                                                 id=f"date-{group_id}-group",
-                                                options=[{"label": s, "value": s} for s in self.df_date_groups],
-                                                value=self.df_date_groups[
-                                                    :4
-                                                ],  # Select up to the first 4 strategies by default
+                                                options=[{"label": s, "value": s} for s in self.df_plot_groups],
+                                                value=self.df_plot_groups[:4],
                                                 labelStyle={"display": "block", "marginBottom": "5px"},
                                                 style={"marginBottom": "10px"},
                                             )
@@ -446,7 +404,6 @@ class GameStatsDashboard:
                                 ],
                                 style=Styles.CONTROL_PANEL_CONTAINER,
                             ),
-                            # Graph
                             html.Div(
                                 [
                                     dcc.Graph(
@@ -471,16 +428,131 @@ class GameStatsDashboard:
             ]
         )
 
-    def _layout_stats_by_bet(self):
-        """Layout logic for the 'Bet' tab."""
-        # Add a row container with display:flex so the left and right panels
-        # widths (from CONTROL_PANEL_CONTAINER and GRAPH_CONTAINER) will actually matter
-        return html.Div(
+    def _layout_stats_by_group(self):
+        min_date, max_date = self.date_range
+
+        date_group_picker = html.Div(
             [
-                # --- Left Control Panel ---
                 html.Div(
                     [
-                        # 1. Date & Strategy Selectors
+                        html.Label("Date Range for Group1:", style={"fontWeight": "bold", "marginRight": "10px"}),
+                        dcc.DatePickerRange(
+                            id="date-picker-range1",
+                            min_date_allowed=min_date,
+                            max_date_allowed=max_date,
+                            initial_visible_month=min_date,
+                            start_date=min_date,
+                            end_date=max_date,
+                            display_format="YYYY-MM-DD",
+                            style={"verticalAlign": "middle", "marginRight": "20px"},
+                        ),
+                        html.Div(style={"width": "30px"}),
+                        html.Label("Date Range for Group2:", style={"fontWeight": "bold", "marginRight": "10px"}),
+                        dcc.DatePickerRange(
+                            id="date-picker-range2",
+                            min_date_allowed=min_date,
+                            max_date_allowed=max_date,
+                            initial_visible_month=min_date,
+                            start_date=None,  # EMPTY by default!
+                            end_date=None,
+                            display_format="YYYY-MM-DD",
+                            style={"verticalAlign": "middle", "marginRight": "20px"},
+                        ),
+                    ],
+                    style={
+                        "display": "flex",
+                        "flexDirection": "row",
+                        "alignItems": "center",
+                        "justifyContent": "flex-start",
+                    },
+                ),
+            ],
+            style={
+                "marginBottom": "20px",
+                "padding": "15px",
+                "backgroundColor": "white",
+                "borderRadius": "8px",
+                "border": "1px solid #e0e0e0",
+            },
+        )
+
+        download_config = {
+            "toImageButtonOptions": {
+                "format": "png",
+                "height": 600,
+                "width": 1200,
+                "scale": 3,
+            },
+            "displaylogo": False,
+        }
+
+        def create_group_panel(group_id, label):
+            dl_id = f"group-{group_id}-plot"
+            metric_dropdown_id = f"group-{group_id}-metrics"
+            display_toggle_id = f"group-{group_id}-display"
+            group_selector_id = f"group-{group_id}-group"
+            return html.Div(
+                [
+                    html.H4(label, style={"marginTop": "0", "color": "#377EB8"}),
+                    html.Div(
+                        [
+                            html.Div(
+                                [
+                                    html.Label("Metric:"),
+                                    dcc.Dropdown(
+                                        id=metric_dropdown_id,
+                                        options=[{"label": m, "value": m} for m in self.plot_metrics[group_id]],
+                                        value=self.plot_metrics[group_id][0] if self.plot_metrics[group_id] else None,
+                                        multi=False,
+                                        style={"minWidth": "200px"},
+                                    ),
+                                    html.Label("Display Mode:", style={"marginTop": "10px"}),
+                                    dcc.RadioItems(
+                                        id=display_toggle_id,
+                                        options=[
+                                            {"label": "Box Plot", "value": "box"},
+                                            {"label": "Bar (Mean)", "value": "bar"},
+                                        ],
+                                        value="box",
+                                        labelStyle={"display": "inline-block", "marginRight": "12px"},
+                                        style={"marginTop": "5px"},
+                                    ),
+                                    html.Label("Group(s) to Show:", style={"marginTop": "16px"}),
+                                    dcc.Checklist(
+                                        id=group_selector_id,
+                                        options=[{"label": s, "value": s} for s in self.df_plot_groups],
+                                        value=self.df_plot_groups[:4],
+                                        labelStyle={"display": "block", "marginBottom": "5px"},
+                                        style={"marginBottom": "10px"},
+                                    ),
+                                ],
+                                style=Styles.CONTROL_PANEL_CONTAINER,
+                            ),
+                            html.Div(
+                                [dcc.Graph(id=dl_id, style={"height": "400px"}, config=download_config)],
+                                style=Styles.GRAPH_CONTAINER,
+                            ),
+                        ],
+                        style=Styles.FLEX_ROW,
+                    ),
+                ],
+                style=Styles.BOX,
+            )
+
+        return html.Div(
+            [
+                date_group_picker,
+                create_group_panel("g1", f"Group Metrics: {self.config['stats_by_date']['group1_label']}"),
+                create_group_panel("g2", f"Group Metrics: {self.config['stats_by_date']['group2_label']}"),
+                create_group_panel("g3", f"Group Metrics: {self.config['stats_by_date']['group3_label']}"),
+            ]
+        )
+
+    def _layout_stats_by_bet(self):
+        return html.Div(
+            [
+                html.Div(
+                    [
                         html.Div(
                             [
                                 html.Label("Select Date:", style={"marginBottom": "10px"}),
@@ -495,14 +567,13 @@ class GameStatsDashboard:
                                 dcc.Checklist(
                                     id="strategy-checklist",
                                     options=[{"label": s, "value": s} for s in self.df_bet_groups],
-                                    value=self.df_bet_groups[:4],  # Select up to the first 4 strategies by default
+                                    value=self.df_bet_groups[:4],
                                     labelStyle={"display": "block", "marginBottom": "5px"},
                                     style={"marginBottom": "10px"},
                                 ),
                             ],
                             style=Styles.BOX,
                         ),
-                        # 2. Metric Selectors
                         html.Div(
                             [
                                 html.Label("Metrics (Left Axis):"),
@@ -518,7 +589,6 @@ class GameStatsDashboard:
                             ],
                             style=Styles.BOX,
                         ),
-                        # 3. Settings & Filters
                         html.Div(
                             [
                                 dcc.Checklist(
@@ -560,7 +630,6 @@ class GameStatsDashboard:
                     ],
                     style=Styles.CONTROL_PANEL_CONTAINER,
                 ),
-                # --- Right Graph Panel ---
                 html.Div([dcc.Graph(id="combined-plot", style={"height": "950px"})], style=Styles.GRAPH_CONTAINER),
             ],
             style={"display": "flex", "width": "100%"},
@@ -571,7 +640,6 @@ class GameStatsDashboard:
     # ------------------------------------------------------------------
 
     def _register_callbacks(self):
-        # 0. Config Dropdown - Reload data when config changes
         @self.app.callback(
             Output("page-content", "children", allow_duplicate=True),
             Input("config-dropdown", "value"),
@@ -579,12 +647,10 @@ class GameStatsDashboard:
             prevent_initial_call=True,
         )
         def update_config(selected_config, current_tab):
-            """Reload data when config changes."""
             self._reset_state()
             self._reload_config(selected_config)
             return self._render_tab_content(current_tab)
 
-        # 1. Tab Switcher - only updates page content
         @self.app.callback(
             Output("page-content", "children"),
             Input("navigator-tabs", "value"),
@@ -593,7 +659,6 @@ class GameStatsDashboard:
         def render_content(tab):
             return self._render_tab_content(tab)
 
-        # 2. Stats by Bet - Main Plot
         self.app.callback(
             Output("combined-plot", "figure"),
             [
@@ -610,7 +675,6 @@ class GameStatsDashboard:
             ],
         )(self.update_bet_plot)
 
-        # 3. Stats by Date - Group Plots (always g1, g2, g3)
         for i in range(1, 4):
             self.app.callback(
                 Output(f"date-g{i}-plot", "figure"),
@@ -624,19 +688,39 @@ class GameStatsDashboard:
                     Input("date-picker-range", "start_date"),
                     Input("date-picker-range", "end_date"),
                 ],
-            )(self.update_date_group_plot)
+            )(self.update_date_plot)
+
+        for i in range(1, 4):
+            self.app.callback(
+                Output(f"group-g{i}-plot", "figure"),
+                [
+                    Input(f"group-g{i}-metrics", "value"),
+                    Input(f"group-g{i}-display", "value"),
+                    Input(f"group-g{i}-group", "value"),
+                    Input("date-picker-range1", "start_date"),
+                    Input("date-picker-range1", "end_date"),
+                    Input("date-picker-range2", "start_date"),
+                    Input("date-picker-range2", "end_date"),
+                ],
+            )(self.update_group_plot_combined_factory(f"g{i}"))
 
     def _render_tab_content(self, current_tab):
-
         if current_tab == "tab-date":
             default_gran = list(self.date_files_config.keys())[0]
             if self.config["stats_by_date"]["group_col"]:
                 self.df_date_group_col = self.config["stats_by_date"]["group_col"]
-                self.df_date_groups: List[str] = (
+                self.df_plot_groups: List[str] = (
                     self.dfs_by_date[default_gran][self.df_date_group_col].unique().tolist()
                 )
             return self._layout_stats_by_date()
-
+        elif current_tab == "tab-group":
+            default_gran = list(self.date_files_config.keys())[0]
+            if self.config["stats_by_date"]["group_col"]:
+                self.df_date_group_col = self.config["stats_by_date"]["group_col"]
+                self.df_plot_groups: List[str] = (
+                    self.dfs_by_date[default_gran][self.df_date_group_col].unique().tolist()
+                )
+            return self._layout_stats_by_group()
         elif current_tab == "tab-bet":
             self._load_bet_data()
             if self.config["stats_by_bet"]["group_col"]:
@@ -650,42 +734,30 @@ class GameStatsDashboard:
     # Plot Logic
     # ------------------------------------------------------------------
 
-    def update_date_group_plot(
+    def update_date_plot(
         self, left_metrics, right_metrics, log_val, log_thresh, groups, date_granularity, start_date, end_date
     ):
-        """
-        Generates a plot using self.df_date.
-        X-axis = date
-        Series = Grouped by the specified group column
-        """
         if not left_metrics and not right_metrics:
             return go.Figure()
-
         log_scale = "ON" in (log_val or [])
         thresh = float(log_thresh) if log_thresh else 10.0
-
         fig = make_subplots(specs=[[{"secondary_y": True}]])
-
         df_date = self.dfs_by_date[date_granularity]
         df_date = df_date[(df_date[self.date_col] >= start_date) & (df_date[self.date_col] <= end_date)].copy()
-
         if self.df_date_group_col == "" or self.df_date_group_col not in df_date.columns:
             group_col = "group"
             df_date["group"] = "total"
             groups = ["total"]
-
             color_map = {
                 f"{s}:{m}": Styles.COLORS[i % len(Styles.COLORS)]
                 for i, m in enumerate(left_metrics + right_metrics)
                 for j, s in enumerate(groups)
             }
-
             line_style_map = {
                 f"{s}:{m}": Styles.LINE_SHAPE[0]
                 for i, m in enumerate(left_metrics + right_metrics)
                 for j, s in enumerate(groups)
             }
-
         else:
             group_col = self.df_date_group_col
             color_map = {
@@ -693,7 +765,6 @@ class GameStatsDashboard:
                 for i, m in enumerate(left_metrics + right_metrics)
                 for j, s in enumerate(groups)
             }
-
             line_style_map = {
                 f"{s}:{m}": Styles.LINE_SHAPE[i % len(Styles.LINE_SHAPE)]
                 for i, m in enumerate(left_metrics + right_metrics)
@@ -702,17 +773,12 @@ class GameStatsDashboard:
 
         def add_scatter_plot(metrics, strat, df_strat, secondary_y):
             x_vals = df_strat[self.date_col]
-
             for m in metrics:
                 if m not in df_strat.columns:
                     continue
-
-                # Compute mean and confidence interval for each date
                 if self.date_col in df_strat.columns:
                     grouped = df_strat.groupby(self.date_col)[m]
                     mean_vals = grouped.mean()
-
-                    # Bootstrapped 95% confidence interval
                     y_raw = mean_vals
                     y_lower = y_raw.copy()
                     y_upper = y_raw.copy()
@@ -723,20 +789,16 @@ class GameStatsDashboard:
                         y_upper.loc[date_idx] = upper
                     y_lower = y_lower.fillna(y_raw)
                     y_upper = y_upper.fillna(y_raw)
-
                     x = mean_vals.index
                     y_plot = self.hybrid_transform(y_raw, thresh) if log_scale else y_raw
                     y_lower_plot = self.hybrid_transform(y_lower, thresh) if log_scale else y_lower
                     y_upper_plot = self.hybrid_transform(y_upper, thresh) if log_scale else y_upper
                 else:
-                    # Fallback: original handling if for some reason grouping isn't possible
                     y_raw = df_strat[m]
                     y_plot = self.hybrid_transform(y_raw, thresh) if log_scale else y_raw
                     x = x_vals
                     y_lower_plot = y_plot
                     y_upper_plot = y_plot
-
-                # Plot main line (mean)
                 fig.add_trace(
                     go.Scatter(
                         x=x,
@@ -751,8 +813,6 @@ class GameStatsDashboard:
                     ),
                     secondary_y=secondary_y,
                 )
-
-                # Plot confidence interval as a filled area
                 if any((y_lower_plot != y_upper_plot)):
                     base_color = color_map.get(f"{strat}:{m}", "black")
                     fig.add_trace(
@@ -761,7 +821,7 @@ class GameStatsDashboard:
                             y=list(y_upper_plot) + list(y_lower_plot[::-1]),
                             fill="toself",
                             fillcolor=self.to_rgba(base_color, 0.1),
-                            line=dict(color="rgba(255,255,255,0)"),  # No border
+                            line=dict(color="rgba(255,255,255,0)"),
                             hoverinfo="skip",
                             showlegend=False,
                             legendgroup=strat,
@@ -771,15 +831,11 @@ class GameStatsDashboard:
                     )
 
         for strat in groups:
-
             df_strat = df_date[df_date[group_col] == strat].sort_values(self.date_col)
             if df_strat.empty:
                 continue
-
             add_scatter_plot(left_metrics, strat, df_strat, False)
             add_scatter_plot(right_metrics, strat, df_strat, True)
-
-        # Formatting
         fig.update_layout(
             height=400,
             margin=dict(l=50, r=10, t=5, b=15),
@@ -787,14 +843,12 @@ class GameStatsDashboard:
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=0.90),
             hovermode="x unified",
             xaxis_title="Date (Beijing)",
-            font=dict(size=16),  # Increase global font size for the plot
+            font=dict(size=16),
             xaxis=dict(title_font=dict(size=18), tickfont=dict(size=15)),
             yaxis=dict(title_font=dict(size=18), tickfont=dict(size=15)),
-            yaxis2=dict(title_font=dict(size=18), tickfont=dict(size=15)),  # In case of secondary axis
+            yaxis2=dict(title_font=dict(size=18), tickfont=dict(size=15)),
         )
-
         if log_scale:
-            # Smart Ticks for Date view
             all_y = []
             if left_metrics:
                 all_y.extend(df_date[left_metrics].values.flatten())
@@ -805,7 +859,6 @@ class GameStatsDashboard:
                     ticktext=[f"{v:.0f}" for v in yticks],
                     secondary_y=False,
                 )
-
             all_y_r = []
             if right_metrics:
                 all_y_r.extend(df_date[right_metrics].values.flatten())
@@ -816,13 +869,12 @@ class GameStatsDashboard:
                     ticktext=[f"{v:.0f}" for v in yticks_r],
                     secondary_y=True,
                 )
-
         return fig
 
     def update_bet_plot(
         self,
         session,
-        strategies,
+        groups,
         left_metrics,
         right_metrics,
         share_left,
@@ -832,26 +884,18 @@ class GameStatsDashboard:
         filter_check,
         filter_thresh,
     ):
-
         self._load_bet_data()
         if self.df_bet.empty:
             return go.Figure()
-
-        # -- 1. Setup Flags --
         share_left_y = "ON" in (share_left or [])
         share_right_y = "ON" in (share_right or [])
         log_scale = "ON" in (log_val or [])
         do_filter = "ON" in (filter_check or [])
         log_thresh = max(float(log_thresh), 1.0) if log_thresh else 10.0
-
-        # -- 2. Filter Data --
         df_sess = self.df_bet[self.df_bet["session_start_date"] == session].sort_values("bet_index")
         if do_filter and filter_thresh:
             df_sess = df_sess[df_sess["bet_index"] <= float(filter_thresh)]
-
-        df_groups = [df_sess[df_sess["session_group"] == s] if s else pd.DataFrame() for s in strategies]
-
-        # -- 3. Init Figure --
+        df_groups = [df_sess[df_sess["session_group"] == s] if s else pd.DataFrame() for s in groups]
         fig = make_subplots(
             rows=1,
             cols=1,
@@ -861,16 +905,11 @@ class GameStatsDashboard:
             vertical_spacing=0.05,
             x_title="Bet Index",
         )
-
-        # -- 4. Y Ranges --
         left_range = self.compute_axis_range(df_groups, left_metrics, log_scale, log_thresh) if share_left_y else None
         right_range = (
             self.compute_axis_range(df_groups, right_metrics, log_scale, log_thresh) if share_right_y else None
         )
-
-        # -- 5. Add dummy trace for left axis if only right metrics are selected
         if not left_metrics and right_metrics:
-            # Add a single invisible dummy trace to initialize the left y-axis
             fig.add_trace(
                 go.Scatter(
                     x=np.array([0]),
@@ -886,22 +925,18 @@ class GameStatsDashboard:
                 col=1,
                 secondary_y=False,
             )
-
-        # -- 6. Add Traces --
         for i, df_g in enumerate(df_groups):
             if df_g.empty:
                 continue
-
-            # Left Axis
             metric_colors = {
-                f"{s}:{m}": Styles.COLORS[i + j * len(strategies) % len(Styles.COLORS)]
-                for i, s in enumerate(strategies)
+                f"{s}:{m}": Styles.COLORS[i + j * len(groups) % len(Styles.COLORS)]
+                for i, s in enumerate(groups)
                 for j, m in enumerate(left_metrics)
             }
             self._add_traces_to_fig(
                 fig,
                 df_g,
-                strategies[i],
+                groups[i],
                 left_metrics,
                 metric_colors,
                 log_scale,
@@ -909,16 +944,15 @@ class GameStatsDashboard:
                 is_right=False,
                 y_range=left_range,
             )
-            # Right Axis
             metric_colors = {
-                f"{s}:{m}": Styles.COLORS[i + j * len(strategies) % len(Styles.COLORS)]
-                for i, s in enumerate(strategies)
+                f"{s}:{m}": Styles.COLORS[i + j * len(groups) % len(Styles.COLORS)]
+                for i, s in enumerate(groups)
                 for j, m in enumerate(right_metrics)
             }
             self._add_traces_to_fig(
                 fig,
                 df_g,
-                strategies[i],
+                groups[i],
                 right_metrics,
                 metric_colors,
                 log_scale,
@@ -926,16 +960,14 @@ class GameStatsDashboard:
                 is_right=True,
                 y_range=right_range,
             )
-
-        # Move legend closer by updating the layout just after trace is added
         fig.update_layout(
             legend=dict(
                 orientation="h",
                 traceorder="normal",
                 yanchor="top",
-                y=1.10,  # push legend further above plot area
+                y=1.10,
                 xanchor="right",
-                x=0.95,  # center legend over plot
+                x=0.95,
                 borderwidth=0,
                 font=dict(size=20),
             ),
@@ -944,31 +976,23 @@ class GameStatsDashboard:
             yaxis=dict(title_font=dict(size=18), tickfont=dict(size=15)),
             yaxis2=dict(title_font=dict(size=18), tickfont=dict(size=15)),
         )
-
-        # -- 6. Ticks & Layout --
         if log_scale:
             self.update_log_ticks(fig, df_groups, left_metrics, right_metrics, log_thresh)
-
         fig.update_layout(height=950, template="plotly_white", margin=dict(l=60, r=60, t=50, b=50))
         fig.update_xaxes(rangeslider=dict(visible=True, thickness=0.05), row=1, col=1)
-
         return fig
 
     def _add_traces_to_fig(self, fig, df, strat, metrics, colors, log_scale, thresh, is_right, y_range):
         if not metrics:
-            # Don't add dummy traces here - handle it at the plot level
             return
-
         y_max_local = -inf
         for m in metrics:
             if m not in df.columns:
                 continue
             y = pd.to_numeric(df[m], errors="coerce").ffill()
             y_plot = self.hybrid_transform(y, thresh) if log_scale else y
-
             curr_max = np.nanmax(y_plot) if len(y_plot) > 0 else 0
             y_max_local = max(y_max_local, curr_max)
-
             fig.add_trace(
                 go.Scatter(
                     x=df["bet_index"],
@@ -983,9 +1007,154 @@ class GameStatsDashboard:
                 col=1,
                 secondary_y=is_right,
             )
-
         y_range = y_range if y_range else (0, y_max_local * 1.05)
         fig.update_yaxes(range=y_range, row=1, col=1, secondary_y=is_right)
+
+    def update_group_plot_combined_factory(self, group_id):
+        """
+        Callback factory: Plots date-group stats for a metric, for both date-range1 and date-range2, in a single figure.
+        """
+
+        def callback(metric, display_mode, groups, range1_start, range1_end, range2_start, range2_end):
+            # If invalid input, return blank
+            if not metric or not groups or range1_start is None or range1_end is None:
+                return go.Figure()
+            granularity = list(self.date_files_config.keys())[0]
+            df_date = self.dfs_by_date[granularity]
+            if df_date.empty or self.df_date_group_col not in df_date.columns or metric not in df_date.columns:
+                return go.Figure()
+            base_colors = Styles.COLORS
+            fig = go.Figure()
+            # We'll build panel such that: for each group, two traces: range1 and range2
+            # Use slight color variation (opacity/hatch/pattern/legend)
+            # To combine, make x/group labels for all groups (with possible suffix if needed)
+            # Approach: x-axis labels like "Group1 [R1]", "Group1 [R2]", "Group2 [R1]", "Group2 [R2]"
+            xticks = []
+            group_idx_map = {}
+            for gi, group in enumerate(groups):
+                group_idx_map[group] = gi
+
+            def _label(group, r):
+                if r == 0:
+                    return f"{group} [Range1]"
+                else:
+                    return f"{group} [Range2]"
+
+            data_by_range = []
+            data_by_range.append(
+                {
+                    "start": range1_start,
+                    "end": range1_end,
+                    "label": f"{range1_start}~{range1_end}",
+                    "range_id": "1",
+                }
+            )
+            if range2_start and range2_end:
+                data_by_range.append(
+                    {
+                        "start": range2_start,
+                        "end": range2_end,
+                        "label": f"{range2_start}~{range2_end}",
+                        "range_id": "2",
+                    }
+                )
+
+            if display_mode == "box":
+                for gi, group in enumerate(groups):
+                    color_base = base_colors[gi % len(base_colors)]
+                    for ri, range_info in enumerate(data_by_range):
+                        mask = (df_date[self.date_col] >= range_info["start"]) & (
+                            df_date[self.date_col] <= range_info["end"]
+                        )
+                        df_g = df_date.loc[mask]
+                        df_g = df_g[df_g[self.df_date_group_col] == group]
+                        vals = df_g[metric].dropna().values
+                        if len(vals) == 0:
+                            continue
+                        box_label = _label(group, ri)
+                        fig.add_trace(
+                            go.Box(
+                                y=vals,
+                                name=box_label,
+                                boxmean="sd",
+                                marker=dict(
+                                    color=color_base, opacity=1.0 if ri == 0 else 0.45, line=dict(color="#333", width=1)
+                                ),
+                                legendgroup=group,
+                                showlegend=(ri == 0),  # Only show legend once per group
+                            )
+                        )
+            else:  # bar, mean+std
+                # For bar: arrange bars side by side for the same group (range1/range2).
+                x_labels = []
+                ydata = []
+                edata = []
+                mcolors = []
+                for gi, group in enumerate(groups):
+                    color_base = base_colors[gi % len(base_colors)]
+                    for ri, range_info in enumerate(data_by_range):
+                        mask = (df_date[self.date_col] >= range_info["start"]) & (
+                            df_date[self.date_col] <= range_info["end"]
+                        )
+                        df_g = df_date.loc[mask]
+                        df_g = df_g[df_g[self.df_date_group_col] == group]
+                        vals = df_g[metric].dropna().values
+                        if len(vals) == 0:
+                            continue
+                        bar_label = _label(group, ri)
+                        x_labels.append(bar_label)
+                        ydata.append(np.mean(vals))
+                        edata.append(np.std(vals))
+                        # Opacity or pattern to distinguish range1/range2
+                        if ri == 0:
+                            mcolors.append(dict(color=color_base, opacity=1.0, line=dict(color="#333", width=1)))
+                        else:
+                            mcolors.append(
+                                dict(
+                                    color=color_base,
+                                    opacity=0.5,
+                                    line=dict(color="#333", width=1),
+                                    pattern=dict(shape="/"),
+                                )
+                            )
+
+                fig.add_trace(
+                    go.Bar(
+                        x=x_labels,
+                        y=ydata,
+                        error_y=dict(type="data", array=edata),
+                        marker={"color": [c["color"] for c in mcolors], "opacity": None},  # colors handled below
+                        customdata=[c for c in mcolors],
+                        hovertemplate="%{x}: %{y:.2f} ± %{error_y.array:.2f}",
+                    )
+                )
+                # Explicitly set bar marker color, with pattern for Range2
+                for i, bar in enumerate(fig.data):
+                    if hasattr(bar, "customdata") and bar.customdata is not None:
+                        for xi in range(len(bar.x)):
+                            this_marker = bar.customdata[xi]
+                            fig.data[i].marker.color = [m["color"] for m in mcolors]
+                            if "pattern" in this_marker:
+                                if not hasattr(fig.data[i].marker, "pattern"):
+                                    fig.data[i].marker.pattern = dict(shape=[""] * len(bar.x))
+                                fig.data[i].marker.pattern.shape = [
+                                    m.get("pattern", {}).get("shape", "") for m in mcolors
+                                ]
+                            if "opacity" in this_marker:
+                                fig.data[i].marker.opacity = [m.get("opacity", 1.0) for m in mcolors]
+
+            mode_title = "Box Plot" if display_mode == "box" else "Bar (Mean ± Std)"
+            fig.update_layout(
+                title=f"{mode_title}: {metric}",
+                yaxis_title=metric,
+                template="plotly_white",
+                hovermode="closest",
+                font=dict(size=16),
+                legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1.0),
+            )
+            return fig
+
+        return callback
 
     # ------------------------------------------------------------------
     # Math Helpers
@@ -1051,22 +1220,18 @@ class GameStatsDashboard:
 
     def run(self, debug=True):
         try:
-            # specific trick to get the reliable IP address
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.connect(("8.8.8.8", 80))
             self.host_ip = s.getsockname()[0]
             s.close()
         except:
             self.host_ip = "127.0.0.1"
-
         print(f"Dashboard running on http://{self.host_ip}:8050")
         self.app.run(debug=debug, host="0.0.0.0", port=8050)
 
 
 if __name__ == "__main__":
-
     setup_logging(f"{LOCAL_ROOT}/jobs/log", log_filename=os.path.splitext(os.path.basename(__file__))[0] + ".log")
-
     config_dir = "/Users/niuxin/Documents/aws-example/src/dashboards"
     dashboard = GameStatsDashboard(config_dir)
     dashboard.run()

@@ -1,23 +1,26 @@
 """
-Script to load CSV file and create multi-group barplots (clustered barplots) using seaborn, with 500 bootstrap error bars, and save corresponding boxplots in a separate directory.
+Script to load CSV file and create multi-group barplots (clustered barplots) and boxplots using seaborn, with 500 bootstrap error bars, and save them. 
+Additionally, for each x tick (level of the x group), it calculates and displays the percentage change of the metrics between the first and second level 
+of the group variable (hue/legend) above the bars and boxplot boxes.
 
 Usage:
     python plot_all_user_stats.py
 
-The script will:
-    - Automatically detect all numeric columns (excluding group_by_column and user_id)
-    - Filter out rows where ai_group is in FILTER_OUT_VALUE (can remove multiple ai_groups)
-    - Create grouped barplots (first group: x axis, second or combined as hue/legend)
-    - For group_by_column of >2, combine all but the first as legend label using ':'-join
-    - Use seaborn with bootstrap error bars (n_boot=500, ci=68%)
-    - Create boxplots for each numeric column and grouping
-    - Save barplots and boxplots in different subfolders
+Features:
+    - Automatically detects all numeric columns except those excluded (group_by_column and user_id)
+    - Filters out rows where ai_group is in FILTER_OUT_VALUE
+    - For grouping, supports >2 columns by combining all but the first as legend (":"-joined)
+    - Barplot uses seaborn with bootstrap error bars (n_boot=500, ci=68%)
+    - Percentage change between the first and second level of the hue (legend) variable is calculated and shown above each bar/box-group
+    - Boxplots for each numeric column and grouping
+    - Barplots and boxplots saved in different subfolders
 """
 
 import os
 from typing import List, Optional, Union
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import seaborn as sns
 
@@ -115,6 +118,51 @@ def check_all_values_same_within_groups(df: pd.DataFrame, group_by_col: Union[st
     return True
 
 
+def annotate_pct_change(ax, bar_coords, pct_changes, is_boxplot=False):
+    """
+    Annotates each group (x) with the corresponding percentage change string, at the tallest bar/box position + offset.
+    """
+    for xc, pct in zip(bar_coords, pct_changes):
+        if pct is not None:
+            text = f"{pct:+.1f}%"
+            y = bar_coords[xc] if not is_boxplot else bar_coords[xc]
+            ax.text(
+                xc,
+                y,
+                text,
+                color="darkred",
+                fontsize=12,
+                fontweight="bold",
+                ha="center",
+                va="bottom",
+                bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor="none", alpha=0.9),
+            )
+
+
+def compute_pct_changes_means(df, group_by_cols, plot_col):
+    """
+    For each x-group (first group col),
+    computes the mean metric for each hue (legend), sorted by hue_order, and returns percent change from first to second.
+    Returns:
+        pct_changes: list (float or None) per x category (NaN if not enough data)
+        mean_by_group: dict of dict, mean_by_group[x][hue] -> mean value
+    """
+    x_col = group_by_cols[0]
+    hue_col = group_by_cols[1]
+    means = df.groupby([x_col, hue_col])[plot_col].mean().unstack(hue_col)
+    cols = means.columns.tolist()
+    pct_changes = []
+    for idx, row in means.iterrows():
+        if len(cols) >= 2 and pd.notna(row[cols[0]]) and pd.notna(row[cols[1]]) and row[cols[0]] != 0:
+            pct = (row[cols[1]] - row[cols[0]]) / abs(row[cols[0]]) * 100.0
+            pct_changes.append(pct)
+        else:
+            pct_changes.append(None)
+    # Means for annotation positioning (max y of bars)
+    max_means = means.max(axis=1)
+    return pct_changes, means.index.tolist(), max_means
+
+
 def seaborn_multi_group_barplot(
     df: pd.DataFrame,
     group_by_cols: List[str],
@@ -126,30 +174,29 @@ def seaborn_multi_group_barplot(
 ):
     """
     Shows/saves a grouped barplot using seaborn, using 500 bootstrap error bars, handling >2 group_by_cols by combining those after the first into a legend label.
+    Annotates each x-group with percentage change from first to second legend (hue).
     """
     group_cols = _ensure_group_is_list(group_by_cols)
     plt.figure(figsize=fig_size)
     hue = None
 
-    # Build hue column if needed (for multi-group plotting)
-    if len(group_cols) > 1:
-        if len(group_cols) == 2:
-            hue = group_cols[1]
-            hue_legend = group_cols[1]
-            df_to_plot = df
-        else:
-            # Combine all except the first for legend
-            legend_col = "_legend"
-            df_to_plot = df.copy()
-            df_to_plot[legend_col] = df_to_plot[group_cols[1:]].astype(str).agg(":".join, axis=1)
-            hue = legend_col
-            hue_legend = ":".join(group_cols[1:])
-    else:
-        df_to_plot = df
-        hue = None
+    if len(group_cols) <= 1:
+        # Skipping annotation for <2 group groups
         hue_legend = None
+        hue = None
+        df_to_plot = df
+    elif len(group_cols) == 2:
+        hue = group_cols[1]
+        hue_legend = group_cols[1]
+        df_to_plot = df
+    else:
+        legend_col = "_legend"
+        df_to_plot = df.copy()
+        df_to_plot[legend_col] = df_to_plot[group_cols[1:]].astype(str).agg(":".join, axis=1)
+        hue = legend_col
+        hue_legend = ":".join(group_cols[1:])
 
-    order = sorted(df_to_plot[group_cols[0]].dropna().unique())  # clean up x order
+    order = sorted(df_to_plot[group_cols[0]].dropna().unique())
     hue_order = sorted(df_to_plot[hue].dropna().unique()) if hue is not None else None
 
     ax = sns.barplot(
@@ -165,8 +212,44 @@ def seaborn_multi_group_barplot(
         n_boot=n_boot,
         capsize=0.08,
         edgecolor="black",
-        errorbar=None,  # This disables errorbar argument, as ci/n_boot will be used.
+        errorbar=None,
     )
+
+    # ----------- Annotate percentage changes ------------
+    if len(group_cols) >= 2:
+        pct_changes, idx, max_y = compute_pct_changes_means(df_to_plot, group_cols, plot_col)
+        xtick_locs = []
+        # Map xtick labels in order (possibly with categorical codes, so map from tick label to bar midpoint)
+        for xi, x in enumerate(order):
+            xtick_locs.append(ax.get_xticks()[xi])
+        # Place annotation above the tallest bar for each x
+        ylocs = []
+        for xi, x in enumerate(order):
+            # Find highest bar y for group x (but may have multiple hues)
+            bars_y = []
+            for child in ax.patches:
+                if isinstance(child, plt.Rectangle):
+                    if abs(child.get_x() + child.get_width() / 2 - xtick_locs[xi]) < child.get_width():
+                        bars_y.append(child.get_height())
+            if bars_y:
+                ylocs.append(max(bars_y) * 1.07)
+            else:
+                ylocs.append(max_y[x] * 1.07 if x in max_y else max_y.max() * 1.07)
+        # Annotate with percent change (%)
+        for xc, y, pct in zip(xtick_locs, ylocs, pct_changes):
+            if pct is not None:
+                text = f"{pct:+.1f}%"
+                ax.text(
+                    xc,
+                    y,
+                    text,
+                    color="darkred",
+                    fontsize=11,
+                    fontweight="bold",
+                    ha="center",
+                    va="bottom",
+                    bbox=dict(boxstyle="round,pad=0.15", facecolor="white", edgecolor="none", alpha=0.85),
+                )
 
     title_str = f"{plot_col} by {group_cols[0]}"
     if hue_legend:
@@ -175,7 +258,7 @@ def seaborn_multi_group_barplot(
     else:
         ax.legend_.remove() if ax.legend_ else None
 
-    plt.title(f"{title_str} (Bootstrap error)", fontsize=14, fontweight="bold")
+    plt.title(f"{title_str} (Bootstrap error & %Δ)", fontsize=14, fontweight="bold")
     plt.xlabel(group_cols[0], fontsize=12)
     plt.ylabel(plot_col, fontsize=12)
     plt.xticks(rotation=45, ha="right")
@@ -194,6 +277,27 @@ def seaborn_multi_group_barplot(
     plt.close()
 
 
+def compute_pct_changes_boxplot(df, group_by_cols, plot_col):
+    """
+    For each x-group (first group col), computes the median per hue for the plot_col, returns percent change from first to second legend (hue).
+    Returns pct_changes (float/None per x) and max_y (for position of box).
+    """
+    x_col = group_by_cols[0]
+    hue_col = group_by_cols[1]
+    medians = df.groupby([x_col, hue_col])[plot_col].median().unstack(hue_col)
+    cols = medians.columns.tolist()
+    pct_changes = []
+    for idx, row in medians.iterrows():
+        if len(cols) >= 2 and pd.notna(row[cols[0]]) and pd.notna(row[cols[1]]) and row[cols[0]] != 0:
+            pct = (row[cols[1]] - row[cols[0]]) / abs(row[cols[0]]) * 100.0
+            pct_changes.append(pct)
+        else:
+            pct_changes.append(None)
+    # Max for annotation Y placement
+    max_medians = medians.max(axis=1)
+    return pct_changes, medians.index.tolist(), max_medians
+
+
 def seaborn_multi_group_boxplot(
     df: pd.DataFrame,
     group_by_cols: List[str],
@@ -204,30 +308,29 @@ def seaborn_multi_group_boxplot(
 ):
     """
     Shows/saves a grouped boxplot using seaborn, handling >2 group_by_cols by combining those after the first into a legend label.
+    Annotates each x-group with percentage change from first to second legend (hue).
     """
     group_cols = _ensure_group_is_list(group_by_cols)
     plt.figure(figsize=fig_size)
     hue = None
 
-    # Build hue column if needed (for multi-group plotting)
-    if len(group_cols) > 1:
-        if len(group_cols) == 2:
-            hue = group_cols[1]
-            hue_legend = group_cols[1]
-            df_to_plot = df
-        else:
-            # Combine all except the first for legend
-            legend_col = "_legend"
-            df_to_plot = df.copy()
-            df_to_plot[legend_col] = df_to_plot[group_cols[1:]].astype(str).agg(":".join, axis=1)
-            hue = legend_col
-            hue_legend = ":".join(group_cols[1:])
-    else:
-        df_to_plot = df
-        hue = None
+    if len(group_cols) <= 1:
+        # Skipping annotation for <2 group groups
         hue_legend = None
+        hue = None
+        df_to_plot = df
+    elif len(group_cols) == 2:
+        hue = group_cols[1]
+        hue_legend = group_cols[1]
+        df_to_plot = df
+    else:
+        legend_col = "_legend"
+        df_to_plot = df.copy()
+        df_to_plot[legend_col] = df_to_plot[group_cols[1:]].astype(str).agg(":".join, axis=1)
+        hue = legend_col
+        hue_legend = ":".join(group_cols[1:])
 
-    order = sorted(df_to_plot[group_cols[0]].dropna().unique())  # clean up x order
+    order = sorted(df_to_plot[group_cols[0]].dropna().unique())
     hue_order = sorted(df_to_plot[hue].dropna().unique()) if hue is not None else None
 
     ax = sns.boxplot(
@@ -241,6 +344,39 @@ def seaborn_multi_group_boxplot(
         showfliers=False,
     )
 
+    # ----------- Annotate percentage changes (based on the group medians) ------------
+    if len(group_cols) >= 2:
+        pct_changes, idx, max_y = compute_pct_changes_boxplot(df_to_plot, group_cols, plot_col)
+        xtick_locs = []
+        for xi, x in enumerate(order):
+            xtick_locs.append(ax.get_xticks()[xi])
+        ylocs = []
+        for xi, x in enumerate(order):
+            # get the maximum box top for this group
+            boxes_y = []
+            for artist in ax.artists:
+                box_x = artist.get_x() + artist.get_width() / 2
+                if abs(box_x - xtick_locs[xi]) < artist.get_width():
+                    boxes_y.append(artist.get_ydata().max())
+            if boxes_y:
+                ylocs.append(max(boxes_y) * 1.07)
+            else:
+                ylocs.append(max_y[x] * 1.07 if x in max_y else max_y.max() * 1.07)
+        for xc, y, pct in zip(xtick_locs, ylocs, pct_changes):
+            if pct is not None:
+                text = f"{pct:+.1f}%"
+                ax.text(
+                    xc,
+                    y,
+                    text,
+                    color="darkred",
+                    fontsize=11,
+                    fontweight="bold",
+                    ha="center",
+                    va="bottom",
+                    bbox=dict(boxstyle="round,pad=0.15", facecolor="white", edgecolor="none", alpha=0.85),
+                )
+
     title_str = f"{plot_col} by {group_cols[0]}"
     if hue_legend:
         ax.legend(title=hue_legend, bbox_to_anchor=(1.01, 1), loc="upper left")
@@ -248,7 +384,7 @@ def seaborn_multi_group_boxplot(
     else:
         ax.legend_.remove() if ax.legend_ else None
 
-    plt.title(f"{title_str} (Boxplot)", fontsize=14, fontweight="bold")
+    plt.title(f"{title_str} (Boxplot & %Δ)", fontsize=14, fontweight="bold")
     plt.xlabel(group_cols[0], fontsize=12)
     plt.ylabel(plot_col, fontsize=12)
     plt.xticks(rotation=45, ha="right")
@@ -281,7 +417,6 @@ def main():
     group_by_cols = _ensure_group_is_list(GROUP_BY_COLUMN)
     print(f"\nGrouping by: {group_by_cols}")
 
-    # Build legend palette for consistent coloring
     legend_palette = None
     if len(group_by_cols) > 1:
         if len(group_by_cols) == 2:
@@ -296,7 +431,7 @@ def main():
     plot_count = 0
 
     for col in valid_plot_cols:
-        print(f"Creating grouped barplot for: {col} (500 bootstrap error bars)")
+        print(f"Creating grouped barplot for: {col} (500 bootstrap error bars, percentage change annotation)")
         seaborn_multi_group_barplot(
             df=df,
             group_by_cols=group_by_cols,
@@ -306,7 +441,7 @@ def main():
             legend_palette=legend_palette,
             n_boot=500,
         )
-        print(f"Creating grouped boxplot for: {col}")
+        print(f"Creating grouped boxplot for: {col} (percentage change annotation)")
         seaborn_multi_group_boxplot(
             df=df,
             group_by_cols=group_by_cols,
