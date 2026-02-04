@@ -5,7 +5,7 @@ import socket
 from datetime import timedelta
 from math import inf
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union, cast
 
 import matplotlib.colors as mcolors
 import numpy as np
@@ -22,12 +22,12 @@ from bituslabs_ds.utils import load_config
 # 1. Styling & Constants
 # ==========================================
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())  # Safe for import
 
 
 class Styles:
-    COLORS = [
+    COLORS: List[str] = [
         "#E41A1C",
         "#377EB8",
         "#4DAF4A",
@@ -38,9 +38,9 @@ class Styles:
         "#999999",
     ]
 
-    LINE_SHAPE = ["solid", "dot", "dash", "longdash", "dashdot", "longdashdot"]
+    LINE_SHAPE: List[str] = ["solid", "dot", "dash", "longdash", "dashdot", "longdashdot"]
 
-    NAV_TAB_SELECTED = {
+    NAV_TAB_SELECTED: Dict[str, Any] = {
         "borderTop": "3px solid #377EB8",
         "borderBottom": "1px solid white",
         "backgroundColor": "white",
@@ -49,9 +49,14 @@ class Styles:
         "padding": "12px",
     }
 
-    NAV_TAB = {"padding": "12px", "backgroundColor": "#f9f9f9", "color": "#555", "border": "1px solid #d6d6d6"}
+    NAV_TAB: Dict[str, Any] = {
+        "padding": "12px",
+        "backgroundColor": "#f9f9f9",
+        "color": "#555",
+        "border": "1px solid #d6d6d6",
+    }
 
-    BOX = {
+    BOX: Dict[str, Any] = {
         "border": "1px solid #e0e0e0",
         "borderRadius": "8px",
         "backgroundColor": "#ffffff",
@@ -60,23 +65,24 @@ class Styles:
         "marginBottom": "20px",
     }
 
-    CONTROL_PANEL_CONTAINER = {
+    CONTROL_PANEL_CONTAINER: Dict[str, Any] = {
         "width": "20%",
         "display": "inline-block",
         "verticalAlign": "top",
-        "paddingRight": "20px",
+        "paddingRight": "22px",
+        "paddingLeft": "2px",
         "boxSizing": "border-box",
     }
 
-    GRAPH_CONTAINER = {
+    GRAPH_CONTAINER: Dict[str, Any] = {
         "width": "100%",
         "display": "inline-block",
         "verticalAlign": "top",
-        "padding": "20px",
+        "padding": "28px",
         "marginRight": "10px",
     }
 
-    FLEX_ROW = {
+    FLEX_ROW: Dict[str, Any] = {
         "display": "flex",
         "flexDirection": "row",
         "justifyContent": "space-between",
@@ -90,25 +96,39 @@ class Styles:
 
 
 class GameStatsDashboard:
+    config_files: List[Dict[str, str]]
+    config: dict
+    dfs_by_date: Dict[str, pd.DataFrame]
+    df_bet: pd.DataFrame
+    df_plot_groups: List[str]
+    df_bet_groups: List[str]
+    df_date_group_col: str
+    df_bet_group_col: str
+    sessions: List[str]
+    bet_metrics: List[str]
+    plot_metrics: Dict[str, List[str]]
+    host_ip: str
+    config_dir: str
+    app: Dash
 
     def __init__(self, config_dir: str, host_ip: str = "127.0.0.1"):
-        self.host_ip = host_ip
-        self.config_dir = config_dir
+        self.host_ip: str = host_ip
+        self.config_dir: str = config_dir
 
         self.config_files = self._find_config_files()
         self._reset_state()
         self.config = load_config(self.config_files[0]["value"])
 
-        self.app = Dash(__name__, suppress_callback_exceptions=True)
+        self.app: Dash = Dash(__name__, suppress_callback_exceptions=True)
         self._build_main_layout()
         self._register_callbacks()
         self._load_date_data()
 
     @property
-    def date_col(self):
+    def date_col(self) -> str:
         return self.config["stats_by_date"]["date_col"]
 
-    def _reset_state(self):
+    def _reset_state(self) -> None:
         self.config = {}
         self.dfs_by_date = {}
         self.df_bet = pd.DataFrame()
@@ -117,10 +137,10 @@ class GameStatsDashboard:
         self.df_date_group_col = ""
         self.df_bet_group_col = ""
         self.bet_metrics = []
-        self.plot_metrics = []
+        self.plot_metrics = {}
 
     def _find_config_files(self) -> List[Dict[str, str]]:
-        config_files = []
+        config_files: List[Dict[str, str]] = []
         config_dir_path = Path(self.config_dir)
         if not config_dir_path.exists() or not config_dir_path.is_dir():
             config_dir_path = Path(__file__).parent
@@ -136,14 +156,14 @@ class GameStatsDashboard:
                     config_files.append({"label": file_path.stem, "value": str(file_path.absolute())})
         return sorted(config_files, key=lambda x: x["label"])
 
-    def _load_data(self):
+    def _load_data(self) -> None:
         self._load_bet_data()
         self._load_date_data()
 
-    def _load_bet_data(self):
+    def _load_bet_data(self) -> None:
         if not self.df_bet.empty:
             return
-        bet_data = []
+        bet_data: List[pd.DataFrame] = []
         for f in self.config["stats_by_bet"]["files"]:
             if f:
                 bet_data.append(read_local_cache(f))
@@ -151,17 +171,17 @@ class GameStatsDashboard:
             self.df_bet = pd.concat(bet_data)
             self.df_bet["bet_index"] = pd.to_numeric(self.df_bet["bet_index"], errors="coerce")
             self.df_bet = self.df_bet.dropna(subset=["bet_index"])
-            self.sessions: List[str] = sorted(self.df_bet["session_start_date"].astype(str).unique())
+            self.sessions = sorted(self.df_bet["session_start_date"].astype(str).unique())
             exclude_bet_cols = ["session_start_date", "session_group", "bet_index"]
-            self.bet_metrics: List[str] = [c for c in self.df_bet.columns if c not in exclude_bet_cols]
+            self.bet_metrics = [c for c in self.df_bet.columns if c not in exclude_bet_cols]
         else:
             self.df_bet = pd.DataFrame()
             self.sessions = []
             self.bet_metrics = []
 
-    def _load_date_data(self):
+    def _load_date_data(self) -> None:
         for gran, file_paths in self.date_files_config.items():
-            daily_data = []
+            daily_data: List[pd.DataFrame] = []
             if isinstance(file_paths, str):
                 file_paths = [file_paths]
             for f in file_paths:
@@ -178,35 +198,43 @@ class GameStatsDashboard:
         self.plot_metrics["g2"] = self.config["stats_by_date"]["group2_columns"]
         self.plot_metrics["g3"] = self.config["stats_by_date"]["group3_columns"]
 
-    def _reload_config(self, config_file: str):
+    def _reload_config(self, config_file: str) -> None:
         self.config = load_config(config_file)
         self._load_date_data()
 
-    def _compute_group_date_ranges(self, granularity=None):
+    def _compute_group_date_ranges(self, granularity: Optional[str] = None) -> Tuple[
+        Optional[pd.Timestamp],
+        Optional[pd.Timestamp],
+        Optional[pd.Timestamp],
+        Optional[pd.Timestamp],
+        Optional[pd.Timestamp],
+        Optional[pd.Timestamp],
+        Optional[pd.Timestamp],
+        Optional[pd.Timestamp],
+    ]:
         """
-        For Stats by Group: Compute
-          - min_date: min date in data
-          - max_date: max date in data
-          - group1 range: the two weeks before the most recent two weeks
-          - group2 range: the most recent two weeks
-        Returns: min_date, max_date, group1_start, group1_end, group2_start, group2_end
+        For Stats by Group: Compute for 3 sequential two-week ranges (6 weeks total, most recent).
+        Returns: min_date, max_date, g1_start, g1_end, g2_start, g2_end, g3_start, g3_end
         """
         if granularity is None:
             granularity = list(self.date_files_config.keys())[0]
         df_date = self.dfs_by_date.get(granularity, pd.DataFrame())
         if df_date.empty or self.date_col not in df_date.columns:
-            return None, None, None, None, None, None
+            return (None, None, None, None, None, None, None, None)
         min_date = pd.to_datetime(df_date[self.date_col].min())
         max_date = pd.to_datetime(df_date[self.date_col].max())
-        group2_end = max_date
-        group2_start = max(min_date, group2_end - timedelta(days=13))
-        group1_end = group2_start - timedelta(days=1)
-        group1_start = max(min_date, group1_end - timedelta(days=13)) if group1_end >= min_date else None
-        return min_date, max_date, group1_start, group1_end, group2_start, group2_end
+
+        # Calculate three consecutive 2-week ranges ending at max_date
+        g3_end = max_date
+        g3_start = max(min_date, g3_end - timedelta(days=13))
+        g2_end = g3_start - timedelta(days=1)
+        g2_start = max(min_date, g2_end - timedelta(days=13)) if g2_end >= min_date else None
+        g1_end = g2_start - timedelta(days=1) if g2_start is not None else None
+        g1_start = max(min_date, g1_end - timedelta(days=13)) if g1_end is not None and g1_end >= min_date else None
+        return min_date, max_date, g1_start, g1_end, g2_start, g2_end, g3_start, g3_end
 
     @property
     def date_range(self) -> Tuple[Any, Any]:
-        # Used for min_date, max_date in the picker
         granularity = list(self.date_files_config.keys())[0]
         df_date = self.dfs_by_date.get(granularity, pd.DataFrame())
         if df_date.empty or self.date_col not in df_date.columns:
@@ -216,46 +244,46 @@ class GameStatsDashboard:
         return min_d, max_d
 
     @property
-    def date_files_config(self):
+    def date_files_config(self) -> Dict[str, Union[str, List[str]]]:
         files_config = self.config["stats_by_date"].get("files", {})
         if isinstance(files_config, list):
             files_config = {"day": files_config}
         return files_config
 
     @staticmethod
-    def to_rgba(color, alpha=0.2):
+    def to_rgba(color: str, alpha: float = 0.2) -> str:
         try:
             return "rgba" + str(tuple(int(c * 255) for c in mcolors.to_rgb(color)) + (alpha,))
         except Exception:
             return f"rgba(0,0,0,{alpha})"
 
     @staticmethod
-    def bootstrap_ci(arr, n_boot=1000, ci_level=0.95):
-        arr = arr.dropna().values
-        if len(arr) == 0:
-            return np.nan, np.nan
-        if min(arr) == max(arr):
-            return arr[0], arr[0]
-        boot_means = []
+    def bootstrap_ci(arr: pd.Series, n_boot: int = 1000, ci_level: float = 0.95) -> Tuple[float, float]:
+        arr_np = arr.dropna().values
+        if len(arr_np) == 0:
+            return float("nan"), float("nan")
+        if min(arr_np) == max(arr_np):
+            return float(arr_np[0]), float(arr_np[0])
+        boot_means: List[float] = []
         for _ in range(n_boot):
-            samples = np.random.choice(arr, size=len(arr), replace=True)
+            samples = np.random.choice(arr_np, size=len(arr_np), replace=True)
             boot_means.append(float(np.mean(samples)))
-        lower = np.percentile(boot_means, (1 - ci_level) / 2 * 100)
-        upper = np.percentile(boot_means, (1 + ci_level) / 2 * 100)
+        lower = float(np.percentile(boot_means, (1 - ci_level) / 2 * 100))
+        upper = float(np.percentile(boot_means, (1 + ci_level) / 2 * 100))
         return lower, upper
 
     # ------------------------------------------------------------------
     # Layout Builders
     # ------------------------------------------------------------------
 
-    def _build_main_layout(self):
+    def _build_main_layout(self) -> None:
         self.app.layout = html.Div(
             [
                 html.Div(
                     [
                         dcc.Dropdown(
                             id="config-dropdown",
-                            options=self.config_files,
+                            options=cast(Any, self.config_files),
                             value=self.config_files[0]["value"],
                             clearable=False,
                             style={
@@ -311,9 +339,9 @@ class GameStatsDashboard:
             ]
         )
 
-    def _layout_stats_by_date(self):
-        granularity = list(self.date_files_config.keys())[0]
-        df_date = self.dfs_by_date.get(granularity, pd.DataFrame())
+    def _layout_stats_by_date(self) -> html.Div:
+        granularity: str = list(self.date_files_config.keys())[0]
+        df_date: pd.DataFrame = self.dfs_by_date.get(granularity, pd.DataFrame())
         min_date = None
         max_date = None
         if not df_date.empty and self.date_col in df_date.columns:
@@ -338,7 +366,9 @@ class GameStatsDashboard:
                         html.Label("Select Date Granularity:", style={"fontWeight": "bold", "marginRight": "10px"}),
                         dcc.Dropdown(
                             id="date-granularity",
-                            options=list(self.date_files_config.keys()),
+                            options=cast(
+                                Any, [{"label": gran, "value": gran} for gran in list(self.date_files_config.keys())]
+                            ),
                             value=list(self.date_files_config.keys())[0],
                             clearable=False,
                             style={"width": "150px"},
@@ -361,46 +391,46 @@ class GameStatsDashboard:
             },
         )
 
-        download_config = {
-            "toImageButtonOptions": {
-                "format": "png",
-                "height": 600,
-                "width": 1200,
-                "scale": 3,
-            },
-            "displaylogo": False,
-        }
+        download_config = dict[str, dict[str, str | int] | bool](
+            toImageButtonOptions=dict(format="png", height=600, width=1200, scale=3), displaylogo=False
+        )
 
-        def create_group_panel(group_id, label):
-            download_config["toImageButtonOptions"]["filename"] = f"stats_by_date{label}"
+        def create_group_panel(group_id: str, label: str) -> html.Div:
+            download_config["toImageButtonOptions"]["filename"] = f"stats_by_date{label}"  # type: ignore
             return html.Div(
                 [
-                    html.H4(label, style={"marginTop": "0", "color": "#377EB8"}),
+                    html.H4(label, style={"marginTop": "0", "color": "#377EB8", "fontWeight": "bold"}),
                     html.Div(
                         [
                             html.Div(
                                 [
-                                    html.Label("Left Axis Metrics:"),
+                                    html.Label("Left Axis Metrics:", style={"fontWeight": "bold"}),
                                     dcc.Dropdown(
                                         id=f"date-{group_id}-left-metrics",
-                                        options=[{"label": m, "value": m} for m in self.plot_metrics[group_id]],
+                                        options=cast(Any, self.plot_metrics[group_id]),
                                         value=[self.plot_metrics[group_id][0]] if self.plot_metrics[group_id] else [],
                                         multi=True,
                                         style={"minWidth": "200px"},
                                     ),
-                                    html.Label("Right Axis Metrics:", style={"marginTop": "10px"}),
+                                    html.Br(),
+                                    html.Label(
+                                        "Right Axis Metrics:", style={"marginTop": "10px", "fontWeight": "bold"}
+                                    ),
                                     dcc.Dropdown(
                                         id=f"date-{group_id}-right-metrics",
-                                        options=[{"label": m, "value": m} for m in self.plot_metrics[group_id]],
+                                        options=cast(Any, self.plot_metrics[group_id]),
                                         value=[],
                                         multi=True,
                                         style={"minWidth": "200px"},
                                     ),
+                                    html.Br(),
+                                    html.Hr(style={"marginTop": "16px", "marginBottom": "16px"}),
+                                    html.Label("Logarithmic Scaling:", style={"fontWeight": "bold"}),
                                     html.Div(
                                         [
                                             dcc.Checklist(
                                                 id=f"date-{group_id}-log",
-                                                options=[{"label": " Hybrid Log", "value": "ON"}],
+                                                options=cast(Any, [{"label": " Hybrid Log", "value": "ON"}]),
                                                 value=[],
                                                 style={"display": "inline-block", "marginRight": "10px"},
                                             ),
@@ -409,16 +439,19 @@ class GameStatsDashboard:
                                                 id=f"date-{group_id}-thresh",
                                                 type="number",
                                                 value=10,
-                                                style={"width": "60px"},
+                                                style={"width": "60px", "marginLeft": "2px"},
                                             ),
                                         ],
                                         style={"marginTop": "10px"},
                                     ),
+                                    html.Br(),
+                                    html.Hr(style={"marginTop": "18px", "marginBottom": "18px"}),
+                                    html.Label("Groups to Show:", style={"fontWeight": "bold"}),
                                     html.Div(
                                         [
                                             dcc.Checklist(
                                                 id=f"date-{group_id}-group",
-                                                options=[{"label": s, "value": s} for s in self.df_plot_groups],
+                                                options=cast(Any, self.df_plot_groups),
                                                 value=self.df_plot_groups[:4],
                                                 labelStyle={"display": "block", "marginBottom": "5px"},
                                                 style={"marginBottom": "10px"},
@@ -432,7 +465,7 @@ class GameStatsDashboard:
                             html.Div(
                                 [
                                     dcc.Graph(
-                                        id=f"date-{group_id}-plot", style={"height": "400px"}, config=download_config
+                                        id=f"date-{group_id}-plot", style={"height": "400px"}, config=download_config  # type: ignore
                                     )
                                 ],
                                 style=Styles.GRAPH_CONTAINER,
@@ -453,14 +486,23 @@ class GameStatsDashboard:
             ]
         )
 
-    def _layout_stats_by_group(self):
-        min_date, max_date, group1_start, group1_end, group2_start, group2_end = self._compute_group_date_ranges()
+    def _layout_stats_by_group(self) -> html.Div:
+        (
+            min_date,
+            max_date,
+            group1_start,
+            group1_end,
+            group2_start,
+            group2_end,
+            group3_start,
+            group3_end,
+        ) = self._compute_group_date_ranges()
 
         date_group_picker = html.Div(
             [
                 html.Div(
                     [
-                        html.Label("Date Range for Group1:", style={"fontWeight": "bold", "marginRight": "10px"}),
+                        html.Label("Date Range 1 (Oldest):", style={"fontWeight": "bold", "marginRight": "10px"}),
                         dcc.DatePickerRange(
                             id="date-picker-range1",
                             min_date_allowed=min_date,
@@ -469,19 +511,29 @@ class GameStatsDashboard:
                             start_date=group1_start if group1_start is not None else min_date,
                             end_date=group1_end if group1_end is not None else group1_start,
                             display_format="YYYY-MM-DD",
-                            style={"verticalAlign": "middle", "marginRight": "20px"},
+                            style={"verticalAlign": "middle", "marginRight": "36px"},
                         ),
-                        html.Div(style={"width": "30px"}),
-                        html.Label("Date Range for Group2:", style={"fontWeight": "bold", "marginRight": "10px"}),
+                        html.Label("Date Range 2:", style={"fontWeight": "bold", "marginRight": "10px"}),
                         dcc.DatePickerRange(
                             id="date-picker-range2",
                             min_date_allowed=min_date,
                             max_date_allowed=max_date,
                             initial_visible_month=group2_start if group2_start is not None else min_date,
                             start_date=group2_start if group2_start is not None else min_date,
-                            end_date=group2_end if group2_end is not None else max_date,
+                            end_date=group2_end if group2_end is not None else group2_start,
                             display_format="YYYY-MM-DD",
-                            style={"verticalAlign": "middle", "marginRight": "20px"},
+                            style={"verticalAlign": "middle", "marginRight": "36px"},
+                        ),
+                        html.Label("Date Range 3 (Most Recent):", style={"fontWeight": "bold", "marginRight": "10px"}),
+                        dcc.DatePickerRange(
+                            id="date-picker-range3",
+                            min_date_allowed=min_date,
+                            max_date_allowed=max_date,
+                            initial_visible_month=group3_start if group3_start is not None else min_date,
+                            start_date=group3_start if group3_start is not None else min_date,
+                            end_date=group3_end if group3_end is not None else max_date,
+                            display_format="YYYY-MM-DD",
+                            style={"verticalAlign": "middle", "marginRight": "18px"},
                         ),
                     ],
                     style={
@@ -493,68 +545,99 @@ class GameStatsDashboard:
                 ),
             ],
             style={
-                "marginBottom": "20px",
-                "padding": "15px",
+                "marginBottom": "26px",
+                "padding": "20px",
                 "backgroundColor": "white",
                 "borderRadius": "8px",
                 "border": "1px solid #e0e0e0",
             },
         )
 
-        download_config = {
-            "toImageButtonOptions": {
-                "format": "png",
-                "height": 600,
-                "width": 1200,
-                "scale": 3,
-            },
-            "displaylogo": False,
-        }
+        download_config = dict(
+            toImageButtonOptions=dict(format="png", height=600, width=1200, scale=3), displaylogo=False
+        )
 
-        def create_group_panel(group_id, label):
+        def create_group_panel(group_id: str, label: str) -> html.Div:
             dl_id = f"group-{group_id}-plot"
             metric_dropdown_id = f"group-{group_id}-metrics"
             display_toggle_id = f"group-{group_id}-display"
             group_selector_id = f"group-{group_id}-group"
+            range_cb_id1 = f"group-{group_id}-show-r1"
+            range_cb_id2 = f"group-{group_id}-show-r2"
+            range_cb_id3 = f"group-{group_id}-show-r3"
             # --- CLIP controls:
             clip_check_id = f"group-{group_id}-clip-enable"
             clip_min_id = f"group-{group_id}-clip-min"
             clip_max_id = f"group-{group_id}-clip-max"
+
             return html.Div(
                 [
-                    html.H4(label, style={"marginTop": "0", "color": "#377EB8"}),
+                    html.H4(label, style={"marginTop": "0", "color": "#377EB8", "fontWeight": "bold"}),
                     html.Div(
                         [
                             html.Div(
                                 [
-                                    html.Label("Metric:"),
+                                    html.Label("Metric:", style={"fontWeight": "bold"}),
                                     dcc.Dropdown(
                                         id=metric_dropdown_id,
-                                        options=[{"label": m, "value": m} for m in self.plot_metrics[group_id]],
-                                        value=self.plot_metrics[group_id][0] if self.plot_metrics[group_id] else None,
+                                        options=cast(Any, self.plot_metrics[group_id]),
+                                        value=[self.plot_metrics[group_id][0]] if self.plot_metrics[group_id] else [],
                                         multi=False,
-                                        style={"minWidth": "200px"},
+                                        style={"minWidth": "240px"},
                                     ),
-                                    html.Label("Display Mode:", style={"marginTop": "10px"}),
+                                    html.Br(),
+                                    html.Hr(style={"marginTop": "18px", "marginBottom": "16px"}),
+                                    html.Label("Display Mode:", style={"fontWeight": "bold"}),
                                     dcc.RadioItems(
                                         id=display_toggle_id,
-                                        options=[
-                                            {"label": "Box Plot", "value": "box"},
-                                            {"label": "Bar (Mean)", "value": "bar"},
-                                        ],
+                                        options=cast(
+                                            Any,
+                                            [
+                                                {"label": "Box Plot", "value": "box"},
+                                                {"label": "Bar (Mean)", "value": "bar"},
+                                            ],
+                                        ),
                                         value="box",
                                         labelStyle={"display": "inline-block", "marginRight": "12px"},
-                                        style={"marginTop": "5px"},
+                                        style={"marginTop": "8px"},
                                     ),
-                                    html.Label("Group(s) to Show:", style={"marginTop": "16px"}),
+                                    html.Br(),
+                                    html.Hr(style={"marginTop": "18px", "marginBottom": "16px"}),
+                                    html.Label("Group(s) to Show:", style={"fontWeight": "bold"}),
                                     dcc.Checklist(
                                         id=group_selector_id,
-                                        options=[{"label": s, "value": s} for s in self.df_plot_groups],
+                                        options=cast(Any, self.df_plot_groups),
                                         value=self.df_plot_groups[:4],
                                         labelStyle={"display": "block", "marginBottom": "5px"},
-                                        style={"marginBottom": "10px"},
+                                        style={"marginBottom": "14px", "marginTop": "8px"},
                                     ),
-                                    html.Hr(style={"marginTop": "14px", "marginBottom": "14px"}),
+                                    html.Br(),
+                                    html.Hr(style={"marginTop": "18px", "marginBottom": "16px"}),
+                                    html.Label("Show Date Range(s):", style={"fontWeight": "bold"}),
+                                    html.Div(
+                                        [
+                                            dcc.Checklist(
+                                                id=range_cb_id1,
+                                                options=cast(Any, [{"label": "Show Range 1", "value": "ON"}]),
+                                                value=["ON"],
+                                                style={"display": "inline-block", "marginRight": "18px"},
+                                            ),
+                                            dcc.Checklist(
+                                                id=range_cb_id2,
+                                                options=cast(Any, [{"label": "Show Range 2", "value": "ON"}]),
+                                                value=["ON"],
+                                                style={"display": "inline-block", "marginRight": "18px"},
+                                            ),
+                                            dcc.Checklist(
+                                                id=range_cb_id3,
+                                                options=cast(Any, [{"label": "Show Range 3", "value": "ON"}]),
+                                                value=["ON"],
+                                                style={"display": "inline-block", "marginRight": "0px"},
+                                            ),
+                                        ],
+                                        style={"marginTop": "8px", "marginBottom": "4px"},
+                                    ),
+                                    html.Hr(style={"marginTop": "16px", "marginBottom": "14px"}),
                                     html.Label(
                                         "Clip Data (Box/Bar):", style={"fontWeight": "bold", "display": "block"}
                                     ),
@@ -562,9 +645,9 @@ class GameStatsDashboard:
                                         [
                                             dcc.Checklist(
                                                 id=clip_check_id,
-                                                options=[{"label": " Enable Clip", "value": "ON"}],
+                                                options=cast(Any, [{"label": " Enable Clip", "value": "ON"}]),
                                                 value=[],
-                                                style={"display": "inline-block", "marginRight": "10px"},
+                                                style={"display": "inline-block", "marginRight": "12px"},
                                             ),
                                             html.Label("Min:", style={"marginLeft": "10px"}),
                                             dcc.Input(
@@ -583,13 +666,13 @@ class GameStatsDashboard:
                                                 value=None,
                                             ),
                                         ],
-                                        style={"marginTop": "6px", "marginBottom": "4px"},
+                                        style={"marginTop": "8px", "marginBottom": "4px"},
                                     ),
                                 ],
                                 style=Styles.CONTROL_PANEL_CONTAINER,
                             ),
                             html.Div(
-                                [dcc.Graph(id=dl_id, style={"height": "400px"}, config=download_config)],
+                                [dcc.Graph(id=dl_id, style={"height": "430px"}, config=download_config)],  # type: ignore
                                 style=Styles.GRAPH_CONTAINER,
                             ),
                         ],
@@ -608,44 +691,49 @@ class GameStatsDashboard:
             ]
         )
 
-    def _layout_stats_by_bet(self):
+    def _layout_stats_by_bet(self) -> html.Div:
         return html.Div(
             [
                 html.Div(
                     [
                         html.Div(
                             [
-                                html.Label("Select Date:", style={"marginBottom": "10px"}),
+                                html.Label("Select Date:", style={"marginBottom": "10px", "fontWeight": "bold"}),
                                 dcc.Dropdown(
                                     id="session-dropdown",
-                                    options=[{"label": s, "value": s} for s in self.sessions],
+                                    options=cast(Any, [{"label": s, "value": s} for s in self.sessions]),
                                     value=self.sessions[0] if self.sessions else None,
                                     clearable=False,
                                 ),
                                 html.Hr(),
-                                html.Label("Compare Strategies:", style={"marginBottom": "10px"}),
+                                html.Label("Compare Strategies:", style={"marginBottom": "10px", "fontWeight": "bold"}),
                                 dcc.Checklist(
                                     id="strategy-checklist",
-                                    options=[{"label": s, "value": s} for s in self.df_bet_groups],
+                                    options=cast(Any, [{"label": s, "value": s} for s in self.df_bet_groups]),
                                     value=self.df_bet_groups[:4],
                                     labelStyle={"display": "block", "marginBottom": "5px"},
-                                    style={"marginBottom": "10px"},
+                                    style={"marginBottom": "8px"},
                                 ),
                             ],
                             style=Styles.BOX,
                         ),
                         html.Div(
                             [
-                                html.Label("Metrics (Left Axis):"),
+                                html.Label("Metrics (Left Axis):", style={"fontWeight": "bold"}),
                                 dcc.Dropdown(
                                     id="metric-checklist",
-                                    options=self.bet_metrics,
+                                    options=cast(Any, [{"label": m, "value": m} for m in self.bet_metrics]),
                                     value=[self.bet_metrics[0]] if self.bet_metrics else [],
                                     multi=True,
-                                    style={"marginBottom": "10px"},
+                                    style={"marginBottom": "14px"},
                                 ),
-                                html.Label("Metrics (Right Axis):"),
-                                dcc.Dropdown(id="right-axis-checklist", options=self.bet_metrics, value=[], multi=True),
+                                html.Label("Metrics (Right Axis):", style={"fontWeight": "bold"}),
+                                dcc.Dropdown(
+                                    id="right-axis-checklist",
+                                    options=cast(Any, [{"label": m, "value": m} for m in self.bet_metrics]),
+                                    value=[],
+                                    multi=True,
+                                ),
                             ],
                             style=Styles.BOX,
                         ),
@@ -653,17 +741,19 @@ class GameStatsDashboard:
                             [
                                 dcc.Checklist(
                                     id="share-left-yscale-check",
-                                    options=[{"label": " Share Left Scale", "value": "ON"}],
+                                    options=cast(Any, [{"label": " Share Left Scale", "value": "ON"}]),
                                     value=[],
                                 ),
                                 dcc.Checklist(
                                     id="share-right-yscale-check",
-                                    options=[{"label": " Share Right Scale", "value": "ON"}],
+                                    options=cast(Any, [{"label": " Share Right Scale", "value": "ON"}]),
                                     value=[],
                                 ),
                                 html.Hr(),
                                 dcc.Checklist(
-                                    id="log-check", options=[{"label": " Hybrid Log Scale", "value": "ON"}], value=[]
+                                    id="log-check",
+                                    options=cast(Any, [{"label": " Hybrid Log Scale", "value": "ON"}]),
+                                    value=[],
                                 ),
                                 html.Div(
                                     [
@@ -675,7 +765,7 @@ class GameStatsDashboard:
                                 html.Hr(),
                                 dcc.Checklist(
                                     id="filter-check",
-                                    options=[{"label": "Max Number of Bets", "value": "ON"}],
+                                    options=cast(Any, [{"label": "Max Number of Bets", "value": "ON"}]),
                                     value=["ON"],
                                 ),
                                 dcc.Input(
@@ -699,14 +789,14 @@ class GameStatsDashboard:
     # Callbacks
     # ------------------------------------------------------------------
 
-    def _register_callbacks(self):
+    def _register_callbacks(self) -> None:
         @self.app.callback(
             Output("page-content", "children", allow_duplicate=True),
             Input("config-dropdown", "value"),
             State("navigator-tabs", "value"),
             prevent_initial_call=True,
         )
-        def update_config(selected_config, current_tab):
+        def update_config(selected_config: str, current_tab: str) -> Any:
             self._reset_state()
             self._reload_config(selected_config)
             return self._render_tab_content(current_tab)
@@ -716,7 +806,7 @@ class GameStatsDashboard:
             Input("navigator-tabs", "value"),
             prevent_initial_call=False,
         )
-        def render_content(tab):
+        def render_content(tab: str) -> Any:
             return self._render_tab_content(tab)
 
         # For "Stats by Date": update picker to full range on granularity switch
@@ -728,7 +818,7 @@ class GameStatsDashboard:
             Output("date-picker-range", "initial_visible_month"),
             Input("date-granularity", "value"),
         )
-        def update_date_picker_on_granularity(granularity):
+        def update_date_picker_on_granularity(granularity: str):
             gran = granularity
             gran_df = self.dfs_by_date.get(gran, pd.DataFrame())
             if gran_df.empty or self.date_col not in gran_df.columns:
@@ -743,7 +833,7 @@ class GameStatsDashboard:
                 min_date,
             )
 
-        # For "Stats by Group": set picker2 to most recent 2 weeks, picker1 to previous 2 weeks.
+        # For "Stats by Group": set three pickers for three most recent 2-week ranges
         @self.app.callback(
             Output("date-picker-range1", "min_date_allowed"),
             Output("date-picker-range1", "max_date_allowed"),
@@ -755,13 +845,24 @@ class GameStatsDashboard:
             Output("date-picker-range2", "start_date"),
             Output("date-picker-range2", "end_date"),
             Output("date-picker-range2", "initial_visible_month"),
+            Output("date-picker-range3", "min_date_allowed"),
+            Output("date-picker-range3", "max_date_allowed"),
+            Output("date-picker-range3", "start_date"),
+            Output("date-picker-range3", "end_date"),
+            Output("date-picker-range3", "initial_visible_month"),
             Input("date-granularity", "value"),
         )
-        def update_group_date_pickers_on_granularity(granularity):
-            min_date, max_date, group1_start, group1_end, group2_start, group2_end = self._compute_group_date_ranges(
-                granularity
-            )
-            # For picker1 (2 weeks before recent 2 weeks), picker2 (most recent 2 weeks)
+        def update_group_date_pickers_on_granularity(granularity: str):
+            (
+                min_date,
+                max_date,
+                group1_start,
+                group1_end,
+                group2_start,
+                group2_end,
+                group3_start,
+                group3_end,
+            ) = self._compute_group_date_ranges(granularity)
             return (
                 min_date,
                 max_date,
@@ -771,11 +872,16 @@ class GameStatsDashboard:
                 min_date,
                 max_date,
                 group2_start if group2_start is not None else min_date,
-                group2_end if group2_end is not None else max_date,
+                group2_end if group2_end is not None else group2_start,
                 group2_start if group2_start is not None else min_date,
+                min_date,
+                max_date,
+                group3_start if group3_start is not None else min_date,
+                group3_end if group3_end is not None else max_date,
+                group3_start if group3_start is not None else min_date,
             )
 
-        # Add group-plot callbacks, now with CLIP
+        # Add group-plot callbacks for 3 date ranges, with show/hide toggles
         for i in range(1, 4):
             self.app.callback(
                 Output(f"group-g{i}-plot", "figure"),
@@ -787,6 +893,11 @@ class GameStatsDashboard:
                     Input("date-picker-range1", "end_date"),
                     Input("date-picker-range2", "start_date"),
                     Input("date-picker-range2", "end_date"),
+                    Input("date-picker-range3", "start_date"),
+                    Input("date-picker-range3", "end_date"),
+                    Input(f"group-g{i}-show-r1", "value"),
+                    Input(f"group-g{i}-show-r2", "value"),
+                    Input(f"group-g{i}-show-r3", "value"),
                     Input(f"group-g{i}-clip-enable", "value"),
                     Input(f"group-g{i}-clip-min", "value"),
                     Input(f"group-g{i}-clip-max", "value"),
@@ -824,28 +935,24 @@ class GameStatsDashboard:
                 ],
             )(self.update_date_plot)
 
-    def _render_tab_content(self, current_tab):
+    def _render_tab_content(self, current_tab: str) -> Any:
         if current_tab == "tab-date":
             default_gran = list(self.date_files_config.keys())[0]
             if self.config["stats_by_date"]["group_col"]:
                 self.df_date_group_col = self.config["stats_by_date"]["group_col"]
-                self.df_plot_groups: List[str] = (
-                    self.dfs_by_date[default_gran][self.df_date_group_col].unique().tolist()
-                )
+                self.df_plot_groups = self.dfs_by_date[default_gran][self.df_date_group_col].unique().tolist()
             return self._layout_stats_by_date()
         elif current_tab == "tab-group":
             default_gran = list(self.date_files_config.keys())[0]
             if self.config["stats_by_date"]["group_col"]:
                 self.df_date_group_col = self.config["stats_by_date"]["group_col"]
-                self.df_plot_groups: List[str] = (
-                    self.dfs_by_date[default_gran][self.df_date_group_col].unique().tolist()
-                )
+                self.df_plot_groups = self.dfs_by_date[default_gran][self.df_date_group_col].unique().tolist()
             return self._layout_stats_by_group()
         elif current_tab == "tab-bet":
             self._load_bet_data()
             if self.config["stats_by_bet"]["group_col"]:
                 self.df_bet_group_col = self.config["stats_by_bet"]["group_col"]
-                self.df_bet_groups: List[str] = self.df_bet[self.df_bet_group_col].unique().tolist()
+                self.df_bet_groups = self.df_bet[self.df_bet_group_col].unique().tolist()
             return self._layout_stats_by_bet()
         else:
             return html.Div("404 Error")
@@ -1130,26 +1237,30 @@ class GameStatsDashboard:
         y_range = y_range if y_range else (0, y_max_local * 1.05)
         fig.update_yaxes(range=y_range, row=1, col=1, secondary_y=is_right)
 
-    def update_group_plot_combined_factory(self, group_id):
+    def update_group_plot_combined_factory(self, group_id: str) -> Callable[..., Any]:
         """
-        Callback factory: Plots date-group stats for a metric, for both date-range1 and date-range2, in a single figure.
-        Now supports optional data clipping.
+        Callback factory: Plots date-group stats for a metric, for three date ranges, in a single figure.
+        Now supports optional data clipping, range toggle, and no redundant legend.
         """
 
         def callback(
             metric,
             display_mode,
             groups,
-            range1_start,
-            range1_end,
-            range2_start,
-            range2_end,
+            r1_start,
+            r1_end,
+            r2_start,
+            r2_end,
+            r3_start,
+            r3_end,
+            show_r1,
+            show_r2,
+            show_r3,
             clip_enable,
             clip_min,
             clip_max,
         ):
-            # If invalid input, return blank
-            if not metric or not groups or range1_start is None or range1_end is None:
+            if not metric or not groups or r1_start is None or r1_end is None:
                 return go.Figure()
             granularity = list(self.date_files_config.keys())[0]
             df_date = self.dfs_by_date[granularity]
@@ -1157,40 +1268,17 @@ class GameStatsDashboard:
                 return go.Figure()
             base_colors = Styles.COLORS
             fig = go.Figure()
-            # We'll build panel such that: for each group, two traces: range1 and range2
-            # Use slight color variation (opacity/hatch/pattern/legend)
-            # To combine, make x/group labels for all groups (with possible suffix if needed)
-            # Approach: x-axis labels like "Group1 [R1]", "Group1 [R2]", "Group2 [R1]", "Group2 [R2]"
-            xticks = []
-            group_idx_map = {}
-            for gi, group in enumerate(groups):
-                group_idx_map[group] = gi
 
-            def _label(group, r):
-                if r == 0:
-                    return f"{group} [Range1]"
-                else:
-                    return f"{group} [Range2]"
+            def _label(group, l):
+                return f"{group} [Range{l}]"
 
-            data_by_range = []
-            data_by_range.append(
-                {
-                    "start": range1_start,
-                    "end": range1_end,
-                    "label": f"{range1_start}~{range1_end}",
-                    "range_id": "1",
-                }
-            )
-            if range2_start and range2_end:
-                data_by_range.append(
-                    {
-                        "start": range2_start,
-                        "end": range2_end,
-                        "label": f"{range2_start}~{range2_end}",
-                        "range_id": "2",
-                    }
-                )
-
+            data_ranges = [
+                {"start": r1_start, "end": r1_end, "label": "1", "show": "ON" in (show_r1 or [])},
+                {"start": r2_start, "end": r2_end, "label": "2", "show": "ON" in (show_r2 or [])},
+                {"start": r3_start, "end": r3_end, "label": "3", "show": "ON" in (show_r3 or [])},
+            ]
+            # Only keep enabled
+            data_by_range = [r for r in data_ranges if r["show"]]
             enable_clip = clip_enable is not None and "ON" in (clip_enable or [])
             cmin = clip_min if enable_clip and clip_min is not None else None
             cmax = clip_max if enable_clip and clip_max is not None else None
@@ -1205,14 +1293,13 @@ class GameStatsDashboard:
                         df_g = df_date.loc[mask]
                         df_g = df_g[df_g[self.df_date_group_col] == group]
                         vals = df_g[metric].dropna().values
-                        # CLIPPING logic, numpy clip
                         if enable_clip and (cmin is not None or cmax is not None):
                             vals = np.clip(
                                 vals, cmin if cmin is not None else -np.inf, cmax if cmax is not None else np.inf
                             )
                         if len(vals) == 0:
                             continue
-                        box_label = _label(group, ri)
+                        box_label = _label(group, range_info["label"])
                         fig.add_trace(
                             go.Box(
                                 y=vals,
@@ -1221,15 +1308,14 @@ class GameStatsDashboard:
                                 marker=dict(
                                     color=color_base, opacity=1.0 if ri == 0 else 0.45, line=dict(color="#333", width=1)
                                 ),
-                                legendgroup=group,
-                                showlegend=(ri == 0),  # Only show legend once per group
+                                showlegend=False,
                             )
                         )
             else:  # bar, mean+std
                 x_labels = []
                 ydata = []
                 edata = []
-                mcolors = []
+                mcolors_box = []
                 for gi, group in enumerate(groups):
                     color_base = base_colors[gi % len(base_colors)]
                     for ri, range_info in enumerate(data_by_range):
@@ -1239,21 +1325,20 @@ class GameStatsDashboard:
                         df_g = df_date.loc[mask]
                         df_g = df_g[df_g[self.df_date_group_col] == group]
                         vals = df_g[metric].dropna().values
-                        # CLIPPING logic, numpy clip
                         if enable_clip and (cmin is not None or cmax is not None):
                             vals = np.clip(
                                 vals, cmin if cmin is not None else -np.inf, cmax if cmax is not None else np.inf
                             )
                         if len(vals) == 0:
                             continue
-                        bar_label = _label(group, ri)
+                        bar_label = _label(group, range_info["label"])
                         x_labels.append(bar_label)
                         ydata.append(np.mean(vals))
                         edata.append(np.std(vals))
                         if ri == 0:
-                            mcolors.append(dict(color=color_base, opacity=1.0, line=dict(color="#333", width=1)))
+                            mcolors_box.append(dict(color=color_base, opacity=1.0, line=dict(color="#333", width=1)))
                         else:
-                            mcolors.append(
+                            mcolors_box.append(
                                 dict(
                                     color=color_base,
                                     opacity=0.5,
@@ -1261,31 +1346,30 @@ class GameStatsDashboard:
                                     pattern=dict(shape="/"),
                                 )
                             )
-
                 fig.add_trace(
                     go.Bar(
                         x=x_labels,
                         y=ydata,
                         error_y=dict(type="data", array=edata),
-                        marker={"color": [c["color"] for c in mcolors], "opacity": None},  # colors handled below
-                        customdata=[c for c in mcolors],
+                        marker={"color": [c["color"] for c in mcolors_box], "opacity": None},
+                        customdata=[c for c in mcolors_box],
                         hovertemplate="%{x}: %{y:.2f} ± %{error_y.array:.2f}",
+                        showlegend=False,
                     )
                 )
-                # Explicitly set bar marker color, with pattern for Range2
                 for i, bar in enumerate(fig.data):
                     if hasattr(bar, "customdata") and bar.customdata is not None:
                         for xi in range(len(bar.x)):
                             this_marker = bar.customdata[xi]
-                            fig.data[i].marker.color = [m["color"] for m in mcolors]
+                            fig.data[i].marker.color = [m["color"] for m in mcolors_box]
                             if "pattern" in this_marker:
                                 if not hasattr(fig.data[i].marker, "pattern"):
                                     fig.data[i].marker.pattern = dict(shape=[""] * len(bar.x))
                                 fig.data[i].marker.pattern.shape = [
-                                    m.get("pattern", {}).get("shape", "") for m in mcolors
+                                    m.get("pattern", {}).get("shape", "") for m in mcolors_box
                                 ]
                             if "opacity" in this_marker:
-                                fig.data[i].marker.opacity = [m.get("opacity", 1.0) for m in mcolors]
+                                fig.data[i].marker.opacity = [m.get("opacity", 1.0) for m in mcolors_box]
 
             mode_title = "Box Plot" if display_mode == "box" else "Bar (Mean ± Std)"
             subtitle = ""
@@ -1302,75 +1386,13 @@ class GameStatsDashboard:
                 template="plotly_white",
                 hovermode="closest",
                 font=dict(size=16),
-                legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1.0),
+                # legend removed (redundant with explicit labels)
             )
             return fig
 
         return callback
 
-    # ------------------------------------------------------------------
-    # Math Helpers
-    # ------------------------------------------------------------------
-
-    def compute_axis_range(self, dfs, metrics, log_scale, thresh):
-        if not metrics:
-            return None
-        vals = []
-        for df in dfs:
-            for m in metrics:
-                if m in df.columns:
-                    y = pd.to_numeric(df[m], errors="coerce").dropna()
-                    vals.append(y)
-        if not vals:
-            return None
-        all_v = pd.concat(vals)
-        if log_scale:
-            all_v = self.hybrid_transform(all_v, thresh)
-        return (0, all_v.max())
-
-    def update_log_ticks(self, fig, dfs, left_ms, right_ms, thresh):
-        all_left = []
-        all_right = []
-        for df in dfs:
-            if left_ms:
-                all_left.extend(df[left_ms].values.flatten())
-            if right_ms:
-                all_right.extend(df[right_ms].values.flatten())
-
-        def set_ticks(data, is_right):
-            if not len(data):
-                return
-            ticks = self.get_ticks(data, thresh)
-            tick_vals = self.hybrid_transform(ticks, thresh)
-            tick_text = [f"{int(t)}" if t >= 1 else f"{t:.2f}" for t in ticks]
-            fig.update_yaxes(tickvals=tick_vals, ticktext=tick_text, secondary_y=is_right, row=1, col=1)
-
-        set_ticks(all_left, False)
-        set_ticks(all_right, True)
-
-    @staticmethod
-    def hybrid_transform(y, thresh):
-        y = np.array(y, dtype=float)
-        eps = 1e-9
-        return np.where(y <= thresh, y, thresh + np.log10(y + eps))
-
-    @staticmethod
-    def get_ticks(y_values, thresh, nticks=10):
-        y_values = np.array(y_values, dtype=float)
-        y_values = y_values[~np.isnan(y_values)]
-        if len(y_values) == 0:
-            return np.array([0, thresh])
-        y_max = y_values.max()
-        lin_ticks = np.linspace(0, thresh, num=4)
-        if y_max > thresh:
-            start_exp = np.ceil(np.log10(thresh))
-            end_exp = np.ceil(np.log10(y_max))
-            log_ticks = np.logspace(start_exp, end_exp, num=int(end_exp - start_exp) + 1)
-            combined = np.unique(np.concatenate([lin_ticks, log_ticks]))
-            return combined[combined <= y_max * 1.1]
-        return lin_ticks
-
-    def run(self, debug=True):
+    def run(self, debug: bool = True) -> None:
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.connect(("8.8.8.8", 80))
