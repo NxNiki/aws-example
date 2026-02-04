@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import socket
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from datetime import timedelta
 from math import inf
 from pathlib import Path
@@ -91,7 +92,31 @@ class Styles:
 
 
 # ==========================================
-# 2. Dashboard Logic
+# 2. Worker Functions
+# ==========================================
+
+
+def _bootstrap_worker(arr_np: np.ndarray, n_boot: int = 1000, ci_level: float = 0.95) -> Tuple[float, float]:
+    """
+    Top-level function required for ProcessPoolExecutor pickling.
+    Calculates bootstrap CI for a single array.
+    """
+    if len(arr_np) == 0:
+        return float("nan"), float("nan")
+    if np.min(arr_np) == np.max(arr_np):
+        return float(arr_np[0]), float(arr_np[0])
+
+    # Vectorized sampling: (n_boot, len(arr))
+    resamples = np.random.choice(arr_np, size=(n_boot, len(arr_np)), replace=True)
+    boot_means = np.mean(resamples, axis=1)
+
+    lower = float(np.percentile(boot_means, (1 - ci_level) / 2 * 100))
+    upper = float(np.percentile(boot_means, (1 + ci_level) / 2 * 100))
+    return lower, upper
+
+
+# ==========================================
+# 3. Dashboard Logic
 # ==========================================
 
 
@@ -163,10 +188,15 @@ class GameStatsDashboard:
     def _load_bet_data(self) -> None:
         if not self.df_bet.empty:
             return
+
+        file_paths = [f for f in self.config["stats_by_bet"]["files"] if f]
+
+        # Parallel I/O: Reading files concurrently
         bet_data: List[pd.DataFrame] = []
-        for f in self.config["stats_by_bet"]["files"]:
-            if f:
-                bet_data.append(read_local_cache(f))
+        with ThreadPoolExecutor() as executor:
+            # map returns an iterator, converting to list triggers execution
+            bet_data = list(executor.map(read_local_cache, file_paths))
+
         if bet_data:
             self.df_bet = pd.concat(bet_data)
             self.df_bet["bet_index"] = pd.to_numeric(self.df_bet["bet_index"], errors="coerce")
@@ -180,19 +210,25 @@ class GameStatsDashboard:
             self.bet_metrics = []
 
     def _load_date_data(self) -> None:
-        for gran, file_paths in self.date_files_config.items():
-            daily_data: List[pd.DataFrame] = []
-            if isinstance(file_paths, str):
-                file_paths = [file_paths]
-            for f in file_paths:
-                if f:
-                    daily_data.append(read_local_cache(f))
-            if daily_data:
-                self.dfs_by_date[gran] = pd.concat(daily_data)
-                if self.date_col in self.dfs_by_date[gran].columns:
-                    self.dfs_by_date[gran][self.date_col] = pd.to_datetime(self.dfs_by_date[gran][self.date_col])
-            else:
-                self.dfs_by_date[gran] = pd.DataFrame()
+        # Parallel I/O: Reading files concurrently for each granularity
+        with ThreadPoolExecutor() as executor:
+            for gran, file_paths in self.date_files_config.items():
+                daily_data: List[pd.DataFrame] = []
+                if isinstance(file_paths, str):
+                    file_paths = [file_paths]
+
+                valid_paths = [f for f in file_paths if f]
+
+                if valid_paths:
+                    daily_data = list(executor.map(read_local_cache, valid_paths))
+
+                if daily_data:
+                    self.dfs_by_date[gran] = pd.concat(daily_data)
+                    if self.date_col in self.dfs_by_date[gran].columns:
+                        self.dfs_by_date[gran][self.date_col] = pd.to_datetime(self.dfs_by_date[gran][self.date_col])
+                else:
+                    self.dfs_by_date[gran] = pd.DataFrame()
+
         self.plot_metrics = {}
         self.plot_metrics["g1"] = self.config["stats_by_date"]["group1_columns"]
         self.plot_metrics["g2"] = self.config["stats_by_date"]["group2_columns"]
@@ -256,21 +292,6 @@ class GameStatsDashboard:
             return "rgba" + str(tuple(int(c * 255) for c in mcolors.to_rgb(color)) + (alpha,))
         except Exception:
             return f"rgba(0,0,0,{alpha})"
-
-    @staticmethod
-    def bootstrap_ci(arr: pd.Series, n_boot: int = 1000, ci_level: float = 0.95) -> Tuple[float, float]:
-        arr_np = arr.dropna().values
-        if len(arr_np) == 0:
-            return float("nan"), float("nan")
-        if min(arr_np) == max(arr_np):
-            return float(arr_np[0]), float(arr_np[0])
-        boot_means: List[float] = []
-        for _ in range(n_boot):
-            samples = np.random.choice(arr_np, size=len(arr_np), replace=True)
-            boot_means.append(float(np.mean(samples)))
-        lower = float(np.percentile(boot_means, (1 - ci_level) / 2 * 100))
-        upper = float(np.percentile(boot_means, (1 + ci_level) / 2 * 100))
-        return lower, upper
 
     # ------------------------------------------------------------------
     # Layout Builders
@@ -966,11 +987,14 @@ class GameStatsDashboard:
     ):
         if not left_metrics and not right_metrics:
             return go.Figure()
+
         log_scale = "ON" in (log_val or [])
         thresh = float(log_thresh) if log_thresh else 10.0
         fig = make_subplots(specs=[[{"secondary_y": True}]])
+
         df_date = self.dfs_by_date[date_granularity]
         df_date = df_date[(df_date[self.date_col] >= start_date) & (df_date[self.date_col] <= end_date)].copy()
+
         if self.df_date_group_col == "" or self.df_date_group_col not in df_date.columns:
             group_col = "group"
             df_date["group"] = "total"
@@ -998,71 +1022,88 @@ class GameStatsDashboard:
                 for j, s in enumerate(groups)
             }
 
-        def add_scatter_plot(metrics, strat, df_strat, secondary_y):
-            x_vals = df_strat[self.date_col]
-            for m in metrics:
-                if m not in df_strat.columns:
+        # Initialize ProcessPoolExecutor for parallel bootstrap calculations
+        # We start it here because creating it inside the inner loop is inefficient
+        with ProcessPoolExecutor() as executor:
+            for strat in groups:
+                df_strat = df_date[df_date[group_col] == strat].sort_values(self.date_col)
+                if df_strat.empty:
                     continue
-                if self.date_col in df_strat.columns:
-                    grouped = df_strat.groupby(self.date_col)[m]
-                    mean_vals = grouped.mean()
-                    y_raw = mean_vals
-                    y_lower = y_raw.copy()
-                    y_upper = y_raw.copy()
-                    for date_idx in mean_vals.index:
-                        arr = grouped.get_group(date_idx)
-                        lower, upper = self.bootstrap_ci(arr)
-                        y_lower.loc[date_idx] = lower
-                        y_upper.loc[date_idx] = upper
-                    y_lower = y_lower.fillna(y_raw)
-                    y_upper = y_upper.fillna(y_raw)
-                    x = mean_vals.index
-                    y_plot = self.hybrid_transform(y_raw, thresh) if log_scale else y_raw
-                    y_lower_plot = self.hybrid_transform(y_lower, thresh) if log_scale else y_lower
-                    y_upper_plot = self.hybrid_transform(y_upper, thresh) if log_scale else y_upper
-                else:
-                    y_raw = df_strat[m]
-                    y_plot = self.hybrid_transform(y_raw, thresh) if log_scale else y_raw
-                    x = x_vals
-                    y_lower_plot = y_plot
-                    y_upper_plot = y_plot
-                fig.add_trace(
-                    go.Scatter(
-                        x=x,
-                        y=y_plot,
-                        name=f"{strat}:{m}",
-                        mode="lines+markers",
-                        line=dict(
-                            color=color_map.get(f"{strat}:{m}", "black"),
-                            dash=line_style_map.get(f"{strat}:{m}", "solid"),
-                        ),
-                        legendgroup=strat,
-                    ),
-                    secondary_y=secondary_y,
-                )
-                if any((y_lower_plot != y_upper_plot)):
-                    base_color = color_map.get(f"{strat}:{m}", "black")
-                    fig.add_trace(
-                        go.Scatter(
-                            x=list(x) + list(x[::-1]),
-                            y=list(y_upper_plot) + list(y_lower_plot[::-1]),
-                            fill="toself",
-                            fillcolor=self.to_rgba(base_color, 0.1),
-                            line=dict(color="rgba(255,255,255,0)"),
-                            hoverinfo="skip",
-                            showlegend=False,
-                            legendgroup=strat,
-                            name=f"{strat}:{m} 95% CI",
-                        ),
-                        secondary_y=secondary_y,
-                    )
 
-        for strat in groups:
-            df_strat = df_date[df_date[group_col] == strat].sort_values(self.date_col)
-            if df_strat.empty:
-                continue
-            add_scatter_plot(left_metrics, strat, df_strat, False)
-            add_scatter_plot(right_metrics, strat, df_strat, True)
+                # Helper to add trace (requires calculating CI first)
+                def add_scatter_plot(metrics, secondary_y):
+                    x_vals = df_strat[self.date_col]
+                    for m in metrics:
+                        if m not in df_strat.columns:
+                            continue
+
+                        if self.date_col in df_strat.columns:
+                            grouped = df_strat.groupby(self.date_col)[m]
+                            mean_vals = grouped.mean()
+
+                            # Prepare data for parallel execution
+                            # We collect all arrays that need bootstrapping for this metric
+                            dates = mean_vals.index.tolist()
+                            arrays_to_bootstrap = [grouped.get_group(d).dropna().values for d in dates]
+
+                            # Execute bootstrap in parallel
+                            ci_results = list(executor.map(_bootstrap_worker, arrays_to_bootstrap))
+
+                            # Unpack results
+                            lowers, uppers = zip(*ci_results)
+
+                            y_raw = mean_vals
+                            y_lower = pd.Series(lowers, index=mean_vals.index).fillna(y_raw)
+                            y_upper = pd.Series(uppers, index=mean_vals.index).fillna(y_raw)
+
+                            x = mean_vals.index
+                            y_plot = self.hybrid_transform(y_raw, thresh) if log_scale else y_raw
+                            y_lower_plot = self.hybrid_transform(y_lower, thresh) if log_scale else y_lower
+                            y_upper_plot = self.hybrid_transform(y_upper, thresh) if log_scale else y_upper
+                        else:
+                            # Fallback if no date column grouping (unlikely given logic above)
+                            y_raw = df_strat[m]
+                            y_plot = self.hybrid_transform(y_raw, thresh) if log_scale else y_raw
+                            x = x_vals
+                            y_lower_plot = y_plot
+                            y_upper_plot = y_plot
+
+                        fig.add_trace(
+                            go.Scatter(
+                                x=x,
+                                y=y_plot,
+                                name=f"{strat}:{m}",
+                                mode="lines+markers",
+                                line=dict(
+                                    color=color_map.get(f"{strat}:{m}", "black"),
+                                    dash=line_style_map.get(f"{strat}:{m}", "solid"),
+                                ),
+                                legendgroup=strat,
+                            ),
+                            secondary_y=secondary_y,
+                        )
+
+                        # Add CI Band if meaningful
+                        if any(y_lower_plot != y_upper_plot):
+                            base_color = color_map.get(f"{strat}:{m}", "black")
+                            fig.add_trace(
+                                go.Scatter(
+                                    x=list(x) + list(x[::-1]),
+                                    y=list(y_upper_plot) + list(y_lower_plot[::-1]),
+                                    fill="toself",
+                                    fillcolor=self.to_rgba(base_color, 0.1),
+                                    line=dict(color="rgba(255,255,255,0)"),
+                                    hoverinfo="skip",
+                                    showlegend=False,
+                                    legendgroup=strat,
+                                    name=f"{strat}:{m} 95% CI",
+                                ),
+                                secondary_y=secondary_y,
+                            )
+
+                add_scatter_plot(left_metrics, False)
+                add_scatter_plot(right_metrics, True)
+
         fig.update_layout(
             height=400,
             margin=dict(l=50, r=10, t=5, b=15),
@@ -1075,6 +1116,7 @@ class GameStatsDashboard:
             yaxis=dict(title_font=dict(size=18), tickfont=dict(size=15)),
             yaxis2=dict(title_font=dict(size=18), tickfont=dict(size=15)),
         )
+
         if log_scale:
             all_y = []
             if left_metrics:
