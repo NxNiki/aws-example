@@ -63,12 +63,13 @@ class Styles:
         "border": "1px solid #e0e0e0",
         "borderRadius": "8px",
         "backgroundColor": "#ffffff",
-        "padding": "20px",
+        "padding": "24px",  # Increased slightly for breathing room
         "boxShadow": "0 2px 10px 0 rgba(0,0,0,0.05)",
         "marginBottom": "20px",
     }
     PANEL_HEADER: Dict[str, Any] = {
         "marginTop": "0",
+        "marginBottom": "20px",  # Consistent space below header
         "color": "#377EB8",
         "fontWeight": "bold",
     }
@@ -82,7 +83,7 @@ class Styles:
         "border": "1px solid #e0e0e0",
     }
     SECTION_GROUP: Dict[str, Any] = {
-        "marginBottom": "26px",
+        "marginBottom": "10px",
         "padding": "20px",
         "backgroundColor": "white",
         "borderRadius": "8px",
@@ -102,12 +103,14 @@ class Styles:
         "alignItems": "center",
         "justifyContent": "flex-start",
     }
+
+    # Grid Layouts
     CONTROL_PANEL_CONTAINER: Dict[str, Any] = {
         "width": "20%",
+        "minWidth": "250px",  # Prevent squashing
         "display": "inline-block",
         "verticalAlign": "top",
-        "paddingRight": "22px",
-        "paddingLeft": "2px",
+        "paddingRight": "20px",
         "boxSizing": "border-box",
     }
 
@@ -115,8 +118,7 @@ class Styles:
         "width": "100%",
         "display": "inline-block",
         "verticalAlign": "top",
-        "padding": "28px",
-        "marginRight": "10px",
+        "padding": "10px",
     }
 
     # Main layout
@@ -129,7 +131,6 @@ class Styles:
         "alignItems": "flex-start",
         "borderBottom": "1px solid #eee",
         "marginBottom": "20px",
-        "marginLeft": "0px",
     }
     PAGE_CONTENT: Dict[str, Any] = {
         "padding": "0 20px 20px 20px",
@@ -137,44 +138,41 @@ class Styles:
         "minHeight": "100vh",
     }
 
-    # Inputs and controls
-    LABEL: Dict[str, Any] = {
-        "fontWeight": "bold",
-        "marginRight": "10px",
-    }
+    # --- CONTROL STYLING CONSTANTS ---
+
+    # 1. Standard Label
     CONTROL_LABEL: Dict[str, Any] = {
         "fontWeight": "bold",
-        "marginBottom": "5px",
-        "display": "block",
-    }
-    GROUP_CHECKLIST_LABEL: Dict[str, Any] = {
-        "display": "block",
-        "marginBottom": "5px",
-    }
-    GROUP_CHECKLIST_STYLE: Dict[str, Any] = {
-        "marginBottom": "10px",
-    }
-    MARGIN_BOTTOM14: Dict[str, Any] = {
-        "marginBottom": "14px",
-        "marginTop": "8px",
-    }
-    HR: Dict[str, Any] = {
-        "marginTop": "2px",
-        "marginBottom": "2px",
+        "marginBottom": "8px",  # Space between Label and Input
+        "display": "block",  # Forces label to own line
+        "fontSize": "14px",
     }
 
+    # 2. Standard Wrapper for Label+Input pairs
+    CONTROL_GROUP: Dict[str, Any] = {
+        "marginTop": "0px",
+        "marginBottom": "2px",
+        "paddingTop": "2px",
+        "paddingBottom": "0px",
+    }
+
+    # 3. Horizontal Rule Standard
+    HR: Dict[str, Any] = {"marginTop": "10px", "marginBottom": "10px", "border": "0", "borderTop": "1px solid #eee"}
+
+    # 4. Helper Utils
     DROPDOWN_NARROW: Dict[str, Any] = {"width": "150px"}
-    DROPDOWN_WIDE: Dict[str, Any] = {"minWidth": "200px"}
-    INPUT_SMALL: Dict[str, Any] = {
-        "width": "60px",
-        "marginLeft": "2px",
-    }
-    INPUT_FULLWIDTH: Dict[str, Any] = {
-        "width": "100%",
-    }
+    DROPDOWN_WIDE: Dict[str, Any] = {"width": "100%"}  # Fill container
+
+    INPUT_SMALL: Dict[str, Any] = {"width": "70px", "marginLeft": "4px", "marginRight": "10px"}
+    INPUT_FULLWIDTH: Dict[str, Any] = {"width": "100%"}
+
     CHECKLIST_INLINE: Dict[str, Any] = {
         "display": "inline-block",
         "marginRight": "10px",
+    }
+    CHECKLIST_BLOCK: Dict[str, Any] = {
+        "display": "block",
+        "marginBottom": "6px",
     }
 
 
@@ -425,7 +423,10 @@ class GameStatsDashboard:
             [
                 html.Div(
                     [
-                        html.Label("Filter Date Range:", style=Styles.LABEL),
+                        html.Label(
+                            "Filter Date Range:",
+                            style={**Styles.CONTROL_LABEL, "marginRight": "10px", "display": "inline-block"},
+                        ),
                         dcc.DatePickerRange(
                             id="date-picker-range",
                             min_date_allowed=min_date,
@@ -434,10 +435,12 @@ class GameStatsDashboard:
                             start_date=min_date,
                             end_date=max_date,
                             display_format="YYYY-MM-DD",
-                            style={"verticalAlign": "middle", "marginRight": "20px"},
+                            style={"verticalAlign": "middle", "marginRight": "30px"},
                         ),
-                        html.Div(style={"width": "30px"}),
-                        html.Label("Select Date Granularity:", style=Styles.LABEL),
+                        html.Label(
+                            "Granularity:",
+                            style={**Styles.CONTROL_LABEL, "marginRight": "10px", "display": "inline-block"},
+                        ),
                         dcc.Dropdown(
                             id="date-granularity",
                             options=cast(
@@ -454,7 +457,7 @@ class GameStatsDashboard:
             style=Styles.SECTION,
         )
 
-        download_config = dict[str, dict[str, str | int] | bool](
+        download_config = dict(
             toImageButtonOptions=dict(format="png", height=600, width=1200, scale=3), displaylogo=False
         )
 
@@ -465,71 +468,83 @@ class GameStatsDashboard:
                     html.H4(label, style=Styles.PANEL_HEADER),
                     html.Div(
                         [
+                            # --- LEFT CONTROL PANEL ---
                             html.Div(
                                 [
-                                    html.Label("Left Axis Metrics:", style=Styles.CONTROL_LABEL),
-                                    dcc.Dropdown(
-                                        id=f"date-{group_id}-left-metrics",
-                                        options=cast(Any, self.plot_metrics[group_id]),
-                                        value=[self.plot_metrics[group_id][0]] if self.plot_metrics[group_id] else [],
-                                        multi=True,
-                                        style=Styles.DROPDOWN_WIDE,
-                                    ),
-                                    html.Br(),
-                                    html.Label(
-                                        "Right Axis Metrics:", style=dict(Styles.CONTROL_LABEL, marginTop="2px")
-                                    ),
-                                    dcc.Dropdown(
-                                        id=f"date-{group_id}-right-metrics",
-                                        options=cast(Any, self.plot_metrics[group_id]),
-                                        value=[],
-                                        multi=True,
-                                        style=Styles.DROPDOWN_WIDE,
-                                    ),
-                                    html.Br(),
-                                    html.Hr(style=Styles.HR),
-                                    html.Label("Logarithmic Scaling:", style=Styles.CONTROL_LABEL),
                                     html.Div(
                                         [
-                                            dcc.Checklist(
-                                                id=f"date-{group_id}-log",
-                                                options=cast(Any, [{"label": " Hybrid Log", "value": "ON"}]),
-                                                value=[],
-                                                style=Styles.CHECKLIST_INLINE,
-                                            ),
-                                            html.Label("Thresh: ", style={"fontSize": "0.9em"}),
-                                            dcc.Input(
-                                                id=f"date-{group_id}-thresh",
-                                                type="number",
-                                                value=10,
-                                                style=Styles.INPUT_SMALL,
+                                            html.Label("Left Axis Metrics:", style=Styles.CONTROL_LABEL),
+                                            dcc.Dropdown(
+                                                id=f"date-{group_id}-left-metrics",
+                                                options=cast(Any, self.plot_metrics[group_id]),
+                                                value=(
+                                                    [self.plot_metrics[group_id][0]]
+                                                    if self.plot_metrics[group_id]
+                                                    else []
+                                                ),
+                                                multi=True,
+                                                style=Styles.DROPDOWN_WIDE,
                                             ),
                                         ],
-                                        style={"marginTop": "10px"},
+                                        style=Styles.CONTROL_GROUP,
                                     ),
-                                    html.Br(),
-                                    html.Hr(style=Styles.HR),
-                                    html.Label("Groups to Show:", style=Styles.CONTROL_LABEL),
                                     html.Div(
                                         [
+                                            html.Label("Right Axis Metrics:", style=Styles.CONTROL_LABEL),
+                                            dcc.Dropdown(
+                                                id=f"date-{group_id}-right-metrics",
+                                                options=cast(Any, self.plot_metrics[group_id]),
+                                                value=[],
+                                                multi=True,
+                                                style=Styles.DROPDOWN_WIDE,
+                                            ),
+                                        ],
+                                        style=Styles.CONTROL_GROUP,
+                                    ),
+                                    html.Hr(style=Styles.HR),
+                                    html.Div(
+                                        [
+                                            html.Label("Logarithmic Scaling:", style=Styles.CONTROL_LABEL),
+                                            html.Div(
+                                                [
+                                                    dcc.Checklist(
+                                                        id=f"date-{group_id}-log",
+                                                        options=cast(Any, [{"label": " Hybrid Log", "value": "ON"}]),
+                                                        value=[],
+                                                        style=Styles.CHECKLIST_INLINE,
+                                                    ),
+                                                    html.Span("Thresh: ", style={"fontSize": "0.9em"}),
+                                                    dcc.Input(
+                                                        id=f"date-{group_id}-thresh",
+                                                        type="number",
+                                                        value=10,
+                                                        style=Styles.INPUT_SMALL,
+                                                    ),
+                                                ]
+                                            ),
+                                        ],
+                                        style=Styles.CONTROL_GROUP,
+                                    ),
+                                    html.Hr(style=Styles.HR),
+                                    html.Div(
+                                        [
+                                            html.Label("Groups to Show:", style=Styles.CONTROL_LABEL),
                                             dcc.Checklist(
                                                 id=f"date-{group_id}-group",
                                                 options=cast(Any, self.df_plot_groups),
                                                 value=self.df_plot_groups[: self.DEFAULT_VISIBLE_GROUPS],
-                                                labelStyle=Styles.GROUP_CHECKLIST_LABEL,
-                                                style=Styles.GROUP_CHECKLIST_STYLE,
-                                            )
+                                                labelStyle=Styles.CHECKLIST_BLOCK,
+                                            ),
                                         ],
-                                        style={"marginTop": "10px"},
+                                        style=Styles.CONTROL_GROUP,
                                     ),
                                 ],
                                 style=Styles.CONTROL_PANEL_CONTAINER,
                             ),
+                            # --- RIGHT GRAPH PANEL ---
                             html.Div(
                                 [
-                                    dcc.Graph(
-                                        id=f"date-{group_id}-plot", style={"height": "400px"}, config=download_config  # type: ignore
-                                    )
+                                    dcc.Graph(id=f"date-{group_id}-plot", style={"height": "400px"}, config=download_config)  # type: ignore
                                 ],
                                 style=Styles.GRAPH_CONTAINER,
                             ),
@@ -550,54 +565,34 @@ class GameStatsDashboard:
         )
 
     def _layout_stats_by_group(self) -> html.Div:
-        (
-            min_date,
-            max_date,
-            group1_start,
-            group1_end,
-            group2_start,
-            group2_end,
-            group3_start,
-            group3_end,
-        ) = self._compute_group_date_ranges()
+        ranges = self._compute_group_date_ranges()
+
+        # Helper to create range picker blocks
+        def range_block(label, idx, start, end, init_month):
+            return html.Div(
+                [
+                    html.Label(label, style=Styles.CONTROL_LABEL),
+                    dcc.DatePickerRange(
+                        id=f"date-picker-range{idx}",
+                        min_date_allowed=ranges[0],
+                        max_date_allowed=ranges[1],
+                        initial_visible_month=init_month or ranges[0],
+                        start_date=start or ranges[0],
+                        end_date=end or start,
+                        display_format="YYYY-MM-DD",
+                        style={"width": "100%"},
+                    ),
+                ],
+                style={"marginRight": "20px"},
+            )
 
         date_group_picker = html.Div(
             [
                 html.Div(
                     [
-                        html.Label("Date Range 1 (Oldest):", style=Styles.LABEL),
-                        dcc.DatePickerRange(
-                            id="date-picker-range1",
-                            min_date_allowed=min_date,
-                            max_date_allowed=max_date,
-                            initial_visible_month=group1_start if group1_start is not None else min_date,
-                            start_date=group1_start if group1_start is not None else min_date,
-                            end_date=group1_end if group1_end is not None else group1_start,
-                            display_format="YYYY-MM-DD",
-                            style={"verticalAlign": "middle", "marginRight": "36px"},
-                        ),
-                        html.Label("Date Range 2:", style=Styles.LABEL),
-                        dcc.DatePickerRange(
-                            id="date-picker-range2",
-                            min_date_allowed=min_date,
-                            max_date_allowed=max_date,
-                            initial_visible_month=group2_start if group2_start is not None else min_date,
-                            start_date=group2_start if group2_start is not None else min_date,
-                            end_date=group2_end if group2_end is not None else group2_start,
-                            display_format="YYYY-MM-DD",
-                            style={"verticalAlign": "middle", "marginRight": "36px"},
-                        ),
-                        html.Label("Date Range 3 (Most Recent):", style=Styles.LABEL),
-                        dcc.DatePickerRange(
-                            id="date-picker-range3",
-                            min_date_allowed=min_date,
-                            max_date_allowed=max_date,
-                            initial_visible_month=group3_start if group3_start is not None else min_date,
-                            start_date=group3_start if group3_start is not None else min_date,
-                            end_date=group3_end if group3_end is not None else max_date,
-                            display_format="YYYY-MM-DD",
-                            style={"verticalAlign": "middle", "marginRight": "18px"},
-                        ),
+                        range_block("Range 1 (Oldest)", 1, ranges[2], ranges[3], ranges[2]),
+                        range_block("Range 2", 2, ranges[4], ranges[5], ranges[4]),
+                        range_block("Range 3 (Newest)", 3, ranges[6], ranges[7], ranges[6]),
                     ],
                     style=Styles.FLEX_ROW_CENTER,
                 ),
@@ -611,120 +606,123 @@ class GameStatsDashboard:
 
         def create_group_panel(group_id: str, label: str) -> html.Div:
             dl_id = f"group-{group_id}-plot"
-            metric_dropdown_id = f"group-{group_id}-metrics"
-            display_toggle_id = f"group-{group_id}-display"
-            group_selector_id = f"group-{group_id}-group"
-            range_cb_id1 = f"group-{group_id}-show-r1"
-            range_cb_id2 = f"group-{group_id}-show-r2"
-            range_cb_id3 = f"group-{group_id}-show-r3"
-            # --- CLIP controls:
-            clip_check_id = f"group-{group_id}-clip-enable"
-            clip_min_id = f"group-{group_id}-clip-min"
-            clip_max_id = f"group-{group_id}-clip-max"
-
             return html.Div(
                 [
                     html.H4(label, style=Styles.PANEL_HEADER),
                     html.Div(
                         [
+                            # --- CONTROL PANEL ---
                             html.Div(
                                 [
-                                    html.Label("Metric:", style=Styles.CONTROL_LABEL),
-                                    dcc.Dropdown(
-                                        id=metric_dropdown_id,
-                                        options=cast(Any, self.plot_metrics[group_id]),
-                                        value=[self.plot_metrics[group_id][0]] if self.plot_metrics[group_id] else [],
-                                        multi=False,
-                                        style={"minWidth": "240px"},
-                                    ),
-                                    html.Br(),
-                                    html.Hr(style=Styles.HR),
-                                    html.Label("Display Mode:", style=Styles.CONTROL_LABEL),
-                                    dcc.RadioItems(
-                                        id=display_toggle_id,
-                                        options=cast(
-                                            Any,
-                                            [
-                                                {"label": "Box Plot", "value": "box"},
-                                                {"label": "Bar (Mean)", "value": "bar"},
-                                            ],
-                                        ),
-                                        value="box",
-                                        labelStyle={"display": "inline-block", "marginRight": "12px"},
-                                        style=Styles.MARGIN_BOTTOM14,
-                                    ),
-                                    html.Br(),
-                                    html.Hr(style=Styles.HR),
-                                    html.Label("Group(s) to Show:", style=Styles.CONTROL_LABEL),
-                                    dcc.Checklist(
-                                        id=group_selector_id,
-                                        options=cast(Any, self.df_plot_groups),
-                                        value=self.df_plot_groups[: self.DEFAULT_VISIBLE_GROUPS],
-                                        labelStyle=Styles.GROUP_CHECKLIST_LABEL,
-                                        style={"marginBottom": "14px", "marginTop": "8px"},
-                                    ),
-                                    html.Br(),
-                                    html.Hr(style=Styles.HR),
-                                    html.Label("Show Date Range(s):", style=Styles.CONTROL_LABEL),
                                     html.Div(
                                         [
+                                            html.Label("Metric:", style=Styles.CONTROL_LABEL),
+                                            dcc.Dropdown(
+                                                id=f"group-{group_id}-metrics",
+                                                options=cast(Any, self.plot_metrics[group_id]),
+                                                value=(
+                                                    [self.plot_metrics[group_id][0]]
+                                                    if self.plot_metrics[group_id]
+                                                    else []
+                                                ),
+                                                multi=False,
+                                                style=Styles.DROPDOWN_WIDE,
+                                            ),
+                                        ],
+                                        style=Styles.CONTROL_GROUP,
+                                    ),
+                                    html.Div(
+                                        [
+                                            html.Label("Display Mode:", style=Styles.CONTROL_LABEL),
+                                            dcc.RadioItems(
+                                                id=f"group-{group_id}-display",
+                                                options=[
+                                                    {"label": "Box Plot", "value": "box"},
+                                                    {"label": "Bar (Mean)", "value": "bar"},
+                                                ],
+                                                value="box",
+                                                labelStyle={"display": "inline-block", "marginRight": "15px"},
+                                            ),
+                                        ],
+                                        style=Styles.CONTROL_GROUP,
+                                    ),
+                                    html.Hr(style=Styles.HR),
+                                    html.Div(
+                                        [
+                                            html.Label("Group(s) to Show:", style=Styles.CONTROL_LABEL),
                                             dcc.Checklist(
-                                                id=range_cb_id1,
-                                                options=cast(Any, [{"label": "Show Range 1", "value": "ON"}]),
+                                                id=f"group-{group_id}-group",
+                                                options=cast(Any, self.df_plot_groups),
+                                                value=self.df_plot_groups[: self.DEFAULT_VISIBLE_GROUPS],
+                                                labelStyle=Styles.CHECKLIST_BLOCK,
+                                            ),
+                                        ],
+                                        style=Styles.CONTROL_GROUP,
+                                    ),
+                                    html.Hr(style=Styles.HR),
+                                    html.Div(
+                                        [
+                                            html.Label("Show Date Range(s):", style=Styles.CONTROL_LABEL),
+                                            dcc.Checklist(
+                                                id=f"group-{group_id}-show-r1",
+                                                options=[{"label": "Range 1", "value": "ON"}],
                                                 value=["ON"],
-                                                style=Styles.CHECKLIST_INLINE | {"marginRight": "18px"},
+                                                style=Styles.CHECKLIST_INLINE,
                                             ),
                                             dcc.Checklist(
-                                                id=range_cb_id2,
-                                                options=cast(Any, [{"label": "Show Range 2", "value": "ON"}]),
+                                                id=f"group-{group_id}-show-r2",
+                                                options=[{"label": "Range 2", "value": "ON"}],
                                                 value=["ON"],
-                                                style=Styles.CHECKLIST_INLINE | {"marginRight": "18px"},
+                                                style=Styles.CHECKLIST_INLINE,
                                             ),
                                             dcc.Checklist(
-                                                id=range_cb_id3,
-                                                options=cast(Any, [{"label": "Show Range 3", "value": "ON"}]),
+                                                id=f"group-{group_id}-show-r3",
+                                                options=[{"label": "Range 3", "value": "ON"}],
                                                 value=["ON"],
                                                 style=Styles.CHECKLIST_INLINE,
                                             ),
                                         ],
-                                        style={"marginTop": "8px", "marginBottom": "4px"},
-                                    ),
-                                    html.Hr(style=Styles.HR),
-                                    html.Label(
-                                        "Clip Data (Box/Bar):", style={**Styles.CONTROL_LABEL, "display": "block"}
+                                        style=Styles.CONTROL_GROUP,
                                     ),
                                     html.Div(
                                         [
-                                            dcc.Checklist(
-                                                id=clip_check_id,
-                                                options=cast(Any, [{"label": " Enable Clip", "value": "ON"}]),
-                                                value=[],
-                                                style={"display": "inline-block", "marginRight": "12px"},
-                                            ),
-                                            html.Label("Min:", style={"marginLeft": "10px"}),
-                                            dcc.Input(
-                                                id=clip_min_id,
-                                                type="number",
-                                                placeholder="min",
-                                                style={"width": "70px"},
-                                                value=None,
-                                            ),
-                                            html.Label("Max:", style={"marginLeft": "10px"}),
-                                            dcc.Input(
-                                                id=clip_max_id,
-                                                type="number",
-                                                placeholder="max",
-                                                style={"width": "70px"},
-                                                value=None,
+                                            html.Label("Clip Data:", style=Styles.CONTROL_LABEL),
+                                            html.Div(
+                                                [
+                                                    dcc.Checklist(
+                                                        id=f"group-{group_id}-clip-enable",
+                                                        options=[{"label": "Enable", "value": "ON"}],
+                                                        value=[],
+                                                        style=Styles.CHECKLIST_INLINE,
+                                                    ),
+                                                    html.Label("Min:", style={"marginLeft": "5px"}),
+                                                    dcc.Input(
+                                                        id=f"group-{group_id}-clip-min",
+                                                        type="number",
+                                                        placeholder="min",
+                                                        style=Styles.INPUT_SMALL,
+                                                    ),
+                                                    html.Label("Max:", style={"marginLeft": "5px"}),
+                                                    dcc.Input(
+                                                        id=f"group-{group_id}-clip-max",
+                                                        type="number",
+                                                        placeholder="max",
+                                                        style=Styles.INPUT_SMALL,
+                                                    ),
+                                                ],
+                                                style=Styles.FLEX_ROW_CENTER,
                                             ),
                                         ],
-                                        style={"marginTop": "8px", "marginBottom": "4px"},
+                                        style=Styles.CONTROL_GROUP,
                                     ),
                                 ],
                                 style=Styles.CONTROL_PANEL_CONTAINER,
                             ),
+                            # --- GRAPH PANEL ---
                             html.Div(
-                                [dcc.Graph(id=dl_id, style={"height": "430px"}, config=download_config)],  # type: ignore
+                                [
+                                    dcc.Graph(id=dl_id, style={"height": "430px"}, config=download_config)  # type: ignore
+                                ],
                                 style=Styles.GRAPH_CONTAINER,
                             ),
                         ],
@@ -746,89 +744,125 @@ class GameStatsDashboard:
     def _layout_stats_by_bet(self) -> html.Div:
         return html.Div(
             [
+                # --- LEFT SIDEBAR ---
                 html.Div(
                     [
+                        # Card 1: Selectors
                         html.Div(
                             [
-                                html.Label("Select Date:", style={**Styles.CONTROL_LABEL, "marginBottom": "10px"}),
-                                dcc.Dropdown(
-                                    id="session-dropdown",
-                                    options=cast(Any, [{"label": s, "value": s} for s in self.sessions]),
-                                    value=self.sessions[0] if self.sessions else None,
-                                    clearable=False,
+                                html.Div(
+                                    [
+                                        html.Label("Select Session:", style=Styles.CONTROL_LABEL),
+                                        dcc.Dropdown(
+                                            id="session-dropdown",
+                                            options=cast(Any, [{"label": s, "value": s} for s in self.sessions]),
+                                            value=self.sessions[0] if self.sessions else None,
+                                            clearable=False,
+                                            style=Styles.DROPDOWN_WIDE,
+                                        ),
+                                    ],
+                                    style=Styles.CONTROL_GROUP,
                                 ),
                                 html.Hr(style=Styles.HR),
-                                html.Label(
-                                    "Compare Strategies:", style={**Styles.CONTROL_LABEL, "marginBottom": "10px"}
-                                ),
-                                dcc.Checklist(
-                                    id="strategy-checklist",
-                                    options=cast(Any, [{"label": s, "value": s} for s in self.df_bet_groups]),
-                                    value=self.df_bet_groups[: self.DEFAULT_VISIBLE_GROUPS],
-                                    labelStyle=Styles.GROUP_CHECKLIST_LABEL,
-                                    style=Styles.GROUP_CHECKLIST_STYLE,
+                                html.Div(
+                                    [
+                                        html.Label("Compare Strategies:", style=Styles.CONTROL_LABEL),
+                                        dcc.Checklist(
+                                            id="strategy-checklist",
+                                            options=cast(Any, [{"label": s, "value": s} for s in self.df_bet_groups]),
+                                            value=self.df_bet_groups[: self.DEFAULT_VISIBLE_GROUPS],
+                                            labelStyle=Styles.CHECKLIST_BLOCK,
+                                        ),
+                                    ],
+                                    style=Styles.CONTROL_GROUP,
                                 ),
                             ],
                             style=Styles.BOX,
                         ),
+                        # Card 2: Metrics
                         html.Div(
                             [
-                                html.Label("Metrics (Left Axis):", style=Styles.CONTROL_LABEL),
-                                dcc.Dropdown(
-                                    id="metric-checklist",
-                                    options=cast(Any, [{"label": m, "value": m} for m in self.bet_metrics]),
-                                    value=[self.bet_metrics[0]] if self.bet_metrics else [],
-                                    multi=True,
-                                    style=Styles.MARGIN_BOTTOM14,
-                                ),
-                                html.Label("Metrics (Right Axis):", style=Styles.CONTROL_LABEL),
-                                dcc.Dropdown(
-                                    id="right-axis-checklist",
-                                    options=cast(Any, [{"label": m, "value": m} for m in self.bet_metrics]),
-                                    value=[],
-                                    multi=True,
-                                ),
-                            ],
-                            style=Styles.BOX,
-                        ),
-                        html.Div(
-                            [
-                                dcc.Checklist(
-                                    id="share-left-yscale-check",
-                                    options=cast(Any, [{"label": " Share Left Scale", "value": "ON"}]),
-                                    value=[],
-                                ),
-                                dcc.Checklist(
-                                    id="share-right-yscale-check",
-                                    options=cast(Any, [{"label": " Share Right Scale", "value": "ON"}]),
-                                    value=[],
-                                ),
-                                html.Hr(style=Styles.HR),
-                                dcc.Checklist(
-                                    id="log-check",
-                                    options=cast(Any, [{"label": " Hybrid Log Scale", "value": "ON"}]),
-                                    value=[],
+                                html.Div(
+                                    [
+                                        html.Label("Metrics (Left Axis):", style=Styles.CONTROL_LABEL),
+                                        dcc.Dropdown(
+                                            id="metric-checklist",
+                                            options=cast(Any, [{"label": m, "value": m} for m in self.bet_metrics]),
+                                            value=[self.bet_metrics[0]] if self.bet_metrics else [],
+                                            multi=True,
+                                            style=Styles.DROPDOWN_WIDE,
+                                        ),
+                                    ],
+                                    style=Styles.CONTROL_GROUP,
                                 ),
                                 html.Div(
                                     [
-                                        html.Label("Linear Thresh:"),
+                                        html.Label("Metrics (Right Axis):", style=Styles.CONTROL_LABEL),
+                                        dcc.Dropdown(
+                                            id="right-axis-checklist",
+                                            options=cast(Any, [{"label": m, "value": m} for m in self.bet_metrics]),
+                                            value=[],
+                                            multi=True,
+                                            style=Styles.DROPDOWN_WIDE,
+                                        ),
+                                    ],
+                                    style=Styles.CONTROL_GROUP,
+                                ),
+                            ],
+                            style=Styles.BOX,
+                        ),
+                        # Card 3: Display Options
+                        html.Div(
+                            [
+                                html.Div(
+                                    [
+                                        dcc.Checklist(
+                                            id="share-left-yscale-check",
+                                            options=[{"label": " Share Left Scale", "value": "ON"}],
+                                            value=[],
+                                            style=Styles.CHECKLIST_BLOCK,
+                                        ),
+                                        dcc.Checklist(
+                                            id="share-right-yscale-check",
+                                            options=[{"label": " Share Right Scale", "value": "ON"}],
+                                            value=[],
+                                            style=Styles.CHECKLIST_BLOCK,
+                                        ),
+                                    ],
+                                    style=Styles.CONTROL_GROUP,
+                                ),
+                                html.Hr(style=Styles.HR),
+                                html.Div(
+                                    [
+                                        dcc.Checklist(
+                                            id="log-check",
+                                            options=[{"label": " Hybrid Log Scale", "value": "ON"}],
+                                            value=[],
+                                            style=Styles.CHECKLIST_BLOCK,
+                                        ),
+                                        html.Label(
+                                            "Linear Thresh:", style={**Styles.CONTROL_LABEL, "marginTop": "8px"}
+                                        ),
                                         dcc.Input(
                                             id="linear-thresh", type="number", value=10, style=Styles.INPUT_FULLWIDTH
                                         ),
                                     ],
-                                    style={"marginTop": "5px"},
+                                    style=Styles.CONTROL_GROUP,
                                 ),
                                 html.Hr(style=Styles.HR),
-                                dcc.Checklist(
-                                    id="filter-check",
-                                    options=cast(Any, [{"label": "Max Number of Bets", "value": "ON"}]),
-                                    value=["ON"],
-                                ),
-                                dcc.Input(
-                                    id="filter-thresh",
-                                    type="number",
-                                    value=5000,
-                                    style={**Styles.INPUT_FULLWIDTH, "marginTop": "5px"},
+                                html.Div(
+                                    [
+                                        dcc.Checklist(
+                                            id="filter-check",
+                                            options=[{"label": "Max Number of Bets", "value": "ON"}],
+                                            value=["ON"],
+                                            style=Styles.CHECKLIST_BLOCK,
+                                        ),
+                                        dcc.Input(
+                                            id="filter-thresh", type="number", value=5000, style=Styles.INPUT_FULLWIDTH
+                                        ),
+                                    ],
+                                    style=Styles.CONTROL_GROUP,
                                 ),
                             ],
                             style=Styles.BOX,
@@ -836,9 +870,10 @@ class GameStatsDashboard:
                     ],
                     style=Styles.CONTROL_PANEL_CONTAINER,
                 ),
+                # --- MAIN PLOT ---
                 html.Div([dcc.Graph(id="combined-plot", style={"height": "950px"})], style=Styles.GRAPH_CONTAINER),
             ],
-            style={"display": "flex", "width": "100%"},
+            style=Styles.FLEX_ROW,
         )
 
     # ------------------------------------------------------------------
