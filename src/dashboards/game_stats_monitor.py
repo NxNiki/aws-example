@@ -17,10 +17,10 @@ from plotly.subplots import make_subplots
 
 from bituslabs_ds.config import LOCAL_ROOT, setup_logging
 from bituslabs_ds.s3_utils import read_local_cache
-from bituslabs_ds.utils import load_config
+from bituslabs_ds.utils import bootstrap_worker, load_config
 
 # ==========================================
-# 1. Styling & Constants
+# Styling & Constants
 # ==========================================
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -92,35 +92,14 @@ class Styles:
 
 
 # ==========================================
-# 2. Worker Functions
-# ==========================================
-
-
-def _bootstrap_worker(arr_np: np.ndarray, n_boot: int = 1000, ci_level: float = 0.95) -> Tuple[float, float]:
-    """
-    Top-level function required for ProcessPoolExecutor pickling.
-    Calculates bootstrap CI for a single array.
-    """
-    if len(arr_np) == 0:
-        return float("nan"), float("nan")
-    if np.min(arr_np) == np.max(arr_np):
-        return float(arr_np[0]), float(arr_np[0])
-
-    # Vectorized sampling: (n_boot, len(arr))
-    resamples = np.random.choice(arr_np, size=(n_boot, len(arr_np)), replace=True)
-    boot_means = np.mean(resamples, axis=1)
-
-    lower = float(np.percentile(boot_means, (1 - ci_level) / 2 * 100))
-    upper = float(np.percentile(boot_means, (1 + ci_level) / 2 * 100))
-    return lower, upper
-
-
-# ==========================================
-# 3. Dashboard Logic
+# Dashboard Logic
 # ==========================================
 
 
 class GameStatsDashboard:
+
+    DEFAULT_VISIBLE_GROUPS: int = 2
+
     config_files: List[Dict[str, str]]
     config: dict
     dfs_by_date: Dict[str, pd.DataFrame]
@@ -473,7 +452,7 @@ class GameStatsDashboard:
                                             dcc.Checklist(
                                                 id=f"date-{group_id}-group",
                                                 options=cast(Any, self.df_plot_groups),
-                                                value=self.df_plot_groups[:4],
+                                                value=self.df_plot_groups[: self.DEFAULT_VISIBLE_GROUPS],
                                                 labelStyle={"display": "block", "marginBottom": "5px"},
                                                 style={"marginBottom": "10px"},
                                             )
@@ -628,7 +607,7 @@ class GameStatsDashboard:
                                     dcc.Checklist(
                                         id=group_selector_id,
                                         options=cast(Any, self.df_plot_groups),
-                                        value=self.df_plot_groups[:4],
+                                        value=self.df_plot_groups[: self.DEFAULT_VISIBLE_GROUPS],
                                         labelStyle={"display": "block", "marginBottom": "5px"},
                                         style={"marginBottom": "14px", "marginTop": "8px"},
                                     ),
@@ -731,7 +710,7 @@ class GameStatsDashboard:
                                 dcc.Checklist(
                                     id="strategy-checklist",
                                     options=cast(Any, [{"label": s, "value": s} for s in self.df_bet_groups]),
-                                    value=self.df_bet_groups[:4],
+                                    value=self.df_bet_groups[: self.DEFAULT_VISIBLE_GROUPS],
                                     labelStyle={"display": "block", "marginBottom": "5px"},
                                     style={"marginBottom": "8px"},
                                 ),
@@ -1047,7 +1026,7 @@ class GameStatsDashboard:
                             arrays_to_bootstrap = [grouped.get_group(d).dropna().values for d in dates]
 
                             # Execute bootstrap in parallel
-                            ci_results = list(executor.map(_bootstrap_worker, arrays_to_bootstrap))
+                            ci_results = list(executor.map(bootstrap_worker, arrays_to_bootstrap))
 
                             # Unpack results
                             lowers, uppers = zip(*ci_results)
