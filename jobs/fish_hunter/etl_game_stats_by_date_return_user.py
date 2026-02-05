@@ -4,7 +4,7 @@ from textwrap import dedent
 from bituslabs_ds.config import LOCAL_ROOT, setup_logging
 from bituslabs_ds.etl import DataLoader, RedshiftBackend
 
-DATE_START = "2025-11-30"
+DATE_START = "2025-12-31"
 DATE_END = "2027-12-1"
 
 retention_days = 7

@@ -6,6 +6,7 @@ import logging
 import os
 import re
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from decimal import Decimal
 from functools import lru_cache, partial
 from pathlib import Path
 from typing import Callable, Dict, List, Literal, Optional, Tuple, Union
@@ -301,6 +302,10 @@ def read_local_cache(
         data = pd.read_csv(local_cache_path, usecols=columns, dtype=data_types)
     elif str(local_cache_path).endswith(".parquet"):
         data = pd.read_parquet(local_cache_path, columns=columns)
+
+        # convert Decimal to float:
+        data = data.map(lambda x: float(x) if isinstance(x, Decimal) else x)
+
         if data_types:
             data = data.astype(data_types)
     else:
