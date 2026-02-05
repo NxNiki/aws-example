@@ -546,3 +546,22 @@ def convert_numpy_types(obj):
 
     else:
         return obj
+
+
+def bootstrap_worker(arr_np: np.ndarray, n_boot: int = 1000, ci_level: float = 0.95) -> Tuple[float, float]:
+    """
+    Top-level function required for ProcessPoolExecutor pickling.
+    Calculates bootstrap CI for a single array.
+    """
+    if len(arr_np) == 0:
+        return float("nan"), float("nan")
+    if np.min(arr_np) == np.max(arr_np):
+        return float(arr_np[0]), float(arr_np[0])
+
+    # Vectorized sampling: (n_boot, len(arr))
+    resamples = np.random.choice(arr_np, size=(n_boot, len(arr_np)), replace=True)
+    boot_means = np.mean(resamples, axis=1)
+
+    lower = float(np.percentile(boot_means, (1 - ci_level) / 2 * 100))
+    upper = float(np.percentile(boot_means, (1 + ci_level) / 2 * 100))
+    return lower, upper
