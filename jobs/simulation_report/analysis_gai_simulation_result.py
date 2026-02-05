@@ -62,7 +62,7 @@ def load_data(config, reload: bool = False) -> pd.DataFrame:
     data = read_files(
         s3_files, local_cache_path=local_output, reload=reload, columns=config["data_loader"]["columns_to_read"]
     )
-    data["cluster_index"] = data["player_id"].str.extract(r"(cluster\d+)_", expand=False).astype(str)
+    data["cluster_index"] = data["player_id"].str.extract(r"(cluster\d+)", expand=False).astype(str)
     data["cluster_index"].replace(
         {"cluster0": "user group: 0", "cluster1": "user group: 1", "cluster2": "user group: 2"}, inplace=True
     )
@@ -293,7 +293,8 @@ def main(config_file):
 
 if __name__ == "__main__":
 
-    project = "deepdive"
+    project = "ss01"
+    # project = "deepdive"
     # project = "wucaishen"
 
     current_path = os.path.abspath(os.path.dirname(__file__))
