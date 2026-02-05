@@ -9,11 +9,12 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_compl
 from decimal import Decimal
 from functools import lru_cache, partial
 from pathlib import Path
-from typing import Callable, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union, cast
 from urllib.parse import urlparse
 
 import boto3
 import pandas as pd
+import polars as pl
 from botocore.config import Config
 from botocore.exceptions import NoCredentialsError
 from pyarrow import fs
@@ -291,28 +292,90 @@ def _read_file(
 
 
 def read_local_cache(
-    local_cache_path: Union[str, Path], columns: Optional[List[str]] = None, data_types: Optional[Dict] = None
-):
-    if not os.path.exists(local_cache_path):
-        logger.warning(f"{local_cache_path} does not exist, return empty dataframe.")
-        return pd.DataFrame()
+    local_cache_path: Union[str, Path],
+    columns: Optional[List[str]] = None,
+    data_types: Optional[Dict[str, Any]] = None,
+    lazy_load: bool = False,
+) -> Union[pd.DataFrame, pl.LazyFrame]:
+    """
+    Reads data from a local CSV or Parquet file with options for lazy loading.
 
-    logger.info(f"read data {local_cache_path}.")
-    if str(local_cache_path).endswith(".csv"):
-        data = pd.read_csv(local_cache_path, usecols=columns, dtype=data_types)
-    elif str(local_cache_path).endswith(".parquet"):
-        data = pd.read_parquet(local_cache_path, columns=columns)
+    Args:
+        local_cache_path: Path to the file.
+        columns: List of columns to read.
+        data_types: Dictionary of column types.
+        lazy_load: If True, returns a Polars LazyFrame for query optimization.
+                   If False, returns a standard Pandas DataFrame.
 
-        # convert Decimal to float:
-        data = data.map(lambda x: float(x) if isinstance(x, Decimal) else x)
+    Returns:
+        pd.DataFrame or pl.LazyFrame
+    """
+    path = Path(local_cache_path)
 
-        if data_types:
-            data = data.astype(data_types)
+    if not path.exists():
+        logger.warning(f"File not found: {path}. Returning empty structure.")
+        # Return appropriate empty type based on requested mode
+        return pl.DataFrame().lazy() if lazy_load else pd.DataFrame()
+
+    logger.info(f"Reading data from {path} (Lazy: {lazy_load})")
+
+    try:
+        if lazy_load:
+            return _read_lazy(path, columns, data_types)
+        else:
+            return _read_eager(path, columns, data_types)
+
+    except Exception as e:
+        logger.error(f"Failed to read cache {path}: {e}", exc_info=True)
+        raise
+
+
+def _read_lazy(path: Path, columns: Optional[List[str]], data_types: Optional[Dict]) -> pl.LazyFrame:
+    """Internal handler for Polars Lazy loading."""
+    # 1. Scan the file (Metadata only)
+    if path.suffix == ".csv":
+        lf = pl.scan_csv(path)
+    elif path.suffix == ".parquet":
+        lf = pl.scan_parquet(path)
     else:
-        raise ValueError(f"read_local_cache: unsupport file type: {local_cache_path}")
+        raise ValueError(f"Unsupported file type for lazy load: {path.suffix}")
 
-    logger.info("read data finished.")
-    logger.info(data.head(5))
+    # 2. Pushdown Predicates (Filter columns early)
+    if columns:
+        lf = lf.select(columns)
+
+    # 3. Handle Types (Cast Decimals and User Types)
+    # Note: Polars handles Decimals natively, but if you strictly need Float:
+    if data_types:
+        # Convert Python types to Polars DataType if needed, or rely on string names
+        lf = lf.cast(data_types)
+
+    return lf
+
+
+def _read_eager(path: Path, columns: Optional[List[str]], data_types: Optional[Dict]) -> pd.DataFrame:
+    """Internal handler for Pandas Eager loading."""
+    if path.suffix == ".csv":
+        data = pd.read_csv(path, usecols=columns, dtype=data_types)
+    elif path.suffix == ".parquet":
+        data = pd.read_parquet(path, columns=columns)
+    else:
+        raise ValueError(f"Unsupported file type: {path.suffix}")
+
+    # OPTIMIZATION: Vectorized Decimal conversion
+    # The original .map(lambda...) is very slow.
+    # We check object columns specifically to see if they contain Decimals.
+    if path.suffix == ".parquet":
+        for col in data.select_dtypes(include=["object", "float"]).columns:
+            # Check a sample to see if it's actually Decimal objects
+            if len(data) > 0 and isinstance(data[col].iloc[0], Decimal):
+                data[col] = data[col].astype(float)
+
+    if data_types:
+        data = data.astype(data_types)
+
+    logger.info("Read data finished.")
+    logger.debug(f"Head:\n{data.head(5)}")
     return data
 
 
@@ -356,7 +419,10 @@ def read_files(
 
     if local_cache_path is not None and os.path.exists(local_cache_path) and not reload:
         logger.info(f"Found local cache at {local_cache_path}")
-        return read_local_cache(local_cache_path, columns, data_types)
+        # read_files always uses lazy_load=False, so we know it returns DataFrame
+        data = cast(pd.DataFrame, read_local_cache(local_cache_path, columns, data_types, lazy_load=False))
+        logger.info("first 5 rows of dataframe: \n%s", data.head(5).to_markdown())
+        return data
 
     logger.info(f"read data with data types spec: {data_types}")
     read_func = partial(_read_file, columns=columns, row_filters=row_filters, data_types=data_types)
@@ -370,7 +436,6 @@ def read_files(
         logger.info(f"read files using {max_workers} workers")
         executor_cls: Callable = ThreadPoolExecutor if parallel_mode == "thread" else ProcessPoolExecutor
         dfs = []
-        files_read_order: List[str] = []
         with executor_cls(max_workers=max_workers) as executor:
             future_to_file = {executor.submit(read_func, file): file for file in files}
             for future in as_completed(future_to_file):
@@ -397,7 +462,8 @@ def read_files(
             gc.collect()
 
         # Read the final cached file and return
-        data = read_local_cache(local_cache_path)
+        # read_files always uses lazy_load=False, so we know it returns DataFrame
+        data = cast(pd.DataFrame, read_local_cache(local_cache_path, lazy_load=False))
     else:
         if add_file_source:
             # the order of dfs may not be consistent with files!!!

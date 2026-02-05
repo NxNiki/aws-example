@@ -3,15 +3,15 @@ import os
 import re
 import socket
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from datetime import timedelta
+from datetime import datetime, timedelta
 from math import inf
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union, cast
 
 import matplotlib.colors as mcolors
 import numpy as np
-import pandas as pd
 import plotly.graph_objects as go
+import polars as pl
 from dash import Dash, Input, Output, State, callback_context, dcc, html, no_update
 from plotly.subplots import make_subplots
 
@@ -187,8 +187,8 @@ class GameStatsDashboard:
 
     config_files: List[Dict[str, str]]
     config: dict
-    dfs_by_date: Dict[str, pd.DataFrame]
-    df_bet: pd.DataFrame
+    lfs_by_date: Dict[str, pl.LazyFrame]
+    lf_bet: pl.LazyFrame
     df_plot_groups: List[str]
     df_bet_groups: List[str]
     df_date_group_col: str
@@ -219,8 +219,8 @@ class GameStatsDashboard:
 
     def _reset_state(self) -> None:
         self.config = {}
-        self.dfs_by_date = {}
-        self.df_bet = pd.DataFrame()
+        self.lfs_by_date = {}
+        self.lf_bet = pl.DataFrame().lazy()
         self.df_plot_groups = []
         self.df_bet_groups = []
         self.df_date_group_col = ""
@@ -249,45 +249,190 @@ class GameStatsDashboard:
         self._load_bet_data()
         self._load_date_data()
 
+    @staticmethod
+    def _align_lazyframe_schemas(lfs: List[pl.LazyFrame], context: str = "") -> List[pl.LazyFrame]:
+        """
+        Align schemas of multiple LazyFrames for safe concatenation.
+
+        Handles:
+        - Different column types (casts to compatible types)
+        - Missing columns (adds as null)
+        - Logs warnings about schema mismatches
+
+        Args:
+            lfs: List of LazyFrames to align
+            context: Context string for logging (e.g., "date data: day")
+
+        Returns:
+            List of LazyFrames with aligned schemas
+        """
+        if len(lfs) <= 1:
+            return lfs
+
+        schemas = [lf.collect_schema() for lf in lfs]
+        all_columns = set()
+        for schema in schemas:
+            all_columns.update(schema.names())
+
+        # Find common columns and detect type mismatches
+        column_types: Dict[str, List[pl.DataType]] = {}
+        for schema in schemas:
+            for col_name in schema.names():
+                if col_name not in column_types:
+                    column_types[col_name] = []
+                column_types[col_name].append(schema[col_name])
+
+        # Determine target type for each column
+        target_types: Dict[str, pl.DataType] = {}
+        mismatches: List[str] = []
+
+        def get_type_class(dtype: pl.DataType) -> str:
+            """Get the base type class name (e.g., 'Int64', 'String', 'Datetime')."""
+            type_str = str(dtype)
+            # Handle parameterized types like Datetime('ns') -> 'Datetime'
+            if "(" in type_str:
+                return type_str.split("(")[0]
+            return type_str
+
+        for col_name, types in column_types.items():
+            # Use string representation to detect unique types (handles Datetime('ns') vs Datetime('μs'))
+            type_strs = [str(t) for t in types]
+            unique_type_strs = list(set(type_strs))
+
+            if len(unique_type_strs) > 1:
+                mismatches.append(f"{col_name}: {unique_type_strs}")
+                # Choose the "wider" type: String > Float > Int, or keep Datetime
+                type_classes = [get_type_class(t) for t in types]
+                has_string = any(cls == "String" for cls in type_classes)
+                has_float = any(cls in ("Float32", "Float64") for cls in type_classes)
+                has_int = any(
+                    cls in ("Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64")
+                    for cls in type_classes
+                )
+                has_datetime = any(cls in ("Datetime", "Date") for cls in type_classes)
+
+                if has_datetime:
+                    # For datetime, use Datetime (normalize precision to nanoseconds)
+                    target_types[col_name] = pl.Datetime("ns")
+                elif has_string:
+                    target_types[col_name] = cast(pl.DataType, pl.String)
+                elif has_float:
+                    target_types[col_name] = cast(pl.DataType, pl.Float64)
+                elif has_int:
+                    target_types[col_name] = cast(pl.DataType, pl.Int64)
+                else:
+                    # Default to first type
+                    target_types[col_name] = types[0]
+            else:
+                target_types[col_name] = types[0]
+
+        # Check for missing columns (columns present in some files but not others)
+        missing_cols_by_file: List[List[str]] = []
+        for i, schema in enumerate(schemas):
+            missing = sorted(all_columns - set(schema.names()))
+            if missing:
+                missing_cols_by_file.append(missing)
+
+        # Log warnings if there are mismatches or missing columns
+        if mismatches:
+            logger.warning(
+                f"Schema mismatches detected {context}: {len(mismatches)} columns have different types. "
+                f"Will coerce to compatible types. Mismatches: {', '.join(mismatches[:5])}"
+                + (f" (and {len(mismatches) - 5} more)" if len(mismatches) > 5 else "")
+            )
+        if missing_cols_by_file:
+            total_missing = sum(len(m) for m in missing_cols_by_file)
+            logger.warning(
+                f"Missing columns detected {context}: Some files are missing {total_missing} column(s). "
+                f"Missing columns will be filled with null values."
+            )
+
+        # Align each LazyFrame to the target schema
+        # Use sorted column order for consistency
+        col_order = sorted(all_columns)
+        aligned_lfs = []
+
+        for i, lf in enumerate(lfs):
+            schema = schemas[i]
+            selects = []
+
+            # Process each column in the target order
+            for col_name in col_order:
+                if col_name in schema.names():
+                    # Column exists - cast if needed
+                    current_type = schema[col_name]
+                    target_type = target_types[col_name]
+                    # Compare by string representation to handle Datetime('ns') vs Datetime('μs')
+                    if str(current_type) != str(target_type):
+                        selects.append(pl.col(col_name).cast(target_type).alias(col_name))
+                    else:
+                        selects.append(pl.col(col_name))
+                else:
+                    # Column missing - add as null
+                    target_type = target_types[col_name]
+                    selects.append(pl.lit(None).cast(target_type).alias(col_name))
+
+            lf_aligned = lf.select(selects)
+            aligned_lfs.append(lf_aligned)
+
+        return aligned_lfs
+
     def _load_bet_data(self) -> None:
-        if not self.df_bet.empty:
+        if self.lf_bet.collect_schema().len() > 0 and self.sessions:
             return
 
         file_paths = [f for f in self.config["stats_by_bet"]["files"] if f]
-
-        bet_data: List[pd.DataFrame] = []
-        with ThreadPoolExecutor() as executor:
-            bet_data = list(executor.map(read_local_cache, file_paths))
-
-        if bet_data:
-            self.df_bet = pd.concat(bet_data)
-            self.df_bet["bet_index"] = pd.to_numeric(self.df_bet["bet_index"], errors="coerce")
-            self.df_bet = self.df_bet.dropna(subset=["bet_index"])
-            self.sessions = sorted(self.df_bet["session_start_date"].astype(str).unique())
-            exclude_bet_cols = ["session_start_date", "session_group", "bet_index"]
-            self.bet_metrics = [c for c in self.df_bet.columns if c not in exclude_bet_cols]
-        else:
-            self.df_bet = pd.DataFrame()
+        if not file_paths:
+            self.lf_bet = pl.DataFrame().lazy()
             self.sessions = []
             self.bet_metrics = []
+            return
+
+        with ThreadPoolExecutor() as executor:
+            bet_lfs: List[pl.LazyFrame] = list(executor.map(lambda p: read_local_cache(p, lazy_load=True), file_paths))
+        valid_lfs = [lf for lf in bet_lfs if lf.collect_schema().len() > 0]
+        if not valid_lfs:
+            self.lf_bet = pl.DataFrame().lazy()
+            self.sessions = []
+            self.bet_metrics = []
+            return
+
+        # Align schemas before concatenation
+        aligned_lfs = self._align_lazyframe_schemas(valid_lfs, context="bet data")
+        self.lf_bet = (
+            pl.concat(aligned_lfs)
+            .with_columns(pl.col("bet_index").cast(pl.Float64))
+            .filter(pl.col("bet_index").is_not_nan())
+        )
+        schema_names = self.lf_bet.collect_schema().names()
+        exclude_bet_cols = {"session_start_date", "session_group", "bet_index"}
+        self.bet_metrics = [c for c in schema_names if c not in exclude_bet_cols]
+        sessions_df = self.lf_bet.select(pl.col("session_start_date").unique().cast(pl.Utf8)).collect()
+        self.sessions = sorted(sessions_df.to_series().to_list()) if not sessions_df.is_empty() else []
 
     def _load_date_data(self) -> None:
         with ThreadPoolExecutor() as executor:
             for gran, file_paths in self.date_files_config.items():
-                daily_data: List[pd.DataFrame] = []
                 if isinstance(file_paths, str):
                     file_paths = [file_paths]
-
                 valid_paths = [f for f in file_paths if f]
-                if valid_paths:
-                    daily_data = list(executor.map(read_local_cache, valid_paths))
-
-                if daily_data:
-                    self.dfs_by_date[gran] = pd.concat(daily_data)
-                    if self.date_col in self.dfs_by_date[gran].columns:
-                        self.dfs_by_date[gran][self.date_col] = pd.to_datetime(self.dfs_by_date[gran][self.date_col])
+                if not valid_paths:
+                    self.lfs_by_date[gran] = pl.DataFrame().lazy()
+                    continue
+                daily_lfs: List[pl.LazyFrame] = list(
+                    executor.map(lambda p: read_local_cache(p, lazy_load=True), valid_paths)
+                )
+                valid_lfs = [lf for lf in daily_lfs if lf.collect_schema().len() > 0]
+                if valid_lfs:
+                    # Align schemas before concatenation
+                    aligned_lfs = self._align_lazyframe_schemas(valid_lfs, context=f"date data: {gran}")
+                    lf = pl.concat(aligned_lfs)
+                    if self.date_col in lf.collect_schema().names():
+                        # Cast to datetime for consistent filtering (handles both string and date columns)
+                        lf = lf.with_columns(pl.col(self.date_col).cast(pl.Datetime))
+                    self.lfs_by_date[gran] = lf
                 else:
-                    self.dfs_by_date[gran] = pd.DataFrame()
+                    self.lfs_by_date[gran] = pl.DataFrame().lazy()
 
         self.plot_metrics = {}
         self.plot_metrics["g1"] = self.config["stats_by_date"]["group1_columns"]
@@ -299,14 +444,14 @@ class GameStatsDashboard:
         self._load_date_data()
 
     def _compute_group_date_ranges(self, granularity: Optional[str] = None) -> Tuple[
-        Optional[pd.Timestamp],
-        Optional[pd.Timestamp],
-        Optional[pd.Timestamp],
-        Optional[pd.Timestamp],
-        Optional[pd.Timestamp],
-        Optional[pd.Timestamp],
-        Optional[pd.Timestamp],
-        Optional[pd.Timestamp],
+        Optional[Any],
+        Optional[Any],
+        Optional[Any],
+        Optional[Any],
+        Optional[Any],
+        Optional[Any],
+        Optional[Any],
+        Optional[Any],
     ]:
         """
         For Stats by Group: Compute for 3 sequential two-week ranges (6 weeks total, most recent).
@@ -314,11 +459,17 @@ class GameStatsDashboard:
         """
         if granularity is None:
             granularity = list(self.date_files_config.keys())[0]
-        df_date = self.dfs_by_date.get(granularity, pd.DataFrame())
-        if df_date.empty or self.date_col not in df_date.columns:
+        lf_date = self.lfs_by_date.get(granularity, pl.DataFrame().lazy())
+        if lf_date.collect_schema().len() == 0 or self.date_col not in lf_date.collect_schema().names():
             return (None, None, None, None, None, None, None, None)
-        min_date = pd.to_datetime(df_date[self.date_col].min())
-        max_date = pd.to_datetime(df_date[self.date_col].max())
+        agg = lf_date.select(
+            pl.col(self.date_col).min().alias("min_d"),
+            pl.col(self.date_col).max().alias("max_d"),
+        ).collect()
+        min_date = agg.item(0, "min_d")
+        max_date = agg.item(0, "max_d")
+        if min_date is None or max_date is None:
+            return (None, None, None, None, None, None, None, None)
 
         # Calculate three consecutive 2-week ranges ending at max_date
         g3_end = max_date
@@ -332,12 +483,14 @@ class GameStatsDashboard:
     @property
     def date_range(self) -> Tuple[Any, Any]:
         granularity = list(self.date_files_config.keys())[0]
-        df_date = self.dfs_by_date.get(granularity, pd.DataFrame())
-        if df_date.empty or self.date_col not in df_date.columns:
+        lf_date = self.lfs_by_date.get(granularity, pl.DataFrame().lazy())
+        if lf_date.collect_schema().len() == 0 or self.date_col not in lf_date.collect_schema().names():
             return None, None
-        min_d = df_date[self.date_col].min()
-        max_d = df_date[self.date_col].max()
-        return min_d, max_d
+        agg = lf_date.select(
+            pl.col(self.date_col).min().alias("min_d"),
+            pl.col(self.date_col).max().alias("max_d"),
+        ).collect()
+        return agg.item(0, "min_d"), agg.item(0, "max_d")
 
     @property
     def date_files_config(self) -> Dict[str, Union[str, List[str]]]:
@@ -352,6 +505,141 @@ class GameStatsDashboard:
             return "rgba" + str(tuple(int(c * 255) for c in mcolors.to_rgb(color)) + (alpha,))
         except Exception:
             return f"rgba(0,0,0,{alpha})"
+
+    @staticmethod
+    def _parse_date(date_value: Optional[Any]) -> Optional[datetime]:
+        """
+        Convert date value from Dash date picker (string) to Python datetime.
+
+        Args:
+            date_value: String date from Dash picker (e.g., "2024-12-02" or "2024-12-02T00:00:00")
+                       or datetime object, or None
+
+        Returns:
+            datetime object or None
+        """
+        if date_value is None:
+            return None
+        if isinstance(date_value, datetime):
+            return date_value
+        if isinstance(date_value, str):
+            date_str = date_value.strip()
+            if not date_str:
+                return None
+            try:
+                # Try ISO format first (handles "2024-12-02T00:00:00" or "2024-12-02T00:00:00Z")
+                # Replace Z with +00:00 for fromisoformat
+                if "Z" in date_str:
+                    date_str = date_str.replace("Z", "+00:00")
+                return datetime.fromisoformat(date_str)
+            except ValueError:
+                try:
+                    # Fallback to date-only format "2024-12-02"
+                    return datetime.strptime(date_str, "%Y-%m-%d")
+                except ValueError as e:
+                    logger.warning(f"Could not parse date value '{date_value}': {e}")
+                    return None
+        # Try to convert other types (e.g., pandas Timestamp, numpy datetime64)
+        try:
+            return datetime.fromisoformat(str(date_value))
+        except (ValueError, AttributeError):
+            logger.warning(f"Could not parse date value '{date_value}' (type: {type(date_value)})")
+            return None
+
+    @staticmethod
+    def hybrid_transform(arr: Union[np.ndarray, pl.Series], thresh: float) -> np.ndarray:
+        """Hybrid scale: linear below thresh, log above. Input array-like, returns numpy."""
+        a = np.asarray(arr, dtype=float)
+        mask = np.isfinite(a)
+        out = np.full_like(a, np.nan)
+        out[mask] = np.where(
+            a[mask] <= thresh,
+            a[mask],
+            thresh * (1.0 + np.log(np.maximum(a[mask] / thresh, 1.0))),
+        )
+        return out
+
+    @staticmethod
+    def get_ticks(all_y: Union[List[float], np.ndarray], thresh: float, n_ticks: int = 8) -> np.ndarray:
+        """Generate tick values for hybrid log axis from flat list of values."""
+        arr = np.asarray(all_y, dtype=float)
+        valid = arr[np.isfinite(arr)]
+        if len(valid) == 0:
+            return np.array([0, thresh])
+        lo, hi = float(np.nanmin(valid)), float(np.nanmax(valid))
+        if lo >= hi:
+            return np.array([lo])
+        below = np.linspace(lo, min(hi, thresh), max(2, n_ticks // 2))
+        above = valid[valid > thresh]
+        if len(above) > 0:
+            log_hi = np.log(np.nanmax(above) / thresh + 1e-12)
+            if log_hi > 0:
+                t_above = thresh * (1.0 + np.linspace(0, log_hi, max(2, n_ticks // 2)))
+                ticks = np.unique(np.r_[below, thresh, t_above])
+            else:
+                ticks = np.unique(below)
+        else:
+            ticks = np.unique(below)
+        return ticks
+
+    def compute_axis_range(
+        self,
+        df_groups: List[pl.DataFrame],
+        metrics: List[str],
+        log_scale: bool,
+        log_thresh: float,
+    ) -> Optional[Tuple[float, float]]:
+        """Compute shared y-axis range from list of Polars DataFrames and metrics."""
+        vals: List[float] = []
+        for df in df_groups:
+            if df.is_empty():
+                continue
+            for m in metrics:
+                if m not in df.columns:
+                    continue
+                s = df.get_column(m).cast(pl.Float64).fill_null(float("nan"))
+                vals.extend(s.to_numpy().tolist())
+        valid = [v for v in vals if np.isfinite(v)]
+        if not valid:
+            return None
+        arr = np.array(valid)
+        if log_scale:
+            arr = self.hybrid_transform(arr, log_thresh)
+        lo, hi = float(np.nanmin(arr)), float(np.nanmax(arr))
+        return (lo, hi * 1.05 if hi > lo else hi + 1.0)
+
+    def update_log_ticks(
+        self,
+        fig: go.Figure,
+        df_groups: List[pl.DataFrame],
+        left_metrics: List[str],
+        right_metrics: List[str],
+        log_thresh: float,
+    ) -> None:
+        """Set y-axis tick values for hybrid log scale."""
+        all_left: List[float] = []
+        all_right: List[float] = []
+        for df in df_groups:
+            for m in left_metrics:
+                if m in df.columns:
+                    all_left.extend(df.get_column(m).cast(pl.Float64).to_numpy().tolist())
+            for m in right_metrics:
+                if m in df.columns:
+                    all_right.extend(df.get_column(m).cast(pl.Float64).to_numpy().tolist())
+        if all_left:
+            yticks = self.get_ticks(all_left, log_thresh)
+            fig.update_yaxes(
+                tickvals=self.hybrid_transform(yticks, log_thresh).tolist(),
+                ticktext=[f"{v:.0f}" for v in yticks],
+                secondary_y=False,
+            )
+        if all_right:
+            yticks_r = self.get_ticks(all_right, log_thresh)
+            fig.update_yaxes(
+                tickvals=self.hybrid_transform(yticks_r, log_thresh).tolist(),
+                ticktext=[f"{v:.0f}" for v in yticks_r],
+                secondary_y=True,
+            )
 
     # ------------------------------------------------------------------
     # Layout Builders
@@ -414,10 +702,7 @@ class GameStatsDashboard:
 
     def _layout_stats_by_date(self) -> html.Div:
         granularity: str = list(self.date_files_config.keys())[0]
-        df_date: pd.DataFrame = self.dfs_by_date.get(granularity, pd.DataFrame())
-        min_date, max_date = None, None
-        if not df_date.empty and self.date_col in df_date.columns:
-            min_date, max_date = df_date[self.date_col].min(), df_date[self.date_col].max()
+        min_date, max_date = self.date_range
 
         date_picker = html.Div(
             [
@@ -479,7 +764,7 @@ class GameStatsDashboard:
                                                 options=cast(Any, self.plot_metrics[group_id]),
                                                 value=(
                                                     [self.plot_metrics[group_id][0]]
-                                                    if self.plot_metrics[group_id]
+                                                    if self.plot_metrics[group_id] and group_id == "g1"
                                                     else []
                                                 ),
                                                 multi=True,
@@ -622,7 +907,7 @@ class GameStatsDashboard:
                                                 options=cast(Any, self.plot_metrics[group_id]),
                                                 value=(
                                                     [self.plot_metrics[group_id][0]]
-                                                    if self.plot_metrics[group_id]
+                                                    if self.plot_metrics[group_id] and group_id == "g1"
                                                     else []
                                                 ),
                                                 multi=False,
@@ -636,10 +921,13 @@ class GameStatsDashboard:
                                             html.Label("Display Mode:", style=Styles.CONTROL_LABEL),
                                             dcc.RadioItems(
                                                 id=f"group-{group_id}-display",
-                                                options=[
-                                                    {"label": "Box Plot", "value": "box"},
-                                                    {"label": "Bar (Mean)", "value": "bar"},
-                                                ],
+                                                options=cast(
+                                                    Any,
+                                                    [
+                                                        {"label": "Box Plot", "value": "box"},
+                                                        {"label": "Bar (Mean)", "value": "bar"},
+                                                    ],
+                                                ),
                                                 value="box",
                                                 labelStyle={"display": "inline-block", "marginRight": "15px"},
                                             ),
@@ -665,19 +953,19 @@ class GameStatsDashboard:
                                             html.Label("Show Date Range(s):", style=Styles.CONTROL_LABEL),
                                             dcc.Checklist(
                                                 id=f"group-{group_id}-show-r1",
-                                                options=[{"label": "Range 1", "value": "ON"}],
+                                                options=cast(Any, [{"label": "Range 1", "value": "ON"}]),
                                                 value=["ON"],
                                                 style=Styles.CHECKLIST_INLINE,
                                             ),
                                             dcc.Checklist(
                                                 id=f"group-{group_id}-show-r2",
-                                                options=[{"label": "Range 2", "value": "ON"}],
+                                                options=cast(Any, [{"label": "Range 2", "value": "ON"}]),
                                                 value=["ON"],
                                                 style=Styles.CHECKLIST_INLINE,
                                             ),
                                             dcc.Checklist(
                                                 id=f"group-{group_id}-show-r3",
-                                                options=[{"label": "Range 3", "value": "ON"}],
+                                                options=cast(Any, [{"label": "Range 3", "value": "ON"}]),
                                                 value=["ON"],
                                                 style=Styles.CHECKLIST_INLINE,
                                             ),
@@ -691,7 +979,7 @@ class GameStatsDashboard:
                                                 [
                                                     dcc.Checklist(
                                                         id=f"group-{group_id}-clip-enable",
-                                                        options=[{"label": "Enable", "value": "ON"}],
+                                                        options=cast(Any, [{"label": "Enable", "value": "ON"}]),
                                                         value=[],
                                                         style=Styles.CHECKLIST_INLINE,
                                                     ),
@@ -818,13 +1106,13 @@ class GameStatsDashboard:
                                     [
                                         dcc.Checklist(
                                             id="share-left-yscale-check",
-                                            options=[{"label": " Share Left Scale", "value": "ON"}],
+                                            options=cast(Any, [{"label": " Share Left Scale", "value": "ON"}]),
                                             value=[],
                                             style=Styles.CHECKLIST_BLOCK,
                                         ),
                                         dcc.Checklist(
                                             id="share-right-yscale-check",
-                                            options=[{"label": " Share Right Scale", "value": "ON"}],
+                                            options=cast(Any, [{"label": " Share Right Scale", "value": "ON"}]),
                                             value=[],
                                             style=Styles.CHECKLIST_BLOCK,
                                         ),
@@ -836,7 +1124,7 @@ class GameStatsDashboard:
                                     [
                                         dcc.Checklist(
                                             id="log-check",
-                                            options=[{"label": " Hybrid Log Scale", "value": "ON"}],
+                                            options=cast(Any, [{"label": " Hybrid Log Scale", "value": "ON"}]),
                                             value=[],
                                             style=Styles.CHECKLIST_BLOCK,
                                         ),
@@ -854,7 +1142,7 @@ class GameStatsDashboard:
                                     [
                                         dcc.Checklist(
                                             id="filter-check",
-                                            options=[{"label": "Max Number of Bets", "value": "ON"}],
+                                            options=cast(Any, [{"label": "Max Number of Bets", "value": "ON"}]),
                                             value=["ON"],
                                             style=Styles.CHECKLIST_BLOCK,
                                         ),
@@ -910,19 +1198,15 @@ class GameStatsDashboard:
             Input("date-granularity", "value"),
         )
         def update_date_picker_on_granularity(granularity: str):
-            gran = granularity
-            gran_df = self.dfs_by_date.get(gran, pd.DataFrame())
-            if gran_df.empty or self.date_col not in gran_df.columns:
+            gran_lf = self.lfs_by_date.get(granularity, pl.DataFrame().lazy())
+            if gran_lf.collect_schema().len() == 0 or self.date_col not in gran_lf.collect_schema().names():
                 return [None] * 5
-            min_date = gran_df[self.date_col].min()
-            max_date = gran_df[self.date_col].max()
-            return (
-                min_date,
-                max_date,
-                min_date,
-                max_date,
-                min_date,
-            )
+            agg = gran_lf.select(
+                pl.col(self.date_col).min().alias("min_d"),
+                pl.col(self.date_col).max().alias("max_d"),
+            ).collect()
+            min_date, max_date = agg.item(0, "min_d"), agg.item(0, "max_d")
+            return (min_date, max_date, min_date, max_date, min_date)
 
         # For "Stats by Group": set three pickers for three most recent 2-week ranges
         @self.app.callback(
@@ -1031,19 +1315,36 @@ class GameStatsDashboard:
             default_gran = list(self.date_files_config.keys())[0]
             if self.config["stats_by_date"]["group_col"]:
                 self.df_date_group_col = self.config["stats_by_date"]["group_col"]
-                self.df_plot_groups = self.dfs_by_date[default_gran][self.df_date_group_col].unique().tolist()
+                lf = self.lfs_by_date.get(default_gran, pl.DataFrame().lazy())
+                if lf.collect_schema().len() > 0 and self.df_date_group_col in lf.collect_schema().names():
+                    uniq = lf.select(pl.col(self.df_date_group_col).unique()).collect()
+                    self.df_plot_groups = uniq.to_series().to_list()
+                else:
+                    self.df_plot_groups = []
             return self._layout_stats_by_date()
         elif current_tab == "tab-group":
             default_gran = list(self.date_files_config.keys())[0]
             if self.config["stats_by_date"]["group_col"]:
                 self.df_date_group_col = self.config["stats_by_date"]["group_col"]
-                self.df_plot_groups = self.dfs_by_date[default_gran][self.df_date_group_col].unique().tolist()
+                lf = self.lfs_by_date.get(default_gran, pl.DataFrame().lazy())
+                if lf.collect_schema().len() > 0 and self.df_date_group_col in lf.collect_schema().names():
+                    uniq = lf.select(pl.col(self.df_date_group_col).unique()).collect()
+                    self.df_plot_groups = uniq.to_series().to_list()
+                else:
+                    self.df_plot_groups = []
             return self._layout_stats_by_group()
         elif current_tab == "tab-bet":
             self._load_bet_data()
             if self.config["stats_by_bet"]["group_col"]:
                 self.df_bet_group_col = self.config["stats_by_bet"]["group_col"]
-                self.df_bet_groups = self.df_bet[self.df_bet_group_col].unique().tolist()
+                if (
+                    self.lf_bet.collect_schema().len() > 0
+                    and self.df_bet_group_col in self.lf_bet.collect_schema().names()
+                ):
+                    uniq = self.lf_bet.select(pl.col(self.df_bet_group_col).unique()).collect()
+                    self.df_bet_groups = uniq.to_series().to_list()
+                else:
+                    self.df_bet_groups = []
             return self._layout_stats_by_bet()
         else:
             return html.Div("404 Error")
@@ -1053,8 +1354,16 @@ class GameStatsDashboard:
     # ------------------------------------------------------------------
 
     def update_date_plot(
-        self, left_metrics, right_metrics, log_val, log_thresh, groups, date_granularity, start_date, end_date
-    ):
+        self,
+        left_metrics: Any,
+        right_metrics: Any,
+        log_val: Any,
+        log_thresh: Any,
+        groups: Any,
+        date_granularity: Any,
+        start_date: Any,
+        end_date: Any,
+    ) -> go.Figure:
         if not left_metrics and not right_metrics:
             return go.Figure()
 
@@ -1062,12 +1371,23 @@ class GameStatsDashboard:
         thresh = float(log_thresh) if log_thresh else 10.0
         fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-        df_date = self.dfs_by_date[date_granularity]
-        df_date = df_date[(df_date[self.date_col] >= start_date) & (df_date[self.date_col] <= end_date)].copy()
+        lf = self.lfs_by_date.get(date_granularity, pl.DataFrame().lazy())
+        if lf.collect_schema().len() == 0:
+            return fig
+
+        # Convert string dates from Dash picker to datetime objects
+        start_dt = self._parse_date(start_date)
+        end_dt = self._parse_date(end_date)
+        if start_dt is None or end_dt is None:
+            return fig
+
+        df_date = lf.filter((pl.col(self.date_col) >= start_dt) & (pl.col(self.date_col) <= end_dt)).collect()
+        if df_date.is_empty():
+            return fig
 
         if self.df_date_group_col == "" or self.df_date_group_col not in df_date.columns:
             group_col = "group"
-            df_date["group"] = "total"
+            df_date = df_date.with_columns(pl.lit("total").alias("group"))
             groups = ["total"]
             color_map = {
                 f"{s}:{m}": Styles.COLORS[i % len(Styles.COLORS)]
@@ -1092,56 +1412,50 @@ class GameStatsDashboard:
                 for j, s in enumerate(groups)
             }
 
-        # Initialize ProcessPoolExecutor for parallel bootstrap calculations
-        # We start it here because creating it inside the inner loop is inefficient
         with ProcessPoolExecutor() as executor:
             for strat in groups:
-                df_strat = df_date[df_date[group_col] == strat].sort_values(self.date_col)
-                if df_strat.empty:
+                df_strat = df_date.filter(pl.col(group_col) == strat).sort(self.date_col)
+                if df_strat.is_empty():
                     continue
 
-                # Helper to add trace (requires calculating CI first)
-                def add_scatter_plot(metrics, secondary_y):
-                    x_vals = df_strat[self.date_col]
+                def add_scatter_plot(metrics: Any, secondary_y: bool) -> None:
+                    date_vals = df_strat.get_column(self.date_col)
                     for m in metrics:
                         if m not in df_strat.columns:
                             continue
 
                         if self.date_col in df_strat.columns:
-                            grouped = df_strat.groupby(self.date_col)[m]
-                            mean_vals = grouped.mean()
-
-                            # Prepare data for parallel execution
-                            # We collect all arrays that need bootstrapping for this metric
-                            dates = mean_vals.index.tolist()
-                            arrays_to_bootstrap = [grouped.get_group(d).dropna().values for d in dates]
-
-                            # Execute bootstrap in parallel
+                            agg_df = (
+                                df_strat.group_by(self.date_col)
+                                .agg(pl.col(m).mean().alias("_mean"))
+                                .sort(self.date_col)
+                            )
+                            dates = agg_df.get_column(self.date_col)
+                            mean_vals = agg_df.get_column("_mean")
+                            arrays_to_bootstrap = [
+                                df_strat.filter(pl.col(self.date_col) == d).get_column(m).drop_nulls().to_numpy()
+                                for d in dates
+                            ]
                             ci_results = list(executor.map(bootstrap_worker, arrays_to_bootstrap))
-
-                            # Unpack results
                             lowers, uppers = zip(*ci_results)
-
-                            y_raw = mean_vals
-                            y_lower = pd.Series(lowers, index=mean_vals.index).fillna(y_raw)
-                            y_upper = pd.Series(uppers, index=mean_vals.index).fillna(y_raw)
-
-                            x = mean_vals.index
+                            y_raw = mean_vals.to_numpy()
+                            y_lower = np.array([l if l == l else y_raw[i] for i, l in enumerate(lowers)])
+                            y_upper = np.array([u if u == u else y_raw[i] for i, u in enumerate(uppers)])
+                            x = dates.to_list()
                             y_plot = self.hybrid_transform(y_raw, thresh) if log_scale else y_raw
                             y_lower_plot = self.hybrid_transform(y_lower, thresh) if log_scale else y_lower
                             y_upper_plot = self.hybrid_transform(y_upper, thresh) if log_scale else y_upper
                         else:
-                            # Fallback if no date column grouping (unlikely given logic above)
-                            y_raw = df_strat[m]
+                            y_raw = df_strat.get_column(m).to_numpy()
                             y_plot = self.hybrid_transform(y_raw, thresh) if log_scale else y_raw
-                            x = x_vals
+                            x = date_vals.to_list()
                             y_lower_plot = y_plot
                             y_upper_plot = y_plot
 
                         fig.add_trace(
                             go.Scatter(
                                 x=x,
-                                y=y_plot,
+                                y=y_plot.tolist() if hasattr(y_plot, "tolist") else list(y_plot),
                                 name=f"{strat}:{m}",
                                 mode="lines+markers",
                                 line=dict(
@@ -1153,13 +1467,16 @@ class GameStatsDashboard:
                             secondary_y=secondary_y,
                         )
 
-                        # Add CI Band if meaningful
-                        if any(y_lower_plot != y_upper_plot):
+                        lower_arr = y_lower_plot if isinstance(y_lower_plot, np.ndarray) else np.asarray(y_lower_plot)
+                        upper_arr = y_upper_plot if isinstance(y_upper_plot, np.ndarray) else np.asarray(y_upper_plot)
+                        if not np.allclose(lower_arr, upper_arr):
                             base_color = color_map.get(f"{strat}:{m}", "black")
+                            x_list = x if isinstance(x, list) else list(x)
                             fig.add_trace(
                                 go.Scatter(
-                                    x=list(x) + list(x[::-1]),
-                                    y=list(y_upper_plot) + list(y_lower_plot[::-1]),
+                                    x=x_list + x_list[::-1],
+                                    y=(upper_arr.tolist() if hasattr(upper_arr, "tolist") else list(upper_arr))
+                                    + (lower_arr.tolist() if hasattr(lower_arr, "tolist") else list(lower_arr))[::-1],
                                     fill="toself",
                                     fillcolor=self.to_rgba(base_color, 0.1),
                                     line=dict(color="rgba(255,255,255,0)"),
@@ -1171,8 +1488,8 @@ class GameStatsDashboard:
                                 secondary_y=secondary_y,
                             )
 
-                add_scatter_plot(left_metrics, False)
-                add_scatter_plot(right_metrics, True)
+                add_scatter_plot(left_metrics or [], False)
+                add_scatter_plot(right_metrics or [], True)
 
         fig.update_layout(
             height=400,
@@ -1188,23 +1505,25 @@ class GameStatsDashboard:
         )
 
         if log_scale:
-            all_y = []
-            if left_metrics:
-                all_y.extend(df_date[left_metrics].values.flatten())
+            all_y: List[float] = []
+            for c in left_metrics or []:
+                if c in df_date.columns:
+                    all_y.extend(df_date.get_column(c).cast(pl.Float64).to_numpy().tolist())
             if all_y:
                 yticks = self.get_ticks(all_y, thresh)
                 fig.update_yaxes(
-                    tickvals=self.hybrid_transform(yticks, thresh),
+                    tickvals=self.hybrid_transform(yticks, thresh).tolist(),
                     ticktext=[f"{v:.0f}" for v in yticks],
                     secondary_y=False,
                 )
-            all_y_r = []
-            if right_metrics:
-                all_y_r.extend(df_date[right_metrics].values.flatten())
+            all_y_r: List[float] = []
+            for c in right_metrics or []:
+                if c in df_date.columns:
+                    all_y_r.extend(df_date.get_column(c).cast(pl.Float64).to_numpy().tolist())
             if all_y_r:
                 yticks_r = self.get_ticks(all_y_r, thresh)
                 fig.update_yaxes(
-                    tickvals=self.hybrid_transform(yticks_r, thresh),
+                    tickvals=self.hybrid_transform(yticks_r, thresh).tolist(),
                     ticktext=[f"{v:.0f}" for v in yticks_r],
                     secondary_y=True,
                 )
@@ -1224,17 +1543,21 @@ class GameStatsDashboard:
         filter_thresh,
     ):
         self._load_bet_data()
-        if self.df_bet.empty:
+        if self.lf_bet.collect_schema().len() == 0 or not self.sessions:
             return go.Figure()
         share_left_y = "ON" in (share_left or [])
         share_right_y = "ON" in (share_right or [])
         log_scale = "ON" in (log_val or [])
         do_filter = "ON" in (filter_check or [])
         log_thresh = max(float(log_thresh), 1.0) if log_thresh else 10.0
-        df_sess = self.df_bet[self.df_bet["session_start_date"] == session].sort_values("bet_index")
+        lf_sess = self.lf_bet.filter(pl.col("session_start_date").cast(pl.Utf8) == str(session)).sort("bet_index")
         if do_filter and filter_thresh:
-            df_sess = df_sess[df_sess["bet_index"] <= float(filter_thresh)]
-        df_groups = [df_sess[df_sess["session_group"] == s] if s else pd.DataFrame() for s in groups]
+            lf_sess = lf_sess.filter(pl.col("bet_index") <= float(filter_thresh))
+        df_sess = lf_sess.collect()
+        if df_sess.is_empty():
+            return go.Figure()
+        group_col = self.config["stats_by_bet"].get("group_col", "session_group")
+        df_groups = [df_sess.filter(pl.col(group_col) == s) if s else pl.DataFrame() for s in groups]
         fig = make_subplots(
             rows=1,
             cols=1,
@@ -1265,7 +1588,7 @@ class GameStatsDashboard:
                 secondary_y=False,
             )
         for i, df_g in enumerate(df_groups):
-            if df_g.empty:
+            if df_g.is_empty():
                 continue
             metric_colors = {
                 f"{s}:{m}": Styles.COLORS[i + j * len(groups) % len(Styles.COLORS)]
@@ -1321,21 +1644,21 @@ class GameStatsDashboard:
         fig.update_xaxes(rangeslider=dict(visible=True, thickness=0.05), row=1, col=1)
         return fig
 
-    def _add_traces_to_fig(self, fig, df, strat, metrics, colors, log_scale, thresh, is_right, y_range):
+    def _add_traces_to_fig(self, fig, df: pl.DataFrame, strat, metrics, colors, log_scale, thresh, is_right, y_range):
         if not metrics:
             return
         y_max_local = -inf
         for m in metrics:
             if m not in df.columns:
                 continue
-            y = pd.to_numeric(df[m], errors="coerce").ffill()
+            y = df.get_column(m).cast(pl.Float64).fill_null(float("nan")).forward_fill().to_numpy()
             y_plot = self.hybrid_transform(y, thresh) if log_scale else y
-            curr_max = np.nanmax(y_plot) if len(y_plot) > 0 else 0
+            curr_max = float(np.nanmax(y_plot)) if len(y_plot) > 0 else 0.0
             y_max_local = max(y_max_local, curr_max)
             fig.add_trace(
                 go.Scatter(
-                    x=df["bet_index"],
-                    y=y_plot,
+                    x=df.get_column("bet_index").to_list(),
+                    y=y_plot.tolist(),
                     name=f"{strat}:{m}{' (R)' if is_right else ''}",
                     mode="lines",
                     line=dict(width=2.5, color=colors.get(f"{strat}:{m}", "#333"), dash="dash" if is_right else None),
@@ -1356,27 +1679,44 @@ class GameStatsDashboard:
         """
 
         def callback(
-            metric,
-            display_mode,
-            groups,
-            r1_start,
-            r1_end,
-            r2_start,
-            r2_end,
-            r3_start,
-            r3_end,
-            show_r1,
-            show_r2,
-            show_r3,
-            clip_enable,
-            clip_min,
-            clip_max,
-        ):
+            metric: Any,
+            display_mode: Any,
+            groups: Any,
+            r1_start: Any,
+            r1_end: Any,
+            r2_start: Any,
+            r2_end: Any,
+            r3_start: Any,
+            r3_end: Any,
+            show_r1: Any,
+            show_r2: Any,
+            show_r3: Any,
+            clip_enable: Any,
+            clip_min: Any,
+            clip_max: Any,
+        ) -> go.Figure:
             if not metric or not groups or r1_start is None or r1_end is None:
                 return go.Figure()
             granularity = list(self.date_files_config.keys())[0]
-            df_date = self.dfs_by_date[granularity]
-            if df_date.empty or self.df_date_group_col not in df_date.columns or metric not in df_date.columns:
+            lf = self.lfs_by_date.get(granularity, pl.DataFrame().lazy())
+            if lf.collect_schema().len() == 0:
+                return go.Figure()
+            # Collect only the date range needed for the three ranges to limit memory
+            # Convert string dates from Dash pickers to datetime objects
+            dates_used = [
+                self._parse_date(r1_start),
+                self._parse_date(r1_end),
+                self._parse_date(r2_start),
+                self._parse_date(r2_end),
+                self._parse_date(r3_start),
+                self._parse_date(r3_end),
+            ]
+            valid_dates = [d for d in dates_used if d is not None]
+            if not valid_dates:
+                return go.Figure()
+            min_d, max_d = min(valid_dates), max(valid_dates)
+            df_date = lf.filter((pl.col(self.date_col) >= min_d) & (pl.col(self.date_col) <= max_d)).collect()
+            if df_date.is_empty() or self.df_date_group_col not in df_date.columns or metric not in df_date.columns:
                 return go.Figure()
             base_colors = Styles.COLORS
             fig = go.Figure()
@@ -1384,11 +1724,29 @@ class GameStatsDashboard:
             def _label(group, l):
                 return f"{group} [Range{l}]"
 
+            # Parse date strings to datetime objects
             data_ranges = [
-                {"start": r1_start, "end": r1_end, "label": "1", "show": "ON" in (show_r1 or [])},
-                {"start": r2_start, "end": r2_end, "label": "2", "show": "ON" in (show_r2 or [])},
-                {"start": r3_start, "end": r3_end, "label": "3", "show": "ON" in (show_r3 or [])},
+                {
+                    "start": self._parse_date(r1_start),
+                    "end": self._parse_date(r1_end),
+                    "label": "1",
+                    "show": "ON" in (show_r1 or []),
+                },
+                {
+                    "start": self._parse_date(r2_start),
+                    "end": self._parse_date(r2_end),
+                    "label": "2",
+                    "show": "ON" in (show_r2 or []),
+                },
+                {
+                    "start": self._parse_date(r3_start),
+                    "end": self._parse_date(r3_end),
+                    "label": "3",
+                    "show": "ON" in (show_r3 or []),
+                },
             ]
+            # Filter out ranges with None dates
+            data_ranges = [r for r in data_ranges if r["start"] is not None and r["end"] is not None]
             # Only keep enabled
             data_by_range = [r for r in data_ranges if r["show"]]
             enable_clip = clip_enable is not None and "ON" in (clip_enable or [])
@@ -1399,12 +1757,16 @@ class GameStatsDashboard:
                 for gi, group in enumerate(groups):
                     color_base = base_colors[gi % len(base_colors)]
                     for ri, range_info in enumerate(data_by_range):
-                        mask = (df_date[self.date_col] >= range_info["start"]) & (
-                            df_date[self.date_col] <= range_info["end"]
+                        start_dt = range_info["start"]
+                        end_dt = range_info["end"]
+                        if start_dt is None or end_dt is None:
+                            continue
+                        df_g = df_date.filter(
+                            (pl.col(self.date_col) >= start_dt)
+                            & (pl.col(self.date_col) <= end_dt)
+                            & (pl.col(self.df_date_group_col) == group)
                         )
-                        df_g = df_date.loc[mask]
-                        df_g = df_g[df_g[self.df_date_group_col] == group]
-                        vals = df_g[metric].dropna().values
+                        vals = df_g.get_column(metric).drop_nulls().to_numpy()
                         if enable_clip and (cmin is not None or cmax is not None):
                             vals = np.clip(
                                 vals, cmin if cmin is not None else -np.inf, cmax if cmax is not None else np.inf
@@ -1431,12 +1793,16 @@ class GameStatsDashboard:
                 for gi, group in enumerate(groups):
                     color_base = base_colors[gi % len(base_colors)]
                     for ri, range_info in enumerate(data_by_range):
-                        mask = (df_date[self.date_col] >= range_info["start"]) & (
-                            df_date[self.date_col] <= range_info["end"]
+                        start_dt = range_info["start"]
+                        end_dt = range_info["end"]
+                        if start_dt is None or end_dt is None:
+                            continue
+                        df_g = df_date.filter(
+                            (pl.col(self.date_col) >= start_dt)
+                            & (pl.col(self.date_col) <= end_dt)
+                            & (pl.col(self.df_date_group_col) == group)
                         )
-                        df_g = df_date.loc[mask]
-                        df_g = df_g[df_g[self.df_date_group_col] == group]
-                        vals = df_g[metric].dropna().values
+                        vals = df_g.get_column(metric).drop_nulls().to_numpy()
                         if enable_clip and (cmin is not None or cmax is not None):
                             vals = np.clip(
                                 vals, cmin if cmin is not None else -np.inf, cmax if cmax is not None else np.inf
@@ -1445,8 +1811,8 @@ class GameStatsDashboard:
                             continue
                         bar_label = _label(group, range_info["label"])
                         x_labels.append(bar_label)
-                        ydata.append(np.mean(vals))
-                        edata.append(np.std(vals))
+                        ydata.append(float(np.mean(vals)))
+                        edata.append(float(np.std(vals)))
                         if ri == 0:
                             mcolors_box.append(dict(color=color_base, opacity=1.0, line=dict(color="#333", width=1)))
                         else:
@@ -1458,30 +1824,29 @@ class GameStatsDashboard:
                                     pattern=dict(shape="/"),
                                 )
                             )
-                fig.add_trace(
-                    go.Bar(
-                        x=x_labels,
-                        y=ydata,
-                        error_y=dict(type="data", array=edata),
-                        marker={"color": [c["color"] for c in mcolors_box], "opacity": None},
-                        customdata=[c for c in mcolors_box],
-                        hovertemplate="%{x}: %{y:.2f} ± %{error_y.array:.2f}",
-                        showlegend=False,
+                if x_labels:
+                    fig.add_trace(
+                        go.Bar(
+                            x=x_labels,
+                            y=ydata,
+                            error_y=dict(type="data", array=edata),
+                            marker={"color": [c["color"] for c in mcolors_box], "opacity": None},
+                            customdata=[c for c in mcolors_box],
+                            hovertemplate="%{x}: %{y:.2f} ± %{error_y.array:.2f}",
+                            showlegend=False,
+                        )
                     )
-                )
-                for i, bar in enumerate(fig.data):
-                    if hasattr(bar, "customdata") and bar.customdata is not None:
-                        for xi in range(len(bar.x)):
-                            this_marker = bar.customdata[xi]
+                    for i, bar in enumerate(fig.data):
+                        if hasattr(bar, "customdata") and bar.customdata is not None:
+                            mcolors_box = bar.customdata
                             fig.data[i].marker.color = [m["color"] for m in mcolors_box]
-                            if "pattern" in this_marker:
+                            if any("pattern" in m for m in mcolors_box):
                                 if not hasattr(fig.data[i].marker, "pattern"):
                                     fig.data[i].marker.pattern = dict(shape=[""] * len(bar.x))
                                 fig.data[i].marker.pattern.shape = [
                                     m.get("pattern", {}).get("shape", "") for m in mcolors_box
                                 ]
-                            if "opacity" in this_marker:
-                                fig.data[i].marker.opacity = [m.get("opacity", 1.0) for m in mcolors_box]
+                            fig.data[i].marker.opacity = [m.get("opacity", 1.0) for m in mcolors_box]
 
             mode_title = "Box Plot" if display_mode == "box" else "Bar (Mean ± Std)"
             subtitle = ""
