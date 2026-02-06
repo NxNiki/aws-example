@@ -15,6 +15,7 @@ IMAGE_URI = "338568447110.dkr.ecr.us-west-2.amazonaws.com/bituslabs-ds-sagemaker
 IMAGE_URI_LTE = "338568447110.dkr.ecr.us-west-2.amazonaws.com/bituslabs-ds-etl:latest"
 DEFAULT_MAX_JOBS = 4
 DEFAULT_ATHENA_OUTPUT = f"s3://{S3_BUCKET}/athena-results"
+DEFAULT_ETL_OUTPUT = f"s3://{S3_BUCKET}/etl-results"
 DEFAULT_BASTION_IP = "13.215.212.244"  # for ssh tunnel connection to redshift
 LOCAL_ROOT = Path(__file__).resolve().parent.parent.parent
 

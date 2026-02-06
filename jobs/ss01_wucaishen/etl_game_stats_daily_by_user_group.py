@@ -4,7 +4,7 @@ from textwrap import dedent
 
 import pandas as pd
 
-from bituslabs_ds.config import DEFAULT_BASTION_IP, LOCAL_ROOT, setup_logging
+from bituslabs_ds.config import DEFAULT_BASTION_IP, DEFAULT_ETL_OUTPUT, LOCAL_ROOT, setup_logging
 from bituslabs_ds.etl import DataLoader, ETLScheduler, RedshiftBackend
 
 # TODO:
@@ -280,7 +280,7 @@ if __name__ == "__main__":
     )
 
     # Initialize Scheduler with a default 3-day lookback
-    scheduler = ETLScheduler(redshift_loader, f"{LOCAL_ROOT}/jobs/output_ss01_wucaishen", lookback_days=3)
+    scheduler = ETLScheduler(redshift_loader, f"{DEFAULT_ETL_OUTPUT}/jobs/output_ss01_wucaishen", lookback_days=3)
 
     scheduler.run_incremental_job(
         job_name="daily_stats",

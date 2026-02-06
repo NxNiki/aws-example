@@ -2,11 +2,10 @@ import argparse
 import os
 from textwrap import dedent
 
-from bituslabs_ds.config import DEFAULT_BASTION_IP, LOCAL_ROOT, setup_logging
+from bituslabs_ds.config import DEFAULT_BASTION_IP, DEFAULT_ETL_OUTPUT, LOCAL_ROOT, setup_logging
 from bituslabs_ds.etl import DataLoader, ETLScheduler, RedshiftBackend
 
 DATE_START = "2025-10-20"
-DATE_END = "2027-12-1"
 
 return_user_days = 30
 retention_days = 3
@@ -15,7 +14,7 @@ streak_session_thresh = 600
 streak_kill_thresh = 3  # nearly 10% of all killing intervals.
 
 
-def generate_query(stats_agg_col: str, start_date: str, end_date: str = DATE_END):
+def generate_query(stats_agg_col: str, start_date: str):
 
     query = dedent(
         f"""
@@ -57,11 +56,6 @@ def generate_query(stats_agg_col: str, start_date: str, end_date: str = DATE_END
                 AND b.created_at >= CONVERT_TIMEZONE('Asia/Shanghai', 'UTC', 
                        DATEADD(day, -{return_user_days}, CAST('{start_date}' AS TIMESTAMP)))
 
-                -- 2. Reverse the date math for END
-                -- Logic: We want events where (EventTime - RetentionDays) < End
-                -- So: EventTime < End + RetentionDays
-                AND b.created_at < CONVERT_TIMEZONE('Asia/Shanghai', 'UTC', 
-                       DATEADD(day, {retention_days}, CAST('{end_date}' AS TIMESTAMP)))
         ),
 
         -- 2. DETERMINE USER DAILY GROUP (Logic applied inside SUM)
@@ -499,7 +493,7 @@ if __name__ == "__main__":
     )
 
     # Initialize Scheduler with a default 3-day lookback
-    scheduler = ETLScheduler(redshift_loader, f"{LOCAL_ROOT}/jobs/output_fish_hunter", lookback_days=3)
+    scheduler = ETLScheduler(redshift_loader, f"{DEFAULT_ETL_OUTPUT}/jobs/output_fish_hunter", lookback_days=3)
 
     scheduler.run_incremental_job(
         job_name="daily_stats",

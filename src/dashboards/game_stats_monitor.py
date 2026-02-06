@@ -2,7 +2,7 @@ import logging
 import os
 import re
 import socket
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timedelta
 from math import inf
 from pathlib import Path
@@ -16,7 +16,7 @@ from dash import Dash, Input, Output, State, callback_context, dcc, html, no_upd
 from plotly.subplots import make_subplots
 
 from bituslabs_ds.config import LOCAL_ROOT, setup_logging
-from bituslabs_ds.s3_utils import read_local_cache
+from bituslabs_ds.s3_utils import read_files
 from bituslabs_ds.utils import bootstrap_worker, load_config
 
 # ==========================================
@@ -249,134 +249,6 @@ class GameStatsDashboard:
         self._load_bet_data()
         self._load_date_data()
 
-    @staticmethod
-    def _align_lazyframe_schemas(lfs: List[pl.LazyFrame], context: str = "") -> List[pl.LazyFrame]:
-        """
-        Align schemas of multiple LazyFrames for safe concatenation.
-
-        Handles:
-        - Different column types (casts to compatible types)
-        - Missing columns (adds as null)
-        - Logs warnings about schema mismatches
-
-        Args:
-            lfs: List of LazyFrames to align
-            context: Context string for logging (e.g., "date data: day")
-
-        Returns:
-            List of LazyFrames with aligned schemas
-        """
-        if len(lfs) <= 1:
-            return lfs
-
-        schemas = [lf.collect_schema() for lf in lfs]
-        all_columns = set()
-        for schema in schemas:
-            all_columns.update(schema.names())
-
-        # Find common columns and detect type mismatches
-        column_types: Dict[str, List[pl.DataType]] = {}
-        for schema in schemas:
-            for col_name in schema.names():
-                if col_name not in column_types:
-                    column_types[col_name] = []
-                column_types[col_name].append(schema[col_name])
-
-        # Determine target type for each column
-        target_types: Dict[str, pl.DataType] = {}
-        mismatches: List[str] = []
-
-        def get_type_class(dtype: pl.DataType) -> str:
-            """Get the base type class name (e.g., 'Int64', 'String', 'Datetime')."""
-            type_str = str(dtype)
-            # Handle parameterized types like Datetime('ns') -> 'Datetime'
-            if "(" in type_str:
-                return type_str.split("(")[0]
-            return type_str
-
-        for col_name, types in column_types.items():
-            # Use string representation to detect unique types (handles Datetime('ns') vs Datetime('μs'))
-            type_strs = [str(t) for t in types]
-            unique_type_strs = list(set(type_strs))
-
-            if len(unique_type_strs) > 1:
-                mismatches.append(f"{col_name}: {unique_type_strs}")
-                # Choose the "wider" type: String > Float > Int, or keep Datetime
-                type_classes = [get_type_class(t) for t in types]
-                has_string = any(cls == "String" for cls in type_classes)
-                has_float = any(cls in ("Float32", "Float64") for cls in type_classes)
-                has_int = any(
-                    cls in ("Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64")
-                    for cls in type_classes
-                )
-                has_datetime = any(cls in ("Datetime", "Date") for cls in type_classes)
-
-                if has_datetime:
-                    # For datetime, use Datetime (normalize precision to nanoseconds)
-                    target_types[col_name] = pl.Datetime("ns")
-                elif has_string:
-                    target_types[col_name] = cast(pl.DataType, pl.String)
-                elif has_float:
-                    target_types[col_name] = cast(pl.DataType, pl.Float64)
-                elif has_int:
-                    target_types[col_name] = cast(pl.DataType, pl.Int64)
-                else:
-                    # Default to first type
-                    target_types[col_name] = types[0]
-            else:
-                target_types[col_name] = types[0]
-
-        # Check for missing columns (columns present in some files but not others)
-        missing_cols_by_file: List[List[str]] = []
-        for i, schema in enumerate(schemas):
-            missing = sorted(all_columns - set(schema.names()))
-            if missing:
-                missing_cols_by_file.append(missing)
-
-        # Log warnings if there are mismatches or missing columns
-        if mismatches:
-            logger.warning(
-                f"Schema mismatches detected {context}: {len(mismatches)} columns have different types. "
-                f"Will coerce to compatible types. Mismatches: {', '.join(mismatches[:5])}"
-                + (f" (and {len(mismatches) - 5} more)" if len(mismatches) > 5 else "")
-            )
-        if missing_cols_by_file:
-            total_missing = sum(len(m) for m in missing_cols_by_file)
-            logger.warning(
-                f"Missing columns detected {context}: Some files are missing {total_missing} column(s). "
-                f"Missing columns will be filled with null values."
-            )
-
-        # Align each LazyFrame to the target schema
-        # Use sorted column order for consistency
-        col_order = sorted(all_columns)
-        aligned_lfs = []
-
-        for i, lf in enumerate(lfs):
-            schema = schemas[i]
-            selects = []
-
-            # Process each column in the target order
-            for col_name in col_order:
-                if col_name in schema.names():
-                    # Column exists - cast if needed
-                    current_type = schema[col_name]
-                    target_type = target_types[col_name]
-                    # Compare by string representation to handle Datetime('ns') vs Datetime('μs')
-                    if str(current_type) != str(target_type):
-                        selects.append(pl.col(col_name).cast(target_type).alias(col_name))
-                    else:
-                        selects.append(pl.col(col_name))
-                else:
-                    # Column missing - add as null
-                    target_type = target_types[col_name]
-                    selects.append(pl.lit(None).cast(target_type).alias(col_name))
-
-            lf_aligned = lf.select(selects)
-            aligned_lfs.append(lf_aligned)
-
-        return aligned_lfs
-
     def _load_bet_data(self) -> None:
         if self.lf_bet.collect_schema().len() > 0 and self.sessions:
             return
@@ -388,21 +260,15 @@ class GameStatsDashboard:
             self.bet_metrics = []
             return
 
-        with ThreadPoolExecutor() as executor:
-            bet_lfs: List[pl.LazyFrame] = list(executor.map(lambda p: read_local_cache(p, lazy_load=True), file_paths))
-        valid_lfs = [lf for lf in bet_lfs if lf.collect_schema().len() > 0]
-        if not valid_lfs:
+        lf_bet_raw = read_files(file_paths, lazy_load=True, return_as_list=False, parallel_mode="thread")
+        if not isinstance(lf_bet_raw, pl.LazyFrame) or lf_bet_raw.collect_schema().len() == 0:
             self.lf_bet = pl.DataFrame().lazy()
             self.sessions = []
             self.bet_metrics = []
             return
 
-        # Align schemas before concatenation
-        aligned_lfs = self._align_lazyframe_schemas(valid_lfs, context="bet data")
-        self.lf_bet = (
-            pl.concat(aligned_lfs)
-            .with_columns(pl.col("bet_index").cast(pl.Float64))
-            .filter(pl.col("bet_index").is_not_nan())
+        self.lf_bet = lf_bet_raw.with_columns(pl.col("bet_index").cast(pl.Float64)).filter(
+            pl.col("bet_index").is_not_nan()
         )
         schema_names = self.lf_bet.collect_schema().names()
         exclude_bet_cols = {"session_start_date", "session_group", "bet_index"}
@@ -411,28 +277,21 @@ class GameStatsDashboard:
         self.sessions = sorted(sessions_df.to_series().to_list()) if not sessions_df.is_empty() else []
 
     def _load_date_data(self) -> None:
-        with ThreadPoolExecutor() as executor:
-            for gran, file_paths in self.date_files_config.items():
-                if isinstance(file_paths, str):
-                    file_paths = [file_paths]
-                valid_paths = [f for f in file_paths if f]
-                if not valid_paths:
-                    self.lfs_by_date[gran] = pl.DataFrame().lazy()
-                    continue
-                daily_lfs: List[pl.LazyFrame] = list(
-                    executor.map(lambda p: read_local_cache(p, lazy_load=True), valid_paths)
-                )
-                valid_lfs = [lf for lf in daily_lfs if lf.collect_schema().len() > 0]
-                if valid_lfs:
-                    # Align schemas before concatenation
-                    aligned_lfs = self._align_lazyframe_schemas(valid_lfs, context=f"date data: {gran}")
-                    lf = pl.concat(aligned_lfs)
-                    if self.date_col in lf.collect_schema().names():
-                        # Cast to datetime for consistent filtering (handles both string and date columns)
-                        lf = lf.with_columns(pl.col(self.date_col).cast(pl.Datetime))
-                    self.lfs_by_date[gran] = lf
-                else:
-                    self.lfs_by_date[gran] = pl.DataFrame().lazy()
+        for gran, file_paths in self.date_files_config.items():
+            if isinstance(file_paths, str):
+                file_paths = [file_paths]
+            valid_paths = [f for f in file_paths if f]
+            if not valid_paths:
+                self.lfs_by_date[gran] = pl.DataFrame().lazy()
+                continue
+
+            lf_date = read_files(valid_paths, lazy_load=True, return_as_list=False, expand_s3_prefixes=True)
+            if isinstance(lf_date, pl.LazyFrame) and lf_date.collect_schema().len() > 0:
+                if self.date_col in lf_date.collect_schema().names():
+                    lf_date = lf_date.with_columns(pl.col(self.date_col).cast(pl.Datetime))
+                self.lfs_by_date[gran] = lf_date
+            else:
+                self.lfs_by_date[gran] = pl.DataFrame().lazy()
 
         self.plot_metrics = {}
         self.plot_metrics["g1"] = self.config["stats_by_date"]["group1_columns"]

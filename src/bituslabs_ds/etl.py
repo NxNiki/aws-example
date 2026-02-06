@@ -553,8 +553,9 @@ class ETLScheduler:
 
         # 4. Atomic Write with Partitioning
         if self.is_s3:
+            job_path_str = str(job_path).replace("s3:/", "s3://", 1)
             wr.s3.to_parquet(
-                df=df, path=str(job_path), dataset=True, partition_cols=partition_cols, mode="append", index=False
+                df=df, path=job_path_str, dataset=True, partition_cols=partition_cols, mode="append", index=False
             )
         else:
             # Note: 'overwrite_or_ignore' prevents file accumulation within existing partitions

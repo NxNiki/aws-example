@@ -262,8 +262,9 @@ def list_s3_files(bucket: str, prefix: str, pattern: Optional[str] = None) -> Li
     List all S3 files in bucket starting from the prefix, filtering with an optional regex pattern.
 
     :param bucket: S3 bucket name
-    :param prefix: S3 key prefix (acts like a root folder)
+    :param prefix: S3 key prefix (acts like a folder)
     :param pattern: Optional regex pattern to match the key
+        if no pattern is provided, all files with the prefix (folder) will be listed.
     :return: List of matching s3 keys (not including bucket)
     """
     logger.info(f"Listing S3 files in: {bucket}/{prefix}, with pattern: {pattern}")
@@ -379,6 +380,250 @@ def _read_eager(path: Path, columns: Optional[List[str]], data_types: Optional[D
     return data
 
 
+def _read_s3_lazy(s3_uri: str, columns: Optional[List[str]], data_types: Optional[Dict]) -> pl.LazyFrame:
+    """Internal handler for Polars Lazy loading from S3."""
+    _, ext = os.path.splitext(s3_uri.lower())
+    if ext == ".csv":
+        lf = pl.scan_csv(s3_uri)
+    elif ext == ".parquet":
+        lf = pl.scan_parquet(s3_uri)
+    else:
+        raise ValueError(f"Unsupported file type for S3 lazy load: {ext}")
+    if columns:
+        lf = lf.select(columns)
+    if data_types:
+        lf = lf.cast(data_types)
+    return lf
+
+
+def _read_s3_eager(s3_uri: str, columns: Optional[List[str]], data_types: Optional[Dict]) -> pd.DataFrame:
+    """Internal handler for eager loading from S3."""
+    bucket, key = parse_s3_path(s3_uri)
+    return read_to_pandas_df(bucket, key, columns, row_filters=None, data_types=data_types)
+
+
+def _is_s3_path(path: str) -> bool:
+    """Return True if path is an S3 URI."""
+    return path.startswith(("s3://", "s3a://", "s3n://"))
+
+
+_SUPPORTED_EXTENSIONS = (".parquet", ".csv")
+
+
+def expand_paths_to_files(paths: List[str]) -> List[str]:
+    """
+    Expand S3 prefixes to individual file URIs. Local paths are returned as-is.
+    For S3 paths, list objects under the prefix and return only .parquet/.csv files.
+    If listing returns empty, the prefix is skipped (and a warning is logged).
+    """
+    result: List[str] = []
+    for p in paths:
+        if not p or not isinstance(p, str):
+            continue
+        if _is_s3_path(p):
+            bucket, prefix = parse_s3_path(p)
+            all_objects = list_s3_files(bucket, prefix)
+            # Keep only files with supported extensions (exclude directory markers, etc.)
+            files = [uri for uri in all_objects if uri.lower().endswith(_SUPPORTED_EXTENSIONS)]
+            if files:
+                result.extend(files)
+            else:
+                if not all_objects:
+                    logger.warning(
+                        f"No objects found under S3 prefix {p}. Skipping. " "Check bucket/prefix and credentials."
+                    )
+                else:
+                    logger.warning(
+                        f"No .parquet or .csv files under S3 prefix {p} "
+                        f"(found {len(all_objects)} object(s)). Skipping."
+                    )
+        else:
+            result.append(p)
+    return result
+
+
+def read_single_file(
+    path: Union[str, Path],
+    columns: Optional[List[str]] = None,
+    data_types: Optional[Dict[str, Any]] = None,
+    lazy_load: bool = False,
+) -> Union[pd.DataFrame, pl.LazyFrame]:
+    """
+    Read a single file from local path or S3, with optional lazy loading.
+
+    Args:
+        path: Local file path or s3:// URI.
+        columns: List of columns to read.
+        data_types: Dictionary of column types.
+        lazy_load: If True, returns a Polars LazyFrame; else returns a Pandas DataFrame.
+
+    Returns:
+        pd.DataFrame or pl.LazyFrame
+    """
+    path_str = str(path)
+    if _is_s3_path(path_str):
+        logger.info(f"Reading S3 data from {path_str} (Lazy: {lazy_load})")
+        try:
+            if lazy_load:
+                return _read_s3_lazy(path_str, columns, data_types)
+            else:
+                return _read_s3_eager(path_str, columns, data_types)
+        except Exception as e:
+            logger.error(f"Failed to read S3 file {path_str}: {e}", exc_info=True)
+            raise
+    else:
+        return read_local_cache(path, columns, data_types, lazy_load)
+
+
+def align_lazyframe_schemas(lfs: List[pl.LazyFrame], context: str = "") -> List[pl.LazyFrame]:
+    """
+    Align schemas of multiple LazyFrames for safe vertical concatenation.
+
+    Handles:
+    - Different column types (casts to compatible types)
+    - Missing columns (adds as null)
+    - Logs warnings about schema mismatches
+
+    Args:
+        lfs: List of LazyFrames to align
+        context: Context string for logging (e.g., "date data: day")
+
+    Returns:
+        List of LazyFrames with aligned schemas
+    """
+    if len(lfs) <= 1:
+        return lfs
+
+    schemas = [lf.collect_schema() for lf in lfs]
+    all_columns = set()
+    for schema in schemas:
+        all_columns.update(schema.names())
+
+    column_types: Dict[str, List[pl.DataType]] = {}
+    for schema in schemas:
+        for col_name in schema.names():
+            if col_name not in column_types:
+                column_types[col_name] = []
+            column_types[col_name].append(schema[col_name])
+
+    target_types: Dict[str, pl.DataType] = {}
+    mismatches: List[str] = []
+
+    def get_type_class(dtype: pl.DataType) -> str:
+        type_str = str(dtype)
+        if "(" in type_str:
+            return type_str.split("(")[0]
+        return type_str
+
+    for col_name, types in column_types.items():
+        type_strs = [str(t) for t in types]
+        unique_type_strs = list(set(type_strs))
+
+        if len(unique_type_strs) > 1:
+            mismatches.append(f"{col_name}: {unique_type_strs}")
+            type_classes = [get_type_class(t) for t in types]
+            has_string = any(cls == "String" for cls in type_classes)
+            has_float = any(cls in ("Float32", "Float64") for cls in type_classes)
+            has_int = any(
+                cls in ("Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64")
+                for cls in type_classes
+            )
+            has_datetime = any(cls in ("Datetime", "Date") for cls in type_classes)
+
+            if has_datetime:
+                target_types[col_name] = pl.Datetime("ns")
+            elif has_string:
+                target_types[col_name] = cast(pl.DataType, pl.String)
+            elif has_float:
+                target_types[col_name] = cast(pl.DataType, pl.Float64)
+            elif has_int:
+                target_types[col_name] = cast(pl.DataType, pl.Int64)
+            else:
+                target_types[col_name] = types[0]
+        else:
+            target_types[col_name] = types[0]
+
+    missing_cols_by_file: List[List[str]] = []
+    for schema in schemas:
+        missing = sorted(all_columns - set(schema.names()))
+        if missing:
+            missing_cols_by_file.append(missing)
+
+    if mismatches:
+        logger.warning(
+            f"Schema mismatches detected {context}: {len(mismatches)} columns have different types. "
+            f"Will coerce to compatible types. Mismatches: {', '.join(mismatches[:5])}"
+            + (f" (and {len(mismatches) - 5} more)" if len(mismatches) > 5 else "")
+        )
+    if missing_cols_by_file:
+        total_missing = sum(len(m) for m in missing_cols_by_file)
+        logger.warning(
+            f"Missing columns detected {context}: Some files are missing {total_missing} column(s). "
+            f"Missing columns will be filled with null values."
+        )
+
+    col_order = sorted(all_columns)
+    aligned_lfs = []
+
+    for i, lf in enumerate(lfs):
+        schema = schemas[i]
+        selects = []
+        for col_name in col_order:
+            if col_name in schema.names():
+                current_type = schema[col_name]
+                target_type = target_types[col_name]
+                if str(current_type) != str(target_type):
+                    selects.append(pl.col(col_name).cast(target_type).alias(col_name))
+                else:
+                    selects.append(pl.col(col_name))
+            else:
+                target_type = target_types[col_name]
+                selects.append(pl.lit(None).cast(target_type).alias(col_name))
+        lf_aligned = lf.select(selects)
+        aligned_lfs.append(lf_aligned)
+
+    return aligned_lfs
+
+
+def align_dataframe_columns(dfs: List[pd.DataFrame], context: str = "") -> List[pd.DataFrame]:
+    """
+    Align columns of multiple Pandas DataFrames for safe vertical concatenation.
+
+    Ensures all DataFrames have the same columns in the same order; missing columns
+    are filled with NaN.
+
+    Args:
+        dfs: List of DataFrames to align
+        context: Context string for logging
+
+    Returns:
+        List of DataFrames with aligned columns
+    """
+    if len(dfs) <= 1:
+        return dfs
+
+    all_columns = set()
+    for df in dfs:
+        all_columns.update(df.columns)
+
+    col_order = sorted(all_columns)
+    missing_by_file = [sorted(all_columns - set(df.columns)) for df in dfs]
+    total_missing = sum(len(m) for m in missing_by_file if m)
+
+    if total_missing > 0:
+        logger.warning(
+            f"Missing columns detected {context}: Some files are missing {total_missing} column(s). "
+            f"Missing columns will be filled with NaN."
+        )
+
+    aligned = []
+    for df in dfs:
+        reordered = df.reindex(columns=col_order)
+        aligned.append(reordered)
+
+    return aligned
+
+
 def save_local_cache(data: pd.DataFrame, local_cache_path: str, append: bool = False):
 
     os.makedirs(os.path.dirname(local_cache_path), exist_ok=True)
@@ -403,41 +648,70 @@ def read_files(
     parallel_mode: Literal["thread", "process", "none"] = "thread",
     reload: bool = False,
     add_file_source: bool = False,
-) -> pd.DataFrame:
+    lazy_load: bool = False,
+    expand_s3_prefixes: bool = True,
+    return_as_list: bool = False,
+) -> Union[pd.DataFrame, pl.LazyFrame, List[pd.DataFrame], List[pl.LazyFrame]]:
     """
-    Read CSV files from S3 using optional parallelization.
+    Read CSV/Parquet files from local paths and/or S3 using optional parallelization.
 
-    :param files: List of S3 paths to CSV files.
-    :param local_cache_path: Local cache path.
+    :param files: List of file paths (local or s3://). Supports CSV and Parquet.
+    :param local_cache_path: Local cache path; if present and not reload, read from cache.
     :param columns: List of column names to read from each file.
+    :param row_filters: Optional row filters to apply (eager mode, S3 only).
+    :param data_types: Optional column data types.
     :param max_workers: Number of workers to use in parallel execution.
     :param parallel_mode: Parallel execution strategy: 'thread', 'process', or 'none'.
-    :param reload: Whether to reload files from S3 or not.
+    :param reload: Whether to reload files from source or not.
     :param add_file_source: Whether to add file paths to result.
-    :return: Concatenated DataFrame of all read files.
+    :param lazy_load: If True, return Polars LazyFrame(s); else Pandas DataFrame(s).
+    :param expand_s3_prefixes: If True, expand S3 prefixes to individual file URIs before reading.
+    :param return_as_list: If True with lazy_load, return List[pl.LazyFrame] instead of concatenated LazyFrame.
+    :return: Concatenated DataFrame/LazyFrame, or list when return_as_list=True.
     """
 
     if local_cache_path is not None and os.path.exists(local_cache_path) and not reload:
         logger.info(f"Found local cache at {local_cache_path}")
-        # read_files always uses lazy_load=False, so we know it returns DataFrame
-        data = cast(pd.DataFrame, read_local_cache(local_cache_path, columns, data_types, lazy_load=False))
-        logger.info("first 5 rows of dataframe: \n%s", data.head(5).to_markdown())
+        data = read_local_cache(local_cache_path, columns, data_types, lazy_load=lazy_load)
+        if return_as_list and lazy_load:
+            return [cast(pl.LazyFrame, data)]
+        if not lazy_load:
+            logger.info("first 5 rows of dataframe: \n%s", cast(pd.DataFrame, data).head(5).to_markdown())
         return data
 
     logger.info(f"read data with data types spec: {data_types}")
-    read_func = partial(_read_file, columns=columns, row_filters=row_filters, data_types=data_types)
-
     if isinstance(files, str):
         files = [files]
+    valid_files = [f for f in files if f]
+    if not valid_files:
+        return (
+            [pl.DataFrame().lazy()]
+            if (lazy_load and return_as_list)
+            else (pl.DataFrame().lazy() if lazy_load else pd.DataFrame())
+        )
 
-    if parallel_mode == "none" or max_workers <= 1 or len(files) == 1:
-        dfs = [read_func(file) for file in files]
+    if expand_s3_prefixes:
+        file_paths = expand_paths_to_files(valid_files)
+    else:
+        file_paths = valid_files
+
+    has_local = any(not _is_s3_path(p) for p in file_paths)
+    use_single_file = lazy_load or has_local
+    if use_single_file:
+        if row_filters:
+            logger.warning("row_filters are ignored when lazy_load=True or when reading local paths")
+        read_func = partial(read_single_file, columns=columns, data_types=data_types, lazy_load=lazy_load)
+    else:
+        read_func = partial(_read_file, columns=columns, row_filters=row_filters, data_types=data_types)
+
+    if parallel_mode == "none" or max_workers <= 1 or len(file_paths) == 1:
+        dfs = [read_func(f) for f in file_paths]
     else:
         logger.info(f"read files using {max_workers} workers")
         executor_cls: Callable = ThreadPoolExecutor if parallel_mode == "thread" else ProcessPoolExecutor
         dfs = []
         with executor_cls(max_workers=max_workers) as executor:
-            future_to_file = {executor.submit(read_func, file): file for file in files}
+            future_to_file = {executor.submit(read_func, f): f for f in file_paths}
             for future in as_completed(future_to_file):
                 file = future_to_file[future]
                 try:
@@ -445,16 +719,16 @@ def read_files(
                 except Exception as e:
                     logger.error(f"Failed to read {file}: {e}")
 
-    if local_cache_path is not None:
+    if local_cache_path is not None and not lazy_load:
         # Write incrementally to cache to avoid memory issues with large concatenation
         logger.info(f"save data to local cache incrementally: {local_cache_path}")
         os.makedirs(os.path.dirname(local_cache_path), exist_ok=True)
 
         for i in range(len(dfs)):
             append = i != 0
-            df = dfs[i]
+            df = cast(pd.DataFrame, dfs[i])
             if add_file_source:
-                df["source_file"] = os.path.basename(files[i])
+                df["source_file"] = os.path.basename(file_paths[i])
 
             save_local_cache(df, local_cache_path, append)
             logger.info(f"Written {len(df)} rows to cache (file {i+1}/{len(dfs)})")
@@ -462,18 +736,31 @@ def read_files(
             gc.collect()
 
         # Read the final cached file and return
-        # read_files always uses lazy_load=False, so we know it returns DataFrame
         data = cast(pd.DataFrame, read_local_cache(local_cache_path, lazy_load=False))
+        logger.info("first 5 rows of dataframe: \n%s", data.head(5).to_markdown())
+        return data
     else:
-        if add_file_source:
-            # the order of dfs may not be consistent with files!!!
-            data = pd.concat(dfs, keys=[os.path.basename(f) for f in files])
-            data = data.reset_index(level=0).rename(columns={"level_0": "source_file"})
+        if lazy_load:
+            valid_lfs = [lf for lf in dfs if isinstance(lf, pl.LazyFrame) and lf.collect_schema().len() > 0]
+            if not valid_lfs:
+                return [pl.DataFrame().lazy()] if return_as_list else pl.DataFrame().lazy()
+            aligned_lfs = align_lazyframe_schemas(valid_lfs, context="read_files")
+            if return_as_list:
+                return aligned_lfs
+            return pl.concat(aligned_lfs)
         else:
-            data = pd.concat(dfs, ignore_index=True)
-
-    logger.info("first 5 rows of dataframe: \n%s", data.head(5).to_markdown())
-    return data
+            pdfs = cast(List[pd.DataFrame], dfs)
+            aligned_dfs = align_dataframe_columns(pdfs, context="read_files")
+            if add_file_source:
+                data = pd.concat(
+                    aligned_dfs,
+                    keys=[os.path.basename(f) for f in file_paths],
+                )
+                data = data.reset_index(level=0).rename(columns={"level_0": "source_file"})
+            else:
+                data = pd.concat(aligned_dfs, ignore_index=True)
+            logger.info("first 5 rows of dataframe: \n%s", data.head(5).to_markdown())
+            return data
 
 
 def read_dataset(file_path: str, region: str = REGION, data_format: str = "parquet") -> Dataset:

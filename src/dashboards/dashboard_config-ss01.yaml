@@ -3,16 +3,16 @@ title: "SS01 (wucaishen) Analytics"
 stats_by_date: 
   files: 
     day: [
-      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/daily_stats/compact_part_0.parquet",
-      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/daily_stats_pa/compact_part_0.parquet",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_wucaishen/daily_stats",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_wucaishen/daily_stats_pa",
     ]
     week: [
-      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/weekly_stats/compact_part_0.parquet",
-      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/weekly_stats_pa/compact_part_0.parquet",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_wucaishen/weekly_stats",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_wucaishen/weekly_stats_pa",
     ]
     month: [
-      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/monthly_stats/compact_part_0.parquet",
-      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/monthly_stats_pa/compact_part_0.parquet",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_wucaishen/monthly_stats",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_wucaishen/monthly_stats_pa",
     ]
 
   group_col: "ai_group"

@@ -1,18 +1,19 @@
+import argparse
 import os
 from textwrap import dedent
 
-from bituslabs_ds.config import LOCAL_ROOT, setup_logging
-from bituslabs_ds.etl import DataLoader, RedshiftBackend
+from bituslabs_ds.config import DEFAULT_BASTION_IP, DEFAULT_ETL_OUTPUT, LOCAL_ROOT, setup_logging
+from bituslabs_ds.etl import DataLoader, ETLScheduler, RedshiftBackend
 
 DATE_START = "2025-12-31"
-DATE_END = "2027-12-1"
 
-retention_days = 7
-streak_session_thresh = 600
-streak_kill_thresh = 3  # nearly 10% of all killing intervals.
+RETURN_USER_DAYS = 30
+RETENTION_DAYS = 3
+STREAK_SESSION_THRESH = 600
+STREAK_KILL_THRESH = 3  # nearly 10% of all killing intervals.
 
 
-def generate_query(stats_agg_col):
+def generate_query(start_date: str):
 
     query = dedent(
         f"""
@@ -46,11 +47,7 @@ def generate_query(stats_agg_col):
                 -- ---------------------------------------------------------
                 -- Logic: We want events where (EventTime + UserDays) >= Start
                 -- So: EventTime >= Start - UserDays
-                AND b.created_at >= CONVERT_TIMEZONE('Asia/Shanghai', 'UTC', CAST('{DATE_START}' AS TIMESTAMP))
-                -- Logic: We want events where (EventTime - RetentionDays) < End
-                -- So: EventTime < End + RetentionDays
-                AND b.created_at < CONVERT_TIMEZONE('Asia/Shanghai', 'UTC',
-                    DATEADD(day, {retention_days}, CAST('{DATE_END}' AS TIMESTAMP)))
+                AND b.created_at >= CONVERT_TIMEZONE('Asia/Shanghai', 'UTC', CAST('{start_date}' AS TIMESTAMP))
                 AND b.strategy_name = 'DEFAULT_FALLBACK'
         ),
 
@@ -74,14 +71,14 @@ def generate_query(stats_agg_col):
                 bet_time,
                 -- GLOBAL: ignores fish_type. Checks if ANY fish was killed recently.
                 CASE 
-                    WHEN DATEDIFF(SECOND, LAG(bet_time) OVER(PARTITION BY user_id ORDER BY bet_time), bet_time) > {streak_kill_thresh} 
+                    WHEN DATEDIFF(SECOND, LAG(bet_time) OVER(PARTITION BY user_id ORDER BY bet_time), bet_time) > {STREAK_KILL_THRESH} 
                         OR LAG(bet_time) OVER(PARTITION BY user_id ORDER BY bet_time) IS NULL 
                     THEN 1 ELSE 0 
                 END AS is_new_global_streak,
                 
                 -- TYPE-SPECIFIC: isolated by fish_type. Only checks previous kill of SAME type.
                 CASE 
-                    WHEN DATEDIFF(SECOND, LAG(bet_time) OVER(PARTITION BY user_id, fish_type ORDER BY bet_time), bet_time) > {streak_kill_thresh} 
+                    WHEN DATEDIFF(SECOND, LAG(bet_time) OVER(PARTITION BY user_id, fish_type ORDER BY bet_time), bet_time) > {STREAK_KILL_THRESH} 
                         OR LAG(bet_time) OVER(PARTITION BY user_id, fish_type ORDER BY bet_time) IS NULL 
                     THEN 1 ELSE 0 
                 END AS is_new_type_streak
@@ -150,7 +147,7 @@ def generate_query(stats_agg_col):
                 t1.activity_date,
                 t1.user_id,
                 CASE 
-                    WHEN next_bet_date <= DATEADD(day, {retention_days}, activity_date) 
+                    WHEN next_bet_date <= DATEADD(day, {RETENTION_DAYS}, activity_date) 
                     THEN 'return' 
                     ELSE 'non-return' 
                 END AS return_user
@@ -211,7 +208,7 @@ def generate_query(stats_agg_col):
                 t.killed,
                 t.fish_type,
                 SUM(CASE 
-                        WHEN DATEDIFF(SECOND, t.prev_bet_time, t.bet_time) < {streak_session_thresh} THEN 0 
+                        WHEN DATEDIFF(SECOND, t.prev_bet_time, t.bet_time) < {STREAK_SESSION_THRESH} THEN 0 
                         ELSE 1 
                     END) OVER (
                         PARTITION BY t.activity_date, t.user_id 
@@ -355,17 +352,18 @@ def generate_query(stats_agg_col):
     return query
 
 
-def execute_query(redshift_loader, stats_agg_col, output_file):
-
-    file_path = f"{LOCAL_ROOT}/jobs/output_fish_hunter/{output_file}.parquet"
-    query = generate_query(stats_agg_col)
-    df_rs = redshift_loader.query_to_df(query=query, local_cache=file_path, reload=True)
-    print(df_rs)
-
-
 if __name__ == "__main__":
 
     setup_logging(f"{LOCAL_ROOT}/jobs/log", log_filename=os.path.splitext(os.path.basename(__file__))[0] + ".log")
+
+    parser = argparse.ArgumentParser(description="ETL Game Stats Daily by User Group")
+    parser.add_argument(
+        "--bastion-ip",
+        type=str,
+        default=DEFAULT_BASTION_IP,
+        help=f"Bastion IP address for Redshift tunnel (default: {DEFAULT_BASTION_IP})",
+    )
+    args = parser.parse_args()
 
     redshift_loader = DataLoader(
         backend=RedshiftBackend(
@@ -374,9 +372,20 @@ if __name__ == "__main__":
             user="anaylsis_user",
             password="oZ4ztMx0yEXPLbJL733L",
             port=5439,
+            bastion_ip=args.bastion_ip,
         )
     )
 
-    execute_query(redshift_loader, "activity_date", "bullet_stats_by_date_return_user")
+    # Initialize Scheduler with a default 3-day lookback
+    scheduler = ETLScheduler(redshift_loader, f"{DEFAULT_ETL_OUTPUT}/jobs/output_fish_hunter", lookback_days=3)
+
+    scheduler.run_incremental_job(
+        job_name="daily_stats_return_user",
+        query_func=lambda start_date: generate_query(start_date),
+        key_cols=["activity_date", "user_id"],
+        date_col="activity_date",
+        partition_level="none",
+        lookback=3,
+    )
 
     redshift_loader.close()
