@@ -3,20 +3,14 @@ title: "Fish Hunter Analytics (return user)"
 stats_by_date: 
   files: 
     day: [
-      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_date_return_user.parquet",
-      # "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_date_pa.parquet",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/daily_stats_return_user",
     ]
 
-    # week: [
-    #   "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_week.parquet",
-    #   "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_week_pa.parquet",
-    # ]
+    week: [
+    ]
 
-    # month: [
-    #   "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_month.parquet",
-    #   "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_month_pa.parquet",
-
-    # ]
+    month: [ 
+    ]
 
   group_col: "return_user"
   date_col: "activity_date"

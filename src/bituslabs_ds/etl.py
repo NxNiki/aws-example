@@ -17,10 +17,20 @@ import boto3
 import pandas as pd
 import paramiko
 import pyarrow as pa
+import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 import redshift_connector
 
-from bituslabs_ds.s3_utils import parse_s3_path, read_local_cache, read_to_pandas_df, save_local_cache
+from bituslabs_ds.s3_utils import (
+    OutputDir,
+    join_output_path,
+    normalize_storage_root,
+    output_path_as_str,
+    read_local_cache,
+    save_local_cache,
+)
+
+# ---------------- Constants / logging ----------------
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -28,7 +38,7 @@ logger.addHandler(logging.NullHandler())
 ssh_pkey = os.environ["BASTION_KEY_PATH"]
 
 
-# ---------------- Port Forwarding Helpers ----------------
+# ---------------- Port forwarding helpers ----------------
 def _shuttle_data(source, destination):
     """Helper to move data between two socket-like objects/channels."""
     try:
@@ -80,7 +90,7 @@ def _forward_tunnel(local_port, remote_host, remote_port, transport, stop_event)
             sock.close()
 
 
-# ---------------- Safe Athena Query Builder ----------------
+# ---------------- Safe Athena query builder ----------------
 class SafeAthenaQuery:
     """Provides SQL injection safe query building for Athena."""
 
@@ -107,7 +117,7 @@ class SafeAthenaQuery:
         return query_template.format(**safe_params)
 
 
-# ---------------- Backend Base ----------------
+# ---------------- Database backends ----------------
 class DatabaseBackend(ABC):
     """Abstract base class for all database backends."""
 
@@ -127,7 +137,9 @@ class DatabaseBackend(ABC):
         pass
 
 
-# ---------------- Redshift Backend ----------------
+# ---------------- Redshift backend ----------------
+
+
 class RedshiftBackend(DatabaseBackend):
 
     WRITE_KEYWORDS = re.compile(r"\b(INSERT|UPDATE|DELETE|MERGE|CREATE|DROP|ALTER|TRUNCATE)\b", re.IGNORECASE)
@@ -275,7 +287,7 @@ class RedshiftBackend(DatabaseBackend):
         time.sleep(1)
 
 
-# ---------------- Athena Backend ----------------
+# ---------------- Athena backend ----------------
 class AthenaBackend(DatabaseBackend):
     def __init__(
         self, database, output_location, region: str = "us-west-2", ctas_approach: bool = False, timeout: int = 300
@@ -312,7 +324,7 @@ class AthenaBackend(DatabaseBackend):
         pass  # Athena is stateless
 
 
-# ---------------- Unified DataLoader  ----------------
+# ---------------- DataLoader ----------------
 class DataLoader:
     def __init__(self, backend: DatabaseBackend):
         self.backend = backend
@@ -340,7 +352,7 @@ class DataLoader:
         self.backend.close()
 
 
-# ---------------- ETL Scheduler   ----------------
+# ---------------- ETL scheduler ----------------
 
 # Define the allowed partition levels for type safety
 PartitionLevel = Literal["none", "year", "month", "day"]
@@ -352,74 +364,69 @@ class ETLScheduler:
     Supports dynamic watermark detection and customizable lookback windows.
     """
 
-    def __init__(self, data_loader: DataLoader, storage_root: Union[str, Path], lookback_days: int = 3):
+    def __init__(self, data_loader: DataLoader, storage_root: OutputDir, lookback_days: int = 3):
         self.loader = data_loader
-        self.storage_root = Path(storage_root)
-        self.is_s3 = str(storage_root).startswith("s3://")
+        self._is_s3, self._storage_root = normalize_storage_root(storage_root)
         self.lookback_days = lookback_days
         self.default_start_date = "2025-01-01"
 
-        # Ensure storage root exists
-        self.storage_root.mkdir(parents=True, exist_ok=True)
+    @property
+    def is_s3(self) -> bool:
+        """True if storage root is an S3 path."""
+        return self._is_s3
+
+    def _job_path(self, job_name: str) -> OutputDir:
+        """Return the output path for a job (Path for local, str for S3)."""
+        return join_output_path(self._storage_root, job_name)
 
     def _get_partition_cols(self, level: PartitionLevel) -> List[str]:
         """Maps partition level to actual column names."""
         mapping = {"none": [], "year": ["year"], "month": ["year", "month"], "day": ["year", "month", "day"]}
         return mapping.get(level, ["year", "month"])
 
-    def _get_max_date(self, job_path: Path, date_col: str) -> Optional[datetime]:
+    def _get_max_date(self, job_path: OutputDir, date_col: str) -> Optional[datetime]:
         """
         Scans the partitioned Parquet dataset to find the maximum processed date.
         """
-
-        if self.is_s3:
+        if self._is_s3:
             try:
-                # Use wrangler to read just the max date from S3
-                df = wr.s3.read_parquet(path=str(job_path), columns=[date_col], dataset=True)
+                df = wr.s3.read_parquet(path=output_path_as_str(job_path), columns=[date_col], dataset=True)
                 if df.empty:
                     return None
                 return pd.to_datetime(df[date_col]).max()
-            except:
+            except Exception:
                 return None
-        else:
-
-            if not job_path.exists() or not any(job_path.iterdir()):
+        # Local: job_path is Path
+        path = job_path if isinstance(job_path, Path) else Path(job_path)
+        if not path.exists() or not any(path.iterdir()):
+            return None
+        try:
+            dataset = pq.ParquetDataset(output_path_as_str(path), use_legacy_dataset=False)
+            table = dataset.read(columns=[date_col])
+            if table.num_rows == 0:
                 return None
-
-            try:
-                # Read only the necessary column from the metadata to save memory/time
-                dataset = pq.ParquetDataset(str(job_path), use_legacy_dataset=False)
-                table = dataset.read(columns=[date_col])
-
-                if table.num_rows == 0:
-                    return None
-
-                max_dt = pd.to_datetime(table.to_pandas()[date_col]).max()
-                return max_dt
-            except Exception as e:
-                logger.warning(f"Could not detect watermark in {job_path}: {e}")
-                return None
+            max_dt = pd.to_datetime(table.to_pandas()[date_col]).max()
+            return max_dt
+        except Exception as e:
+            logger.warning(f"Could not detect watermark in {job_path}: {e}")
+            return None
 
     def _compact_partitions(self, job_name: str, key_cols: List[str], partition_level: PartitionLevel = "month"):
         """
         Internal housekeeping: Merges files and removes duplicates using _processed_at.
         """
-        import pyarrow.dataset as ds  # Import the modern dataset API
-
         logger.info(f"[{job_name}] Starting de-duplicating compaction...")
 
+        job_path = self._job_path(job_name)
         try:
             # 1. Load the entire dataset using the modern API
-            if self.is_s3:
-                job_path_str = f"{str(self.storage_root)}/{job_name}"
-                # AWS Wrangler is significantly faster for reading partitioned S3 datasets
-                df = wr.s3.read_parquet(path=job_path_str, dataset=True)
+            if self._is_s3:
+                df = wr.s3.read_parquet(path=output_path_as_str(job_path), dataset=True)
             else:
-                job_path = self.storage_root / job_name
-                if not job_path.exists() or not any(job_path.iterdir()):
+                path = job_path if isinstance(job_path, Path) else Path(job_path)
+                if not path.exists() or not any(path.iterdir()):
                     return
-                # This is more robust against the "Must provide schema" error
-                dataset = ds.dataset(str(job_path), format="parquet", partitioning="hive")
+                dataset = ds.dataset(output_path_as_str(path), format="parquet", partitioning="hive")
                 table = dataset.to_table()
                 df = table.to_pandas()
 
@@ -427,38 +434,35 @@ class ETLScheduler:
                 return
 
             # 2. De-duplication Logic
-            # Ensure sorting columns exist before sorting
             sort_cols = key_cols + ["_processed_at"] if "_processed_at" in df.columns else key_cols
             df = df.sort_values(by=sort_cols, ascending=True)
             df = df.drop_duplicates(subset=key_cols, keep="last")
 
             partition_cols = self._get_partition_cols(partition_level)
-            if self.is_s3:
-                # On S3, 'mode="overwrite"' handles the deletion of old files for us
+            if self._is_s3:
                 wr.s3.to_parquet(
-                    df=df, path=job_path_str, dataset=True, partition_cols=partition_cols, mode="overwrite", index=False
+                    df=df,
+                    path=output_path_as_str(job_path),
+                    dataset=True,
+                    partition_cols=partition_cols,
+                    mode="overwrite",
+                    index=False,
                 )
             else:
-                # 3. Temporary storage for the "clean" write
-                temp_path = job_path.with_suffix(".tmp")
+                path = job_path if isinstance(job_path, Path) else Path(job_path)
+                temp_path = path.with_suffix(".tmp")
                 if temp_path.exists():
                     shutil.rmtree(temp_path)
-
-                # 4. Write back using pyarrow table to preserve the original schema
-                # We use preserve_index=False to keep the parquet files clean
                 clean_table = pa.Table.from_pandas(df, preserve_index=False)
-
                 pq.write_to_dataset(
                     clean_table,
-                    root_path=str(temp_path),
+                    root_path=output_path_as_str(temp_path),
                     partition_cols=partition_cols,
                     basename_template="compact_part_{i}.parquet",
                     existing_data_behavior="overwrite_or_ignore",
                 )
-
-                # 5. Atomic Swap
-                shutil.rmtree(job_path)
-                temp_path.rename(job_path)
+                shutil.rmtree(path)
+                temp_path.rename(path)
 
             logger.info(f"[{job_name}] Compaction complete. Partitions consolidated and de-duplicated.")
         except Exception as e:
@@ -485,7 +489,7 @@ class ETLScheduler:
             lookback: Override for the default class lookback_days.
             partition_cols: Columns to use for Parquet partitioning on disk.
         """
-        job_path = self.storage_root / job_name
+        job_path = self._job_path(job_name)
         days_to_lookback = lookback if lookback is not None else self.lookback_days
 
         # 1. Detect Watermark
@@ -552,16 +556,19 @@ class ETLScheduler:
                     # logger.debug(f"Sample values for {col}: {df[col].head(3).tolist()}")
 
         # 4. Atomic Write with Partitioning
-        if self.is_s3:
-            job_path_str = str(job_path).replace("s3:/", "s3://", 1)
+        if self._is_s3:
             wr.s3.to_parquet(
-                df=df, path=job_path_str, dataset=True, partition_cols=partition_cols, mode="append", index=False
+                df=df,
+                path=output_path_as_str(job_path),
+                dataset=True,
+                partition_cols=partition_cols,
+                mode="append",
+                index=False,
             )
         else:
-            # Note: 'overwrite_or_ignore' prevents file accumulation within existing partitions
             try:
                 df.to_parquet(
-                    path=str(job_path),
+                    path=output_path_as_str(job_path),
                     index=False,
                     engine="pyarrow",
                     partition_cols=partition_cols,

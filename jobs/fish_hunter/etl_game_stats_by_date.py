@@ -5,16 +5,15 @@ from textwrap import dedent
 from bituslabs_ds.config import DEFAULT_BASTION_IP, DEFAULT_ETL_OUTPUT, LOCAL_ROOT, setup_logging
 from bituslabs_ds.etl import DataLoader, ETLScheduler, RedshiftBackend
 
-DATE_START = "2025-10-20"
-
-return_user_days = 30
-retention_days = 3
+DEFAULT_DATE_START = "2025-10-20"
+RETURN_USER_DAYS = 30
+RETENTION_DAYS = 3
 DATE_START_HOUR = 6
-streak_session_thresh = 600
-streak_kill_thresh = 3  # nearly 10% of all killing intervals.
+STREAK_SESSION_THRESH = 600
+STREAK_KILL_THRESH = 3  # nearly 10% of all killing intervals.
 
 
-def generate_query(stats_agg_col: str, start_date: str):
+def generate_query(stats_agg_col: str, start_date: str = DEFAULT_DATE_START):
 
     query = dedent(
         f"""
@@ -54,7 +53,7 @@ def generate_query(stats_agg_col: str, start_date: str):
                 -- Logic: We want events where (EventTime + UserDays) >= Start
                 -- So: EventTime >= Start - UserDays
                 AND b.created_at >= CONVERT_TIMEZONE('Asia/Shanghai', 'UTC', 
-                       DATEADD(day, -{return_user_days}, CAST('{start_date}' AS TIMESTAMP)))
+                       DATEADD(day, -{RETURN_USER_DAYS}, CAST('{start_date}' AS TIMESTAMP)))
 
         ),
 
@@ -97,14 +96,14 @@ def generate_query(stats_agg_col: str, start_date: str):
                 bet_time,
                 -- GLOBAL: ignores fish_type. Checks if ANY fish was killed recently.
                 CASE 
-                    WHEN DATEDIFF(SECOND, LAG(bet_time) OVER(PARTITION BY user_id ORDER BY bet_time), bet_time) > {streak_kill_thresh} 
+                    WHEN DATEDIFF(SECOND, LAG(bet_time) OVER(PARTITION BY user_id ORDER BY bet_time), bet_time) > {STREAK_KILL_THRESH} 
                         OR LAG(bet_time) OVER(PARTITION BY user_id ORDER BY bet_time) IS NULL 
                     THEN 1 ELSE 0 
                 END AS is_new_global_streak,
                 
                 -- TYPE-SPECIFIC: isolated by fish_type. Only checks previous kill of SAME type.
                 CASE 
-                    WHEN DATEDIFF(SECOND, LAG(bet_time) OVER(PARTITION BY user_id, fish_type ORDER BY bet_time), bet_time) > {streak_kill_thresh} 
+                    WHEN DATEDIFF(SECOND, LAG(bet_time) OVER(PARTITION BY user_id, fish_type ORDER BY bet_time), bet_time) > {STREAK_KILL_THRESH} 
                         OR LAG(bet_time) OVER(PARTITION BY user_id, fish_type ORDER BY bet_time) IS NULL 
                     THEN 1 ELSE 0 
                 END AS is_new_type_streak
@@ -161,7 +160,7 @@ def generate_query(stats_agg_col: str, start_date: str):
                 t.killed,
                 t.fish_type,
                 SUM(CASE 
-                        WHEN DATEDIFF(SECOND, t.prev_bet_time, t.bet_time) < {streak_session_thresh} THEN 0 
+                        WHEN DATEDIFF(SECOND, t.prev_bet_time, t.bet_time) < {STREAK_SESSION_THRESH} THEN 0 
                         ELSE 1 
                     END) OVER (
                         PARTITION BY t.activity_date, t.user_id 
@@ -305,7 +304,7 @@ def generate_query(stats_agg_col: str, start_date: str):
                 COUNT(DISTINCT
                     CASE
                         WHEN
-                            DATEDIFF('day', u.bj_date_last_bet, u.activity_date) > {return_user_days}
+                            DATEDIFF('day', u.bj_date_last_bet, u.activity_date) > {RETURN_USER_DAYS}
                         THEN u.user_id
                     END
                 ) AS num_return_users,

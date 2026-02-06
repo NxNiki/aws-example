@@ -407,6 +407,51 @@ def _is_s3_path(path: str) -> bool:
     return path.startswith(("s3://", "s3a://", "s3n://"))
 
 
+# --------------- Output directory helpers (local Path vs S3 str) ---------------
+# Path does not handle s3:// well; use these for ETL output roots and joining.
+
+OutputDir = Union[str, Path]
+
+
+def is_s3_path(path: OutputDir) -> bool:
+    """Return True if path is an S3 URI (e.g. s3://bucket/prefix). Accepts str or Path."""
+    return _is_s3_path(str(path).strip())
+
+
+def normalize_storage_root(storage_root: OutputDir) -> Tuple[bool, OutputDir]:
+    """
+    Normalize a storage root for use in ETL: local paths become Path (and dir is created),
+    S3 paths stay as str. Returns (is_s3, normalized_root) for use in branch logic.
+    """
+    if is_s3_path(storage_root):
+        return (True, str(storage_root).rstrip("/"))
+    path_root = Path(storage_root)
+    path_root.mkdir(parents=True, exist_ok=True)
+    return (False, path_root)
+
+
+def join_output_path(root: OutputDir, *parts: str) -> OutputDir:
+    """
+    Join root with path parts. Use this instead of Path / or string concat so that
+    S3 paths remain str and local paths remain Path (mypy-friendly and correct at runtime).
+    """
+    if isinstance(root, Path):
+        return root.joinpath(*parts) if parts else root
+    base = str(root).rstrip("/")
+    for part in parts:
+        base = f"{base}/{part.lstrip('/')}"
+    return base
+
+
+def output_path_as_str(path: OutputDir) -> str:
+    """
+    Return the path as a string suitable for S3 or local APIs (e.g. wr.s3, df.to_parquet).
+    """
+    return str(path) if isinstance(path, Path) else path
+
+
+# --------------- Path expansion and file reading ---------------
+
 _SUPPORTED_EXTENSIONS = (".parquet", ".csv")
 
 
