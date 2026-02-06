@@ -1169,41 +1169,36 @@ class GameStatsDashboard:
                 ],
             )(self.update_date_plot)
 
+    def _get_plot_groups(self, lf: pl.LazyFrame, group_col: str) -> list:
+        """
+        Helper function to extract unique non-None groups from given LazyFrame and group column.
+        """
+        if lf.collect_schema().len() > 0 and group_col in lf.collect_schema().names():
+            uniq = lf.select(pl.col(group_col).unique()).collect()
+            return [x for x in uniq.to_series().to_list() if x is not None]
+        return []
+
     def _render_tab_content(self, current_tab: str) -> Any:
         if current_tab == "tab-date":
             default_gran = list(self.date_files_config.keys())[0]
             if self.config["stats_by_date"]["group_col"]:
                 self.df_date_group_col = self.config["stats_by_date"]["group_col"]
                 lf = self.lfs_by_date.get(default_gran, pl.DataFrame().lazy())
-                if lf.collect_schema().len() > 0 and self.df_date_group_col in lf.collect_schema().names():
-                    uniq = lf.select(pl.col(self.df_date_group_col).unique()).collect()
-                    self.df_plot_groups = uniq.to_series().to_list()
-                else:
-                    self.df_plot_groups = []
+                self.df_plot_groups = self._get_plot_groups(lf, self.df_date_group_col)
             return self._layout_stats_by_date()
         elif current_tab == "tab-group":
             default_gran = list(self.date_files_config.keys())[0]
             if self.config["stats_by_date"]["group_col"]:
                 self.df_date_group_col = self.config["stats_by_date"]["group_col"]
                 lf = self.lfs_by_date.get(default_gran, pl.DataFrame().lazy())
-                if lf.collect_schema().len() > 0 and self.df_date_group_col in lf.collect_schema().names():
-                    uniq = lf.select(pl.col(self.df_date_group_col).unique()).collect()
-                    self.df_plot_groups = uniq.to_series().to_list()
-                else:
-                    self.df_plot_groups = []
+                self.df_plot_groups = self._get_plot_groups(lf, self.df_date_group_col)
             return self._layout_stats_by_group()
         elif current_tab == "tab-bet":
             self._load_bet_data()
             if self.config["stats_by_bet"]["group_col"]:
                 self.df_bet_group_col = self.config["stats_by_bet"]["group_col"]
-                if (
-                    self.lf_bet.collect_schema().len() > 0
-                    and self.df_bet_group_col in self.lf_bet.collect_schema().names()
-                ):
-                    uniq = self.lf_bet.select(pl.col(self.df_bet_group_col).unique()).collect()
-                    self.df_bet_groups = uniq.to_series().to_list()
-                else:
-                    self.df_bet_groups = []
+                lf_bet = self.lf_bet
+                self.df_bet_groups = self._get_plot_groups(lf_bet, self.df_bet_group_col)
             return self._layout_stats_by_bet()
         else:
             return html.Div("404 Error")
@@ -1245,6 +1240,8 @@ class GameStatsDashboard:
             return fig
 
         if self.df_date_group_col == "" or self.df_date_group_col not in df_date.columns:
+            logger.warning(f"Group column {self.df_date_group_col} not found in dataframe")
+            logger.warning(f"Using default group column 'group'")
             group_col = "group"
             df_date = df_date.with_columns(pl.lit("total").alias("group"))
             groups = ["total"]
@@ -1273,26 +1270,27 @@ class GameStatsDashboard:
 
         with ProcessPoolExecutor() as executor:
             for strat in groups:
-                df_strat = df_date.filter(pl.col(group_col) == strat).sort(self.date_col)
-                if df_strat.is_empty():
+                print(f"Processing group: {strat}")
+                df_group = df_date.filter(pl.col(group_col) == strat).sort(self.date_col)
+                if df_group.is_empty():
                     continue
 
                 def add_scatter_plot(metrics: Any, secondary_y: bool) -> None:
-                    date_vals = df_strat.get_column(self.date_col)
+                    date_vals = df_group.get_column(self.date_col)
                     for m in metrics:
-                        if m not in df_strat.columns:
+                        if m not in df_group.columns:
                             continue
 
-                        if self.date_col in df_strat.columns:
+                        if self.date_col in df_group.columns:
                             agg_df = (
-                                df_strat.group_by(self.date_col)
+                                df_group.group_by(self.date_col)
                                 .agg(pl.col(m).mean().alias("_mean"))
                                 .sort(self.date_col)
                             )
                             dates = agg_df.get_column(self.date_col)
                             mean_vals = agg_df.get_column("_mean")
                             arrays_to_bootstrap = [
-                                df_strat.filter(pl.col(self.date_col) == d).get_column(m).drop_nulls().to_numpy()
+                                df_group.filter(pl.col(self.date_col) == d).get_column(m).drop_nulls().to_numpy()
                                 for d in dates
                             ]
                             ci_results = list(executor.map(bootstrap_worker, arrays_to_bootstrap))
@@ -1305,7 +1303,7 @@ class GameStatsDashboard:
                             y_lower_plot = self.hybrid_transform(y_lower, thresh) if log_scale else y_lower
                             y_upper_plot = self.hybrid_transform(y_upper, thresh) if log_scale else y_upper
                         else:
-                            y_raw = df_strat.get_column(m).to_numpy()
+                            y_raw = df_group.get_column(m).to_numpy()
                             y_plot = self.hybrid_transform(y_raw, thresh) if log_scale else y_raw
                             x = date_vals.to_list()
                             y_lower_plot = y_plot
