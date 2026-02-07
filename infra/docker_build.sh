@@ -3,7 +3,7 @@ set -e
 
 # run bash infra/docker_build.sh from project root directory to ensure build context is correctly specified.
 
-IMAGE_NAME="bituslabs-ds-etl"
+IMAGE_NAME="bituslabs-ds-dl"
 TAG="latest"
 REGION="us-west-2"
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
@@ -18,7 +18,7 @@ aws ecr create-repository --repository-name "$IMAGE_NAME" --region "$REGION"
 aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com"
 
 # 3. Build the Docker image
-docker build --platform linux/amd64 -t $IMAGE_NAME -f infra/Dockerfile.etl ./
+docker build --platform linux/amd64 -t $IMAGE_NAME -f infra/Dockerfile ./
 
 # 4. Tag and push to ECR
 docker tag "$IMAGE_NAME:$TAG" "$ECR_URL:$TAG"
