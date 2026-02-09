@@ -1,7 +1,7 @@
 import os
 from textwrap import dedent
 
-from bituslabs_ds.config import LOCAL_ROOT, S3_BUCKET, setup_logging
+from bituslabs_ds.config import DEFAULT_ETL_OUTPUT, LOCAL_ROOT, S3_BUCKET, setup_logging
 from bituslabs_ds.etl import AthenaBackend, DataLoader, ETLScheduler
 
 DATE_END = "2027-12-1"
@@ -67,15 +67,15 @@ def generate_query(stats_agg_col: str, start_date: str, end_date: str = DATE_END
                 -- COUNT(DISTINCT t6.user_id) AS num_users_month1
             FROM user_daily_group t1
             LEFT JOIN user_daily_group t2
-                ON t1.user_id = t2.user_id AND t2.activity_date = DATE_ADD('day', -1, t1.activity_date)
+                ON t1.user_id = t2.user_id AND t2.activity_date = DATE_ADD('day', 1, t1.activity_date)
             LEFT JOIN user_daily_group t3
-                ON t1.user_id = t3.user_id AND t3.activity_date = DATE_ADD('day', -3, t1.activity_date)
+                ON t1.user_id = t3.user_id AND t3.activity_date = DATE_ADD('day', 3, t1.activity_date)
             LEFT JOIN user_daily_group t4
-                ON t1.user_id = t4.user_id AND t4.activity_date = DATE_ADD('day', -7, t1.activity_date)
+                ON t1.user_id = t4.user_id AND t4.activity_date = DATE_ADD('day', 7, t1.activity_date)
             -- LEFT JOIN user_daily_group t5
-            --    ON t1.user_id = t5.user_id AND t5.activity_week = DATE_ADD(week, -1, t1.activity_week)
+            --    ON t1.user_id = t5.user_id AND t5.activity_week = DATE_ADD(week, 1, t1.activity_week)
             -- LEFT JOIN user_daily_group t6
-            --    ON t1.user_id = t6.user_id AND t6.activity_month = DATE_ADD(month, -1, t1.activity_month)
+            --    ON t1.user_id = t6.user_id AND t6.activity_month = DATE_ADD(month, 1, t1.activity_month)
             GROUP BY t1.daily_group, t1.{stats_agg_col}
         ),
 
@@ -190,7 +190,7 @@ if __name__ == "__main__":
         )
     )
     # Initialize Scheduler with a default 3-day lookback
-    scheduler = ETLScheduler(data_loader, f"{LOCAL_ROOT}/jobs/output_fish_hunter", lookback_days=3)
+    scheduler = ETLScheduler(data_loader, f"{DEFAULT_ETL_OUTPUT}/jobs/output_fish_hunter", lookback_days=3)
 
     scheduler.run_incremental_job(
         job_name="daily_stats_pa",

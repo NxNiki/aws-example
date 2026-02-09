@@ -283,15 +283,15 @@ def generate_query(stats_agg_col: str, start_date: str = DEFAULT_DATE_START):
                 -- COUNT(DISTINCT t6.user_id) AS num_users_month1
             FROM user_daily_group t1
             LEFT JOIN user_daily_group t2
-                ON t1.user_id = t2.user_id AND t2.activity_date = DATEADD(day, -1, t1.activity_date)
+                ON t1.user_id = t2.user_id AND t2.activity_date = DATEADD(day, 1, t1.activity_date)
             LEFT JOIN user_daily_group t3
-                ON t1.user_id = t3.user_id AND t3.activity_date = DATEADD(day, -3, t1.activity_date)
+                ON t1.user_id = t3.user_id AND t3.activity_date = DATEADD(day, 3, t1.activity_date)
             LEFT JOIN user_daily_group t4
-                ON t1.user_id = t4.user_id AND t4.activity_date = DATEADD(day, -7, t1.activity_date)
+                ON t1.user_id = t4.user_id AND t4.activity_date = DATEADD(day, 7, t1.activity_date)
             -- LEFT JOIN user_daily_group t5
-            --    ON t1.user_id = t5.user_id AND t5.activity_week = DATEADD(week, -1, t1.activity_week)
+            --    ON t1.user_id = t5.user_id AND t5.activity_week = DATEADD(week, 1, t1.activity_week)
             -- LEFT JOIN user_daily_group t6
-            --    ON t1.user_id = t6.user_id AND t6.activity_month = DATEADD(month, -1, t1.activity_month)
+            --    ON t1.user_id = t6.user_id AND t6.activity_month = DATEADD(month, 1, t1.activity_month)
             GROUP BY t1.daily_group, t1.{stats_agg_col}
         ),
 
@@ -510,7 +510,7 @@ if __name__ == "__main__":
         key_cols=["activity_date", "user_id", "daily_group"],
         date_col="activity_date",  # Always check max activity_date
         partition_level="none",
-        lookback=30,
+        lookback=7,
     )
 
     # Overrides to 31 days because weekly data takes longer to settle
