@@ -149,8 +149,8 @@ class ClusterAnalysisPipeline:
         )
 
     @property
-    def run_fit_cluster_model(self):
-        return self._config["pipeline"]["fit_cluster_model"]
+    def run_test_model(self):
+        return self._config["pipeline"]["test_model"]
 
     @property
     def run_attach_cluster_label(self):
@@ -617,6 +617,26 @@ class ClusterAnalysisPipeline:
 
         return cluster_label, pipeline
 
+    def model_inference(
+        self, data: pd.DataFrame, features_ordered_by_importance: List[str], model_path: Optional[str] = None
+    ) -> np.ndarray:
+        """Run model inference on new data."""
+        pipeline = self.load_trained_model(model_path)
+        cluster_labels = pipeline.predict(data[features_ordered_by_importance])
+
+        unique_labels, counts = np.unique(cluster_labels, return_counts=True)
+        for label, count in zip(unique_labels, counts):
+            logger.info(f"Cluster {label}: {count} samples")
+
+        data["cluster"] = cluster_labels
+        for cluster in np.unique(cluster_labels):
+            print(f"save cluster: {cluster}")
+            data.loc[data["cluster"] == cluster, :].drop(columns="cluster").to_csv(
+                f"{self.output_path}/output/grouped_data_2025_cluster_{cluster}.csv", index=False
+            )
+
+        return cluster_labels
+
     def plot_pca(
         self,
         data: pd.DataFrame,
@@ -721,16 +741,18 @@ class ClusterAnalysisPipeline:
                 logger.info(f"Cluster {cluster} feature statistics:")
                 logger.info(stats[["mean", "std", "min", "25%", "50%", "75%", "max"]])
 
-    def load_trained_model(self) -> KMeans:
+    def load_trained_model(self, model_path: Optional[str] = None) -> KMeans:
         """Load the trained K-means model."""
-        model_path = self.output_path / "models" / self.pickle_model_name
+        if model_path is None:
+            model_path = self.output_path / "models" / self.pickle_model_name
+
         if not os.path.exists(model_path):
             raise ValueError("clustering model is not trained!")
         return joblib.load(model_path)
 
-    def predict_clusters(self, data: pd.DataFrame, features: List[str]) -> np.ndarray:
+    def predict_clusters(self, data: pd.DataFrame, features: List[str], model_path: Optional[str] = None) -> np.ndarray:
         """Predict clusters for new data using trained model."""
-        model = self.load_trained_model()
+        model = self.load_trained_model(model_path)
         return model.predict(data[features])
 
     def save_pipeline_model(self, pipeline: Pipeline) -> None:

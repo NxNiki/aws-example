@@ -13,7 +13,7 @@ data_loader:
     row_filters:  # General row filtering (null to disable filtering)
       currency: ""  # Filter to specific currency
     outlier_threshold: 0  # z score to filter outliers
-    clip_threshold: [.25, .75]
+    clip_threshold: [.05, .95]
     local_cache: "ss01_features_grouped.parquet"
 
     data_types:
@@ -319,8 +319,8 @@ cluster_analysis:
 
 pipeline:
   elbow_method: true  # Run elbow method analysis
-  cluster_analysis: true  # Run cluster analysis with selected features and n_clusters  
-  fit_cluster_model: false  # Apply trained model to new data
+  cluster_analysis: false  # Run cluster analysis with selected features and n_clusters  
+  test_model: true  # Apply trained model to new data
   attach_cluster_label: false  # Attach cluster indices to original data
   get_cluster_stats: false 
   upload_result_to_s3: false 
