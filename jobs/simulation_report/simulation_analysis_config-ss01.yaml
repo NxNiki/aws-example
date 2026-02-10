@@ -7,11 +7,11 @@ work_dir: "output_ss01_simulation"  # Base working directory, where local cache 
 
 data_loader:
   bucket: "bituslabs-team-ai"  # S3 bucket for input data
-  prefix: "gail_simulator_data_raw/SS01/sim_15000_20260203/" # S3 prefix for input data
+  prefix: "gail_simulator_data_raw/SS01/sim_50000_20260206/" # S3 prefix for input data
   pattern: "cluster.*_sessions_summary.csv$"  # Pattern for grouped data files
-  local_cache: "ss01_simulation_sim_15000_20260203.parquet"
+  local_cache: "ss01_simulation_sim_50000_20260206.parquet"
   row_filters:  # General row filtering (null to disable filtering)
-      machine_id: ["dropTower", "giftShop", "rollerCoaster", "newBee", "carousels", "risky", "fireworkShow"]
+      machine_id: ["dropTower", "giftShop", "rollerCoaster", "newBee", "carousels", "risky2"]
   scaler: "standard"      # Choose one: "standard" | "minMax" 
 
   columns_to_read:

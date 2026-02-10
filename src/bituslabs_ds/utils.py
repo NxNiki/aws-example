@@ -199,7 +199,7 @@ def remove_outliers(
 
 def clip_outliers(
     data: Union[pd.DataFrame, pd.Series, np.ndarray], lower_quantile: float = 0.01, upper_quantile: float = 0.99
-) -> Union[pd.DataFrame, pd.Series, np.ndarray]:
+) -> Tuple[Union[pd.DataFrame, pd.Series, np.ndarray], List[float], List[float]]:
     """
     Clips the extreme positive and negative values in each column independently,
     preserving the central mass of zeros.
@@ -218,7 +218,7 @@ def clip_outliers(
 
     if (lower_quantile == 0 or lower_quantile == 1) and (upper_quantile == 0 or upper_quantile == 1):
         logger.info(f"skip clip outliers")
-        return data
+        return data, [], []
 
     if isinstance(data, pd.Series):
         df = data.to_frame()
@@ -232,28 +232,36 @@ def clip_outliers(
         raise TypeError("Input must be a pandas DataFrame, Series, or a numpy array.")
 
     numeric_columns = df.select_dtypes(include="number").columns.tolist()
+    upper_bounds = []
+    lower_bounds = []
     for col_name in numeric_columns:
         positives = df.loc[df[col_name] > 0, col_name]
         negatives = df.loc[df[col_name] < 0, col_name]
 
         if not positives.empty:
             upper_bound = positives.quantile(upper_quantile)
+            upper_bounds.append(upper_bound)
             df.loc[df[col_name] > upper_bound, col_name] = upper_bound
             logger.info(f"apply clip to positive values in {col_name}, upper bound: {upper_bound}")
+        else:
+            upper_bounds.append(np.nan)
 
         if not negatives.empty:
             lower_bound = negatives.quantile(lower_quantile)
+            lower_bounds.append(lower_bound)
             df.loc[df[col_name] < lower_bound, col_name] = lower_bound
             logger.info(f"apply clip to negative values in {col_name}, lower bound: {lower_bound}")
+        else:
+            lower_bounds.append(np.nan)
 
     if isinstance(data, pd.Series):
-        return df.iloc[:, 0]
+        return df.iloc[:, 0], upper_bounds, lower_bounds
     elif isinstance(data, np.ndarray) and data.ndim == 1:
-        return df.iloc[:, 0].values
+        return df.iloc[:, 0].values, upper_bounds, lower_bounds
     elif isinstance(data, pd.DataFrame):
-        return df
+        return df, upper_bounds, lower_bounds
     else:
-        return df.to_numpy()
+        return df.to_numpy(), upper_bounds, lower_bounds
 
 
 def keep_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
