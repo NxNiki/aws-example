@@ -430,13 +430,15 @@ class ClusterAnalysisPipeline:
         self,
         data: pd.DataFrame,
         features_ordered_by_importance: List[str],
-    ) -> Dict[Any, Dict[Any, Any]]:
+    ) -> Tuple[Dict[Any, Dict[Any, Any]], List[float], List[float]]:
         """Run elbow method to determine optimal number of clusters."""
 
         k_range = self._config["elbow_method"]["k_range"]
         n_features = self._config["elbow_method"]["top_features"]
         cluster_indices = {}
-        data = clip_outliers(data[features_ordered_by_importance], self.clip_threshold[0], self.clip_threshold[1])
+        data, upper_bounds, lower_bounds = clip_outliers(
+            data[features_ordered_by_importance], self.clip_threshold[0], self.clip_threshold[1]
+        )
 
         for df_x, n in column_iterator(data, features_ordered_by_importance, n_features):
             cluster_indices_by_k = {}
@@ -474,7 +476,9 @@ class ClusterAnalysisPipeline:
             cluster_indices[n] = cluster_indices_by_k
             self._plot_elbow_method(k_range, inertia, silhouette_scores, cluster_sizes, n)
 
-        return cluster_indices
+        save_list(upper_bounds, str(self.output_path / "features" / "upper_bounds.json"))
+        save_list(lower_bounds, str(self.output_path / "features" / "lower_bounds.json"))
+        return cluster_indices, upper_bounds, lower_bounds
 
     def _plot_elbow_method(self, k_range, inertia, silhouette_scores, cluster_sizes, n_features):
         """Plot elbow method results."""
@@ -532,7 +536,7 @@ class ClusterAnalysisPipeline:
         """Run K-means clustering analysis using pipeline approach."""
 
         feature_columns = features_ordered_by_importance[: self.n_top_features]
-        clustering_data = clip_outliers(data[feature_columns], self.clip_threshold[0], self.clip_threshold[1])
+        clustering_data, _, _ = clip_outliers(data[feature_columns], self.clip_threshold[0], self.clip_threshold[1])
         transform_columns, transform_columns_index = self.get_transform_columns(clustering_data)
         pipeline = self.create_clustering_pipeline(
             n_clusters=self.n_clusters,
