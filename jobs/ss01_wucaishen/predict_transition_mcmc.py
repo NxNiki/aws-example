@@ -8,9 +8,19 @@ Structure: 3 origin states × (3-1) target coefficients = separate beta per row.
 
 Optional spike-and-slab yields Posterior Inclusion Probability (PIP) per (origin, feature, target).
 
-Usage: run after analysis_cluster_transition_stats.py so merged_with_transitions.parquet exists.
+Usage:
+  Local: run after analysis_cluster_transition_stats.py (reads/writes OUTPUT_DIR).
+  SageMaker: --input /opt/ml/processing/input --output /opt/ml/processing/output
+
+Outputs (all written to --output, which SageMaker uploads to S3):
+  - transition_mcmc_report.md          (markdown report)
+  - transition_mcmc_coefficient_summary.csv
+  - transition_mcmc_run_info.csv       (n_obs, n_chains, duration_sec, etc.)
+  - transition_mcmc_diagnostics.csv   (rhat, ess_bulk, ess_tail per coefficient)
 """
 
+import argparse
+import time
 from datetime import datetime
 from multiprocessing import cpu_count
 from pathlib import Path
@@ -20,7 +30,9 @@ import numpy as np
 import pandas as pd
 import pymc as pm
 
-# Same paths as analysis_cluster_transition_stats
+from jobs.ss01_wucaishen.cluster_transition_data import ensure_merged_parquet
+
+# Same output dir as analysis_cluster_transition_stats
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output_ss01_cluster_transition"
 FEATURE_START_INDEX = 6
 MAX_FEATURES_FOR_MCMC = 25  # cap predictors so MCMC is tractable
@@ -161,6 +173,33 @@ def summarize_predictive_variables(
     return pd.DataFrame(rows)
 
 
+def build_diagnostics_df(
+    idata,
+    predictor_names: list[str],
+    n_origin_states: int,
+    n_eta: int,
+) -> pd.DataFrame:
+    """Build a CSV of MCMC diagnostics (rhat, ess_bulk, ess_tail) per (origin, predictor, target)."""
+    rhat = az.rhat(idata, var_names=["beta"]).values  # (n_origin, n_features, n_eta)
+    ess_bulk = az.ess(idata, var_names=["beta"], method="bulk").values
+    ess_tail = az.ess(idata, var_names=["beta"], method="tail").values
+    rows = []
+    for i_origin in range(n_origin_states):
+        for j in range(len(predictor_names)):
+            for k in range(n_eta):
+                rows.append(
+                    {
+                        "origin_state": i_origin,
+                        "predictor": predictor_names[j],
+                        "target_class": k + 1,
+                        "rhat": float(rhat[i_origin, j, k]),
+                        "ess_bulk": float(ess_bulk[i_origin, j, k]),
+                        "ess_tail": float(ess_tail[i_origin, j, k]),
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
 def write_report(
     summary_df: pd.DataFrame,
     merged: pd.DataFrame,
@@ -247,13 +286,41 @@ def write_report(
     return out_path
 
 
+def _parse_args():
+    parser = argparse.ArgumentParser(description="MCMC transition model (3×3 Markov).")
+    parser.add_argument(
+        "--input",
+        type=str,
+        default=None,
+        help="Input path: directory containing merged_with_transitions.parquet, or path to the parquet file. Default: OUTPUT_DIR.",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="Output directory for CSV and report. Default: OUTPUT_DIR.",
+    )
+    return parser.parse_args()
+
+
 def main():
-    merged_path = OUTPUT_DIR / "merged_with_transitions.parquet"
+    args = _parse_args()
+    if args.input is not None:
+        inp = Path(args.input)
+        if inp.suffix == ".parquet":
+            merged_path = inp
+        else:
+            merged_path = inp / "merged_with_transitions.parquet"
+    else:
+        merged_path = OUTPUT_DIR / "merged_with_transitions.parquet"
+        # Local run: ensure merged parquet exists (from cache or build from S3 + features)
+        if not merged_path.exists():
+            ensure_merged_parquet(merged_path)
     if not merged_path.exists():
-        print("Run analysis_cluster_transition_stats.py first to create merged_with_transitions.parquet")
+        print(f"Merged data not found at {merged_path}")
         return
 
-    out_dir = OUTPUT_DIR
+    out_dir = Path(args.output) if args.output is not None else OUTPUT_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print("Loading merged data (features + origin/target state)...")
@@ -268,6 +335,7 @@ def main():
         + (" + spike-and-slab" if USE_SPIKE_SLAB else "")
         + f") with {N_CHAINS} chains on {N_CORES} cores..."
     )
+    t0 = time.perf_counter()
     idata = build_model_and_sample(
         X,
         y,
@@ -277,6 +345,36 @@ def main():
         RANDOM_SEED,
         use_spike_slab=USE_SPIKE_SLAB,
     )
+    duration_sec = time.perf_counter() - t0
+    print(f"MCMC finished in {duration_sec:.1f} s")
+
+    # Run info and diagnostics (saved to out_dir → S3 when on SageMaker)
+    run_info = pd.DataFrame(
+        [
+            {
+                "n_observations": len(merged),
+                "n_features": len(predictor_names),
+                "n_origin_states": n_origin_states,
+                "n_classes": n_classes,
+                "n_chains": N_CHAINS,
+                "n_draws": N_SAMPLES,
+                "n_tune": N_TUNE,
+                "duration_sec": round(duration_sec, 2),
+                "timestamp": datetime.now().isoformat(),
+                "random_seed": RANDOM_SEED,
+                "use_spike_slab": USE_SPIKE_SLAB,
+            }
+        ]
+    )
+    run_info_path = out_dir / "transition_mcmc_run_info.csv"
+    run_info.to_csv(run_info_path, index=False)
+    print(f"Saved run info to {run_info_path}")
+
+    n_eta = n_classes - 1
+    diagnostics_df = build_diagnostics_df(idata, predictor_names, n_origin_states, n_eta)
+    diagnostics_path = out_dir / "transition_mcmc_diagnostics.csv"
+    diagnostics_df.to_csv(diagnostics_path, index=False)
+    print(f"Saved MCMC diagnostics to {diagnostics_path}")
 
     print("Summarizing posteriors (per origin state, feature, target)...")
     summary_df = summarize_predictive_variables(

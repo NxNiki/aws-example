@@ -34,7 +34,7 @@ bokeh = "^3.4.3"
 ydata-profiling = "^4.16.1"
 plotly = "^6.3.1"
 dash = "^3.2.0"
-polars = "^1.0.0"
+polars = "^1.38.1"  # avoid 1.38.0 (yanked on PyPI)
 pymc = "^5.10"
 arviz = "^0.18.0"
 

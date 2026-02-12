@@ -4,7 +4,6 @@ compute transition labels (from_cluster:to_cluster), run two-way ANOVA
 (current cluster × next cluster) and plot boxplots/barplots with p-values.
 """
 
-import re
 from pathlib import Path
 from typing import Any
 
@@ -15,18 +14,7 @@ import pingouin as pg
 import seaborn as sns
 from scipy import stats
 
-from bituslabs_ds.s3_utils import read_single_file
-
-# --- Config (same as in your snippet) ---
-cluster_labels = [
-    "s3://bituslabs-team-ai/ss01_analysis_kmeans_2026-01-21_15-22-05/output/enriched_data_cluster_0.parquet",
-    "s3://bituslabs-team-ai/ss01_analysis_kmeans_2026-01-21_15-22-05/output/enriched_data_cluster_1.parquet",
-    "s3://bituslabs-team-ai/ss01_analysis_kmeans_2026-01-21_15-22-05/output/enriched_data_cluster_2.parquet",
-]
-
-features_file = "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/ss01_features_grouped.parquet"
-
-MERGE_KEYS = ["user_id", "session_group", "agg_group"]
+from jobs.ss01_wucaishen.cluster_transition_data import ensure_merged_parquet
 
 # Stats and ANOVA: explicit columns you asked for (and we also use index >= 6 for ANOVA)
 STATS_COLUMNS = [
@@ -55,61 +43,6 @@ BOOTSTRAP_N_SAMPLES = 500
 BOOTSTRAP_RANDOM_SEED = 42
 # Use Kruskal-Wallis (non-parametric) instead of ANOVA when True
 USE_KRUSKAL_WALLIS = False
-
-
-def _cluster_index_from_path(s3_uri: str) -> int:
-    """Extract cluster index from path like .../enriched_data_cluster_2.parquet."""
-    m = re.search(r"enriched_data_cluster_(\d+)\.parquet", s3_uri, re.I)
-    if m:
-        return int(m.group(1))
-    raise ValueError(f"Cannot extract cluster index from: {s3_uri}")
-
-
-def load_cluster_labels(cluster_uris: list[str]) -> pd.DataFrame:
-    """Load all cluster parquet files from S3 and concat with cluster_label column."""
-    merge_cols = list(MERGE_KEYS)
-    dfs = []
-    for uri in cluster_uris:
-        k = _cluster_index_from_path(uri)
-        df = read_single_file(uri, columns=merge_cols)
-        df["cluster_label"] = k
-        dfs.append(df)
-    out = pd.concat(dfs, ignore_index=True)
-    return out
-
-
-def load_features(path: str) -> pd.DataFrame:
-    """Load features parquet (local or future S3)."""
-    if path.startswith("s3://"):
-        return read_single_file(path)
-    return pd.read_parquet(path)
-
-
-def build_merged_with_transitions(
-    cluster_df: pd.DataFrame,
-    features_df: pd.DataFrame,
-) -> pd.DataFrame:
-    """Inner join cluster labels to features on MERGE_KEYS, then add transition labels.
-
-    Transition = (from_cluster, to_cluster): e.g. cluster0:1 = stats of cluster 0 that
-    later transit to cluster 1. So we use the *current* row's features (the "from"
-    state) and the *next* agg_group's cluster as "to". We drop the last agg_group
-    in each session (no next row), so we never drop the first agg_group.
-    """
-    merged = features_df.merge(
-        cluster_df,
-        on=MERGE_KEYS,
-        how="inner",
-    )
-    merged = merged.sort_values(MERGE_KEYS)
-    # Next cluster = cluster of the following agg_group in the same session
-    merged["next_cluster"] = merged.groupby(["user_id", "session_group"], group_keys=False)["cluster_label"].shift(-1)
-    # Drop last agg_group in each session (no "to" state); stats are from the previous (from) session
-    merged = merged.dropna(subset=["next_cluster"]).copy()
-    merged["next_cluster"] = merged["next_cluster"].astype(int)
-    # transition = from (current row's cluster) to (next row's cluster); stats are from current row
-    merged["transition"] = "cluster" + merged["cluster_label"].astype(str) + ":" + merged["next_cluster"].astype(str)
-    return merged
 
 
 def _is_numeric_column(df: pd.DataFrame, col: str) -> bool:
@@ -451,20 +384,10 @@ def main():
     output_dir = OUTPUT_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1) Load features (local) and merged data (from cache if available to avoid S3 reads)
-    print("Loading features...")
-    features_df = load_features(features_file)
-
+    # 1) Merged data: use cache if present, else build from S3 cluster labels + features
     merged_path = output_dir / "merged_with_transitions.parquet"
-    if merged_path.exists():
-        print(f"Found cached merged data at {merged_path}, skip reading S3 cluster files.")
-        merged = pd.read_parquet(merged_path)
-    else:
-        print("Loading cluster label files from S3...")
-        cluster_df = load_cluster_labels(cluster_labels)
-        # Merge and build transitions
-        merged = build_merged_with_transitions(cluster_df, features_df)
-        merged.to_parquet(merged_path, index=False)
+    ensure_merged_parquet(merged_path)
+    merged = pd.read_parquet(merged_path)
     print(f"Merged shape: {merged.shape}, transitions: {merged['transition'].nunique()}")
 
     # 3) Stats for requested columns
@@ -478,7 +401,9 @@ def main():
     plot_transition_counts(merged, output_dir)
 
     # 4) Two-way ANOVA or Kruskal-Wallis (current cluster × next cluster) and simple-effect tests
-    feature_file_cols = list(features_df.columns)
+    # Feature columns = merged columns minus transition metadata (order preserved from features file)
+    transition_meta = {"cluster_label", "next_cluster", "transition"}
+    feature_file_cols = [c for c in merged.columns if c not in transition_meta]
     anova_cols = [c for i, c in enumerate(feature_file_cols) if i >= FEATURE_START_INDEX and c in merged.columns]
     anova_cols = [c for c in anova_cols if _is_numeric_column(merged, c)]
 
