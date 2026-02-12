@@ -251,11 +251,11 @@ if __name__ == "__main__":
     )
 
     print("ss01 未开通PID：")
-    print("```")
+    print("--------------------------------")
     print(diff_product_ids_ss01)
-    print("```")
+    print("--------------------------------")
 
     print("捕鱼未开通PID：")
-    print("```")
+    print("--------------------------------")
     print(diff_product_ids_fishhunter)
-    print("```")
+    print("--------------------------------")
