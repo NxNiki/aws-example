@@ -710,10 +710,24 @@ class ClusterAnalysisPipeline:
             ax.fill(angles, vals, alpha=0.2)
 
         ax.set_xticks(angles[:-1])
-        ax.set_xticklabels(categories, fontsize=12)
-        plt.title("Cluster Feature Means (Standardized) - Radar Chart")
+        ax.set_xticklabels(categories, fontsize=16)
+        # Align labels by side (same approach as make_radar_plot in simulation_report):
+        # left side → ha="right" so text extends left; right side → ha="left" so text extends right;
+        # top and bottom → do not change.
+        top_bottom_band = np.pi / 12  # no change when angle near pi/2 (top) or 3*pi/2 (bottom)
+        for label, angle_rad in zip(ax.get_xticklabels(), angles[:-1]):
+            in_top = np.pi / 2 - top_bottom_band <= angle_rad <= np.pi / 2 + top_bottom_band
+            in_bottom = 3 * np.pi / 2 - top_bottom_band <= angle_rad <= 3 * np.pi / 2 + top_bottom_band
+            if in_top or in_bottom:
+                continue
+            if np.pi / 2 < angle_rad < 3 * np.pi / 2:  # left side → text extends left
+                label.set_horizontalalignment("right")
+            else:  # right side → text extends right
+                label.set_horizontalalignment("left")
+            label.set_y(label.get_position()[1] + 0.05)  # slight radial nudge outward
+        plt.title("Cluster Feature Means (Standardized) - Radar Chart", pad=28, fontsize=14)
         plt.legend(loc="upper right")
-        plt.subplots_adjust(left=0.1, bottom=0.1)
+        plt.subplots_adjust(left=0.1, bottom=0.1, top=0.92)
         plt.savefig(
             self.output_path
             / "figures"

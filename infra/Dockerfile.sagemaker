@@ -8,11 +8,12 @@
 # We use a full python image to install build tools
 FROM python:3.11-slim AS builder
 
-# Set environment variables for Poetry
+# Set environment variables for Poetry and pip (longer timeout for slow PyPI)
 ENV POETRY_NO_INTERACTION=1 \
     POETRY_VIRTUALENVS_IN_PROJECT=1 \
     POETRY_VIRTUALENVS_CREATE=1 \
-    POETRY_CACHE_DIR=/tmp/poetry_cache
+    POETRY_CACHE_DIR=/tmp/poetry_cache \
+    PIP_DEFAULT_TIMEOUT=600
 
 WORKDIR /app
 
@@ -28,11 +29,15 @@ RUN curl -sSL https://install.python-poetry.org | python3 -
 ENV PATH="/root/.local/bin:$PATH"
 
 # Copy only the files needed for dependency installation
-COPY pyproject.toml poetry.lock ./
+COPY pyproject.toml poetry.lock* ./
+RUN poetry lock
 
-# Install ONLY the main and ds groups (skips ml, etl, dl, spark, dev, test)
-# This keeps the environment focused on analysis / MCMC workloads.
-RUN poetry install --only main,ds --no-root --no-cache && rm -rf $POETRY_CACHE_DIR
+# Install in separate layers so changes to one group only rebuild that layer.
+RUN poetry install --only main --no-root --no-cache
+RUN poetry install --only ds --no-root --no-cache
+RUN poetry install --only ml --no-root --no-cache
+
+RUN rm -rf $POETRY_CACHE_DIR
 
 # --- Stage 2: Runtime ---
 # We use the same slim image for the final runtime

@@ -52,12 +52,13 @@
 
 """
 
+import argparse
 import os
 from textwrap import dedent
 
 import pandas as pd
 
-from bituslabs_ds.config import LOCAL_ROOT, setup_logging
+from bituslabs_ds.config import DEFAULT_BASTION_IP, LOCAL_ROOT, setup_logging
 from bituslabs_ds.etl import DataLoader, RedshiftBackend
 
 DATE_START = "2025-11-24 00:00:00"
@@ -646,6 +647,15 @@ if __name__ == "__main__":
 
     setup_logging(f"{LOCAL_ROOT}/jobs/log", log_filename=os.path.splitext(os.path.basename(__file__))[0] + ".log")
 
+    parser = argparse.ArgumentParser(description="ETL Feature Engineer for SS01 Wucaishen")
+    parser.add_argument(
+        "--bastion-ip",
+        type=str,
+        default=DEFAULT_BASTION_IP,
+        help=f"Bastion IP address for Redshift tunnel (default: {DEFAULT_BASTION_IP})",
+    )
+    args = parser.parse_args()
+
     redshift_loader = DataLoader(
         backend=RedshiftBackend(
             host="production-redshift-cluster.cwiqzcm13zcn.ap-southeast-1.redshift.amazonaws.com",
@@ -653,11 +663,12 @@ if __name__ == "__main__":
             user="anaylsis_user",
             password="oZ4ztMx0yEXPLbJL733L",
             port=5439,
+            bastion_ip=args.bastion_ip,
         )
     )
 
     query_raw_stats, query_grouped_stats = generate_query()
-    # execute_query(redshift_loader, "ss01_features_enriched", query_raw_stats)
+    execute_query(redshift_loader, "ss01_features_enriched", query_raw_stats)
     execute_query(redshift_loader, "ss01_features_grouped", query_grouped_stats)
 
     redshift_loader.close()

@@ -3,7 +3,7 @@ set -e
 
 # run bash infra/docker_build_ds.sh from project root directory to ensure build context is correctly specified.
 
-IMAGE_NAME="bituslabs-ds-ds"
+IMAGE_NAME="bituslabs-ds-sagemaker"
 TAG="latest"
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 REGION="us-west-2"
@@ -22,7 +22,7 @@ fi
 aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com"
 
 # 3. Build the Docker image (only main + ds groups via Dockerfile.ds)
-docker build --platform linux/amd64 -t $IMAGE_NAME -f infra/Dockerfile.ds ./
+docker build --platform linux/amd64 -t $IMAGE_NAME -f infra/Dockerfile.sagemaker ./
 
 # 4. Tag and push to ECR
 docker tag "$IMAGE_NAME:$TAG" "$ECR_URL:$TAG"

@@ -22,7 +22,6 @@ pyyaml = "^6.0.2"
 [tool.poetry.group.ds]
 optional = true
 [tool.poetry.group.ds.dependencies]
-jupyter = "^1.0"
 scipy = "^1.12.0"
 diptest = "^0.10.0"
 pingouin = "^0.5.1"
@@ -30,10 +29,6 @@ openpyxl = "^3.1.5"
 matplotlib = "^3.9.0"
 seaborn = "^0.13.2"
 statannotations = "^0.7.1"
-bokeh = "^3.4.3"
-ydata-profiling = "^4.16.1"
-plotly = "^6.3.1"
-dash = "^3.2.0"
 polars = "^1.38.1"  # avoid 1.38.0 (yanked on PyPI)
 pymc = "^5.10"
 arviz = "^0.18.0"
@@ -77,6 +72,11 @@ pyjanitor = "^0.31.0"
 # pyspark-stubs = "^3.0.0.post3"
 types-pyyaml = "^6.0.12.20250822"
 types-paramiko = "^3.4.0"
+jupyter = "^1.0"
+bokeh = "^3.4.3"
+ydata-profiling = "^4.16.1"
+plotly = "^6.3.1"
+dash = "^3.2.0"
 
 [tool.poetry.group.test.dependencies]
 # Core testing framework

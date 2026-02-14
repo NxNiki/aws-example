@@ -6,7 +6,8 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from itertools import zip_longest
-from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple, Union
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Set, Tuple, Union
 
 import matplotlib.cm as cm
 import matplotlib.legend_handler as lh
@@ -25,7 +26,7 @@ from matplotlib.ticker import MaxNLocator
 from matplotlib.typing import ColorType
 from pandas import DataFrame, Series
 from scipy.cluster.hierarchy import leaves_list, linkage
-from scipy.stats import energy_distance, skew
+from scipy.stats import energy_distance, kurtosis as scipy_kurtosis, skew
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler, power_transform
 from statannotations.Annotator import Annotator
@@ -1178,6 +1179,268 @@ class DataVisualizer:
 
         return axis
 
+    def _add_histogram_original_and_transformed_to_axis(
+        self,
+        axis: Axes,
+        col: str,
+        bins: int = 50,
+        log_scale_cols: Optional[Set[str]] = None,
+        pt_log_scale_cols: Optional[Set[str]] = None,
+        max_points: int = 100_000,
+        random_state: int = 42,
+    ) -> Tuple[List[Any], List[str], float, float]:
+        """
+        Draw original and power-transformed (Yeo-Johnson) distributions on the same axes.
+
+        - Original: bottom x-axis, left y-axis, counts; symlog y when col in log_scale_cols.
+        - Power-transformed: top x-axis, right y-axis, counts; symlog y when col in pt_log_scale_cols.
+        (Both sets use the same rule: |skewness| >= threshold, computed in plot_numeric_distribution_pages.)
+
+        Returns:
+            (handles, labels, pt_skewness, pt_kurtosis) for figure-level legend and stats box.
+        """
+        df = self.data_profiler.df
+        empty_return: Tuple[List[Any], List[str], float, float] = ([], [], np.nan, np.nan)
+        if col not in df.columns:
+            return empty_return
+        log_scale_cols = log_scale_cols or set()
+        raw = df[col].replace([np.inf, -np.inf], np.nan).dropna()
+        if len(raw) > max_points:
+            raw = raw.sample(n=max_points, random_state=random_state)
+        values_orig = np.asarray(raw, dtype=float)
+        values_orig = values_orig[np.isfinite(values_orig)]
+        if len(values_orig) < 2:
+            axis.text(0.5, 0.5, "No data", ha="center", va="center", transform=axis.transAxes, fontsize=8)
+            return empty_return
+
+        # Power-transform (Yeo-Johnson); handle constant or near-constant columns
+        try:
+            pt = power_transform(values_orig.reshape(-1, 1), method="yeo-johnson")
+            values_pt = pt.ravel()
+        except Exception:
+            values_pt = values_orig.copy()
+        # Skew and kurtosis of power-transformed values (bias=False for consistency)
+        pt_skew = skew(values_pt, bias=False) if len(values_pt) >= 2 else np.nan
+        pt_kurt = scipy_kurtosis(values_pt, bias=False) if len(values_pt) >= 2 else np.nan
+
+        # Original: bottom x, left y, counts; symlog y if highly skewed
+        sns.histplot(
+            values_orig,
+            ax=axis,
+            bins=bins,
+            kde=True,
+            stat="count",
+            color="steelblue",
+            alpha=0.45,
+            label="original",
+            edgecolor="white",
+            linewidth=0.3,
+        )
+        if col in log_scale_cols:
+            axis.set_yscale("symlog", linthresh=1)
+        axis.set_xlabel("")
+        axis.set_ylabel("")
+        axis.xaxis.tick_bottom()
+        axis.yaxis.tick_left()
+        axis.yaxis.set_label_position("left")
+
+        # Transformed: top x, right y (twin axes). Use density, no log scale.
+        ax_right = axis.twinx()
+        ax_top_right = ax_right.twiny()
+        n_bins_pt = min(bins, max(20, len(np.unique(values_pt)) // 2))
+        sns.histplot(
+            values_pt,
+            ax=ax_top_right,
+            bins=n_bins_pt,
+            kde=True,
+            stat="count",
+            color="coral",
+            alpha=0.45,
+            label="power-transformed",
+            edgecolor="white",
+            linewidth=0.3,
+        )
+        ax_top_right.set_xlabel("")
+        ax_right.set_ylabel("")
+        pt_log = pt_log_scale_cols or set()
+        if col in pt_log:
+            ax_right.set_yscale("symlog", linthresh=1)
+        ax_top_right.xaxis.tick_top()
+        ax_right.yaxis.tick_right()
+        ax_right.yaxis.set_label_position("right")
+        axis.tick_params(axis="both", labelsize=7)
+        ax_right.tick_params(axis="y", labelsize=7)
+        ax_top_right.tick_params(axis="x", labelsize=7)
+        # Return combined handles/labels for a single figure-level legend
+        lines_orig, labels_orig = axis.get_legend_handles_labels()
+        lines_pt, labels_pt = ax_top_right.get_legend_handles_labels()
+        leg_pt = ax_top_right.get_legend()
+        if leg_pt is not None:
+            leg_pt.remove()
+        axis.grid(True, alpha=0.3)
+        axis.set_title(col, fontsize=8, pad=4)
+        return (lines_orig + lines_pt, labels_orig + labels_pt, float(pt_skew), float(pt_kurt))
+
+    def plot_numeric_distribution_pages(
+        self,
+        output_dir: Union[str, Path],
+        layout_cols: Optional[List[str]] = None,
+        cols_per_page: int = 4,
+        rows_per_page: int = 5,
+        bins: int = 50,
+        skewness_log_scale_threshold: float = 2.0,
+        dpi: int = 120,
+        fig_title_prefix: str = "",
+        show_distribution_stats_legend: bool = False,
+        overlay_power_transform: bool = False,
+    ) -> List[Path]:
+        """
+        Create paginated distribution plots (histograms) for numeric columns.
+
+        One figure per page; each subplot shows a histogram with optional KDE.
+        Subplot titles include skewness and kurtosis; log y-scale is applied
+        for columns whose absolute skewness exceeds the given threshold.
+
+        If overlay_power_transform is True, each subplot shows both the original
+        and the power-transformed (Yeo-Johnson) distribution: original uses
+        counts on the left y-axis and bottom x-axis (symlog y when highly skewed);
+        power-transformed uses counts on the right y-axis and top x-axis (no log).
+
+        Parameters:
+            output_dir: Directory to save PNG files (created if missing).
+            layout_cols: Columns to plot; default is profiler's numeric columns.
+            cols_per_page: Subplot columns per page.
+            rows_per_page: Subplot rows per page.
+            bins: Histogram bins per subplot.
+            skewness_log_scale_threshold: Use log y-scale when |skewness| >= this.
+            dpi: Figure save DPI.
+            fig_title_prefix: Prefix for each page suptitle (e.g. dataset name).
+            show_distribution_stats_legend: If True, add legend with skew/dip per group.
+            overlay_power_transform: If True, overlay power-transformed distribution
+                on each subplot and use top x-ticks and right y-ticks.
+
+        Returns:
+            List of saved file paths.
+        """
+        out_path = Path(output_dir) if not isinstance(output_dir, Path) else output_dir
+        out_path.mkdir(parents=True, exist_ok=True)
+
+        numeric_cols = layout_cols or self.data_profiler.check_numeric_columns(include_boolean=False)
+        if not numeric_cols:
+            logger.warning("No numeric columns to plot.")
+            return []
+
+        stats_by_col = self.data_profiler.get_distribution_stats_dict()
+        # Same rule for both: log y-scale when |skewness| >= threshold (raw from profiler, PT computed below)
+        log_scale_cols = self.data_profiler.get_columns_for_log_scale(threshold=skewness_log_scale_threshold)
+        pt_log_scale_cols: Set[str] = set()
+        if overlay_power_transform:
+            for col in numeric_cols:
+                if col not in self.data_profiler.df.columns:
+                    continue
+                vals = self.data_profiler.df[col].replace([np.inf, -np.inf], np.nan).dropna()
+                vals = np.asarray(vals, dtype=float)
+                vals = vals[np.isfinite(vals)]
+                if len(vals) < 2:
+                    continue
+                try:
+                    pt = power_transform(vals.reshape(-1, 1), method="yeo-johnson")
+                    pt_skew = skew(pt.ravel(), bias=False)
+                    if not pd.isna(pt_skew) and abs(pt_skew) >= skewness_log_scale_threshold:
+                        pt_log_scale_cols.add(col)
+                except Exception:
+                    pass
+        subplots_per_page = cols_per_page * rows_per_page
+        saved_paths: List[Path] = []
+        page = 0
+        use_overlay = overlay_power_transform
+
+        for start in range(0, len(numeric_cols), subplots_per_page):
+            page += 1
+            cols_this_page = numeric_cols[start : start + subplots_per_page]
+
+            fig, axes = self.create_figure(
+                layout_cols=cols_this_page,
+                group_col="",
+                n_cols=cols_per_page,
+                fig_size=(4, 3),
+                palette="pastel",
+            )
+            legend_handles, legend_labels = None, None
+            pt_stats_list: List[Tuple[float, float]] = []
+            if use_overlay:
+                for i, col in enumerate(cols_this_page):
+                    handles, labels, pt_skew, pt_kurt = self._add_histogram_original_and_transformed_to_axis(
+                        self.axes[i],
+                        col,
+                        bins=bins,
+                        log_scale_cols=log_scale_cols,
+                        pt_log_scale_cols=pt_log_scale_cols,
+                    )
+                    if legend_handles is None and handles:
+                        legend_handles, legend_labels = handles, labels
+                    pt_stats_list.append((pt_skew, pt_kurt))
+            else:
+                self.add_histogram(
+                    show_distribution_stats=show_distribution_stats_legend,
+                    bins=bins,
+                    kde=True,
+                    stat="density",
+                )
+
+            for i, col in enumerate(cols_this_page):
+                ax = self.axes[i]
+                stat = stats_by_col.get(col, {})
+                skew_val = stat.get("skewness", np.nan)
+                kurt_val = stat.get("kurtosis", np.nan)
+                skew_str = f"{skew_val:.3f}" if not pd.isna(skew_val) else "n/a"
+                kurt_str = f"{kurt_val:.3f}" if not pd.isna(kurt_val) else "n/a"
+                title_line = f"Skew: {skew_str}  Kurtosis: {kurt_str}"
+                if col in log_scale_cols and not use_overlay:
+                    ax.set_yscale("symlog")
+                    title_line += "  (log y)"
+                # Place stats in upper-right (original + power-transformed skew/kurtosis)
+                if use_overlay:
+                    if i < len(pt_stats_list):
+                        pt_skew, pt_kurt = pt_stats_list[i]
+                        pt_skew_str = f"{pt_skew:.3f}" if not pd.isna(pt_skew) else "n/a"
+                        pt_kurt_str = f"{pt_kurt:.3f}" if not pd.isna(pt_kurt) else "n/a"
+                        title_line += f"\nPT Skew: {pt_skew_str}  PT Kurt: {pt_kurt_str}"
+                    ax.text(
+                        0.98,
+                        0.98,
+                        title_line,
+                        transform=ax.transAxes,
+                        fontsize=6,
+                        verticalalignment="top",
+                        horizontalalignment="right",
+                        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8, edgecolor="none"),
+                    )
+                else:
+                    ax.set_title(title_line, fontsize=8)
+                ax.tick_params(axis="both", labelsize=7)
+
+            # One legend per figure, just right of the plot area
+            if use_overlay and legend_handles and legend_labels:
+                fig.legend(
+                    legend_handles,
+                    legend_labels,
+                    loc="upper left",
+                    bbox_to_anchor=(0.98, 1.0),
+                    fontsize=8,
+                    frameon=True,
+                )
+            prefix = f"{fig_title_prefix} — " if fig_title_prefix else ""
+            fig.suptitle(f"{prefix}numeric distributions (page {page})", fontsize=12, y=1.02)
+            fig.tight_layout(rect=(0, 0, 0.90, 0.98))
+            path = out_path / f"overview_page_{page}.png"
+            fig.savefig(path, dpi=dpi, bbox_inches="tight")
+            plt.close(fig)
+            saved_paths.append(path)
+            logger.info("Saved %s", path)
+
+        return saved_paths
+
     def add_correlation_heatmap(
         self,
         method: str = "pearson",
@@ -1247,8 +1510,9 @@ class DataVisualizer:
 
         # Add more space at the bottom so x tick labels are fully displayed
         fig = axis.get_figure()
-        bottom_pad = 0.25  # adjust as needed
-        fig.subplots_adjust(bottom=bottom_pad)
+        if fig is not None:
+            bottom_pad = 0.25  # adjust as needed
+            fig.subplots_adjust(bottom=bottom_pad)
 
         return axis
 
@@ -1410,8 +1674,14 @@ class DataVisualizer:
 
 class DataProfiler:
     """
-    A comprehensive data profiling class that analyzes data distributions,
-    correlations, and provides analytical insights.
+    Data profiling for distributions, correlations, and numeric preparation.
+
+    - Numeric preparation: use prepare_numeric_df() to get a numeric-only DataFrame
+      from sources like Parquet where some columns are stored as fixed_len_byte_array.
+    - Distribution stats: check_distribution_stats() / check_df_distribution_stats()
+      return skewness, kurtosis, and dip test per column; get_distribution_stats_dict()
+      for lookup by column name; get_columns_for_log_scale() for plot log-scale decisions.
+    - Skewed columns: get_skewed_columns(), transform_skewed_columns() for transforms.
     """
 
     def __init__(
@@ -1482,6 +1752,80 @@ class DataProfiler:
 
         return numeric_cols
 
+    @staticmethod
+    def try_convert_series_to_numeric(series: pd.Series) -> Optional[pd.Series]:
+        """
+        Convert a series to numeric when possible.
+
+        Handles Parquet fixed_len_byte_array (e.g. object/bytes), decimal.Decimal,
+        and other types that support float conversion.
+
+        Returns:
+            A numeric series, or None if conversion fails entirely.
+        """
+        try:
+            out = pd.to_numeric(series, errors="coerce")
+            if out.notna().any():
+                return out
+            return None
+        except (TypeError, ValueError):
+            pass
+
+        def _to_float(x: Any) -> float:
+            if pd.isna(x):
+                return np.nan
+            if hasattr(x, "__float__"):
+                try:
+                    return float(x)
+                except (TypeError, ValueError):
+                    return np.nan
+            if isinstance(x, bytes):
+                try:
+                    return float(x.decode("utf-8").strip())
+                except (ValueError, UnicodeDecodeError):
+                    return np.nan
+            return np.nan
+
+        try:
+            out = series.apply(_to_float)
+            return out if out.notna().any() else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def prepare_numeric_df(
+        df: pd.DataFrame,
+        exclude_columns: Optional[Iterable[str]] = None,
+    ) -> Tuple[List[str], pd.DataFrame]:
+        """
+        Build a numeric-only DataFrame suitable for profiling and distribution plots.
+
+        Includes columns that are already numeric and columns that can be converted
+        to numeric (e.g. from Parquet fixed_len_byte_array / object dtypes).
+        Excluded columns are omitted from the result.
+
+        Parameters:
+            df: Input DataFrame (e.g. from read_parquet).
+            exclude_columns: Column names to exclude (e.g. IDs: user_id, session_group).
+
+        Returns:
+            (numeric_column_names, dataframe_with_only_numeric_columns).
+            Column order is preserved; converted columns are float.
+        """
+        exclude = set(exclude_columns or [])
+        native_numeric = [c for c in df.select_dtypes(include=["number"]).columns if c not in exclude]
+        other = [c for c in df.columns if c not in exclude and c not in native_numeric]
+        converted: Dict[str, pd.Series] = {}
+        for c in other:
+            s = DataProfiler.try_convert_series_to_numeric(df[c])
+            if s is not None:
+                converted[c] = s
+        numeric_cols = native_numeric + list(converted.keys())
+        plot_df = df[native_numeric].copy()
+        for c, s in converted.items():
+            plot_df[c] = s
+        return numeric_cols, plot_df
+
     def check_distribution_stats(self, refresh: bool = False) -> List[Dict]:
         """Check distribution statistics for numerical columns."""
         if not hasattr(self, "_distribution_stats") or refresh:
@@ -1491,27 +1835,45 @@ class DataProfiler:
         return self._distribution_stats
 
     @staticmethod
-    def check_df_distribution_stats(data: pd.DataFrame, numeric_columns: Optional[List[str]] = None) -> List[Dict]:
-        """Check distribution statistics for numerical columns for a given dataframe."""
+    def check_df_distribution_stats(
+        data: pd.DataFrame,
+        numeric_columns: Optional[List[str]] = None,
+        include_kurtosis: bool = True,
+    ) -> List[Dict]:
+        """
+        Compute distribution statistics for numerical columns.
+
+        Parameters:
+            data: DataFrame containing the columns.
+            numeric_columns: Columns to analyze; default is all numeric columns.
+            include_kurtosis: If True, add kurtosis (bias=False) to each stat dict.
+
+        Returns:
+            List of dicts with keys: column, skewness, dip_stat, dip_p_values,
+            and optionally kurtosis. Inf values are dropped before computation.
+        """
         distribution_stats: List[Dict] = []
         if numeric_columns is None:
             numeric_columns = data.select_dtypes(include=["number"]).columns.tolist()
 
         for col in numeric_columns:
-            values = data[col].dropna()
-            if len(values) == 0:
+            if col not in data.columns:
+                continue
+            values = data[col].replace([np.inf, -np.inf], np.nan).dropna()
+            if len(values) < 2:
                 continue
 
             skewness = skew(values, bias=False)
             dip_statistic_unimodal, p_value_unimodal = diptest(values)
-            distribution_stats.append(
-                {
-                    "column": col,
-                    "skewness": skewness,
-                    "dip_stat": dip_statistic_unimodal,
-                    "dip_p_values": p_value_unimodal,
-                }
-            )
+            stat: Dict[str, Any] = {
+                "column": col,
+                "skewness": skewness,
+                "dip_stat": dip_statistic_unimodal,
+                "dip_p_values": p_value_unimodal,
+            }
+            if include_kurtosis:
+                stat["kurtosis"] = scipy_kurtosis(values, bias=False)
+            distribution_stats.append(stat)
 
         return distribution_stats
 
@@ -1523,6 +1885,29 @@ class DataProfiler:
         neg_skewed = [stat["column"] for stat in stats if stat["skewness"] < -self.skewness_threshold]
 
         return pos_skewed, neg_skewed
+
+    def get_distribution_stats_dict(self, refresh: bool = False) -> Dict[str, Dict[str, Any]]:
+        """
+        Return distribution statistics keyed by column name.
+
+        Convenient for lookup when annotating plots (e.g. skewness, kurtosis per column).
+        Keys include: column, skewness, kurtosis, dip_stat, dip_p_values.
+        """
+        stats_list = self.check_distribution_stats(refresh=refresh)
+        return {s["column"]: s for s in stats_list}
+
+    def get_columns_for_log_scale(
+        self,
+        threshold: float = 2.0,
+        refresh: bool = False,
+    ) -> Set[str]:
+        """
+        Return column names whose absolute skewness is at least threshold.
+
+        Useful for deciding which distribution plots should use log y-scale.
+        """
+        stats = self.get_distribution_stats_dict(refresh=refresh)
+        return {col for col, s in stats.items() if not pd.isna(s.get("skewness")) and abs(s["skewness"]) >= threshold}
 
     def transform_skewed_columns(self, pos_suffix: Optional[str] = None, neg_suffix: Optional[str] = None) -> None:
         """Transform skewed columns using log or exponential transformations."""
