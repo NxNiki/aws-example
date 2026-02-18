@@ -830,7 +830,16 @@ class ClusterAnalysisPipeline:
         return cluster_labels
 
     def attach_cluster_label(self, reload: bool = False):
+        """Attach cluster labels to enriched (attach) data and save per-cluster parquet files.
 
+        Row removal can happen in two places:
+        1. load_attach_data(): keeps only (merge_features) groups with exactly session_length rows,
+           so incomplete groups are already dropped before this method.
+        2. Merge with cluster labels: cluster labels come from clustering output, which used
+           cluster_data after dropna(how='any'). So any attach_data key that was dropped in
+           clustering (e.g. due to NaN in cluster features) has no label; with how='inner'
+           those rows are dropped here.
+        """
         cluster_column = "cluster_label"
         data_with_cluster_label = pd.read_parquet(
             self.output_path
@@ -843,6 +852,27 @@ class ClusterAnalysisPipeline:
         attach_data = self.load_attach_data(reload=reload)
         feature_columns = attach_data.select_dtypes(include="number").columns.to_list()
 
+        # Log key counts to explain row removal
+        attach_keys = attach_data[self.merge_features].drop_duplicates()
+        label_keys = data_with_cluster_label[self.merge_features].drop_duplicates()
+        keys_only_in_attach = attach_keys.merge(label_keys, on=self.merge_features, how="left", indicator=True)
+        keys_only_in_attach = keys_only_in_attach[keys_only_in_attach["_merge"] == "left_only"]
+        n_keys_attach = len(attach_keys)
+        n_keys_label = len(label_keys)
+        n_keys_dropped = len(keys_only_in_attach)
+        n_rows_dropped = attach_data.merge(
+            keys_only_in_attach[self.merge_features], on=self.merge_features, how="inner"
+        ).shape[0]
+        logger.info(
+            f"attach_cluster_label: attach_data keys={n_keys_attach}, cluster_label keys={n_keys_label}, "
+            f"keys in attach but not in labels={n_keys_dropped}, enriched rows dropped by merge={n_rows_dropped}"
+        )
+        if n_keys_dropped > 0:
+            logger.warning(
+                f"Dropped {n_keys_dropped} (user_id, session_group, agg_group) groups "
+                f"({n_rows_dropped} rows) because they have no cluster label (e.g. were removed by dropna before clustering)."
+            )
+
         num_samples = 0
         for cluster in unique_clusters:
             logger.info(f"save attach data for cluster: {cluster}")
@@ -853,7 +883,8 @@ class ClusterAnalysisPipeline:
                 how="inner",
                 suffixes=("", "_y"),
             )
-            cluster_data[attach_data.columns].to_parquet(self.output_path / "output" / file_name, index=False)
+            cluster_data = cluster_data[attach_data.columns]
+            cluster_data.to_parquet(self.output_path / "output" / file_name, index=False)
             num_samples += len(cluster_data)
 
             if feature_columns is not None:

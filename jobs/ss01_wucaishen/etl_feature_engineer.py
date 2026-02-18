@@ -30,7 +30,7 @@
 -- withdraw: -deposit if it is negative.
 
 -- aggregate 40 consecutive raw bet rounds in the same session_group (free game aggregated into the previous base game
--- so won't be counted)
+-- so won't be counted). agg_group = ROUND((row_number - 1) / 40), so the last group in a session may have < 40 rows.
 -- and get statistics such as mean, median, std, and:
 -- accumulative positive delta bet amount
 -- accumulative negative delta bet amount
@@ -433,6 +433,8 @@ def generate_query():
                 t.user_id,
                 t.session_group,
                 t.agg_group
+            -- Only keep groups with exactly SESSION_LENGTH (40) rows. Incomplete "tail" groups are dropped,
+            -- so unique (user_id, session_group, agg_group) in ss01_features_grouped <= ss01_features_enriched.
             HAVING COUNT(t.user_id) = {SESSION_LENGTH}
         )
 
