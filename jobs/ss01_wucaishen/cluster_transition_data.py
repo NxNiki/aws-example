@@ -68,6 +68,7 @@ def build_merged_with_transitions(
     """
     keys = list(merge_keys or MERGE_KEYS)
     merged = features_df.merge(cluster_df, on=keys, how="inner")
+    merged = merged.drop_duplicates(subset=keys)
     merged = merged.sort_values(keys)
     merged["next_cluster"] = merged.groupby(["user_id", "session_group"], group_keys=False)["cluster_label"].shift(-1)
     merged = merged.dropna(subset=["next_cluster"]).copy()

@@ -4,8 +4,14 @@ compute transition labels (from_cluster:to_cluster), run two-way ANOVA
 (current cluster × next cluster) and plot boxplots/barplots with p-values.
 """
 
+import sys
 from pathlib import Path
 from typing import Any
+
+# Allow running as script (e.g. python analysis_cluster_transition_stats.py) from any cwd
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -246,16 +252,16 @@ def plot_transition_counts(merged: pd.DataFrame, output_dir: Path) -> None:
     ax.set_ylabel("Number of bets")
     ax.set_yscale("log")
     ax.set_xlabel("Transition (from:to)")
-    ax.set_title("Sample size per transition condition")
+    ax.set_title("Sample size per transition condition", pad=20)
     # Add count and percentage (within current cluster) on top of each bar
     for i, (x, c) in enumerate(zip(x_pos, vals)):
         h = c if c > 0 else 1
         label = f"{int(c)} ({pcts[i]:.2f}%)"
         ax.text(x, h * 1.08, label, ha="center", va="bottom", fontsize=8, rotation=0)
-    # More space on top for labels; remove top and right border
+    # More space on top for labels and between title and figure; remove top and right border
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-    plt.tight_layout(rect=(0, 0, 1, 0.92))
+    plt.tight_layout(rect=(0, 0, 1, 0.88))
     fig.savefig(output_dir / "transition_counts.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
 
@@ -374,7 +380,7 @@ def plot_barplots_significant(
                     continue
                 x_c = x_centers[level]
                 ax.text(x_c, y_annot, f"p={_fmt_p(p)}", ha="center", fontsize=8, family="monospace")
-        plt.tight_layout()
+        plt.tight_layout(rect=(0, 0, 1, 0.92))
         safe_name = col.replace("/", "_").replace(" ", "_")
         fig.savefig(output_dir / f"barplot_{safe_name}.png", dpi=150, bbox_inches="tight")
         plt.close(fig)
