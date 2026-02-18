@@ -65,7 +65,8 @@ def main(config_path: str):
 
     # Data profiling and cleaning
     DataProfiler.count_df_missing_columns(data)
-    data.fillna(0, inplace=True)
+    numeric_cols = data.select_dtypes(include=["number"]).columns
+    data[numeric_cols] = data[numeric_cols].fillna(0)
 
     important_features = feature_selection(data, cluster_pipeline)
 
