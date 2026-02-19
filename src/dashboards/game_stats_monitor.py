@@ -276,6 +276,14 @@ class GameStatsDashboard:
         sessions_df = self.lf_bet.select(pl.col("session_start_date").unique().cast(pl.Utf8)).collect()
         self.sessions = sorted(sessions_df.to_series().to_list()) if not sessions_df.is_empty() else []
 
+    def _ensure_plot_metrics_loaded(self) -> None:
+        """Ensure plot_metrics has g1/g2/g3 keys; repopulate from config if missing."""
+        if "g1" not in self.plot_metrics and "stats_by_date" in self.config:
+            sd = self.config["stats_by_date"]
+            self.plot_metrics["g1"] = sd.get("group1_columns", [])
+            self.plot_metrics["g2"] = sd.get("group2_columns", [])
+            self.plot_metrics["g3"] = sd.get("group3_columns", [])
+
     def _load_date_data(self) -> None:
         for gran, file_paths in self.date_files_config.items():
             if isinstance(file_paths, str):
@@ -1180,6 +1188,7 @@ class GameStatsDashboard:
 
     def _render_tab_content(self, current_tab: str) -> Any:
         if current_tab == "tab-date":
+            self._ensure_plot_metrics_loaded()
             default_gran = list(self.date_files_config.keys())[0]
             if self.config["stats_by_date"]["group_col"]:
                 self.df_date_group_col = self.config["stats_by_date"]["group_col"]
@@ -1187,6 +1196,7 @@ class GameStatsDashboard:
                 self.df_plot_groups = self._get_plot_groups(lf, self.df_date_group_col)
             return self._layout_stats_by_date()
         elif current_tab == "tab-group":
+            self._ensure_plot_metrics_loaded()
             default_gran = list(self.date_files_config.keys())[0]
             if self.config["stats_by_date"]["group_col"]:
                 self.df_date_group_col = self.config["stats_by_date"]["group_col"]
