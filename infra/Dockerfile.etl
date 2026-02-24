@@ -50,8 +50,7 @@ COPY entry_points/ ./entry_points/
 COPY src/bituslabs_ds ./bituslabs_ds
 COPY jobs/ ./jobs/
 
-# Default entry point
+# Default: run ETL via dispatcher (supports jobs that use if __name__ == "__main__")
 ENTRYPOINT ["python", "entry_points/etl_dispatcher.py"]
-
-# Default job if none specified in EventBridge
-CMD ["fish_hunter/etl_game_stats_by_date.py", "--bastion-ip", ""]
+# Override CMD to run a different job; pass args after the job path (e.g. --bastion-ip "")
+CMD ["fish_hunter/etl_game_stats_daily_by_user.py", "--bastion-ip", ""]

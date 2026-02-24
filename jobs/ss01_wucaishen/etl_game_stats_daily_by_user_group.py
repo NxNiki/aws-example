@@ -1,18 +1,26 @@
 import argparse
 import os
+import sys
+from pathlib import Path
 from textwrap import dedent
 
 import pandas as pd
 
+# Allow "jobs" package to be found when script is run directly (e.g. python jobs/ss01_wucaishen/...)
+_root = Path(__file__).resolve().parents[2]
+if str(_root) not in sys.path:
+    sys.path.insert(0, str(_root))
+
 from bituslabs_ds.config import DEFAULT_BASTION_IP, DEFAULT_ETL_OUTPUT, LOCAL_ROOT, setup_logging
 from bituslabs_ds.etl import DataLoader, ETLScheduler, RedshiftBackend
+from jobs.etl_utils import AggCol, effective_start_date
 
 # TODO:
 # add max/min user daily profit
 
 
-def generate_query(stats_agg_col: str, start_date: str):
-
+def generate_query(stats_agg_col: AggCol, start_date: str):
+    effective_start = effective_start_date(stats_agg_col, start_date)
     query = dedent(
         f"""
         WITH user_bets AS (
@@ -38,7 +46,7 @@ def generate_query(stats_agg_col: str, start_date: str):
         FROM
             public.fct_bet_orders AS t
         WHERE
-            CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at) >= '{start_date}'
+            CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at) >= '{effective_start}'
             AND t.currency_type = 'CNY'
             AND t.status = 'COMPLETED'
             AND t.game_id = 'SS01'

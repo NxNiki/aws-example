@@ -1,0 +1,23 @@
+{
+  "family": "etl-fish-hunter",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "etl",
+      "image": "ECR_IMAGE_URI",
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/etl-fish-hunter",
+          "awslogs-region": "us-west-2"
+        }
+      },
+      "command": ["jobs/fish_hunter/etl_game_stats_daily_by_user.py", "--bastion-ip", ""]
+    }
+  ]
+}

@@ -387,14 +387,48 @@ class ETLScheduler:
     def _get_max_date(self, job_path: OutputDir, date_col: str) -> Optional[datetime]:
         """
         Scans the partitioned Parquet dataset to find the maximum processed date.
+        More robust for mixed schemas on S3: if some old files are missing the
+        target date column, we fall back to reading the full schema and only
+        use files where the column exists.
         """
         if self._is_s3:
+            # S3 list uses prefix matching: "daily_stats" also matches
+            # "daily_stats_return_user/...". Use trailing slash so we only
+            # read under this job's path.
+            path_str = output_path_as_str(job_path)
+            if not path_str.endswith("/"):
+                path_str = path_str + "/"
             try:
-                df = wr.s3.read_parquet(path=output_path_as_str(job_path), columns=[date_col], dataset=True)
+                try:
+                    # Fast path: only load the requested date column
+                    df = wr.s3.read_parquet(
+                        path=path_str,
+                        columns=[date_col],
+                        dataset=True,
+                    )
+                except Exception as e:
+                    # Fallback: schema evolution / mixed files can break the
+                    # column-pruned read. Load full schema instead.
+                    logger.warning(
+                        f"Could not read watermark column '{date_col}' with column-pruned "
+                        f"read in {job_path}: {e}. Falling back to full-schema scan."
+                    )
+                    df = wr.s3.read_parquet(
+                        path=path_str,
+                        dataset=True,
+                    )
+                    if date_col not in df.columns:
+                        logger.warning(
+                            f"Date column '{date_col}' not found in dataset at {job_path}. "
+                            f"Watermark detection will return None."
+                        )
+                        return None
+
                 if df.empty:
                     return None
                 return pd.to_datetime(df[date_col]).max()
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Could not detect watermark in {job_path}: {e}")
                 return None
         # Local: job_path is Path
         path = job_path if isinstance(job_path, Path) else Path(job_path)
@@ -421,7 +455,10 @@ class ETLScheduler:
         try:
             # 1. Load the entire dataset using the modern API
             if self._is_s3:
-                df = wr.s3.read_parquet(path=output_path_as_str(job_path), dataset=True)
+                path_str = output_path_as_str(job_path)
+                if not path_str.endswith("/"):
+                    path_str = path_str + "/"
+                df = wr.s3.read_parquet(path=path_str, dataset=True)
             else:
                 path = job_path if isinstance(job_path, Path) else Path(job_path)
                 if not path.exists() or not any(path.iterdir()):
@@ -499,9 +536,11 @@ class ETLScheduler:
             # Shift back to handle late-arriving data
             start_dt_obj = last_date - timedelta(days=days_to_lookback)
             if days_to_lookback >= 30:
-                start_dt_obj.replace(day=1)
+                # For monthly stats, always start from the first day of the month
+                start_dt_obj = start_dt_obj.replace(day=1)
                 logger.info(f"[{job_name}] truncate query start date to the first day of month: {start_dt_obj}")
             elif days_to_lookback >= 7:
+                # For weekly stats, always start from the first day of the week (Monday)
                 start_dt_obj = start_dt_obj - timedelta(days=start_dt_obj.weekday())
                 logger.info(f"[{job_name}] truncate query start date to the first day of week: {start_dt_obj}")
 

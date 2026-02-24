@@ -161,6 +161,39 @@ QUERIES = {
         "output_path_redshift": f"{LOCAL_ROOT}/jobs/output_ss01_wucaishen/product_id.parquet",
         "output_path_athena": f"{LOCAL_ROOT}/jobs/output_ss01_wucaishen/product_id_pa.parquet",
     },
+    "ss03_majiang_streak": {
+        "redshift_query": dedent(
+            """
+            SELECT
+                distinct t.op_code AS product_id
+            FROM
+                public.fct_bet_orders AS t
+            WHERE
+                t.currency_type = 'CNY'
+                AND t.status = 'COMPLETED'
+                AND t.game_id = 'SS03'
+                AND t.op_code not in ('B26','TST','TSB','TSO') 
+                -- AND CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at) < '2025-12-29 06:00:00'
+            """
+        ),
+        "athena_query": dedent(
+            """
+            SELECT
+                distinct t.productid AS product_id
+            FROM
+                ag_share_data.slotorders AS t
+            WHERE
+                t.currency = 'CNY'
+                AND gametype = 'SB28' 
+                AND flag != -8.0
+            """
+        ),
+        "athena_database": "ag_share_data",
+        "athena_output": f"s3://{S3_BUCKET}/ds-data-ss03_majiang_streak/product_id_pa",
+        "redshift_database": "slot-machine",
+        "output_path_redshift": f"{LOCAL_ROOT}/jobs/output_ss03_majiang_streak/product_id.parquet",
+        "output_path_athena": f"{LOCAL_ROOT}/jobs/output_ss03_majiang_streak/product_id_pa.parquet",
+    },
 }
 
 REDSHIFT_CONFIG = {
@@ -238,7 +271,7 @@ if __name__ == "__main__":
         ctas_approach=True,  # Only fish_hunter needs CTAS
     )
 
-    diff_product_ids_ss01 = run_pid_diff_check(
+    diff_product_ids_ss01_wucaishen = run_pid_diff_check(
         athena_database=QUERIES["ss01_wucaishen"]["athena_database"],
         athena_output_location=QUERIES["ss01_wucaishen"]["athena_output"],
         athena_query=QUERIES["ss01_wucaishen"]["athena_query"],
@@ -250,9 +283,26 @@ if __name__ == "__main__":
         ctas_approach=False,
     )
 
-    print("ss01 未开通PID：")
+    diff_product_ids_ss03_majiang_streak = run_pid_diff_check(
+        athena_database=QUERIES["ss03_majiang_streak"]["athena_database"],
+        athena_output_location=QUERIES["ss03_majiang_streak"]["athena_output"],
+        athena_query=QUERIES["ss03_majiang_streak"]["athena_query"],
+        redshift_database=QUERIES["ss03_majiang_streak"]["redshift_database"],
+        redshift_query=QUERIES["ss03_majiang_streak"]["redshift_query"],
+        output_path_redshift=QUERIES["ss03_majiang_streak"]["output_path_redshift"],
+        output_path_athena=QUERIES["ss03_majiang_streak"]["output_path_athena"],
+        pids_to_ignore=pids_to_ignore,
+        ctas_approach=False,
+    )
+
+    print("ss01_wucaishen 未开通PID：")
     print("--------------------------------")
-    print(diff_product_ids_ss01)
+    print(diff_product_ids_ss01_wucaishen)
+    print("--------------------------------")
+
+    print("ss03_majiang_streak 未开通PID：")
+    print("--------------------------------")
+    print(diff_product_ids_ss03_majiang_streak)
     print("--------------------------------")
 
     print("捕鱼未开通PID：")

@@ -1,9 +1,17 @@
 import argparse
 import os
+import sys
+from pathlib import Path
 from textwrap import dedent
+
+# Allow "jobs" package to be found when script is run directly (e.g. python jobs/fish_hunter/...)
+_root = Path(__file__).resolve().parents[2]
+if str(_root) not in sys.path:
+    sys.path.insert(0, str(_root))
 
 from bituslabs_ds.config import DEFAULT_BASTION_IP, DEFAULT_ETL_OUTPUT, LOCAL_ROOT, setup_logging
 from bituslabs_ds.etl import DataLoader, ETLScheduler, RedshiftBackend
+from jobs.etl_utils import AggCol, effective_start_date
 
 DEFAULT_DATE_START = "2025-10-20"
 RETURN_USER_DAYS = 30
@@ -13,7 +21,9 @@ STREAK_SESSION_THRESH = 600
 STREAK_KILL_THRESH = 3  # nearly 10% of all killing intervals.
 
 
-def generate_query(stats_agg_col: str, start_date: str = DEFAULT_DATE_START):
+def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
+    """Generate SQL query. start_date filters both raw data and output for incremental lookback."""
+    effective_start = effective_start_date(stats_agg_col, start_date)
 
     query = dedent(
         f"""
@@ -49,11 +59,11 @@ def generate_query(stats_agg_col: str, start_date: str = DEFAULT_DATE_START):
                 -- FAST FILTERING: Transform the INPUTS, not the COLUMN
                 -- ---------------------------------------------------------
                 
-                -- 1. Reverse the date math for START
+                -- 1. Reverse the date math for START (use effective_start so monthly/weekly get full period)
                 -- Logic: We want events where (EventTime + UserDays) >= Start
                 -- So: EventTime >= Start - UserDays
-                AND b.created_at >= CONVERT_TIMEZONE('Asia/Shanghai', 'UTC', 
-                       DATEADD(day, -{RETURN_USER_DAYS}, CAST('{start_date}' AS TIMESTAMP)))
+                AND b.created_at >= CONVERT_TIMEZONE('Asia/Shanghai', 'UTC',
+                       DATEADD(day, -{RETURN_USER_DAYS}, CAST('{effective_start}' AS TIMESTAMP)))
 
         ),
 
@@ -458,6 +468,7 @@ def generate_query(stats_agg_col: str, start_date: str = DEFAULT_DATE_START):
             ON t1.user_id = t5.user_id 
             AND t1.{stats_agg_col} = t5.{stats_agg_col}
             AND t1.daily_group = t5.daily_group
+        WHERE t1.{stats_agg_col} >= '{effective_start}'
         ORDER BY t1.{stats_agg_col}, t1.daily_group
         ;
 
@@ -503,24 +514,24 @@ if __name__ == "__main__":
         lookback=3,
     )
 
-    # Overrides to 7 days because weekly data takes longer to settle
-    scheduler.run_incremental_job(
-        job_name="weekly_stats",
-        query_func=lambda start_date: generate_query("activity_week", start_date),
-        key_cols=["activity_date", "user_id", "daily_group"],
-        date_col="activity_date",  # Always check max activity_date
-        partition_level="none",
-        lookback=7,
-    )
+    # # Overrides to 7 days because weekly data takes longer to settle
+    # scheduler.run_incremental_job(
+    #     job_name="weekly_stats",
+    #     query_func=lambda start_date: generate_query("activity_week", start_date),
+    #     key_cols=["activity_date", "user_id", "daily_group"],
+    #     date_col="activity_date",  # Always check max activity_date
+    #     partition_level="none",
+    #     lookback=7,
+    # )
 
-    # Overrides to 31 days because weekly data takes longer to settle
-    scheduler.run_incremental_job(
-        job_name="monthly_stats",
-        query_func=lambda start_date: generate_query("activity_month", start_date),
-        key_cols=["activity_date", "user_id", "daily_group"],
-        date_col="activity_date",  # Always check max activity_date
-        partition_level="none",
-        lookback=31,
-    )
+    # # Overrides to 31 days because weekly data takes longer to settle
+    # scheduler.run_incremental_job(
+    #     job_name="monthly_stats",
+    #     query_func=lambda start_date: generate_query("activity_month", start_date),
+    #     key_cols=["activity_date", "user_id", "daily_group"],
+    #     date_col="activity_date",  # Always check max activity_date
+    #     partition_level="none",
+    #     lookback=31,
+    # )
 
     redshift_loader.close()

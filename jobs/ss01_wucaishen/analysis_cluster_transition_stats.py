@@ -20,9 +20,10 @@ import pingouin as pg
 import seaborn as sns
 from scipy import stats
 
+from bituslabs_ds.s3_utils import read_local_cache
 from jobs.ss01_wucaishen.cluster_transition_data import ensure_merged_parquet
 
-# Stats and ANOVA: explicit columns you asked for (and we also use index >= 6 for ANOVA)
+# columns to show in boxplots and barplots regardless of significance:
 STATS_COLUMNS = [
     "fg_rounds",
     "delta_t_seconds_avg",
@@ -315,6 +316,8 @@ def _bootstrap_95ci(
     random_state: int | None = BOOTSTRAP_RANDOM_SEED,
 ) -> tuple[float, float]:
     """Return (lower, upper) 95% CI of the mean using bootstrap."""
+    # Coerce to float (handles Decimal from parquet)
+    values = np.asarray(values, dtype=np.float64)
     rng = np.random.default_rng(random_state)
     n = len(values)
     if n == 0:
@@ -393,7 +396,7 @@ def main():
     # 1) Merged data: use cache if present, else build from S3 cluster labels + features
     merged_path = output_dir / "merged_with_transitions.parquet"
     ensure_merged_parquet(merged_path)
-    merged = pd.read_parquet(merged_path)
+    merged = read_local_cache(merged_path)
     print(f"Merged shape: {merged.shape}, transitions: {merged['transition'].nunique()}")
 
     # 3) Stats for requested columns
@@ -439,6 +442,7 @@ def main():
         print("None")
 
     # 5) Boxplots and bar plots with test p-values, in separate folders
+    significant = list(set(significant + STATS_COLUMNS))
     if significant:
         box_dir = output_dir / BOXPLOT_DIR_NAME
         bar_dir = output_dir / BARPLOT_DIR_NAME

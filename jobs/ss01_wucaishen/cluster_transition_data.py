@@ -43,17 +43,17 @@ def load_cluster_labels(cluster_uris: list[str], merge_keys: Optional[list[str]]
     for uri in cluster_uris:
         k = _cluster_index_from_path(uri)
         df = read_single_file(uri, columns=merge_cols)
+        # read_single_file returns DataFrame when lazy_load=False (default); LazyFrame otherwise
+        assert isinstance(df, pd.DataFrame), "Expected DataFrame (lazy_load=False)"
+        df = df.copy()
         df["cluster_label"] = k
         dfs.append(df)
     return pd.concat(dfs, ignore_index=True)
 
 
 def load_features(path: str | Path) -> pd.DataFrame:
-    """Load features parquet (local or S3)."""
-    path_str = str(path)
-    if path_str.startswith("s3://"):
-        return read_single_file(path_str)
-    return pd.read_parquet(path_str)
+    """Load features parquet (local or S3). Uses read_single_file for Decimal->float conversion."""
+    return read_single_file(str(path))
 
 
 def build_merged_with_transitions(
