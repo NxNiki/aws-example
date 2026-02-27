@@ -9,7 +9,7 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_compl
 from decimal import Decimal
 from functools import lru_cache, partial
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Tuple, Union, cast
 from urllib.parse import urlparse
 
 import boto3
@@ -19,7 +19,9 @@ from botocore.config import Config
 from botocore.exceptions import NoCredentialsError
 from pyarrow import fs
 from pyarrow.dataset import Dataset, dataset
-from pyspark.sql import DataFrame as SparkDataFrame
+
+if TYPE_CHECKING:
+    from pyspark.sql import DataFrame as SparkDataFrame
 
 from bituslabs_ds.config import DEFAULT_MAX_JOBS, REGION
 
@@ -123,13 +125,17 @@ def read_to_pandas_df(
     return data
 
 
-def write_df_to_s3(data: Union[pd.DataFrame, SparkDataFrame], bucket: str, key: str) -> None:
+def write_df_to_s3(data: Union[pd.DataFrame, "SparkDataFrame"], bucket: str, key: str) -> None:
     if isinstance(data, pd.DataFrame):
         return write_pandas_to_s3(data, bucket, key)
-    elif isinstance(data, SparkDataFrame):
-        return write_spark_to_s3(data, bucket, key)
-    else:
-        raise TypeError("Unsupported DataFrame type.")
+    try:
+        from pyspark.sql import DataFrame as SparkDataFrame
+
+        if isinstance(data, SparkDataFrame):
+            return write_spark_to_s3(data, bucket, key)
+    except ImportError:
+        pass
+    raise TypeError("Unsupported DataFrame type.")
 
 
 def write_pandas_to_s3(data: pd.DataFrame, bucket: str, key: str) -> None:
@@ -142,7 +148,7 @@ def write_pandas_to_s3(data: pd.DataFrame, bucket: str, key: str) -> None:
     logger.info(f"Writing {key} to {bucket}")
 
 
-def write_spark_to_s3(data: SparkDataFrame, bucket: str, key: str, file_format: str = "csv") -> None:
+def write_spark_to_s3(data: "SparkDataFrame", bucket: str, key: str, file_format: str = "csv") -> None:
     """Write a PySpark DataFrame to S3 in CSV or Parquet format."""
     bucket = parse_bucket_name(bucket)
     s3_path = f"s3://{bucket}/{key}"

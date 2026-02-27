@@ -80,16 +80,68 @@ The script creates:
 
 Override names with env vars: `ETL_CLUSTER_NAME`, `ETL_TASK_FAMILY`, `ETL_LOG_GROUP`, `ETL_RULE_NAME`, `AWS_REGION`.
 
-## Running different ETL jobs
+## Running multiple ETL jobs
 
-- **Same image, different command:** Create another task definition (or use the same one) and set `command` to e.g. `["jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py"]`.
-- **Different schedule:** Create another EventBridge rule with a different cron and point it at the same (or another) task definition.
+One task definition, one image. Override the **command** to run different jobs.
+
+### Option A: One task definition, override command per run
+
+When you run a task (RunTask API or EventBridge), pass a different `command`:
+
+| Job | Command |
+|-----|---------|
+| fish_hunter daily | `["jobs/fish_hunter/etl_game_stats_daily_by_user.py", "--bastion-ip", "13.215.212.244"]` |
+| ss01 by user group | `["jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py", "--bastion-ip", "13.215.212.244"]` |
+| ss01 by group | `["jobs/ss01_wucaishen/etl_game_stats_daily_by_group.py", "--bastion-ip", "13.215.212.244"]` |
+
+**EventBridge**: Create one rule per job. Each rule targets the same task definition but overrides the container command in the target.
+
+**RunTask (CLI)**:
+```bash
+aws ecs run-task --cluster etl-cluster --task-definition etl-fishhunter \
+  --overrides '{"containerOverrides":[{"name":"etl","command":["jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py","--bastion-ip","13.215.212.244"]}]}'
+```
+
+### Option B: Separate task definitions per job
+
+Useful if jobs need different CPU/memory or different secrets. Create `etl-fishhunter`, `etl-ss01-user-group`, etc., each with a different default `command`.
 
 ## Secrets (Redshift password, etc.)
 
 - Store in **Secrets Manager** (or SSM Parameter Store).
 - Grant the **task role** read access to the secret.
 - In the container, read the secret at startup (e.g. with boto3) and set env vars or config before running the ETL. Alternatively, use IAM auth for Redshift if you adopt it.
+
+## Bastion tunnel (cross-region ECS ↔ Redshift)
+
+When ECS and Redshift are in different regions, use an SSH bastion host. **Do not copy the `.pem` key into the Docker image** (security risk).
+
+### ECS Fargate (Secrets Manager)
+
+1. **Store the bastion private key in Secrets Manager**
+   ```bash
+   aws secretsmanager create-secret --name etl/bastion-key \
+     --secret-string "$(cat ~/.ssh/your-bastion.pem)" --region us-west-2
+   ```
+
+2. **Grant the ECS task execution role** (ecsTaskExecutionRole) `secretsmanager:GetSecretValue` on that secret. Attach a policy or add an inline policy with that permission.
+
+3. **Update the task definition**
+   - Replace `BASTION_IP_PLACEHOLDER` in `command` with your bastion IP.
+   - Replace `ACCOUNT_ID` in the `secrets[0].valueFrom` ARN with your AWS account ID.
+
+4. `etl.py` reads `BASTION_KEY_CONTENT` at connect time and uses it for the SSH tunnel.
+
+### Local Docker (volume mount)
+
+```bash
+docker run --rm \
+  -v ~/.ssh/your-bastion.pem:/tmp/bastion_key.pem \
+  -e BASTION_KEY_PATH=/tmp/bastion_key.pem \
+  -e AWS_ACCESS_KEY_ID=... -e AWS_SECRET_ACCESS_KEY=... \
+  338568447110.dkr.ecr.us-west-2.amazonaws.com/bituslabs-ds-etl:latest \
+  fish_hunter/etl_game_stats_daily_by_user.py --bastion-ip 13.215.212.244
+```
 
 ## Summary
 

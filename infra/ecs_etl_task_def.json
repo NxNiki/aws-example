@@ -17,7 +17,17 @@
           "awslogs-region": "us-west-2"
         }
       },
-      "command": ["jobs/fish_hunter/etl_game_stats_daily_by_user.py", "--bastion-ip", ""]
+      "command": [
+        "jobs/fish_hunter/etl_game_stats_daily_by_user.py",
+        "--bastion-ip",
+        "13.215.212.244"
+      ],
+      "secrets": [
+        {
+          "name": "BASTION_KEY_CONTENT",
+          "valueFrom": "arn:aws:secretsmanager:us-west-2:ACCOUNT_ID:secret:etl/bastion-key"
+        }
+      ]
     }
   ]
 }

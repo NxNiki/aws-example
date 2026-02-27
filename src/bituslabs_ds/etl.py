@@ -35,7 +35,30 @@ from bituslabs_ds.s3_utils import (
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-ssh_pkey = os.environ["BASTION_KEY_PATH"]
+_BASTION_KEY_FILE: Optional[str] = None  # temp file path when using BASTION_KEY_CONTENT
+
+
+def _get_bastion_key_path() -> Optional[str]:
+    """
+    Resolve bastion SSH key path. Supports:
+    - BASTION_KEY_PATH: path to .pem file (local Docker volume mount)
+    - BASTION_KEY_CONTENT: raw PEM from Secrets Manager (ECS); writes to temp file on first use
+    """
+    global _BASTION_KEY_FILE
+    path = os.environ.get("BASTION_KEY_PATH")
+    if path and os.path.isfile(path):
+        return path
+    content = os.environ.get("BASTION_KEY_CONTENT")
+    if content:
+        if _BASTION_KEY_FILE is None:
+            import tempfile
+
+            fd, _BASTION_KEY_FILE = tempfile.mkstemp(suffix=".pem")
+            os.write(fd, content.encode() if isinstance(content, str) else content)
+            os.close(fd)
+            os.chmod(_BASTION_KEY_FILE, 0o600)
+        return _BASTION_KEY_FILE
+    return None
 
 
 # ---------------- Port forwarding helpers ----------------
@@ -189,6 +212,12 @@ class RedshiftBackend(DatabaseBackend):
             return self.conn
 
         if self.bastion_ip:
+            ssh_pkey = _get_bastion_key_path()
+            if not ssh_pkey:
+                raise RuntimeError(
+                    "Bastion key required when using --bastion-ip. Set either BASTION_KEY_PATH (path to .pem) "
+                    "or BASTION_KEY_CONTENT (from Secrets Manager). Omit --bastion-ip for direct connect."
+                )
             logger.info(f"Establishing SSH Tunnel via {self.bastion_ip}...")
 
             # 1. Establish SSH connection
