@@ -106,11 +106,17 @@ aws ecs run-task --cluster etl-cluster --task-definition etl-fishhunter \
 
 Useful if jobs need different CPU/memory or different secrets. Create `etl-fishhunter`, `etl-ss01-user-group`, etc., each with a different default `command`.
 
-## Secrets (Redshift password, etc.)
+## Secrets (Redshift credentials, bastion key)
 
-- Store in **Secrets Manager** (or SSM Parameter Store).
-- Grant the **task role** read access to the secret.
-- In the container, read the secret at startup (e.g. with boto3) and set env vars or config before running the ETL. Alternatively, use IAM auth for Redshift if you adopt it.
+ETL jobs read credentials from environment variables. **Never commit credentials to the repo.**
+
+- **Local**: Copy `.env.example` to `.env`, fill in `REDSHIFT_USER` and `REDSHIFT_PASSWORD`, then `source .env` or use `python-dotenv` before running jobs.
+- **ECS**: Add to task definition `secrets` (from Secrets Manager):
+  - `REDSHIFT_USER`
+  - `REDSHIFT_PASSWORD`
+  - `BASTION_KEY_CONTENT` (if using bastion tunnel)
+
+Grant the task **execution role** `secretsmanager:GetSecretValue` on those secrets.
 
 ## Bastion tunnel (cross-region ECS ↔ Redshift)
 
@@ -118,17 +124,21 @@ When ECS and Redshift are in different regions, use an SSH bastion host. **Do no
 
 ### ECS Fargate (Secrets Manager)
 
-1. **Store the bastion private key in Secrets Manager**
+1. **Store secrets in Secrets Manager**
    ```bash
-   aws secretsmanager create-secret --name etl/bastion-key \
+   aws secretsmanager create-secret --name ai_etl/bastion-key \
      --secret-string "$(cat ~/.ssh/your-bastion.pem)" --region us-west-2
+   aws secretsmanager create-secret --name ai_etl/redshift-user \
+     --secret-string "anaylsis_user" --region us-west-2
+   aws secretsmanager create-secret --name ai_etl/redshift-password \
+     --secret-string "your-password" --region us-west-2
    ```
 
 2. **Grant the ECS task execution role** (ecsTaskExecutionRole) `secretsmanager:GetSecretValue` on that secret. Attach a policy or add an inline policy with that permission.
 
 3. **Update the task definition**
-   - Replace `BASTION_IP_PLACEHOLDER` in `command` with your bastion IP.
-   - Replace `ACCOUNT_ID` in the `secrets[0].valueFrom` ARN with your AWS account ID.
+   - Replace `ACCOUNT_ID` in all secret ARNs with your AWS account ID.
+   - Add `REDSHIFT_USER` and `REDSHIFT_PASSWORD` to `secrets` (pointing to your Secrets Manager ARNs).
 
 4. `etl.py` reads `BASTION_KEY_CONTENT` at connect time and uses it for the SSH tunnel.
 

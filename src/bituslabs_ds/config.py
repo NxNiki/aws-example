@@ -19,6 +19,28 @@ DEFAULT_ETL_OUTPUT = f"s3://{S3_BUCKET}/etl-results"
 DEFAULT_BASTION_IP = "13.215.212.244"  # for ssh tunnel connection to redshift
 LOCAL_ROOT = Path(os.environ.get("LOCAL_ROOT", str(Path(__file__).resolve().parent.parent.parent)))
 
+# Redshift: host is safe to commit; user/password come from env (never commit)
+REDSHIFT_HOST = "production-redshift-cluster.cwiqzcm13zcn.ap-southeast-1.redshift.amazonaws.com"
+REDSHIFT_PORT = 5439
+
+
+def get_redshift_user() -> str:
+    """Redshift user from REDSHIFT_USER env. For local: .env or export. For ECS: task secrets."""
+    v = os.environ.get("REDSHIFT_USER")
+    if not v:
+        raise RuntimeError("REDSHIFT_USER env var required. Local: add to .env or export. ECS: add to task secrets.")
+    return v
+
+
+def get_redshift_password() -> str:
+    """Redshift password from REDSHIFT_PASSWORD env. For local: .env or export. For ECS: task secrets."""
+    v = os.environ.get("REDSHIFT_PASSWORD")
+    if not v:
+        raise RuntimeError(
+            "REDSHIFT_PASSWORD env var required. Local: add to .env or export. ECS: add to task secrets."
+        )
+    return v
+
 
 def get_cpu_cores(logical=True, default=1):
     """

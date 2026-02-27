@@ -1,7 +1,16 @@
 import os
 from textwrap import dedent
 
-from bituslabs_ds.config import DEFAULT_BASTION_IP, LOCAL_ROOT, S3_BUCKET, setup_logging
+from bituslabs_ds.config import (
+    DEFAULT_BASTION_IP,
+    LOCAL_ROOT,
+    REDSHIFT_HOST,
+    REDSHIFT_PORT,
+    S3_BUCKET,
+    get_redshift_password,
+    get_redshift_user,
+    setup_logging,
+)
 from bituslabs_ds.etl import AthenaBackend, DataLoader, RedshiftBackend
 
 pids_to_ignore = {
@@ -196,13 +205,6 @@ QUERIES = {
     },
 }
 
-REDSHIFT_CONFIG = {
-    "host": "production-redshift-cluster.cwiqzcm13zcn.ap-southeast-1.redshift.amazonaws.com",
-    "user": "anaylsis_user",
-    "password": "oZ4ztMx0yEXPLbJL733L",
-    "port": 5439,
-}
-
 
 def run_pid_diff_check(
     athena_database,
@@ -227,11 +229,11 @@ def run_pid_diff_check(
     # Redshift DataLoader
     redshift_loader = DataLoader(
         backend=RedshiftBackend(
-            host=REDSHIFT_CONFIG["host"],
+            host=REDSHIFT_HOST,
             database=redshift_database,
-            user=REDSHIFT_CONFIG["user"],
-            password=REDSHIFT_CONFIG["password"],
-            port=REDSHIFT_CONFIG["port"],
+            user=get_redshift_user(),
+            password=get_redshift_password(),
+            port=REDSHIFT_PORT,
             bastion_ip=DEFAULT_BASTION_IP,
         )
     )

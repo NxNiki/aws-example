@@ -57,26 +57,12 @@ run script [athena_utils.py](https://github.com/NxNiki/aws-example/blob/main/src
 
 ### run sql query to fetch data from redshift:
 
-You need the following credentials to connect to amazon redshift:
+Credentials (never commit to git):
 
-```
-URI: production-redshift-cluster.*********.ap-southeast-1.redshift.amazonaws.com
-port:  5439
-username: anaylsis_user
-password: ***************
+1. **Redshift**: Copy `.env.example` to `.env` and set `REDSHIFT_USER` and `REDSHIFT_PASSWORD`.
+2. **Bastion** (for Redshift tunnel): Set `BASTION_KEY_PATH` to your `.pem` path, or use `BASTION_KEY_CONTENT` (Secrets Manager on ECS).
 
-
-跳板机IP：13.215.212.244   
-username: ubuntu
-openssh private key: **********.pem
-```
-
-- download the private key and save in a secure place (e.g. ~/.ssh/)
-- add private key to your system path.
-    for zsh: ~/.zshrc, for bash: ~/.bashrc
-    ```
-    export BASTION_KEY_PATH="$HOME/.ssh/**********.pem"
-    ```
+Host and port are in `bituslabs_ds.config`. Bastion IP: 13.215.212.244 (ubuntu).
 
 check [etl.py](https://github.com/NxNiki/aws-example/blob/main/src/bituslabs_ds/etl.py) to see sample to execute sql query.
 

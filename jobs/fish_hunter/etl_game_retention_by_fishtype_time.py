@@ -1,7 +1,14 @@
 import os
 from textwrap import dedent
 
-from bituslabs_ds.config import LOCAL_ROOT, setup_logging
+from bituslabs_ds.config import (
+    LOCAL_ROOT,
+    REDSHIFT_HOST,
+    REDSHIFT_PORT,
+    get_redshift_password,
+    get_redshift_user,
+    setup_logging,
+)
 from bituslabs_ds.etl import DataLoader, RedshiftBackend
 
 DATE_START = "2025-11-30"
@@ -188,11 +195,11 @@ if __name__ == "__main__":
 
     redshift_loader = DataLoader(
         backend=RedshiftBackend(
-            host="production-redshift-cluster.cwiqzcm13zcn.ap-southeast-1.redshift.amazonaws.com",
+            host=REDSHIFT_HOST,
             database="transform-agfish-game",
-            user="anaylsis_user",
-            password="oZ4ztMx0yEXPLbJL733L",
-            port=5439,
+            user=get_redshift_user(),
+            password=get_redshift_password(),
+            port=REDSHIFT_PORT,
         )
     )
 
