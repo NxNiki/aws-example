@@ -64,7 +64,16 @@ Credentials (never commit to git):
 
 Host and port are in `bituslabs_ds.config`. Bastion IP: 13.215.212.244 (ubuntu).
 
-check [etl.py](https://github.com/NxNiki/aws-example/blob/main/src/bituslabs_ds/etl.py) to see sample to execute sql query.
+Setup and run an ETL job:
+
+```bash
+cp .env.example .env
+# Edit .env if needed, then:
+source .env
+python jobs/ss01_wucaishen/etl_game_stats_daily_by_group.py
+```
+
+Check [etl.py](https://github.com/NxNiki/aws-example/blob/main/src/bituslabs_ds/etl.py) to see sample to execute sql query.
 
 
 ### submit script to AWS EMR:
