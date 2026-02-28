@@ -66,6 +66,8 @@ Host and port are in `bituslabs_ds.config`. Bastion IP: 13.215.212.244 (ubuntu).
 
 Setup and run an ETL job:
 
+Update user name and password for bastion connection then run:
+
 ```bash
 cp .env.example .env
 # Edit .env if needed, then:
