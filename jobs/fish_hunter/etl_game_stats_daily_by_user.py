@@ -523,24 +523,24 @@ if __name__ == "__main__":
         lookback=3,
     )
 
-    # # Overrides to 7 days because weekly data takes longer to settle
-    # scheduler.run_incremental_job(
-    #     job_name="weekly_stats",
-    #     query_func=lambda start_date: generate_query("activity_week", start_date),
-    #     key_cols=["activity_date", "user_id", "daily_group"],
-    #     date_col="activity_date",  # Always check max activity_date
-    #     partition_level="none",
-    #     lookback=7,
-    # )
+    # Overrides to 7 days because weekly data takes longer to settle
+    scheduler.run_incremental_job(
+        job_name="weekly_stats",
+        query_func=lambda start_date: generate_query("activity_week", start_date),
+        key_cols=["activity_date", "user_id", "daily_group"],
+        date_col="activity_date",  # Always check max activity_date
+        partition_level="none",
+        lookback=7,
+    )
 
-    # # Overrides to 31 days because weekly data takes longer to settle
-    # scheduler.run_incremental_job(
-    #     job_name="monthly_stats",
-    #     query_func=lambda start_date: generate_query("activity_month", start_date),
-    #     key_cols=["activity_date", "user_id", "daily_group"],
-    #     date_col="activity_date",  # Always check max activity_date
-    #     partition_level="none",
-    #     lookback=31,
-    # )
+    # Overrides to 31 days because weekly data takes longer to settle
+    scheduler.run_incremental_job(
+        job_name="monthly_stats",
+        query_func=lambda start_date: generate_query("activity_month", start_date),
+        key_cols=["activity_date", "user_id", "daily_group"],
+        date_col="activity_date",  # Always check max activity_date
+        partition_level="none",
+        lookback=31,
+    )
 
     redshift_loader.close()

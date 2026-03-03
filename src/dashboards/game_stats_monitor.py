@@ -1180,10 +1180,12 @@ class GameStatsDashboard:
     def _get_plot_groups(self, lf: pl.LazyFrame, group_col: str) -> list:
         """
         Helper function to extract unique non-None groups from given LazyFrame and group column.
+        Returns groups sorted alphabetically (by string representation).
         """
         if lf.collect_schema().len() > 0 and group_col in lf.collect_schema().names():
             uniq = lf.select(pl.col(group_col).unique()).collect()
-            return [x for x in uniq.to_series().to_list() if x is not None]
+            groups = [x for x in uniq.to_series().to_list() if x is not None]
+            return sorted(groups, key=str)
         return []
 
     def _render_tab_content(self, current_tab: str) -> Any:
@@ -1564,6 +1566,7 @@ class GameStatsDashboard:
         ) -> go.Figure:
             if not metric or not groups or r1_start is None or r1_end is None:
                 return go.Figure()
+            groups = sorted(groups, key=str)
             granularity = list(self.date_files_config.keys())[0]
             lf = self.lfs_by_date.get(granularity, pl.DataFrame().lazy())
             if lf.collect_schema().len() == 0:
@@ -1588,8 +1591,11 @@ class GameStatsDashboard:
             base_colors = Styles.COLORS
             fig = go.Figure()
 
-            def _label(group, l):
-                return f"{group} [Range{l}]"
+            def _format_date_range(start_dt: datetime, end_dt: datetime) -> str:
+                return f"{start_dt.strftime('%m/%d/%Y')}-{end_dt.strftime('%m/%d/%Y')}"
+
+            def _label(group: str, date_range_str: str) -> str:
+                return f"{group}<br>{date_range_str}"
 
             # Parse date strings to datetime objects
             data_ranges = [
@@ -1640,7 +1646,7 @@ class GameStatsDashboard:
                             )
                         if len(vals) == 0:
                             continue
-                        box_label = _label(group, range_info["label"])
+                        box_label = _label(group, _format_date_range(cast(datetime, start_dt), cast(datetime, end_dt)))
                         fig.add_trace(
                             go.Box(
                                 y=vals,
@@ -1652,10 +1658,13 @@ class GameStatsDashboard:
                                 showlegend=False,
                             )
                         )
-            else:  # bar, mean+std
+            else:  # bar, mean + 500 bootstrap CI + text stats
+                N_BOOTSTRAP = 500
                 x_labels = []
                 ydata = []
-                edata = []
+                err_upper = []
+                err_lower = []
+                text_stats = []
                 mcolors_box = []
                 for gi, group in enumerate(groups):
                     color_base = base_colors[gi % len(base_colors)]
@@ -1676,10 +1685,19 @@ class GameStatsDashboard:
                             )
                         if len(vals) == 0:
                             continue
-                        bar_label = _label(group, range_info["label"])
+                        bar_label = _label(group, _format_date_range(cast(datetime, start_dt), cast(datetime, end_dt)))
                         x_labels.append(bar_label)
-                        ydata.append(float(np.mean(vals)))
-                        edata.append(float(np.std(vals)))
+                        mean_val = float(np.mean(vals))
+                        ydata.append(mean_val)
+                        lower_ci, upper_ci = bootstrap_worker(vals, n_boot=N_BOOTSTRAP)
+                        err_upper.append(upper_ci - mean_val if np.isfinite(upper_ci) else 0.0)
+                        err_lower.append(mean_val - lower_ci if np.isfinite(lower_ci) else 0.0)
+                        med_val = float(np.median(vals))
+                        min_val = float(np.min(vals))
+                        max_val = float(np.max(vals))
+                        text_stats.append(
+                            f"μ={mean_val:.2f}<br>med={med_val:.2f}<br>max={max_val:.2f}<br>min={min_val:.2f}"
+                        )
                         if ri == 0:
                             mcolors_box.append(dict(color=color_base, opacity=1.0, line=dict(color="#333", width=1)))
                         else:
@@ -1696,13 +1714,38 @@ class GameStatsDashboard:
                         go.Bar(
                             x=x_labels,
                             y=ydata,
-                            error_y=dict(type="data", array=edata),
+                            error_y=dict(
+                                type="data",
+                                array=err_upper,
+                                arrayminus=err_lower,
+                                symmetric=False,
+                            ),
+                            text=text_stats,
+                            textposition="none",
                             marker={"color": [c["color"] for c in mcolors_box], "opacity": None},
                             customdata=[c for c in mcolors_box],
-                            hovertemplate="%{x}: %{y:.2f} ± %{error_y.array:.2f}",
+                            hovertemplate="%{x}<br>mean=%{y:.2f}<br>95%% CI (500 boot)<br>%{text}",
                             showlegend=False,
                         )
                     )
+                    # Add left-aligned annotations to the left of each bar
+                    annotations = []
+                    for i in range(len(x_labels)):
+                        annotations.append(
+                            dict(
+                                x=i - 0.25,
+                                y=ydata[i],
+                                xref="x",
+                                yref="y",
+                                text=text_stats[i],
+                                xanchor="right",
+                                yanchor="bottom",
+                                align="left",
+                                showarrow=False,
+                                font=dict(size=14),
+                            )
+                        )
+                    fig.update_layout(annotations=annotations, margin=dict(l=220))
                     for i, bar in enumerate(fig.data):
                         if hasattr(bar, "customdata") and bar.customdata is not None:
                             mcolors_box = bar.customdata
@@ -1715,7 +1758,7 @@ class GameStatsDashboard:
                                 ]
                             fig.data[i].marker.opacity = [m.get("opacity", 1.0) for m in mcolors_box]
 
-            mode_title = "Box Plot" if display_mode == "box" else "Bar (Mean ± Std)"
+            mode_title = "Box Plot" if display_mode == "box" else "Bar (Mean ± 95% CI, 500 bootstrap)"
             subtitle = ""
             if enable_clip:
                 subtitle = f" (Clipped"
@@ -1754,6 +1797,6 @@ class GameStatsDashboard:
 if __name__ == "__main__":
     setup_logging(f"{LOCAL_ROOT}/jobs/log", log_filename=os.path.splitext(os.path.basename(__file__))[0] + ".log")
     config_dir = os.environ.get("DASHBOARD_CONFIG_DIR", str(Path(__file__).resolve().parent))
-    debug = os.environ.get("DASHBOARD_DEBUG", "false").lower() in ("1", "true", "yes")
+    debug = os.environ.get("DASHBOARD_DEBUG", "true").lower() in ("1", "true", "yes")
     dashboard = GameStatsDashboard(config_dir)
     dashboard.run(debug=debug)

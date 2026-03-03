@@ -44,7 +44,9 @@ COPY src/dashboards ./src/dashboards
 
 # Run dashboard on 0.0.0.0 so it's reachable from outside the container
 # Port 8050 is Dash's default
-ENV DASHBOARD_CONFIG_DIR=/app/src/dashboards
+# Debug off in production Docker image
+ENV DASHBOARD_CONFIG_DIR=/app/src/dashboards \
+    DASHBOARD_DEBUG=false
 EXPOSE 8050
 
 CMD ["python", "src/dashboards/game_stats_monitor.py"]

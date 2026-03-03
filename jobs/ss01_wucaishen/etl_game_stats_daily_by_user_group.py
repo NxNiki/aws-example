@@ -24,6 +24,9 @@ from bituslabs_ds.config import (
 from bituslabs_ds.etl import DataLoader, ETLScheduler, RedshiftBackend
 from jobs.etl_utils import AggCol, effective_start_date
 
+# Day boundary: 6 AM Shanghai time (same as fish_hunter)
+DATE_START_HOUR = 6
+
 # TODO:
 # add max/min user daily profit
 
@@ -41,9 +44,9 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             t.actual_payout AS payout,
             t.bet_type,
             t.actual_payout - t.bet_amount AS profit,
-            TRUNC(DATEADD(hour, -6, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS activity_date,
-            CAST(DATE_TRUNC('week', DATEADD(hour, -6, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_week,
-            CAST(DATE_TRUNC('month', DATEADD(hour, -6, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_month,
+            CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_date,
+            CAST(DATE_TRUNC('week', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_week,
+            CAST(DATE_TRUNC('month', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_month,
             t.partition_ab[0] AS ab_group_id,
             t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.created_at) AS delta_t,
             COUNT(t.user_id) OVER (PARTITION BY t.user_id) AS user_bet_count,
@@ -148,9 +151,9 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             FROM
                 daily_login AS t1
             LEFT JOIN daily_login AS t2
-                ON t2.first_bet_time < DATE_ADD('hour', 48, t1.first_bet_time) AND t2.last_bet_time >= DATE_ADD('hour', 24, t1.first_bet_time) AND t1.user_id = t2.user_id
+                ON t1.user_id = t2.user_id AND t2.activity_date = DATEADD(day, 1, t1.activity_date)
             LEFT JOIN daily_login AS t3
-                ON t3.first_bet_time < DATE_ADD('hour', 96, t1.first_bet_time) AND t3.last_bet_time >= DATE_ADD('hour', 72, t1.first_bet_time) AND t1.user_id = t3.user_id
+                ON t1.user_id = t3.user_id AND t3.activity_date = DATEADD(day, 3, t1.activity_date)
             GROUP BY t1.{stats_agg_col}, t1.ai_group
         ),
 
