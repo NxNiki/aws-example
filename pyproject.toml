@@ -49,13 +49,20 @@ torchvision = "^0.25.0"
 torchaudio = "^2.10.0" 
 lightning = "^2.4.0" # Modern standard for organizing PyTorch code
 
+[tool.poetry.group.dashboard]
+optional = true
+[tool.poetry.group.dashboard.dependencies]
+matplotlib = "^3.9.0"
+plotly = "^6.3.1"
+dash = "^3.2.0"
+polars = "^1.38.1"  # avoid 1.38.0 (yanked on PyPI)
+
 [tool.poetry.group.etl]
 optional = true 
 [tool.poetry.group.etl.dependencies]
 redshift_connector = "^2.0.0"
 paramiko = "^4.0.0"
 awswrangler = "^3.7.0"
-polars = "^1.38.1"  # avoid 1.38.0 (yanked on PyPI)
 
 [tool.poetry.group.spark]
 optional = true

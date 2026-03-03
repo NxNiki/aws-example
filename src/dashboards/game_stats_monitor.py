@@ -16,8 +16,8 @@ from dash import Dash, Input, Output, State, callback_context, dcc, html, no_upd
 from plotly.subplots import make_subplots
 
 from bituslabs_ds.config import LOCAL_ROOT, setup_logging
+from bituslabs_ds.dashboard_utils import bootstrap_worker, load_config
 from bituslabs_ds.s3_utils import read_files
-from bituslabs_ds.utils import bootstrap_worker, load_config
 
 # ==========================================
 # Styling & Constants
@@ -1742,14 +1742,18 @@ class GameStatsDashboard:
             s.connect(("8.8.8.8", 80))
             self.host_ip = s.getsockname()[0]
             s.close()
-        except:
+        except Exception:
             self.host_ip = "127.0.0.1"
-        print(f"Dashboard running on http://{self.host_ip}:8050")
+        # Use DASHBOARD_PUBLIC_URL when deployed (e.g. http://bituslabs.ds.dashboard.com)
+        public_url = os.environ.get("DASHBOARD_PUBLIC_URL")
+        display_url = public_url if public_url else f"http://{self.host_ip}:8050"
+        print(f"Dashboard running on {display_url}")
         self.app.run(debug=debug, host="0.0.0.0", port=8050)
 
 
 if __name__ == "__main__":
     setup_logging(f"{LOCAL_ROOT}/jobs/log", log_filename=os.path.splitext(os.path.basename(__file__))[0] + ".log")
-    config_dir = "/Users/niuxin/Documents/aws-example/src/dashboards"
+    config_dir = os.environ.get("DASHBOARD_CONFIG_DIR", str(Path(__file__).resolve().parent))
+    debug = os.environ.get("DASHBOARD_DEBUG", "false").lower() in ("1", "true", "yes")
     dashboard = GameStatsDashboard(config_dir)
-    dashboard.run()
+    dashboard.run(debug=debug)

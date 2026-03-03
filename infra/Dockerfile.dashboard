@@ -1,0 +1,50 @@
+# --- Stage 1: Builder ---
+FROM python:3.11-slim AS builder
+
+ENV POETRY_NO_INTERACTION=1 \
+    POETRY_VIRTUALENVS_IN_PROJECT=1 \
+    POETRY_VIRTUALENVS_CREATE=1 \
+    POETRY_CACHE_DIR=/tmp/poetry_cache
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    gcc \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -sSL https://install.python-poetry.org | python3 -
+ENV PATH="/root/.local/bin:$PATH"
+
+COPY pyproject.toml poetry.lock ./
+
+# Install main and dashboard (matplotlib, plotly, dash, polars)
+RUN poetry install --only main,dashboard --no-root --no-cache && rm -rf $POETRY_CACHE_DIR
+
+# --- Stage 2: Runtime ---
+FROM python:3.11-slim AS runtime
+
+ENV VIRTUAL_ENV=/app/.venv \
+    PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH="/app" \
+    LOCAL_ROOT=/app
+
+WORKDIR /app
+
+# No heavy runtime deps needed for Dash (unlike ETL which needs libpq5)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/.venv /app/.venv
+
+# Dashboard code and configs
+COPY src/bituslabs_ds ./bituslabs_ds
+COPY src/dashboards ./src/dashboards
+
+# Run dashboard on 0.0.0.0 so it's reachable from outside the container
+# Port 8050 is Dash's default
+ENV DASHBOARD_CONFIG_DIR=/app/src/dashboards
+EXPOSE 8050
+
+CMD ["python", "src/dashboards/game_stats_monitor.py"]
