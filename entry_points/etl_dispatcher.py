@@ -6,8 +6,7 @@ Usage:
   python etl_dispatcher.py job1 job2 -- --bastion-ip 13.215.212.244
 
 Examples:
-  python etl_dispatcher.py fish_hunter/etl_game_stats_daily_by_user.py --bastion-ip 13.215.212.244
-  python etl_dispatcher.py fish_hunter/etl_game_stats_daily_by_user.py ss01_wucaishen/etl_game_stats_daily_by_group.py -- --bastion-ip 13.215.212.244
+  python etl_dispatcher.py fish_hunter/etl_game_stats_daily_by_user.py -- --bastion-ip 13.215.212.244
 """
 
 import importlib.util

@@ -92,7 +92,7 @@ When you run a task (RunTask API or EventBridge), pass a different `command`:
 |-----|---------|
 | fish_hunter daily | `["jobs/fish_hunter/etl_game_stats_daily_by_user.py", "--bastion-ip", "13.215.212.244"]` |
 | ss01 by user group | `["jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py", "--bastion-ip", "13.215.212.244"]` |
-| ss01 by group | `["jobs/ss01_wucaishen/etl_game_stats_daily_by_group.py", "--bastion-ip", "13.215.212.244"]` |
+| ss01 by group | `["jobs/operation_daily_report/etl_game_stats_daily_by_group.py", "--bastion-ip", "13.215.212.244"]` |
 
 **EventBridge**: Create one rule per job. Each rule targets the same task definition but overrides the container command in the target.
 

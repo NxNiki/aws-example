@@ -17,9 +17,16 @@ Features:
 """
 
 import os
+from pathlib import Path
 from typing import List, Optional, Union
 
 import matplotlib.pyplot as plt
+
+# Resolve project root for portable paths
+try:
+    from bituslabs_ds.config import LOCAL_ROOT
+except ImportError:
+    LOCAL_ROOT = Path(__file__).resolve().parent.parent.parent
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -28,11 +35,11 @@ import seaborn as sns
 # CONFIGURATION - Modify these variables for your use case
 # ============================================================================
 
-CSV_FILE_PATH = "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/all_user_stats.parquet"
+CSV_FILE_PATH = str(Path(LOCAL_ROOT) / "jobs" / "output_ss01_wucaishen" / "all_user_stats.parquet")
 GROUP_BY_COLUMN = ["ai_group", "math_policy"]
 FILTER_OUT_VALUE = ["rollerCoaster", "dropTower"]
 EXCLUDE_COLUMNS: List[str] = []
-OUTPUT_DIR: Optional[str] = "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/all_user_stats_plot"
+OUTPUT_DIR: Optional[str] = str(Path(LOCAL_ROOT) / "jobs" / "output_ss01_wucaishen" / "all_user_stats_plot")
 BARPLOT_SUBDIR = "barplots"
 BOXPLOT_SUBDIR = "boxplots"
 AGGREGATION = "mean"

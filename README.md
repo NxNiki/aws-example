@@ -72,7 +72,7 @@ Update user name and password for bastion connection then run:
 cp .env.example .env
 # Edit .env if needed, then:
 source .env
-python jobs/ss01_wucaishen/etl_game_stats_daily_by_group.py
+poetry run python jobs/operation_daily_report/run_daily_report.py
 ```
 
 Check [etl.py](https://github.com/NxNiki/aws-example/blob/main/src/bituslabs_ds/etl.py) to see sample to execute sql query.

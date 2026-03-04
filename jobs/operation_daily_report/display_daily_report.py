@@ -1,13 +1,14 @@
-from textwrap import dedent
-from typing import List
+"""
+Display SS01 daily report (Control vs AI vs PA).
+"""
+
+import argparse
+from pathlib import Path
 
 import pandas as pd
 
-from bituslabs_ds.config import LOCAL_ROOT
 
-
-def generate_daily_report(df: pd.DataFrame, df_pa: pd.DataFrame, n_days=6) -> None:
-    # Convert activity_date columns to datetime if they aren't already
+def generate_daily_report(df: pd.DataFrame, df_pa: pd.DataFrame, lookback_days: int = 7) -> str:
     df["activity_date"] = pd.to_datetime(df["activity_date"])
     df_pa["activity_date"] = pd.to_datetime(df_pa["activity_date"])
 
@@ -29,10 +30,10 @@ def generate_daily_report(df: pd.DataFrame, df_pa: pd.DataFrame, n_days=6) -> No
     ]
 
     dates = sorted(df["activity_date"].unique(), reverse=True)
-
-    for date in dates[1 : n_days + 1]:
+    # dates[0] is most recent; we skip it (dates[1] is yesterday). Show last lookback_days.
+    chunks = []
+    for date in dates[1 : lookback_days + 1]:
         df_date = df[df["activity_date"] == date]
-        # Subtract one year from the target date for df_pa selection
         pa_date = date - pd.DateOffset(years=1)
         df_pa_date = df_pa[df_pa["activity_date"] == pa_date]
 
@@ -42,12 +43,14 @@ def generate_daily_report(df: pd.DataFrame, df_pa: pd.DataFrame, n_days=6) -> No
             ai_val = get_value(df_date, col, "AI")
             pa_val = get_value(df_pa_date, col)
             if i > 4:
-                rows.append(f"| {metric_cn} | {default_val} | {ai_val} | {pa_val:.4f} |")
+                try:
+                    pa_fmt = f"{float(pa_val):.4f}" if pa_val != "" else pa_val
+                except (TypeError, ValueError):
+                    pa_fmt = str(pa_val)
+                rows.append(f"| {metric_cn} | {default_val} | {ai_val} | {pa_fmt} |")
             else:
                 rows.append(f"| {metric_cn} | {default_val} | {ai_val} | {pa_val} |")
 
-        # Remove extra leading/trailing spaces in header lines and ensure no extra leading spaces in the first n rows
-        # Add 6 hours to date and pa_date for display in report
         date = date + pd.Timedelta(hours=6)
         pa_date = pa_date + pd.Timedelta(hours=6)
         lines = [
@@ -59,15 +62,25 @@ def generate_daily_report(df: pd.DataFrame, df_pa: pd.DataFrame, n_days=6) -> No
         ] + rows
 
         report = "\n" + "\n".join([line.strip() for line in lines]) + "\n"
+        chunks.append(report)
+    return "\n".join(chunks)
 
-        print(report)
+
+def _load_data(output_dir: Path):
+    """Load HG and PA data from output_dir."""
+    hg_path = output_dir / "stats_by_date.parquet"
+    pa_path = output_dir / "stats_by_day_pa.parquet"
+    df_hg = pd.read_parquet(hg_path)
+    df_pa = pd.read_parquet(pa_path)
+    return df_hg, df_pa
 
 
 if __name__ == "__main__":
-    file_path = f"{LOCAL_ROOT}/jobs/output_ss01_wucaishen/stats_by_date.parquet"
-    df_hg = pd.read_parquet(file_path)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--lookback-days", type=int, default=7, help="Number of past days to report (default: 7)")
+    args = parser.parse_args()
 
-    file_path = f"{LOCAL_ROOT}/jobs/output_ss01_wucaishen/stats_by_day_pa.parquet"
-    df_pa = pd.read_parquet(file_path)
-
-    generate_daily_report(df_hg, df_pa)
+    output_dir = Path(__file__).resolve().parent / "output"
+    df_hg, df_pa = _load_data(output_dir)
+    report = generate_daily_report(df_hg, df_pa, lookback_days=args.lookback_days)
+    print(report)

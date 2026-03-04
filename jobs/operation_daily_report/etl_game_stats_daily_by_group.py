@@ -1,5 +1,10 @@
+"""
+ETL game stats daily by group (Redshift).
+"""
+
 import argparse
 import os
+from pathlib import Path
 from textwrap import dedent
 
 from bituslabs_ds.config import (
@@ -12,9 +17,6 @@ from bituslabs_ds.config import (
     setup_logging,
 )
 from bituslabs_ds.etl import DataLoader, RedshiftBackend
-
-# TODO:
-# add max/min user daily profit
 
 query = dedent(
     """
@@ -107,16 +109,13 @@ query = dedent(
 
             COUNT(DISTINCT t.user_id) AS num_active_users,
 
-            -- total number of bets:
             COUNT(t.user_id) AS num_bets,
             COUNT(CASE WHEN t.bet_type = 'BASE' THEN t.user_id END) AS num_bets_bg,
             COUNT(CASE WHEN t.bet_type = 'FREE' THEN t.user_id END) AS num_bets_fg,
 
-            -- total bet amount:
             SUM(t.bet_amount) AS total_bet,
             SUM(CASE WHEN t.bet_type = 'BASE' THEN t.bet_amount END) AS total_bet_bg,
 
-            -- total payout amount:
             SUM(t.payout) AS total_payout,
             SUM(CASE WHEN t.bet_type = 'BASE' THEN t.payout END) AS total_payout_bg,
             SUM(CASE WHEN t.bet_type = 'FREE' THEN t.payout END) AS total_payout_fg,
@@ -148,24 +147,18 @@ query = dedent(
 
         ds.avg_delta_t_seconds,
 
-        -- free game ratio
         ur.day0_num_users,
 
-        -- Number of bets and total bet per user:
         ur.day1_num_users,
         ur.day3_num_users,
 
-        -- Profit Calculations
         ds.num_bets_fg * 1.0 / NULLIF(ds.num_bets, 0) AS fg_ratio,
 
-        -- Per-User Bet
         ds.num_bets / NULLIF(ds.num_active_users, 0) AS num_bets_per_user,
         ds.total_bet / NULLIF(ds.num_active_users, 0) AS total_bet_per_user,
         (ds.total_payout - ds.total_bet) AS total_profit,
 
-        -- RTP (Return to Player) Calculations (Fix: NULLIF for bet amounts AND RTP numerator error)
         ds.total_payout / NULLIF(ds.total_bet, 0) AS rtp,
-        -- total bet for base game is same to total bet and free game has 0 bet amount:
         ds.total_payout_bg / NULLIF(ds.total_bet, 0) AS rtp_bg
 
     FROM daily_stats AS ds
@@ -173,13 +166,11 @@ query = dedent(
         ON ds.activity_date = ur.activity_date AND ds.ai_group = ur.ai_group
     ORDER BY ds.activity_date DESC, ds.ai_group DESC
     ;
-
     """
 )
 
 
 if __name__ == "__main__":
-
     setup_logging(f"{LOCAL_ROOT}/jobs/log", log_filename=os.path.splitext(os.path.basename(__file__))[0] + ".log")
 
     parser = argparse.ArgumentParser(description="ETL Game Stats Daily by User Group")
@@ -202,8 +193,10 @@ if __name__ == "__main__":
         )
     )
 
-    file_path = f"{LOCAL_ROOT}/jobs/output_ss01_wucaishen/stats_by_date.parquet"
-    df_rs = redshift_loader.query_to_df(query=query, local_cache=file_path, reload=True)
+    output_dir = Path(__file__).resolve().parent / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    file_path = output_dir / "stats_by_date.parquet"
+    df_rs = redshift_loader.query_to_df(query=query, local_cache=str(file_path), reload=True)
     print(
         df_rs[
             [
