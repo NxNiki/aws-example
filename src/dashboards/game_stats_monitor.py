@@ -810,6 +810,33 @@ class GameStatsDashboard:
                                                 options=cast(Any, self.df_plot_groups),
                                                 value=self.df_plot_groups[: self.DEFAULT_VISIBLE_GROUPS],
                                                 labelStyle=Styles.CHECKLIST_BLOCK,
+                                                style={"columnCount": 3, "columnGap": "8px"},
+                                            ),
+                                        ],
+                                        style=Styles.CONTROL_GROUP,
+                                    ),
+                                    html.Hr(style=Styles.HR),
+                                    html.Div(
+                                        [
+                                            html.Label("Drop duplicates:", style=Styles.CONTROL_LABEL),
+                                            html.Div(
+                                                [
+                                                    dcc.Checklist(
+                                                        id=f"group-{group_id}-drop-activity-date",
+                                                        options=cast(
+                                                            Any, [{"label": " activity_date", "value": "activity_date"}]
+                                                        ),
+                                                        value=[],
+                                                        style=Styles.CHECKLIST_INLINE,
+                                                    ),
+                                                    dcc.Checklist(
+                                                        id=f"group-{group_id}-drop-user-id",
+                                                        options=cast(Any, [{"label": " user_id", "value": "user_id"}]),
+                                                        value=[],
+                                                        style=Styles.CHECKLIST_INLINE,
+                                                    ),
+                                                ],
+                                                style=Styles.FLEX_ROW_CENTER,
                                             ),
                                         ],
                                         style=Styles.CONTROL_GROUP,
@@ -1140,6 +1167,8 @@ class GameStatsDashboard:
                     Input(f"group-g{i}-show-r1", "value"),
                     Input(f"group-g{i}-show-r2", "value"),
                     Input(f"group-g{i}-show-r3", "value"),
+                    Input(f"group-g{i}-drop-activity-date", "value"),
+                    Input(f"group-g{i}-drop-user-id", "value"),
                     Input(f"group-g{i}-clip-enable", "value"),
                     Input(f"group-g{i}-clip-min", "value"),
                     Input(f"group-g{i}-clip-max", "value"),
@@ -1560,6 +1589,8 @@ class GameStatsDashboard:
             show_r1: Any,
             show_r2: Any,
             show_r3: Any,
+            drop_activity_date: Any,
+            drop_user_id: Any,
             clip_enable: Any,
             clip_min: Any,
             clip_max: Any,
@@ -1622,6 +1653,13 @@ class GameStatsDashboard:
             data_ranges = [r for r in data_ranges if r["start"] is not None and r["end"] is not None]
             # Only keep enabled
             data_by_range = [r for r in data_ranges if r["show"]]
+            drop_cols: List[str] = []
+            if drop_activity_date and "activity_date" in (drop_activity_date or []):
+                date_col_name = "activity_date" if "activity_date" in df_date.columns else self.date_col
+                if date_col_name in df_date.columns:
+                    drop_cols.append(date_col_name)
+            if drop_user_id and "user_id" in (drop_user_id or []):
+                drop_cols.append("user_id")
             enable_clip = clip_enable is not None and "ON" in (clip_enable or [])
             cmin = clip_min if enable_clip and clip_min is not None else None
             cmax = clip_max if enable_clip and clip_max is not None else None
@@ -1639,6 +1677,9 @@ class GameStatsDashboard:
                             & (pl.col(self.date_col) <= end_dt)
                             & (pl.col(self.df_date_group_col) == group)
                         )
+                        valid_drop = [c for c in drop_cols if c in df_g.columns]
+                        if valid_drop:
+                            df_g = df_g.unique(subset=valid_drop)
                         vals = df_g.get_column(metric).drop_nulls().to_numpy()
                         if enable_clip and (cmin is not None or cmax is not None):
                             vals = np.clip(
@@ -1678,6 +1719,9 @@ class GameStatsDashboard:
                             & (pl.col(self.date_col) <= end_dt)
                             & (pl.col(self.df_date_group_col) == group)
                         )
+                        valid_drop = [c for c in drop_cols if c in df_g.columns]
+                        if valid_drop:
+                            df_g = df_g.unique(subset=valid_drop)
                         vals = df_g.get_column(metric).drop_nulls().to_numpy()
                         if enable_clip and (cmin is not None or cmax is not None):
                             vals = np.clip(
@@ -1695,8 +1739,9 @@ class GameStatsDashboard:
                         med_val = float(np.median(vals))
                         min_val = float(np.min(vals))
                         max_val = float(np.max(vals))
+                        n_samples = len(vals)
                         text_stats.append(
-                            f"μ={mean_val:.2f}<br>med={med_val:.2f}<br>max={max_val:.2f}<br>min={min_val:.2f}"
+                            f"n={n_samples}<br>μ={mean_val:.2f}<br>med={med_val:.2f}<br>max={max_val:.2f}<br>min={min_val:.2f}"
                         )
                         if ri == 0:
                             mcolors_box.append(dict(color=color_base, opacity=1.0, line=dict(color="#333", width=1)))
