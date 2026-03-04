@@ -20,14 +20,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Resolve project root and ensure bituslabs_ds (in src/) is importable
-_script_dir = Path(__file__).resolve().parent
-_project_root = _script_dir.parent.parent
-_src_root = _project_root / "src"
-for p in (_src_root, _project_root):
-    if str(p) not in sys.path:
-        sys.path.insert(0, str(p))
-
 from bituslabs_ds.config import LOCAL_ROOT, setup_logging
 
 OP_DIR = Path(__file__).resolve().parent
@@ -124,8 +116,8 @@ def main():
     parser.add_argument(
         "--lookback-days",
         type=int,
-        default=7,
-        help="Number of days for daily report (default: 7)",
+        default=1,
+        help="Number of days for daily report (default: 1)",
     )
     parser.add_argument(
         "--reload-cached-etl",
