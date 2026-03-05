@@ -206,6 +206,16 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             FROM user_bets_group AS t
             WHERE t.user_bet_count >= 40
             GROUP BY t.{stats_agg_col}, t.ai_group
+        ),
+
+        group_no_fg AS (
+            SELECT
+                {stats_agg_col},
+                ai_group,
+                COUNT(*) AS num_active_users_no_fg
+            FROM user_stats
+            WHERE user_num_bets_fg = 0
+            GROUP BY {stats_agg_col}, ai_group
         )
 
         SELECT
@@ -215,6 +225,8 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             us.user_mathtable_change,
 
             gs.num_active_users,
+            CASE WHEN us.user_num_bets_fg = 0 THEN 1 ELSE 0 END AS active_user_no_fg,
+            COALESCE(gn.num_active_users_no_fg, 0) * 1.0 / NULLIF(gs.num_active_users, 0) AS active_user_no_fg_ratio,
 
             gs.total_num_bets,
             gs.total_num_bets_bg,
@@ -276,6 +288,8 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
         FROM user_stats AS us
         INNER JOIN group_stats AS gs
             ON us.{stats_agg_col} = gs.{stats_agg_col} AND us.ai_group = gs.ai_group
+        LEFT JOIN group_no_fg AS gn
+            ON us.{stats_agg_col} = gn.{stats_agg_col} AND us.ai_group = gn.ai_group
         INNER JOIN user_retention AS ur
             ON us.{stats_agg_col} = ur.{stats_agg_col} AND us.ai_group = ur.ai_group
         ORDER BY us.{stats_agg_col} DESC, us.ai_group DESC, us.user_id DESC;
@@ -300,7 +314,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--overwrite",
         action="store_true",
-        default=False,
         help="Overwrite existing S3/local output (full reload from default start date)",
     )
     args = parser.parse_args()

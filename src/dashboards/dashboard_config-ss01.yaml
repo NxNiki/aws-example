@@ -24,8 +24,9 @@ stats_by_date:
     "day0_num_users",
     "day1_num_users",
     "day2_num_users",
-    retention_rate_day1,
-    retention_rate_day3,
+    "active_user_no_fg_ratio",
+    "retention_rate_day1",
+    "retention_rate_day3",
   ]
 
   group2_label: "User RTP and Profit"

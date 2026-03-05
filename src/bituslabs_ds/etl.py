@@ -420,6 +420,82 @@ class ETLScheduler:
         mapping = {"none": [], "year": ["year"], "month": ["year", "month"], "day": ["year", "month", "day"]}
         return mapping.get(level, ["year", "month"])
 
+    def _dataset_has_incomplete_columns(self, job_path: OutputDir, required_columns) -> bool:
+        """
+        Return True if any existing Parquet file under job_path is missing one or more of the
+        required_columns. This is used to detect mixed schemas (old files without newly added
+        metrics) so we can trigger a full reload instead of appending incompatible data.
+
+        On error (e.g. S3 listing/permission, metadata read failure), returns False and logs
+        a WARNING. Use --overwrite to force a full reload when schema may have changed.
+        """
+        try:
+            required_set = set(required_columns)
+
+            if self._is_s3:
+                path_str = output_path_as_str(job_path)
+                if not path_str.endswith("/"):
+                    path_str = path_str + "/"
+                try:
+                    objects = wr.s3.list_objects(path=path_str, suffix=".parquet")
+                except Exception as e:
+                    logger.warning(
+                        f"Schema check: could not list S3 objects at {job_path}: {type(e).__name__}: {e}. "
+                        "Skipping schema validation; incremental append will proceed. "
+                        "If new columns were added, run with --overwrite to force a full reload."
+                    )
+                    return False
+
+                # Exclude sibling dirs: "daily_stats/" must not match "daily_stats_pa/..."
+                path_str_slash = path_str.rstrip("/") + "/"
+                objects = [o for o in objects if o.startswith(path_str_slash)]
+
+                for obj in objects:
+                    try:
+                        columns_types, _ = wr.s3.read_parquet_metadata(path=obj, dataset=False)
+                    except Exception as e:
+                        logger.debug(f"Could not read metadata for {obj}: {e}")
+                        continue
+                    existing = set(columns_types.keys())
+                    missing = required_set - existing
+                    if missing:
+                        logger.info(
+                            f"Schema check: file {obj} missing {len(missing)} columns: {sorted(missing)[:10]}{'...' if len(missing) > 10 else ''}. "
+                            "Triggering full reload."
+                        )
+                        return True
+
+                if len(objects) == 0:
+                    logger.info(
+                        f"Schema check: no parquet files found under {path_str}; treating as no existing data (will append)."
+                    )
+                return False
+
+            # Local filesystem
+            path = job_path if isinstance(job_path, Path) else Path(job_path)
+            if not path.exists():
+                return False
+
+            for f in path.rglob("*.parquet"):
+                try:
+                    schema = pq.read_schema(f)
+                except Exception as e:
+                    logger.debug(f"Could not read schema for {f}: {e}")
+                    continue
+                existing = {schema.field(i).name for i in range(schema.num_fields)}
+                if not required_set.issubset(existing):
+                    return True
+
+            return False
+
+        except Exception as e:
+            logger.warning(
+                f"Schema completeness check failed at {job_path}: {type(e).__name__}: {e}. "
+                "Skipping schema validation; incremental append will proceed. "
+                "If new columns were added, run with --overwrite to force a full reload."
+            )
+            return False
+
     def _get_max_date(self, job_path: OutputDir, date_col: str) -> Optional[datetime]:
         """
         Scans the partitioned Parquet dataset to find the maximum processed date.
@@ -602,12 +678,39 @@ class ETLScheduler:
             logger.info(f"[{job_name}] No new records to process.")
             return
 
+        partition_cols = self._get_partition_cols(partition_level)
+        write_mode: Literal["append", "overwrite"] = "overwrite" if self.overwrite else "append"
+
+        # 2b. Schema change detection (append mode): if any existing file is missing
+        # one of the current query's columns, do a full reload and overwrite.
+        if write_mode == "append":
+            required_columns = set(df.columns)
+            has_incomplete = self._dataset_has_incomplete_columns(job_path, required_columns)
+            if has_incomplete:
+                logger.info(
+                    f"[{job_name}] Schema change detected (e.g. new columns in query). "
+                    "Doing full reload to keep dataset consistent."
+                )
+                start_date_str = self.default_start_date
+                try:
+                    sql = query_func(start_date_str)
+                    df = self.loader.query_to_df(query=sql)
+                except Exception as e:
+                    logger.error(f"[{job_name}] Full reload fetch failed: {e}")
+                    return
+                if df is None or df.empty:
+                    logger.warning(f"[{job_name}] Full reload returned no data.")
+                    return
+                write_mode = "overwrite"
+            else:
+                logger.info(
+                    f"[{job_name}] Schema check passed (existing data has all {len(required_columns)} columns)."
+                )
+
         # 3. Data Preparation & Partitioning
         # Ensure date_col is datetime objects for extraction
         df[date_col] = pd.to_datetime(df[date_col])
         df["_processed_at"] = datetime.now()
-
-        partition_cols = self._get_partition_cols(partition_level)
 
         if "year" in partition_cols:
             df["year"] = df[date_col].dt.year
@@ -634,7 +737,6 @@ class ETLScheduler:
                     # logger.debug(f"Sample values for {col}: {df[col].head(3).tolist()}")
 
         # 4. Atomic Write with Partitioning
-        write_mode: Literal["append", "overwrite"] = "overwrite" if self.overwrite else "append"
         if self._is_s3:
             wr.s3.to_parquet(
                 df=df,
@@ -646,7 +748,7 @@ class ETLScheduler:
             )
         else:
             try:
-                if self.overwrite:
+                if write_mode == "overwrite":
                     path = job_path if isinstance(job_path, Path) else Path(job_path)
                     if path.exists():
                         shutil.rmtree(path)
