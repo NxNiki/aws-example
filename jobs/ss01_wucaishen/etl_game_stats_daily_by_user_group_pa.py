@@ -1,3 +1,4 @@
+import argparse
 import os
 from textwrap import dedent
 
@@ -187,6 +188,14 @@ def execute_query(output_file, stats_agg_col):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="ETL Game Stats Daily by User Group (Athena)")
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        default=False,
+        help="Overwrite existing S3/local output (full reload from default start date)",
+    )
+    args = parser.parse_args()
 
     data_loader = DataLoader(
         backend=AthenaBackend(
@@ -199,7 +208,10 @@ if __name__ == "__main__":
 
     # Initialize Scheduler
     scheduler = ETLScheduler(
-        data_loader=data_loader, storage_root=f"{LOCAL_ROOT}/jobs/output_ss01_wucaishen", lookback_days=3
+        data_loader=data_loader,
+        storage_root=f"{LOCAL_ROOT}/jobs/output_ss01_wucaishen",
+        lookback_days=3,
+        overwrite=args.overwrite,
     )
 
     scheduler.run_incremental_job(

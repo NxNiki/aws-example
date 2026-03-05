@@ -1,3 +1,4 @@
+import argparse
 import os
 from textwrap import dedent
 
@@ -180,6 +181,14 @@ def execute_query(output_file, stats_agg_col):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="ETL Game Stats by Date (Athena)")
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        default=False,
+        help="Overwrite existing S3/local output (full reload from default start date)",
+    )
+    args = parser.parse_args()
 
     setup_logging(f"{LOCAL_ROOT}/jobs/log", log_filename=os.path.splitext(os.path.basename(__file__))[0] + ".log")
 
@@ -190,7 +199,12 @@ if __name__ == "__main__":
         )
     )
     # Initialize Scheduler with a default 3-day lookback
-    scheduler = ETLScheduler(data_loader, f"{DEFAULT_ETL_OUTPUT}/jobs/output_fish_hunter", lookback_days=3)
+    scheduler = ETLScheduler(
+        data_loader,
+        f"{DEFAULT_ETL_OUTPUT}/jobs/output_fish_hunter",
+        lookback_days=3,
+        overwrite=args.overwrite,
+    )
 
     scheduler.run_incremental_job(
         job_name="daily_stats_pa",

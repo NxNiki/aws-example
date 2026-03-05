@@ -393,11 +393,18 @@ class ETLScheduler:
     Supports dynamic watermark detection and customizable lookback windows.
     """
 
-    def __init__(self, data_loader: DataLoader, storage_root: OutputDir, lookback_days: int = 3):
+    def __init__(
+        self,
+        data_loader: DataLoader,
+        storage_root: OutputDir,
+        lookback_days: int = 3,
+        overwrite: bool = False,
+    ):
         self.loader = data_loader
         self._is_s3, self._storage_root = normalize_storage_root(storage_root)
         self.lookback_days = lookback_days
         self.default_start_date = "2025-01-01"
+        self.overwrite = overwrite
 
     @property
     def is_s3(self) -> bool:
@@ -558,8 +565,8 @@ class ETLScheduler:
         job_path = self._job_path(job_name)
         days_to_lookback = lookback if lookback is not None else self.lookback_days
 
-        # 1. Detect Watermark
-        last_date = self._get_max_date(job_path, date_col)
+        # 1. Detect Watermark (skip if overwrite mode)
+        last_date = None if self.overwrite else self._get_max_date(job_path, date_col)
 
         if last_date:
             # Shift back to handle late-arriving data
@@ -576,9 +583,12 @@ class ETLScheduler:
             start_date_str = start_dt_obj.strftime("%Y-%m-%d")
             logger.info(f"[{job_name}] Incremental start: {start_date_str} (Lookback: {days_to_lookback}d)")
         else:
-            # Initial Load
+            # Initial Load (or overwrite mode)
             start_date_str = self.default_start_date
-            logger.info(f"[{job_name}] No existing data found. Starting full load from {start_date_str}")
+            if self.overwrite:
+                logger.info(f"[{job_name}] Overwrite mode: full reload from {start_date_str}")
+            else:
+                logger.info(f"[{job_name}] No existing data found. Starting full load from {start_date_str}")
 
         # 2. Fetch Data via the provided Loader
         try:
@@ -624,17 +634,23 @@ class ETLScheduler:
                     # logger.debug(f"Sample values for {col}: {df[col].head(3).tolist()}")
 
         # 4. Atomic Write with Partitioning
+        write_mode: Literal["append", "overwrite"] = "overwrite" if self.overwrite else "append"
         if self._is_s3:
             wr.s3.to_parquet(
                 df=df,
                 path=output_path_as_str(job_path),
                 dataset=True,
                 partition_cols=partition_cols,
-                mode="append",
+                mode=write_mode,
                 index=False,
             )
         else:
             try:
+                if self.overwrite:
+                    path = job_path if isinstance(job_path, Path) else Path(job_path)
+                    if path.exists():
+                        shutil.rmtree(path)
+                        logger.info(f"[{job_name}] Cleared existing output for overwrite.")
                 df.to_parquet(
                     path=output_path_as_str(job_path),
                     index=False,

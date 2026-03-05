@@ -27,6 +27,24 @@ from jobs.etl_utils import AggCol, effective_start_date
 # Day boundary: 6 AM Shanghai time (same as fish_hunter)
 DATE_START_HOUR = 6
 
+# Shared column list for user_bets_group UNION (reused across group variants)
+_USER_BETS_GROUP_COLS = """
+                t.created_at,
+                t.activity_date,
+                t.activity_week,
+                t.activity_month,
+                t.user_id,
+                t.bet_amount,
+                t.payout,
+                t.bet_type,
+                t.profit,
+                t.delta_t,
+                t.user_bet_count,
+                t.mathtable_change,
+                t.prev_bet_type,
+                t.prev_bet_amount,
+                CASE WHEN t.bet_type = 'FREE' AND t.prev_bet_type = 'BASE' THEN t.prev_bet_amount END AS fg_session_trigger_bet,"""
+
 # TODO:
 # add max/min user daily profit
 
@@ -49,6 +67,8 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             CAST(DATE_TRUNC('month', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_month,
             t.partition_ab[0] AS ab_group_id,
             t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.created_at) AS delta_t,
+            LAG(t.bet_type) OVER (PARTITION BY t.user_id ORDER BY t.created_at) AS prev_bet_type,
+            LAG(t.bet_amount) OVER (PARTITION BY t.user_id ORDER BY t.created_at) AS prev_bet_amount,
             COUNT(t.user_id) OVER (PARTITION BY t.user_id) AS user_bet_count,
             CASE
                 WHEN LAG(t.script_id) OVER (PARTITION BY t.user_id ORDER BY t.created_at) IS NULL THEN 0
@@ -67,18 +87,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
 
         user_bets_group AS (
             SELECT
-                t.created_at,
-                t.activity_date,
-                t.activity_week,
-                t.activity_month,
-                t.user_id,
-                t.bet_amount,
-                t.payout,
-                t.bet_type,
-                t.profit,
-                t.delta_t,
-                t.user_bet_count,
-                t.mathtable_change,
+                {_USER_BETS_GROUP_COLS}
                 CASE
                     WHEN t.ab_group_id != 'jojpin-9mokha-rexQug' THEN 'Default'
                     ELSE 'AI'
@@ -89,18 +98,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             UNION ALL
 
             SELECT
-                t.created_at,
-                t.activity_date,
-                t.activity_week,
-                t.activity_month,
-                t.user_id,
-                t.bet_amount,
-                t.payout,
-                t.bet_type,
-                t.profit,
-                t.delta_t,
-                t.user_bet_count,
-                t.mathtable_change,
+                {_USER_BETS_GROUP_COLS}
                 t.mathtable AS ai_group
             FROM
                 user_bets AS t
@@ -110,18 +108,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             UNION ALL
 
             SELECT
-                t.created_at,
-                t.activity_date,
-                t.activity_week,
-                t.activity_month,
-                t.user_id,
-                t.bet_amount,
-                t.payout,
-                t.bet_type,
-                t.profit,
-                t.delta_t,
-                t.user_bet_count,
-                t.mathtable_change,
+                {_USER_BETS_GROUP_COLS}
                 CAST('HG' AS VARCHAR(10)) AS ai_group
             FROM
                 user_bets AS t
@@ -177,6 +164,12 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 SUM(CASE WHEN t.bet_type = 'BASE' THEN t.payout END) AS user_total_payout_bg,
                 SUM(CASE WHEN t.bet_type = 'FREE' THEN t.payout END) AS user_total_payout_fg,
 
+                SUM(t.fg_session_trigger_bet) AS user_total_bet_fg_for_rtp,
+
+                COUNT(CASE WHEN t.payout > 0 THEN 1 END) AS user_num_bets_with_payout,
+                COUNT(CASE WHEN t.bet_type = 'BASE' AND t.payout > 0 THEN 1 END) AS user_num_bets_bg_with_payout,
+                COUNT(CASE WHEN t.bet_type = 'FREE' AND t.payout > 0 THEN 1 END) AS user_num_bets_fg_with_payout,
+
                 AVG(CASE WHEN EXTRACT(EPOCH FROM t.delta_t) BETWEEN 0 AND 86400 THEN EXTRACT(EPOCH FROM t.delta_t) END)
                     AS user_avg_delta_t_seconds,
 
@@ -203,7 +196,13 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
 
                 SUM(t.payout) AS total_payout,
                 SUM(CASE WHEN t.bet_type = 'BASE' THEN t.payout END) AS total_payout_bg,
-                SUM(CASE WHEN t.bet_type = 'FREE' THEN t.payout END) AS total_payout_fg
+                SUM(CASE WHEN t.bet_type = 'FREE' THEN t.payout END) AS total_payout_fg,
+
+                SUM(t.fg_session_trigger_bet) AS total_bet_fg_for_rtp,
+
+                COUNT(CASE WHEN t.payout > 0 THEN 1 END) AS total_num_bets_with_payout,
+                COUNT(CASE WHEN t.bet_type = 'BASE' AND t.payout > 0 THEN 1 END) AS total_num_bets_bg_with_payout,
+                COUNT(CASE WHEN t.bet_type = 'FREE' AND t.payout > 0 THEN 1 END) AS total_num_bets_fg_with_payout
             FROM user_bets_group AS t
             WHERE t.user_bet_count >= 40
             GROUP BY t.{stats_agg_col}, t.ai_group
@@ -260,7 +259,19 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             -- total bet for base game is same to total bet and free game has 0 bet amount:
             gs.total_payout_bg / NULLIF(gs.total_bet, 0) AS rtp_bg,
             us.user_total_payout / NULLIF(us.user_total_bet, 0) AS user_rtp,
-            us.user_total_payout_bg / NULLIF(us.user_total_bet, 0) AS user_rtp_bg
+            us.user_total_payout_bg / NULLIF(us.user_total_bet, 0) AS user_rtp_bg,
+
+            -- Free game RTP: payout of free games / trigger bet (bet before free game)
+            us.user_total_payout_fg / NULLIF(us.user_total_bet_fg_for_rtp, 0) AS user_rtp_fg,
+            gs.total_payout_fg / NULLIF(gs.total_bet_fg_for_rtp, 0) AS rtp_fg,
+
+            -- Hit rate: proportion of bets with payout > 0
+            us.user_num_bets_with_payout * 1.0 / NULLIF(us.user_num_bets, 0) AS user_hit_rate,
+            gs.total_num_bets_with_payout * 1.0 / NULLIF(gs.total_num_bets, 0) AS hit_rate,
+            us.user_num_bets_bg_with_payout * 1.0 / NULLIF(us.user_num_bets_bg, 0) AS user_hit_rate_bg,
+            us.user_num_bets_fg_with_payout * 1.0 / NULLIF(us.user_num_bets_fg, 0) AS user_hit_rate_fg,
+            gs.total_num_bets_bg_with_payout * 1.0 / NULLIF(gs.total_num_bets_bg, 0) AS hit_rate_bg,
+            gs.total_num_bets_fg_with_payout * 1.0 / NULLIF(gs.total_num_bets_fg, 0) AS hit_rate_fg
 
         FROM user_stats AS us
         INNER JOIN group_stats AS gs
@@ -286,6 +297,12 @@ if __name__ == "__main__":
         default=DEFAULT_BASTION_IP,
         help=f"Bastion IP address for Redshift tunnel (default: {DEFAULT_BASTION_IP})",
     )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        default=False,
+        help="Overwrite existing S3/local output (full reload from default start date)",
+    )
     args = parser.parse_args()
 
     redshift_loader = DataLoader(
@@ -300,7 +317,12 @@ if __name__ == "__main__":
     )
 
     # Initialize Scheduler with a default 3-day lookback
-    scheduler = ETLScheduler(redshift_loader, f"{DEFAULT_ETL_OUTPUT}/jobs/output_ss01_wucaishen", lookback_days=3)
+    scheduler = ETLScheduler(
+        redshift_loader,
+        f"{DEFAULT_ETL_OUTPUT}/jobs/output_ss01_wucaishen",
+        lookback_days=3,
+        overwrite=args.overwrite,
+    )
 
     scheduler.run_incremental_job(
         job_name="daily_stats",

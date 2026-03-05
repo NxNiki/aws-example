@@ -223,6 +223,7 @@ def main() -> None:
     parser.add_argument(
         "--build-first",
         action="store_true",
+        default=False,
         help="Run docker_build_dashboard.sh before deploying",
     )
     parser.add_argument(

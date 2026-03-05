@@ -35,15 +35,25 @@ stats_by_date:
     "user_total_bet",
     "user_total_profit",
     "user_rtp",
+    "user_rtp_bg",
+    "user_rtp_fg",
+    "user_hit_rate",
+    "user_hit_rate_bg",
+    "user_hit_rate_fg",
     "user_fg_ratio",
   ]
 
-  group3_label: "Group RTP and Profit"
+  group3_label: "Total RTP and Profit"
   group3_columns: [
     "total_num_bets",
     "total_bet",
     "total_profit",
     "rtp",
+    "rtp_bg",
+    "rtp_fg",
+    "hit_rate",
+    "hit_rate_bg",
+    "hit_rate_fg",
     "fg_ratio",
   ]
 

@@ -372,6 +372,12 @@ if __name__ == "__main__":
         default=DEFAULT_BASTION_IP,
         help=f"Bastion IP address for Redshift tunnel (default: {DEFAULT_BASTION_IP})",
     )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        default=False,
+        help="Overwrite existing S3/local output (full reload from default start date)",
+    )
     args = parser.parse_args()
 
     redshift_loader = DataLoader(
@@ -386,7 +392,12 @@ if __name__ == "__main__":
     )
 
     # Initialize Scheduler with a default 3-day lookback
-    scheduler = ETLScheduler(redshift_loader, f"{DEFAULT_ETL_OUTPUT}/jobs/output_fish_hunter", lookback_days=3)
+    scheduler = ETLScheduler(
+        redshift_loader,
+        f"{DEFAULT_ETL_OUTPUT}/jobs/output_fish_hunter",
+        lookback_days=3,
+        overwrite=args.overwrite,
+    )
 
     scheduler.run_incremental_job(
         job_name="daily_stats_return_user",
