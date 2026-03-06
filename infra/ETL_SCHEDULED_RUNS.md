@@ -93,6 +93,7 @@ When you run a task (RunTask API or EventBridge), pass a different `command`:
 | fish_hunter daily | `["jobs/fish_hunter/etl_game_stats_daily_by_user.py", "--bastion-ip", "13.215.212.244"]` |
 | ss01 by user group | `["jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py", "--bastion-ip", "13.215.212.244"]` |
 | ss01 by group | `["jobs/operation_daily_report/etl_game_stats_daily_by_group.py", "--bastion-ip", "13.215.212.244"]` |
+| operation daily report (+ Slack) | `["jobs/operation_daily_report/run_daily_report.py", "--bastion-ip", "13.215.212.244", "--send-slack"]` |
 
 **EventBridge**: Create one rule per job. Each rule targets the same task definition but overrides the container command in the target.
 
@@ -151,6 +152,49 @@ docker run --rm \
   -e AWS_ACCESS_KEY_ID=... -e AWS_SECRET_ACCESS_KEY=... \
   338568447110.dkr.ecr.us-west-2.amazonaws.com/bituslabs-ds-etl:latest \
   fish_hunter/etl_game_stats_daily_by_user.py --bastion-ip 13.215.212.244
+```
+
+## Operation Daily Report (with Slack)
+
+The operation daily report (`jobs/operation_daily_report/run_daily_report.py`) runs ETL, generates a daily metrics report, and can send it to Slack.
+
+### Setup scheduled run with Slack
+
+1. **Create Slack App and Bot** (one-time):
+   - Create a Slack App at https://api.slack.com/apps
+   - Add Bot Token Scopes: `chat:write`, `channels:read` (for public channels)
+   - Install the app to your workspace and copy the Bot OAuth token (xoxb-...)
+   - Invite the bot to your channel: `/invite @YourBotName`
+
+2. **Store secrets in Secrets Manager**:
+   ```bash
+   aws secretsmanager create-secret --name etl/slack-bot-token \
+     --secret-string "xoxb-your-bot-token" --region us-west-2
+   aws secretsmanager create-secret --name etl/slack-channel-id \
+     --secret-string "C01234567" --region us-west-2  # or channel name like #daily-reports
+   ```
+
+3. **Run the setup script**:
+   ```bash
+   export SUBNETS="subnet-xxx,subnet-yyy"
+   export SECURITY_GROUP="sg-xxx"
+   bash infra/setup_operation_daily_report_schedule.sh
+   ```
+
+4. **Adjust schedule** (optional): Default is 14:30 UTC (22:30 Beijing). Override:
+   ```bash
+   export DAILY_REPORT_SCHEDULE="cron(0 15 * * ? *)"  # 15:00 UTC
+   bash infra/setup_operation_daily_report_schedule.sh
+   ```
+
+5. **Grant IAM permissions**: Ensure `ecsTaskExecutionRole` has `secretsmanager:GetSecretValue` on `etl/slack-bot-token` and `etl/slack-channel-id`.
+
+### Local run with Slack
+
+```bash
+export SLACK_BOT_TOKEN="xoxb-..."
+export SLACK_CHANNEL_ID="#daily-reports"  # or channel ID
+poetry run python jobs/operation_daily_report/run_daily_report.py --send-slack
 ```
 
 ## Summary

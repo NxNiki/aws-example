@@ -63,6 +63,7 @@ optional = true
 redshift_connector = "^2.0.0"
 paramiko = "^4.0.0"
 awswrangler = "^3.7.0"
+slack-sdk = "^3.27.0"
 
 [tool.poetry.group.spark]
 optional = true

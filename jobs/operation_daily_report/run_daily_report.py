@@ -12,6 +12,11 @@ Final report is printed cleanly at the end (no logging mixed in).
 
 Usage:
   poetry run python jobs/operation_daily_report/run_daily_report.py [--bastion-ip IP]
+  poetry run python jobs/operation_daily_report/run_daily_report.py --send-slack  # send report to Slack
+
+Environment variables for Slack (when --send-slack):
+  SLACK_BOT_TOKEN   - Slack Bot OAuth token (e.g. xoxb-...)
+  SLACK_CHANNEL_ID  - Slack channel ID (e.g. C01234567) or channel name (e.g. #daily-reports)
 """
 
 import argparse
@@ -24,6 +29,41 @@ from bituslabs_ds.config import LOCAL_ROOT, setup_logging
 
 OP_DIR = Path(__file__).resolve().parent
 LOG_DIR = Path(LOCAL_ROOT) / "jobs" / "log"
+
+
+def _send_report_to_slack(report_text: str, channel: str | None = None) -> bool:
+    """Send report to Slack. Returns True on success."""
+    token = os.environ.get("SLACK_BOT_TOKEN")
+    chan = channel or os.environ.get("SLACK_CHANNEL_ID")
+    if not token:
+        print("[WARN] SLACK_BOT_TOKEN not set; skipping Slack send")
+        return False
+    if not chan:
+        print("[WARN] SLACK_CHANNEL_ID not set; skipping Slack send")
+        return False
+
+    try:
+        from slack_sdk import WebClient
+        from slack_sdk.errors import SlackApiError
+
+        client = WebClient(token=token)
+        # Slack text field has 40k char limit; split if needed
+        max_len = 39_000
+        if len(report_text) <= max_len:
+            client.chat_postMessage(channel=chan, text=f"📊 *Daily Report*\n\n```\n{report_text}\n```")
+        else:
+            chunks = [report_text[i : i + max_len] for i in range(0, len(report_text), max_len)]
+            for i, chunk in enumerate(chunks):
+                prefix = "📊 *Daily Report* " if i == 0 else ""
+                client.chat_postMessage(channel=chan, text=f"{prefix}({i + 1}/{len(chunks)})\n```\n{chunk}\n```")
+        print(f"[OK] Report sent to Slack channel {chan}")
+        return True
+    except SlackApiError as e:
+        print(f"[ERROR] Slack API error: {e.response['error']}")
+        return False
+    except Exception as e:
+        print(f"[ERROR] Failed to send to Slack: {e}")
+        return False
 
 
 def _run_script(script_path: Path, args: list[str]) -> bool:
@@ -124,6 +164,17 @@ def main():
         action="store_true",
         help="Force re-run ETL for stats_by_day_pa, fishhunter_product_id_pa, slot_product_id_pa (default: use cache)",
     )
+    parser.add_argument(
+        "--send-slack",
+        action="store_true",
+        help="Send the final report to Slack (requires SLACK_BOT_TOKEN and SLACK_CHANNEL_ID env vars)",
+    )
+    parser.add_argument(
+        "--slack-channel",
+        type=str,
+        default=None,
+        help="Override Slack channel (default: use SLACK_CHANNEL_ID env)",
+    )
     args = parser.parse_args()
 
     extra_args = []
@@ -200,14 +251,20 @@ def main():
             print("[OK] Check PID difference completed")
 
     # --- Final combined report (clean output for submission) ---
+    full_report = "\n".join(report_chunks) if report_chunks else ""
     if report_chunks:
         print("\n" + "=" * 60)
         print("FINAL REPORT FOR SUBMISSION")
         print("=" * 60)
-        print("\n".join(report_chunks))
+        print(full_report)
         print("=" * 60)
         print("END OF REPORT")
         print("=" * 60)
+
+    # --- Send to Slack if requested ---
+    if args.send_slack and full_report:
+        print("\nSending report to Slack...")
+        _send_report_to_slack(full_report, channel=args.slack_channel)
 
     if failed:
         print(f"\n[FAILED] {len(failed)} step(s): {', '.join(failed)}")
