@@ -13,6 +13,7 @@ import numpy as np
 import plotly.graph_objects as go
 import polars as pl
 from dash import Dash, Input, Output, State, callback_context, dcc, html, no_update
+from flask import request
 from plotly.subplots import make_subplots
 
 from bituslabs_ds.config import LOCAL_ROOT, setup_logging
@@ -209,6 +210,35 @@ class GameStatsDashboard:
         self.config = load_config(self.config_files[0]["value"])
 
         self.app: Dash = Dash(__name__, suppress_callback_exceptions=True)
+
+        @self.app.server.route("/health")
+        def health():
+            return "ok", 200
+
+        @self.app.server.after_request
+        def _emit_user_request_metric(response):
+            """Emit CloudWatch metric for user requests (excludes /health for scale-to-zero)."""
+            if request.path != "/health":
+                try:
+                    import boto3
+
+                    cw = boto3.client("cloudwatch")
+                    service_name = os.environ.get("DASHBOARD_SERVICE_NAME", "game-stats-dashboard")
+                    cw.put_metric_data(
+                        Namespace="Dashboard",
+                        MetricData=[
+                            {
+                                "MetricName": "UserRequestCount",
+                                "Dimensions": [{"Name": "Service", "Value": service_name}],
+                                "Value": 1,
+                                "Unit": "Count",
+                            }
+                        ],
+                    )
+                except Exception as e:
+                    logger.debug("Could not emit UserRequestCount metric: %s", e)
+            return response
+
         self._build_main_layout()
         self._register_callbacks()
         self._load_date_data()

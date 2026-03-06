@@ -52,9 +52,12 @@ S3_BUCKET = "bituslabs-team-ai"
 IMAGE_NAME = "bituslabs-ds-dashboard"
 DASHBOARD_PORT = 8050
 
-# Target group health check (faster = quicker cold start; cost impact negligible)
-TG_HEALTH_CHECK_INTERVAL = 10
+# Target group health check: use /health path (excluded from request counting for scale-in)
+# Max interval 300s to minimize health-check traffic so scale-to-zero can trigger
+HEALTH_CHECK_PATH = "/health"
+TG_HEALTH_CHECK_INTERVAL = 300
 TG_HEALTHY_THRESHOLD = 2
+SCALE_IN_IDLE_MINUTES = 180  # Scale to 0 after 3 hours with no user requests
 
 
 def get_account_id(sts_client) -> str:
@@ -115,7 +118,13 @@ S3_DASHBOARD_POLICY = {
                 f"arn:aws:s3:::{S3_DASHBOARD_BUCKET}",
                 f"arn:aws:s3:::{S3_DASHBOARD_BUCKET}/*",
             ],
-        }
+        },
+        {
+            "Effect": "Allow",
+            "Action": ["cloudwatch:PutMetricData"],
+            "Resource": "*",
+            "Condition": {"StringEquals": {"cloudwatch:namespace": ["Dashboard"]}},
+        },
     ],
 }
 
@@ -469,7 +478,7 @@ def main() -> None:
             VpcId=vpc_id,
             TargetType="ip",
             HealthCheckProtocol="HTTP",
-            HealthCheckPath="/",
+            HealthCheckPath=HEALTH_CHECK_PATH,
             HealthCheckIntervalSeconds=TG_HEALTH_CHECK_INTERVAL,
             HealthyThresholdCount=TG_HEALTHY_THRESHOLD,
             UnhealthyThresholdCount=3,
@@ -486,6 +495,7 @@ def main() -> None:
     # Update target group health check (affects existing TGs too)
     elbv2.modify_target_group(
         TargetGroupArn=tg_arn,
+        HealthCheckPath=HEALTH_CHECK_PATH,
         HealthCheckIntervalSeconds=TG_HEALTH_CHECK_INTERVAL,
         HealthyThresholdCount=TG_HEALTHY_THRESHOLD,
     )
@@ -520,6 +530,7 @@ def main() -> None:
 
     env_vars = [
         {"name": "DASHBOARD_CONFIG_DIR", "value": "/app/src/dashboards"},
+        {"name": "DASHBOARD_SERVICE_NAME", "value": args.service_name},
     ]
     public_url = args.public_url or f"http://{alb_dns}"
     if public_url:
@@ -550,7 +561,7 @@ def main() -> None:
                 "healthCheck": {
                     "command": [
                         "CMD-SHELL",
-                        f"curl -sf http://localhost:{DASHBOARD_PORT}/ || exit 1",
+                        f"curl -sf http://localhost:{DASHBOARD_PORT}{HEALTH_CHECK_PATH} || exit 1",
                     ],
                     "interval": 10,
                     "timeout": 5,
@@ -672,7 +683,8 @@ def main() -> None:
             )
             print("  Scale-out: 503 (no targets) -> add 1 task")
 
-            # Scale in: when no requests for 15 min, scale to 0
+            # Scale in: when no user requests for 3 hours (excludes /health), scale to 0
+            # Uses custom metric UserRequestCount from dashboard app (excludes health checks)
             resp_in = as_client.put_scaling_policy(
                 ServiceNamespace="ecs",
                 ResourceId=resource_id,
@@ -688,23 +700,22 @@ def main() -> None:
             )
             policy_arn_in = resp_in["PolicyARN"]
             alarm_name_in = f"{args.service_name}-scale-in-on-idle"
+            scale_in_period_sec = 60
+            scale_in_eval_periods = (SCALE_IN_IDLE_MINUTES * 60) // scale_in_period_sec  # 180
             cw.put_metric_alarm(
                 AlarmName=alarm_name_in,
-                MetricName="RequestCount",
-                Namespace="AWS/ApplicationELB",
-                Dimensions=[
-                    {"Name": "TargetGroup", "Value": tg_dim},
-                    {"Name": "LoadBalancer", "Value": alb_dim},
-                ],
+                MetricName="UserRequestCount",
+                Namespace="Dashboard",
+                Dimensions=[{"Name": "Service", "Value": args.service_name}],
                 Statistic="Sum",
-                Period=60,
-                EvaluationPeriods=60,
+                Period=scale_in_period_sec,
+                EvaluationPeriods=scale_in_eval_periods,
                 Threshold=1.0,
                 ComparisonOperator="LessThanThreshold",
                 TreatMissingData="breaching",
                 AlarmActions=[policy_arn_in],
             )
-            print("  Scale-in: no requests for 1 hour -> remove 1 task (min 0)")
+            print(f"  Scale-in: no user requests for {SCALE_IN_IDLE_MINUTES} min -> remove 1 task (min 0)")
         except ClientError as e:
             print(f"  Warning: Auto Scaling setup failed: {e}")
             print("  Configure manually in ECS Console -> Service -> Auto Scaling")
