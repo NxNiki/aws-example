@@ -15,7 +15,8 @@ Usage:
   poetry run python jobs/operation_daily_report/run_daily_report.py --send-slack  # send report to Slack
 
 Environment variables for Slack (when --send-slack):
-  SLACK_BOT_TOKEN   - Slack Bot OAuth token (e.g. xoxb-...)
+  SLACK_USER_TOKEN  - Slack User OAuth token (e.g. xoxp-...); messages appear as you. Preferred.
+  SLACK_BOT_TOKEN   - Slack Bot OAuth token (e.g. xoxb-...); alternative if SLACK_USER_TOKEN not set
   SLACK_CHANNEL_ID  - Slack channel ID (e.g. C01234567) or channel name (e.g. #daily-reports)
 """
 
@@ -32,11 +33,11 @@ LOG_DIR = Path(LOCAL_ROOT) / "jobs" / "log"
 
 
 def _send_report_to_slack(report_text: str, channel: str | None = None) -> bool:
-    """Send report to Slack. Returns True on success."""
-    token = os.environ.get("SLACK_BOT_TOKEN")
+    """Send report to Slack. Returns True on success. Uses SLACK_USER_TOKEN or SLACK_BOT_TOKEN."""
+    token = os.environ.get("SLACK_USER_TOKEN") or os.environ.get("SLACK_BOT_TOKEN")
     chan = channel or os.environ.get("SLACK_CHANNEL_ID")
     if not token:
-        print("[WARN] SLACK_BOT_TOKEN not set; skipping Slack send")
+        print("[WARN] SLACK_USER_TOKEN or SLACK_BOT_TOKEN not set; skipping Slack send")
         return False
     if not chan:
         print("[WARN] SLACK_CHANNEL_ID not set; skipping Slack send")
@@ -167,7 +168,7 @@ def main():
     parser.add_argument(
         "--send-slack",
         action="store_true",
-        help="Send the final report to Slack (requires SLACK_BOT_TOKEN and SLACK_CHANNEL_ID env vars)",
+        help="Send the final report to Slack (requires SLACK_USER_TOKEN or SLACK_BOT_TOKEN and SLACK_CHANNEL_ID)",
     )
     parser.add_argument(
         "--slack-channel",

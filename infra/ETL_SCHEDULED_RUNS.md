@@ -192,10 +192,42 @@ The operation daily report (`jobs/operation_daily_report/run_daily_report.py`) r
 ### Local run with Slack
 
 ```bash
-export SLACK_BOT_TOKEN="xoxb-..."
-export SLACK_CHANNEL_ID="#daily-reports"  # or channel ID
+export SLACK_USER_TOKEN="xoxp-..."       # User token (messages appear as you); or use SLACK_BOT_TOKEN
+export SLACK_CHANNEL_ID="#daily-reports" # or channel ID
 poetry run python jobs/operation_daily_report/run_daily_report.py --send-slack
 ```
+
+### Schedule on macOS (launchd)
+
+Lightweight option that runs the daily report locally on your Mac—no AWS ECS needed.
+
+**Prerequisites:**
+- `.env` in the project root with `SLACK_USER_TOKEN` (or `SLACK_BOT_TOKEN`), `SLACK_CHANNEL_ID`, and other required vars (Redshift, bastion, etc.)
+- Mac must be **on and awake** at the scheduled time (does not run when asleep or shut down)
+
+**Setup:**
+
+1. Ensure Slack tokens are in `.env`:
+   ```
+   SLACK_USER_TOKEN=xoxp-...   # User token (messages as you); or SLACK_BOT_TOKEN=xoxb-...
+   SLACK_CHANNEL_ID=C01234567
+   ```
+
+2. Run the install script:
+   ```bash
+   bash infra/setup_daily_report_schedule_mac.sh
+   ```
+
+3. To change the scheduled time, edit `infra/com.operation.daily-report.plist` (set `Hour` 0–23 and `Minute` 0–59 in local time), then re-run the setup script.
+
+**Useful commands:**
+```bash
+launchctl list com.operation.daily-report          # check status
+launchctl unload ~/Library/LaunchAgents/com.operation.daily-report.plist   # stop
+launchctl load ~/Library/LaunchAgents/com.operation.daily-report.plist     # start (after unload)
+```
+
+**Logs:** `jobs/log/daily-report-stdout.log` and `jobs/log/daily-report-stderr.log`
 
 ## Summary
 
