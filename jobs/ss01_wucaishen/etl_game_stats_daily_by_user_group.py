@@ -216,6 +216,16 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             FROM user_stats
             WHERE user_num_bets_fg = 0
             GROUP BY {stats_agg_col}, ai_group
+        ),
+
+        group_0_rtp AS (
+            SELECT
+                {stats_agg_col},
+                ai_group,
+                COUNT(*) AS num_active_users_0_rtp
+            FROM user_stats
+            WHERE user_total_payout = 0
+            GROUP BY {stats_agg_col}, ai_group
         )
 
         SELECT
@@ -227,6 +237,8 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             gs.num_active_users,
             CASE WHEN us.user_num_bets_fg = 0 THEN 1 ELSE 0 END AS active_user_no_fg,
             COALESCE(gn.num_active_users_no_fg, 0) * 1.0 / NULLIF(gs.num_active_users, 0) AS active_user_no_fg_ratio,
+            COALESCE(gn0.num_active_users_0_rtp, 0) AS num_active_user_0_rtp,
+            COALESCE(gn0.num_active_users_0_rtp, 0) * 1.0 / NULLIF(gs.num_active_users, 0) AS active_user_0_rtp_ratio,
 
             gs.total_num_bets,
             gs.total_num_bets_bg,
@@ -290,6 +302,8 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             ON us.{stats_agg_col} = gs.{stats_agg_col} AND us.ai_group = gs.ai_group
         LEFT JOIN group_no_fg AS gn
             ON us.{stats_agg_col} = gn.{stats_agg_col} AND us.ai_group = gn.ai_group
+        LEFT JOIN group_0_rtp AS gn0
+            ON us.{stats_agg_col} = gn0.{stats_agg_col} AND us.ai_group = gn0.ai_group
         INNER JOIN user_retention AS ur
             ON us.{stats_agg_col} = ur.{stats_agg_col} AND us.ai_group = ur.ai_group
         ORDER BY us.{stats_agg_col} DESC, us.ai_group DESC, us.user_id DESC;

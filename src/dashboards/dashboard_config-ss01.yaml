@@ -25,6 +25,7 @@ stats_by_date:
     "day1_num_users",
     "day2_num_users",
     "active_user_no_fg_ratio",
+    "active_user_0_rtp_ratio",
     "retention_rate_day1",
     "retention_rate_day3",
   ]
