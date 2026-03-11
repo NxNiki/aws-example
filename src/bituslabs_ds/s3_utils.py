@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gc
 import io
+import json
 import logging
 import os
 import re
@@ -146,6 +147,24 @@ def write_pandas_to_s3(data: pd.DataFrame, bucket: str, key: str) -> None:
     get_s3_client().put_object(Bucket=bucket, Key=key, Body=csv_buffer.getvalue())
 
     logger.info(f"Writing {key} to {bucket}")
+
+
+def write_json_to_s3(data: Dict[str, Any], s3_path: str) -> None:
+    """Write a JSON-serializable dict to S3."""
+    bucket, key = parse_s3_path(s3_path)
+    bucket = parse_bucket_name(bucket)
+    body = json.dumps(data, indent=2, default=str)
+    get_s3_client().put_object(Bucket=bucket, Key=key, Body=body, ContentType="application/json")
+    logger.info(f"Wrote JSON to s3://{bucket}/{key}")
+
+
+def read_json_from_s3(s3_path: str) -> Dict[str, Any]:
+    """Read a JSON file from S3 and return as dict."""
+    bucket, key = parse_s3_path(s3_path)
+    bucket = parse_bucket_name(bucket)
+    response = get_s3_client().get_object(Bucket=bucket, Key=key)
+    body = response["Body"].read().decode("utf-8")
+    return json.loads(body)
 
 
 def write_spark_to_s3(data: "SparkDataFrame", bucket: str, key: str, file_format: str = "csv") -> None:

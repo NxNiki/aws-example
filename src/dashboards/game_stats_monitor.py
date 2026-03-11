@@ -16,9 +16,9 @@ from dash import Dash, Input, Output, State, callback_context, dcc, html, no_upd
 from flask import request
 from plotly.subplots import make_subplots
 
-from bituslabs_ds.config import LOCAL_ROOT, setup_logging
+from bituslabs_ds.config import DASHBOARD_CONFIG_S3_PATH, LOCAL_ROOT, setup_logging
 from bituslabs_ds.dashboard_utils import bootstrap_worker, load_config
-from bituslabs_ds.s3_utils import read_files
+from bituslabs_ds.s3_utils import list_s3_files, parse_s3_path, read_files, read_json_from_s3, write_json_to_s3
 
 # ==========================================
 # Styling & Constants
@@ -239,9 +239,11 @@ class GameStatsDashboard:
                     logger.debug("Could not emit UserRequestCount metric: %s", e)
             return response
 
+        self._load_date_data()
+        self._ensure_date_plot_groups()
+        self._ensure_bet_groups()
         self._build_main_layout()
         self._register_callbacks()
-        self._load_date_data()
 
     @property
     def date_col(self) -> str:
@@ -587,12 +589,158 @@ class GameStatsDashboard:
                             ],
                             style={"width": "1050px"},
                         ),
+                        html.Div(
+                            [
+                                html.Button(
+                                    "Save Config",
+                                    id="save-config-btn",
+                                    n_clicks=0,
+                                    style={
+                                        "marginRight": "8px",
+                                        "padding": "6px 12px",
+                                        "cursor": "pointer",
+                                        "backgroundColor": "#377EB8",
+                                        "color": "white",
+                                        "border": "none",
+                                        "borderRadius": "4px",
+                                        "fontSize": "13px",
+                                    },
+                                ),
+                                html.Button(
+                                    "Load Config",
+                                    id="load-config-btn",
+                                    n_clicks=0,
+                                    style={
+                                        "padding": "6px 12px",
+                                        "cursor": "pointer",
+                                        "backgroundColor": "#4DAF4A",
+                                        "color": "white",
+                                        "border": "none",
+                                        "borderRadius": "4px",
+                                        "fontSize": "13px",
+                                    },
+                                ),
+                                html.Div(
+                                    id="save-config-modal",
+                                    style={
+                                        "display": "none",
+                                        "position": "fixed",
+                                        "top": "0",
+                                        "left": "0",
+                                        "width": "100%",
+                                        "height": "100%",
+                                        "backgroundColor": "rgba(0,0,0,0.5)",
+                                        "zIndex": 1000,
+                                        "justifyContent": "center",
+                                        "alignItems": "center",
+                                        "flexDirection": "row",
+                                    },
+                                    children=[
+                                        html.Div(
+                                            [
+                                                html.H4("Save dashboard config", style={"marginTop": "0"}),
+                                                html.Label("Config name:", style=Styles.CONTROL_LABEL),
+                                                dcc.Input(
+                                                    id="save-config-filename",
+                                                    type="text",
+                                                    placeholder="my_config.json",
+                                                    style={**Styles.INPUT_FULLWIDTH, "marginBottom": "12px"},
+                                                ),
+                                                html.Label("Or overwrite existing:", style=Styles.CONTROL_LABEL),
+                                                dcc.Dropdown(
+                                                    id="save-config-overwrite",
+                                                    options=[],
+                                                    placeholder="Select to overwrite...",
+                                                    clearable=True,
+                                                    style={"marginBottom": "12px"},
+                                                ),
+                                                html.Div(
+                                                    [
+                                                        html.Button(
+                                                            "Save",
+                                                            id="save-config-confirm",
+                                                            n_clicks=0,
+                                                            style={
+                                                                "marginRight": "8px",
+                                                                "padding": "8px 16px",
+                                                                "cursor": "pointer",
+                                                                "backgroundColor": "#377EB8",
+                                                                "color": "white",
+                                                                "border": "none",
+                                                                "borderRadius": "4px",
+                                                            },
+                                                        ),
+                                                        html.Button(
+                                                            "Cancel",
+                                                            id="save-config-cancel",
+                                                            n_clicks=0,
+                                                            style={
+                                                                "padding": "8px 16px",
+                                                                "cursor": "pointer",
+                                                                "backgroundColor": "#999",
+                                                                "color": "white",
+                                                                "border": "none",
+                                                                "borderRadius": "4px",
+                                                            },
+                                                        ),
+                                                    ],
+                                                    style={"display": "flex", "marginTop": "12px"},
+                                                ),
+                                            ],
+                                            style={
+                                                "backgroundColor": "white",
+                                                "padding": "24px",
+                                                "borderRadius": "8px",
+                                                "minWidth": "350px",
+                                                "boxShadow": "0 4px 20px rgba(0,0,0,0.15)",
+                                            },
+                                        ),
+                                    ],
+                                ),
+                                html.Div(
+                                    id="load-config-dropdown-container",
+                                    style={"display": "none", "marginLeft": "8px", "minWidth": "200px"},
+                                    children=[
+                                        html.Label(
+                                            "Select config to load:", style={"fontSize": "12px", "marginBottom": "4px"}
+                                        ),
+                                        dcc.Dropdown(
+                                            id="load-config-dropdown",
+                                            options=[],
+                                            placeholder="Loading...",
+                                            clearable=True,
+                                            style={"width": "100%"},
+                                        ),
+                                    ],
+                                ),
+                            ],
+                            style={"display": "flex", "alignItems": "center", "marginLeft": "auto"},
+                        ),
                     ],
                     style=Styles.NAV_CONTAINER,
                 ),
+                dcc.Store(id="tab-date-g1-state", data=None),
+                dcc.Store(id="tab-date-g2-state", data=None),
+                dcc.Store(id="tab-date-g3-state", data=None),
+                dcc.Store(id="tab-group-g1-state", data=None),
+                dcc.Store(id="tab-group-g2-state", data=None),
+                dcc.Store(id="tab-group-g3-state", data=None),
+                dcc.Store(id="tab-bet-state", data=None),
+                dcc.Store(id="dashboard-load-trigger", data=None),
                 html.Div(
-                    id="page-content",
-                    style=Styles.PAGE_CONTENT,
+                    self._layout_stats_by_date(),
+                    id="tab-date-content",
+                    style={**Styles.PAGE_CONTENT, "display": "block"},
+                ),
+                html.Div(
+                    self._layout_stats_by_group(),
+                    id="tab-group-content",
+                    style={**Styles.PAGE_CONTENT, "display": "none"},
+                ),
+                html.Div(
+                    self._layout_stats_by_bet(),
+                    id="tab-bet-content",
+                    style={**Styles.PAGE_CONTENT, "display": "none"},
                 ),
             ]
         )
@@ -1094,23 +1242,34 @@ class GameStatsDashboard:
 
     def _register_callbacks(self) -> None:
         @self.app.callback(
-            Output("page-content", "children", allow_duplicate=True),
+            Output("tab-date-content", "children"),
+            Output("tab-group-content", "children"),
+            Output("tab-bet-content", "children"),
             Input("config-dropdown", "value"),
-            State("navigator-tabs", "value"),
             prevent_initial_call=True,
         )
-        def update_config(selected_config: str, current_tab: str) -> Any:
+        def update_config(selected_config: str) -> Any:
             self._reset_state()
             self._reload_config(selected_config)
-            return self._render_tab_content(current_tab)
+            self._ensure_tab_data_loaded()
+            return (
+                self._layout_stats_by_date(),
+                self._layout_stats_by_group(),
+                self._layout_stats_by_bet(),
+            )
 
         @self.app.callback(
-            Output("page-content", "children"),
+            Output("tab-date-content", "style"),
+            Output("tab-group-content", "style"),
+            Output("tab-bet-content", "style"),
             Input("navigator-tabs", "value"),
             prevent_initial_call=False,
         )
         def render_content(tab: str) -> Any:
-            return self._render_tab_content(tab)
+            date_style = {**Styles.PAGE_CONTENT, "display": "block" if tab == "tab-date" else "none"}
+            group_style = {**Styles.PAGE_CONTENT, "display": "block" if tab == "tab-group" else "none"}
+            bet_style = {**Styles.PAGE_CONTENT, "display": "block" if tab == "tab-bet" else "none"}
+            return date_style, group_style, bet_style
 
         # For "Stats by Date": update picker to full range on granularity switch
         @self.app.callback(
@@ -1120,8 +1279,11 @@ class GameStatsDashboard:
             Output("date-picker-range", "end_date"),
             Output("date-picker-range", "initial_visible_month"),
             Input("date-granularity", "value"),
+            State("dashboard-load-trigger", "data"),
         )
-        def update_date_picker_on_granularity(granularity: str):
+        def update_date_picker_on_granularity(granularity: str, load_trigger: Any):
+            if load_trigger is not None:
+                return (no_update,) * 5
             gran_lf = self.lfs_by_date.get(granularity, pl.DataFrame().lazy())
             if gran_lf.collect_schema().len() == 0 or self.date_col not in gran_lf.collect_schema().names():
                 return [None] * 5
@@ -1150,8 +1312,11 @@ class GameStatsDashboard:
             Output("date-picker-range3", "end_date"),
             Output("date-picker-range3", "initial_visible_month"),
             Input("date-granularity", "value"),
+            State("dashboard-load-trigger", "data"),
         )
-        def update_group_date_pickers_on_granularity(granularity: str):
+        def update_group_date_pickers_on_granularity(granularity: str, load_trigger: Any):
+            if load_trigger is not None:
+                return [no_update] * 15
             (
                 min_date,
                 max_date,
@@ -1180,10 +1345,149 @@ class GameStatsDashboard:
                 group3_start if group3_start is not None else min_date,
             )
 
-        # Add group-plot callbacks for 3 date ranges, with show/hide toggles
+        def _wrap_bet_plot(session, groups, left_m, right_m, share_l, share_r, log_v, log_t, filt_c, filt_t):
+            fig = self.update_bet_plot(session, groups, left_m, right_m, share_l, share_r, log_v, log_t, filt_c, filt_t)
+            state = {
+                "session": session,
+                "strategy": groups,
+                "left_metrics": left_m,
+                "right_metrics": right_m,
+                "share_left": share_l,
+                "share_right": share_r,
+                "log": log_v,
+                "log_thresh": log_t,
+                "filter_check": filt_c,
+                "filter_thresh": filt_t,
+            }
+            return fig, state
+
+        self.app.callback(
+            Output("combined-plot", "figure"),
+            Output("tab-bet-state", "data"),
+            [
+                Input("session-dropdown", "value"),
+                Input("strategy-checklist", "value"),
+                Input("metric-checklist", "value"),
+                Input("right-axis-checklist", "value"),
+                Input("share-left-yscale-check", "value"),
+                Input("share-right-yscale-check", "value"),
+                Input("log-check", "value"),
+                Input("linear-thresh", "value"),
+                Input("filter-check", "value"),
+                Input("filter-thresh", "value"),
+            ],
+        )(_wrap_bet_plot)
+
+        def _date_plot_with_state_factory(gi: str):
+            def _inner(
+                left_m: Any,
+                right_m: Any,
+                log_v: Any,
+                thresh: Any,
+                groups: Any,
+                gran: Any,
+                start_d: Any,
+                end_d: Any,
+            ):
+                fig = self.update_date_plot(left_m, right_m, log_v, thresh, groups, gran, start_d, end_d)
+                state = {
+                    "left_metrics": left_m,
+                    "right_metrics": right_m,
+                    "log": log_v,
+                    "thresh": thresh,
+                    "groups": groups,
+                    "date_granularity": gran,
+                    "start_date": start_d,
+                    "end_date": end_d,
+                }
+                return fig, state
+
+            return _inner
+
+        for i in range(1, 4):
+            self.app.callback(
+                Output(f"date-g{i}-plot", "figure"),
+                Output(f"tab-date-g{i}-state", "data"),
+                [
+                    Input(f"date-g{i}-left-metrics", "value"),
+                    Input(f"date-g{i}-right-metrics", "value"),
+                    Input(f"date-g{i}-log", "value"),
+                    Input(f"date-g{i}-thresh", "value"),
+                    Input(f"date-g{i}-group", "value"),
+                    Input("date-granularity", "value"),
+                    Input("date-picker-range", "start_date"),
+                    Input("date-picker-range", "end_date"),
+                ],
+            )(_date_plot_with_state_factory(f"g{i}"))
+
+        def _group_plot_with_state_factory(gi: str):
+            orig = self.update_group_plot_combined_factory(gi)
+
+            def _inner(
+                metrics: Any,
+                display: Any,
+                group: Any,
+                r1_s: Any,
+                r1_e: Any,
+                r2_s: Any,
+                r2_e: Any,
+                r3_s: Any,
+                r3_e: Any,
+                show_r1: Any,
+                show_r2: Any,
+                show_r3: Any,
+                drop_ad: Any,
+                drop_uid: Any,
+                clip_en: Any,
+                clip_min: Any,
+                clip_max: Any,
+            ):
+                fig = orig(
+                    metrics,
+                    display,
+                    group,
+                    r1_s,
+                    r1_e,
+                    r2_s,
+                    r2_e,
+                    r3_s,
+                    r3_e,
+                    show_r1,
+                    show_r2,
+                    show_r3,
+                    drop_ad,
+                    drop_uid,
+                    clip_en,
+                    clip_min,
+                    clip_max,
+                )
+                state = {
+                    "metrics": metrics,
+                    "display": display,
+                    "group": group,
+                    "date_range1_start": r1_s,
+                    "date_range1_end": r1_e,
+                    "date_range2_start": r2_s,
+                    "date_range2_end": r2_e,
+                    "date_range3_start": r3_s,
+                    "date_range3_end": r3_e,
+                    "show_r1": show_r1,
+                    "show_r2": show_r2,
+                    "show_r3": show_r3,
+                    "drop_activity_date": drop_ad,
+                    "drop_user_id": drop_uid,
+                    "clip_enable": clip_en,
+                    "clip_min": clip_min,
+                    "clip_max": clip_max,
+                }
+                return fig, state
+
+            return _inner
+
         for i in range(1, 4):
             self.app.callback(
                 Output(f"group-g{i}-plot", "figure"),
+                Output(f"tab-group-g{i}-state", "data"),
                 [
                     Input(f"group-g{i}-metrics", "value"),
                     Input(f"group-g{i}-display", "value"),
@@ -1203,42 +1507,378 @@ class GameStatsDashboard:
                     Input(f"group-g{i}-clip-min", "value"),
                     Input(f"group-g{i}-clip-max", "value"),
                 ],
-            )(self.update_group_plot_combined_factory(f"g{i}"))
+            )(_group_plot_with_state_factory(f"g{i}"))
 
-        self.app.callback(
-            Output("combined-plot", "figure"),
-            [
-                Input("session-dropdown", "value"),
-                Input("strategy-checklist", "value"),
-                Input("metric-checklist", "value"),
-                Input("right-axis-checklist", "value"),
-                Input("share-left-yscale-check", "value"),
-                Input("share-right-yscale-check", "value"),
-                Input("log-check", "value"),
-                Input("linear-thresh", "value"),
-                Input("filter-check", "value"),
-                Input("filter-thresh", "value"),
-            ],
-        )(self.update_bet_plot)
+        # Save config: open modal and fetch existing configs
+        @self.app.callback(
+            Output("save-config-modal", "style"),
+            Output("save-config-overwrite", "options"),
+            Input("save-config-btn", "n_clicks"),
+            Input("save-config-cancel", "n_clicks"),
+            prevent_initial_call=True,
+        )
+        def toggle_save_modal(save_clicks: int, cancel_clicks: int):
+            triggered = callback_context.triggered_id
+            if triggered == "save-config-btn":
+                try:
+                    bucket, prefix = parse_s3_path(DASHBOARD_CONFIG_S3_PATH)
+                    prefix_ = prefix.rstrip("/") + "/" if prefix else ""
+                    files = list_s3_files(bucket, prefix_, pattern=r"\.json$")
+                    opts = [{"label": Path(f).name, "value": f} for f in files]
+                except Exception as e:
+                    logger.warning(f"Failed to list configs: {e}")
+                    opts = []
+                return {
+                    "display": "flex",
+                    "position": "fixed",
+                    "top": 0,
+                    "left": 0,
+                    "width": "100%",
+                    "height": "100%",
+                    "backgroundColor": "rgba(0,0,0,0.5)",
+                    "zIndex": 1000,
+                    "justifyContent": "center",
+                    "alignItems": "center",
+                }, opts
+            return {
+                "display": "none",
+                "position": "fixed",
+                "top": 0,
+                "left": 0,
+                "width": "100%",
+                "height": "100%",
+                "backgroundColor": "rgba(0,0,0,0.5)",
+                "zIndex": 1000,
+            }, []
 
-        for i in range(1, 4):
-            self.app.callback(
-                Output(f"date-g{i}-plot", "figure"),
+        # Save config: perform save to S3 (full state)
+        modal_hidden = {
+            "display": "none",
+            "position": "fixed",
+            "top": 0,
+            "left": 0,
+            "width": "100%",
+            "height": "100%",
+            "backgroundColor": "rgba(0,0,0,0.5)",
+            "zIndex": 1000,
+        }
+
+        @self.app.callback(
+            Output("save-config-filename", "value"),
+            Output("save-config-overwrite", "value"),
+            Output("save-config-modal", "style", allow_duplicate=True),
+            Input("save-config-confirm", "n_clicks"),
+            State("save-config-filename", "value"),
+            State("save-config-overwrite", "value"),
+            State("config-dropdown", "value"),
+            State("navigator-tabs", "value"),
+            State("tab-date-g1-state", "data"),
+            State("tab-date-g2-state", "data"),
+            State("tab-date-g3-state", "data"),
+            State("tab-group-g1-state", "data"),
+            State("tab-group-g2-state", "data"),
+            State("tab-group-g3-state", "data"),
+            State("tab-bet-state", "data"),
+            prevent_initial_call=True,
+        )
+        def save_config_confirm(
+            n_clicks: int,
+            filename: Optional[str],
+            overwrite: Optional[str],
+            config_file: str,
+            current_tab: str,
+            d1: Optional[Dict],
+            d2: Optional[Dict],
+            d3: Optional[Dict],
+            g1: Optional[Dict],
+            g2: Optional[Dict],
+            g3: Optional[Dict],
+            bet: Optional[Dict],
+        ):
+            if not n_clicks:
+                return no_update, no_update, no_update
+            bucket, prefix = parse_s3_path(DASHBOARD_CONFIG_S3_PATH)
+            prefix_ = prefix.rstrip("/") + "/"
+            if overwrite:
+                s3_path = overwrite
+            else:
+                name = (filename or "config").strip()
+                if not name.endswith(".json"):
+                    name = name + ".json"
+                s3_path = f"s3://{bucket}/{prefix_}{name}"
+            payload = {
+                "config_file": config_file,
+                "current_tab": current_tab,
+                "tab_date": {"g1": d1, "g2": d2, "g3": d3},
+                "tab_group": {"g1": g1, "g2": g2, "g3": g3},
+                "tab_bet": bet,
+            }
+            try:
+                write_json_to_s3(payload, s3_path)
+            except Exception as e:
+                logger.error(f"Failed to save config: {e}")
+            return "", None, modal_hidden
+
+        # Load config: show dropdown when Load Config is clicked
+        @self.app.callback(
+            Output("load-config-dropdown-container", "style"),
+            Output("load-config-dropdown", "options"),
+            Output("load-config-dropdown", "value"),
+            Input("load-config-btn", "n_clicks"),
+            prevent_initial_call=True,
+        )
+        def show_load_dropdown(n_clicks: int):
+            if not n_clicks:
+                return no_update, no_update, no_update
+            try:
+                bucket, prefix = parse_s3_path(DASHBOARD_CONFIG_S3_PATH)
+                prefix_ = prefix.rstrip("/") + "/"
+                files = list_s3_files(bucket, prefix_, pattern=r"\.json$")
+                opts = [{"label": Path(f).name, "value": f} for f in files]
+            except Exception as e:
+                logger.warning(f"Failed to list configs: {e}")
+                opts = []
+            return {"display": "block", "marginLeft": "8px", "minWidth": "200px"}, opts, None
+
+        # Load config: apply when user selects a file (populate stores + trigger restore)
+        @self.app.callback(
+            Output("config-dropdown", "value", allow_duplicate=True),
+            Output("navigator-tabs", "value", allow_duplicate=True),
+            Output("load-config-dropdown", "value", allow_duplicate=True),
+            Output("tab-date-g1-state", "data", allow_duplicate=True),
+            Output("tab-date-g2-state", "data", allow_duplicate=True),
+            Output("tab-date-g3-state", "data", allow_duplicate=True),
+            Output("tab-group-g1-state", "data", allow_duplicate=True),
+            Output("tab-group-g2-state", "data", allow_duplicate=True),
+            Output("tab-group-g3-state", "data", allow_duplicate=True),
+            Output("tab-bet-state", "data", allow_duplicate=True),
+            Output("dashboard-load-trigger", "data", allow_duplicate=True),
+            Input("load-config-dropdown", "value"),
+            prevent_initial_call=True,
+        )
+        def load_config_select(s3_uri: Optional[str]):
+            if not s3_uri:
+                return (
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                    no_update,
+                )
+            try:
+                data = read_json_from_s3(s3_uri)
+                config_file = data.get("config_file")
+                current_tab = data.get("current_tab", "tab-date")
+                tab_date = data.get("tab_date", {})
+                tab_group = data.get("tab_group", {})
+                tab_bet = data.get("tab_bet")
+                if not config_file:
+                    return (
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                        no_update,
+                    )
+                # Ensure config_file matches an option (path may differ by machine)
+                saved_basename = Path(config_file).name
+                if not any(opt["value"] == config_file for opt in self.config_files):
+                    match = next(
+                        (opt["value"] for opt in self.config_files if Path(opt["value"]).name == saved_basename), None
+                    )
+                    if match:
+                        config_file = match
+                return (
+                    config_file,
+                    current_tab,
+                    None,
+                    tab_date.get("g1"),
+                    tab_date.get("g2"),
+                    tab_date.get("g3"),
+                    tab_group.get("g1"),
+                    tab_group.get("g2"),
+                    tab_group.get("g3"),
+                    tab_bet,
+                    datetime.now().isoformat(),
+                )
+            except Exception as e:
+                logger.error(f"Failed to load config: {e}")
+            return (
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+            )
+
+        # Restore: apply loaded state to all UI components when load-trigger fires
+        @self.app.callback(
+            Output("dashboard-load-trigger", "data", allow_duplicate=True),
+            Output("date-granularity", "value", allow_duplicate=True),
+            Output("date-picker-range", "start_date", allow_duplicate=True),
+            Output("date-picker-range", "end_date", allow_duplicate=True),
+            Output("date-g1-left-metrics", "value", allow_duplicate=True),
+            Output("date-g1-right-metrics", "value", allow_duplicate=True),
+            Output("date-g1-log", "value", allow_duplicate=True),
+            Output("date-g1-thresh", "value", allow_duplicate=True),
+            Output("date-g1-group", "value", allow_duplicate=True),
+            Output("date-g2-left-metrics", "value", allow_duplicate=True),
+            Output("date-g2-right-metrics", "value", allow_duplicate=True),
+            Output("date-g2-log", "value", allow_duplicate=True),
+            Output("date-g2-thresh", "value", allow_duplicate=True),
+            Output("date-g2-group", "value", allow_duplicate=True),
+            Output("date-g3-left-metrics", "value", allow_duplicate=True),
+            Output("date-g3-right-metrics", "value", allow_duplicate=True),
+            Output("date-g3-log", "value", allow_duplicate=True),
+            Output("date-g3-thresh", "value", allow_duplicate=True),
+            Output("date-g3-group", "value", allow_duplicate=True),
+            Output("date-picker-range1", "start_date", allow_duplicate=True),
+            Output("date-picker-range1", "end_date", allow_duplicate=True),
+            Output("date-picker-range2", "start_date", allow_duplicate=True),
+            Output("date-picker-range2", "end_date", allow_duplicate=True),
+            Output("date-picker-range3", "start_date", allow_duplicate=True),
+            Output("date-picker-range3", "end_date", allow_duplicate=True),
+            Output("group-g1-metrics", "value", allow_duplicate=True),
+            Output("group-g1-display", "value", allow_duplicate=True),
+            Output("group-g1-group", "value", allow_duplicate=True),
+            Output("group-g1-show-r1", "value", allow_duplicate=True),
+            Output("group-g1-show-r2", "value", allow_duplicate=True),
+            Output("group-g1-show-r3", "value", allow_duplicate=True),
+            Output("group-g1-drop-activity-date", "value", allow_duplicate=True),
+            Output("group-g1-drop-user-id", "value", allow_duplicate=True),
+            Output("group-g1-clip-enable", "value", allow_duplicate=True),
+            Output("group-g1-clip-min", "value", allow_duplicate=True),
+            Output("group-g1-clip-max", "value", allow_duplicate=True),
+            Output("group-g2-metrics", "value", allow_duplicate=True),
+            Output("group-g2-display", "value", allow_duplicate=True),
+            Output("group-g2-group", "value", allow_duplicate=True),
+            Output("group-g2-show-r1", "value", allow_duplicate=True),
+            Output("group-g2-show-r2", "value", allow_duplicate=True),
+            Output("group-g2-show-r3", "value", allow_duplicate=True),
+            Output("group-g2-drop-activity-date", "value", allow_duplicate=True),
+            Output("group-g2-drop-user-id", "value", allow_duplicate=True),
+            Output("group-g2-clip-enable", "value", allow_duplicate=True),
+            Output("group-g2-clip-min", "value", allow_duplicate=True),
+            Output("group-g2-clip-max", "value", allow_duplicate=True),
+            Output("group-g3-metrics", "value", allow_duplicate=True),
+            Output("group-g3-display", "value", allow_duplicate=True),
+            Output("group-g3-group", "value", allow_duplicate=True),
+            Output("group-g3-show-r1", "value", allow_duplicate=True),
+            Output("group-g3-show-r2", "value", allow_duplicate=True),
+            Output("group-g3-show-r3", "value", allow_duplicate=True),
+            Output("group-g3-drop-activity-date", "value", allow_duplicate=True),
+            Output("group-g3-drop-user-id", "value", allow_duplicate=True),
+            Output("group-g3-clip-enable", "value", allow_duplicate=True),
+            Output("group-g3-clip-min", "value", allow_duplicate=True),
+            Output("group-g3-clip-max", "value", allow_duplicate=True),
+            Output("session-dropdown", "value", allow_duplicate=True),
+            Output("strategy-checklist", "value", allow_duplicate=True),
+            Output("metric-checklist", "value", allow_duplicate=True),
+            Output("right-axis-checklist", "value", allow_duplicate=True),
+            Output("share-left-yscale-check", "value", allow_duplicate=True),
+            Output("share-right-yscale-check", "value", allow_duplicate=True),
+            Output("log-check", "value", allow_duplicate=True),
+            Output("linear-thresh", "value", allow_duplicate=True),
+            Output("filter-check", "value", allow_duplicate=True),
+            Output("filter-thresh", "value", allow_duplicate=True),
+            Input("tab-date-content", "children"),
+            State("dashboard-load-trigger", "data"),
+            State("tab-date-g1-state", "data"),
+            State("tab-date-g2-state", "data"),
+            State("tab-date-g3-state", "data"),
+            State("tab-group-g1-state", "data"),
+            State("tab-group-g2-state", "data"),
+            State("tab-group-g3-state", "data"),
+            State("tab-bet-state", "data"),
+            prevent_initial_call=True,
+        )
+        def restore_dashboard_state(
+            _tab_children: Any,
+            trigger: Any,
+            d1: Optional[Dict],
+            d2: Optional[Dict],
+            d3: Optional[Dict],
+            g1: Optional[Dict],
+            g2: Optional[Dict],
+            g3: Optional[Dict],
+            bet: Optional[Dict],
+        ):
+            if trigger is None:
+                return (no_update,) * 68
+            out: List[Any] = [None]
+            sd = d1 or {}
+            out.extend([sd.get("date_granularity"), sd.get("start_date"), sd.get("end_date")])
+            for s in [d1, d2, d3]:
+                sd = s or {}
+                out.extend(
+                    [sd.get("left_metrics"), sd.get("right_metrics"), sd.get("log"), sd.get("thresh"), sd.get("groups")]
+                )
+            sg = g1 or {}
+            out.extend(
                 [
-                    Input(f"date-g{i}-left-metrics", "value"),
-                    Input(f"date-g{i}-right-metrics", "value"),
-                    Input(f"date-g{i}-log", "value"),
-                    Input(f"date-g{i}-thresh", "value"),
-                    Input(f"date-g{i}-group", "value"),
-                    Input("date-granularity", "value"),
-                    Input("date-picker-range", "start_date"),
-                    Input("date-picker-range", "end_date"),
-                ],
-            )(self.update_date_plot)
+                    sg.get("date_range1_start"),
+                    sg.get("date_range1_end"),
+                    sg.get("date_range2_start"),
+                    sg.get("date_range2_end"),
+                    sg.get("date_range3_start"),
+                    sg.get("date_range3_end"),
+                ]
+            )
+            for s in [g1, g2, g3]:
+                sg = s or {}
+                out.extend(
+                    [
+                        sg.get("metrics"),
+                        sg.get("display"),
+                        sg.get("group"),
+                        sg.get("show_r1"),
+                        sg.get("show_r2"),
+                        sg.get("show_r3"),
+                        sg.get("drop_activity_date"),
+                        sg.get("drop_user_id"),
+                        sg.get("clip_enable"),
+                        sg.get("clip_min"),
+                        sg.get("clip_max"),
+                    ]
+                )
+            sb = bet or {}
+            out.extend(
+                [
+                    sb.get("session"),
+                    sb.get("strategy"),
+                    sb.get("left_metrics"),
+                    sb.get("right_metrics"),
+                    sb.get("share_left"),
+                    sb.get("share_right"),
+                    sb.get("log"),
+                    sb.get("log_thresh"),
+                    sb.get("filter_check"),
+                    sb.get("filter_thresh"),
+                ]
+            )
+            return tuple(out)
 
     def _get_plot_groups(self, lf: pl.LazyFrame, group_col: str) -> list:
         """
-        Helper function to extract unique non-None groups from given LazyFrame and group column.
+        Extract unique non-None groups from a LazyFrame by group column.
         Returns groups sorted alphabetically (by string representation).
         """
         if lf.collect_schema().len() > 0 and group_col in lf.collect_schema().names():
@@ -1247,32 +1887,53 @@ class GameStatsDashboard:
             return sorted(groups, key=str)
         return []
 
+    def _ensure_date_plot_groups(self) -> None:
+        """Populate df_date_group_col and df_plot_groups from config and date data."""
+        if self.config.get("stats_by_date", {}).get("group_col"):
+            self.df_date_group_col = self.config["stats_by_date"]["group_col"]
+            default_gran = list(self.date_files_config.keys())[0]
+            lf = self.lfs_by_date.get(default_gran, pl.DataFrame().lazy())
+            self.df_plot_groups = self._get_plot_groups(lf, self.df_date_group_col)
+
+    def _ensure_bet_groups(self) -> None:
+        """Populate df_bet_group_col and df_bet_groups from config and bet data."""
+        self._load_bet_data()
+        if self.config.get("stats_by_bet", {}).get("group_col"):
+            self.df_bet_group_col = self.config["stats_by_bet"]["group_col"]
+            self.df_bet_groups = self._get_plot_groups(self.lf_bet, self.df_bet_group_col)
+
+    def _ensure_tab_data_loaded(self) -> None:
+        """Ensure data for all tabs is loaded (for rendering all tab contents)."""
+        self._ensure_plot_metrics_loaded()
+        self._ensure_date_plot_groups()
+        self._ensure_bet_groups()
+
     def _render_tab_content(self, current_tab: str) -> Any:
         if current_tab == "tab-date":
-            self._ensure_plot_metrics_loaded()
-            default_gran = list(self.date_files_config.keys())[0]
-            if self.config["stats_by_date"]["group_col"]:
-                self.df_date_group_col = self.config["stats_by_date"]["group_col"]
-                lf = self.lfs_by_date.get(default_gran, pl.DataFrame().lazy())
-                self.df_plot_groups = self._get_plot_groups(lf, self.df_date_group_col)
+            self._ensure_tab_data_loaded()
             return self._layout_stats_by_date()
         elif current_tab == "tab-group":
-            self._ensure_plot_metrics_loaded()
-            default_gran = list(self.date_files_config.keys())[0]
-            if self.config["stats_by_date"]["group_col"]:
-                self.df_date_group_col = self.config["stats_by_date"]["group_col"]
-                lf = self.lfs_by_date.get(default_gran, pl.DataFrame().lazy())
-                self.df_plot_groups = self._get_plot_groups(lf, self.df_date_group_col)
+            self._ensure_tab_data_loaded()
             return self._layout_stats_by_group()
         elif current_tab == "tab-bet":
-            self._load_bet_data()
-            if self.config["stats_by_bet"]["group_col"]:
-                self.df_bet_group_col = self.config["stats_by_bet"]["group_col"]
-                lf_bet = self.lf_bet
-                self.df_bet_groups = self._get_plot_groups(lf_bet, self.df_bet_group_col)
+            self._ensure_tab_data_loaded()
             return self._layout_stats_by_bet()
         else:
             return html.Div("404 Error")
+
+    def _render_all_tab_contents(self, current_tab: str) -> html.Div:
+        """Render all three tab contents with visibility toggled - keeps all components in DOM for restore."""
+        self._ensure_tab_data_loaded()
+        date_visible = "block" if current_tab == "tab-date" else "none"
+        group_visible = "block" if current_tab == "tab-group" else "none"
+        bet_visible = "block" if current_tab == "tab-bet" else "none"
+        return html.Div(
+            [
+                html.Div(self._layout_stats_by_date(), id="tab-date-content", style={"display": date_visible}),
+                html.Div(self._layout_stats_by_group(), id="tab-group-content", style={"display": group_visible}),
+                html.Div(self._layout_stats_by_bet(), id="tab-bet-content", style={"display": bet_visible}),
+            ]
+        )
 
     # ------------------------------------------------------------------
     # Plot Logic
