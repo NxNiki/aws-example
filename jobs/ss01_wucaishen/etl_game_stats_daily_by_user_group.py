@@ -99,6 +99,16 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
 
             SELECT
                 {_USER_BETS_GROUP_COLS}
+                CASE
+                    WHEN t.ab_group_id != 'jojpin-9mokha-rexQug' THEN CONCAT('Default_', t.mathtable)
+                END AS ai_group
+            FROM
+                user_bets AS t
+
+            UNION ALL
+
+            SELECT
+                {_USER_BETS_GROUP_COLS}
                 t.mathtable AS ai_group
             FROM
                 user_bets AS t
@@ -366,7 +376,7 @@ if __name__ == "__main__":
     # Initialize Scheduler with a default 3-day lookback
     scheduler = ETLScheduler(
         redshift_loader,
-        f"{DEFAULT_ETL_OUTPUT}/jobs/output_ss01_wucaishen",
+        f"{DEFAULT_ETL_OUTPUT}/jobs/output_ss01_wucaishen_old",
         lookback_days=3,
         overwrite=args.overwrite,
     )

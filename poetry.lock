@@ -779,6 +779,31 @@ files = [
 ]
 
 [[package]]
+name = "cca-zoo"
+version = "3.0.0"
+description = "Multiview CCA methods in a scikit-learn style framework"
+optional = false
+python-versions = ">=3.10"
+groups = ["ds"]
+files = [
+    {file = "cca_zoo-3.0.0-py3-none-any.whl", hash = "sha256:eb672d05a3919eb5973cac9436dab1e3748e8cd8128c55f692033cd65fb0a813"},
+    {file = "cca_zoo-3.0.0.tar.gz", hash = "sha256:d2e40a81e83c1988e21d681e74dea32ff85c5495e8acf21df7e15116652d082f"},
+]
+
+[package.dependencies]
+numpy = ">=1.26"
+scikit-learn = ">=1.4"
+scipy = ">=1.11"
+tensorly = ">=0.8"
+
+[package.extras]
+all = ["arviz (>=0.17)", "jax (>=0.4)", "lightning (>=2.1)", "numpyro (>=0.13)", "torch (>=2.1)"]
+deep = ["lightning (>=2.1)", "torch (>=2.1)"]
+dev = ["mypy (>=1.8)", "pytest (>=8)", "pytest-cov (>=5)", "ruff (>=0.4)"]
+docs = ["mkdocs (>=1.5,<2.0)", "mkdocs-material (>=9.5,<10.0)", "mkdocstrings[python] (>=0.24)"]
+probabilistic = ["arviz (>=0.17)", "jax (>=0.4)", "numpyro (>=0.13)"]
+
+[[package]]
 name = "certifi"
 version = "2026.1.4"
 description = "Python package for providing Mozilla's CA Bundle."
@@ -8653,6 +8678,22 @@ files = [
 ]
 
 [[package]]
+name = "tensorly"
+version = "0.9.0"
+description = "Tensor learning in Python."
+optional = false
+python-versions = "*"
+groups = ["ds"]
+files = [
+    {file = "tensorly-0.9.0-py3-none-any.whl", hash = "sha256:a393022ff1616a36c021496f46a955d94234d6bc8c42793f477a6be8849f4873"},
+    {file = "tensorly-0.9.0.tar.gz", hash = "sha256:9b970dde47e2267a17b66a1444113e879c0bb77fb22f497a4207eb2b548ff792"},
+]
+
+[package.dependencies]
+numpy = "*"
+scipy = "*"
+
+[[package]]
 name = "terminado"
 version = "0.18.1"
 description = "Tornado websocket backend for the Xterm.js Javascript terminal emulator library."
@@ -9858,4 +9899,4 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10.0.0,<3.13"
-content-hash = "c99d8513a4ae0a57a12118061f37ab79acc25cd88251553089bc3895e7eb6cf9"
+content-hash = "ae35c6e813f18cb805081335cf8bff77ea210aee48b5bdb7d411b850e45bb0f2"

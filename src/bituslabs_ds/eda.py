@@ -26,7 +26,7 @@ from matplotlib.ticker import MaxNLocator
 from matplotlib.typing import ColorType
 from pandas import DataFrame, Series
 from scipy.cluster.hierarchy import leaves_list, linkage
-from scipy.stats import energy_distance, kurtosis as scipy_kurtosis, skew
+from scipy.stats import energy_distance, kurtosis as scipy_kurtosis, pearsonr, skew, spearmanr
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler, power_transform
 from statannotations.Annotator import Annotator
@@ -184,6 +184,101 @@ def split_column_by_threshold(
         data.loc[data[col] <= thresh, f"{col}_above_{thresh}"] = pd.NA
 
     return data
+
+
+def remove_rows_with_zeros(data: pd.DataFrame, columns: List[str], eps: float = 1e-10) -> pd.DataFrame:
+    """
+    Drop rows where any of the specified columns is zero (or below eps).
+    Useful before power transform for zero-inflated data.
+
+    Args:
+        data: Input DataFrame.
+        columns: Column names to check for zeros.
+        eps: Values below this are treated as zero. Default 1e-10.
+
+    Returns:
+        Filtered DataFrame.
+    """
+    mask = (data[columns] > eps).all(axis=1)
+    return data.loc[mask].copy()
+
+
+def correlation_matrix_with_pvalues(
+    df: pd.DataFrame,
+    method: str = "pearson",
+    remove_pairwise_zeros: bool = False,
+    zeros_eps: float = 1e-10,
+    zeros_removal_threshold: float = 0.3,
+    df_for_zero_check: Optional[pd.DataFrame] = None,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Compute correlation matrix and p-values.
+
+    Args:
+        df: DataFrame with numeric columns (used for correlation).
+        method: 'pearson' or 'spearman'.
+        remove_pairwise_zeros: If True, for each pair independently: if col A has >threshold zeros,
+            drop those rows (and corresponding col B values); same for col B. Applied per pair.
+        zeros_eps: Values below this are treated as zero.
+        zeros_removal_threshold: Remove pairwise zeros only when zero proportion > this (0–1). Default 0.3.
+        df_for_zero_check: If provided and remove_pairwise_zeros is True, use this (e.g. raw pre-transform
+            data) to detect zeros. Required when df is power-transformed, since transform maps 0 to non-zero.
+
+    Returns:
+        Tuple of (correlation_matrix, pvalue_matrix).
+    """
+    cols = df.columns.tolist()
+    corr = np.zeros((len(cols), len(cols)))
+    pval = np.zeros((len(cols), len(cols)))
+    corr_func = spearmanr if method == "spearman" else pearsonr
+    df_zero = df_for_zero_check if df_for_zero_check is not None else df
+    for i, c1 in enumerate(cols):
+        for j, c2 in enumerate(cols):
+            if i == j:
+                corr[i, j] = 1.0
+                pval[i, j] = 0.0
+            else:
+                valid = df[[c1, c2]].dropna()
+                valid_zero = df_zero[[c1, c2]].reindex(valid.index).dropna()
+                if remove_pairwise_zeros and len(valid) >= 3 and len(valid_zero) >= 3:
+                    zero_frac_c1 = (valid_zero[c1] <= zeros_eps).mean()
+                    zero_frac_c2 = (valid_zero[c2] <= zeros_eps).mean()
+                    keep = ((valid_zero[c1] > zeros_eps) | (zero_frac_c1 <= zeros_removal_threshold)) & (
+                        (valid_zero[c2] > zeros_eps) | (zero_frac_c2 <= zeros_removal_threshold)
+                    )
+                    valid = valid[keep]
+                if len(valid) >= 3:
+                    r, p = corr_func(valid[c1], valid[c2])
+                    corr[i, j] = r
+                    pval[i, j] = p
+                else:
+                    corr[i, j] = np.nan
+                    pval[i, j] = np.nan
+    return pd.DataFrame(corr, index=cols, columns=cols), pd.DataFrame(pval, index=cols, columns=cols)
+
+
+def get_significant_correlation_pairs(
+    corr_df: pd.DataFrame,
+    pval_df: pd.DataFrame,
+    significance_level: float = 0.05,
+    min_abs_corr: float = 0.2,
+) -> List[Tuple[str, str, float, float]]:
+    """
+    Return pairs with significant correlation.
+
+    Returns:
+        List of (var1, var2, r, p).
+    """
+    pairs: List[Tuple[str, str, float, float]] = []
+    for i, c1 in enumerate(corr_df.index):
+        for j, c2 in enumerate(corr_df.columns):
+            if i >= j:
+                continue
+            r = corr_df.loc[c1, c2]
+            p = pval_df.loc[c1, c2]
+            if np.isfinite(r) and np.isfinite(p) and p < significance_level and abs(r) >= min_abs_corr:
+                pairs.append((c1, c2, float(r), float(p)))
+    return pairs
 
 
 def split_column_by_multiple_separators(data: pd.DataFrame, column: str, sep: str = ";") -> pd.DataFrame:
@@ -507,34 +602,58 @@ def plot_dual_axis_sorted_swarm(
 def plot_scatter_pairs(
     data: pd.DataFrame,
     pairs: Optional[List[Tuple[str, str, bool, bool]]] = None,
+    correlation_pairs: Optional[List[Tuple[str, str, float, float]]] = None,
     max_per_row: int = 5,
     fig_size_per_plot: Tuple[int, int] = (4, 4),
     alpha: float = 0.7,
+    add_regression_line: bool = False,
+    add_correlation_annotation: bool = False,
+    significance_level: float = 0.05,
+    save_path: Optional[Union[str, Path]] = None,
+    s: int = 2,
+    remove_pairwise_zeros: bool = False,
+    zeros_eps: float = 1e-10,
+    zeros_removal_threshold: float = 0.3,
+    df_for_zero_check: Optional[pd.DataFrame] = None,
 ) -> None:
     """
     Plots scatter plots for every unique pair of numeric columns in the DataFrame.
 
     Parameters:
-    - data (pd.DataFrame): DataFrame containing numeric columns.
-    - pairs (List[Tuple[str, str]]): List of pairs of numeric column names.
-    - max_per_row (int): Maximum number of plots per row.
-    - fig_size_per_plot (Tuple[int, int]): Size of each subplot (width, height).
-    - alpha (float): Marker transparency.
-
-    Returns:
-    - None: Shows matplotlib scatter plots.
+    - data: DataFrame containing numeric columns (used for x/y values; may be power-transformed).
+    - pairs: List of (col_x, col_y, logx, logy). Ignored if correlation_pairs is provided.
+    - correlation_pairs: List of (c1, c2, r, p) for correlation scatter plots with optional
+        regression line and r/p annotation.
+    - max_per_row: Maximum number of plots per row.
+    - fig_size_per_plot: Size of each subplot (width, height).
+    - alpha: Marker transparency.
+    - add_regression_line: If True (and correlation_pairs provided), add linear regression line.
+    - add_correlation_annotation: If True (and correlation_pairs provided), add r and p text.
+    - significance_level: p-value threshold for significance marker (*) in annotation.
+    - save_path: If provided, save figure to path instead of plt.show().
+    - s: Marker size for scatter points.
+    - remove_pairwise_zeros: If True, drop rows where col has zeros when zero frac > threshold
+        (same logic as correlation_matrix_with_pvalues). Ensures scatter/regression match r/p.
+    - zeros_eps: Values <= this treated as zero.
+    - zeros_removal_threshold: Remove pairwise zeros only when zero proportion > this (0–1).
+    - df_for_zero_check: Use for zero detection when data is power-transformed (required; raw data).
     """
-    # Select only numeric columns
     numeric_cols = data.select_dtypes(include="number").columns.tolist()
 
-    if pairs is None or len(pairs) == 0:
-        # Generate all unique pairs (combinations)
-        pairs = []
-        for i in range(len(numeric_cols)):
-            for j in range(i + 1, len(numeric_cols)):
-                pairs.append((numeric_cols[i], numeric_cols[j], False, False))
+    use_correlation_mode = correlation_pairs is not None and len(correlation_pairs) > 0
+    if use_correlation_mode and correlation_pairs is not None:
+        plot_items: List[Tuple[str, str, Optional[float], Optional[float]]] = [
+            (c1, c2, r, p) for c1, c2, r, p in correlation_pairs
+        ]
+    else:
+        if pairs is None or len(pairs) == 0:
+            pairs = []
+            for i in range(len(numeric_cols)):
+                for j in range(i + 1, len(numeric_cols)):
+                    pairs.append((numeric_cols[i], numeric_cols[j], False, False))
+        plot_items = [(col_x, col_y, None, None) for col_x, col_y, _logx, _logy in pairs]
 
-    num_plots = len(pairs)
+    num_plots = len(plot_items)
     if num_plots == 0:
         print("No numeric column pairs to plot.")
         return
@@ -543,28 +662,67 @@ def plot_scatter_pairs(
     ncols = min(num_plots, max_per_row)
 
     fig, axes = plt.subplots(
-        nrows=nrows, ncols=ncols, figsize=(fig_size_per_plot[0] * ncols, fig_size_per_plot[1] * nrows)
+        nrows=nrows,
+        ncols=ncols,
+        figsize=(fig_size_per_plot[0] * ncols, fig_size_per_plot[1] * nrows),
+        squeeze=False,
     )
-    axes = axes.flatten() if num_plots > 1 else [axes]
+    axes_flat = axes.flatten()
 
-    for ax_idx, (col_x, col_y, logx, logy) in enumerate(pairs):
-        ax = axes[ax_idx]
-        ax.scatter(data[col_x], data[col_y], alpha=alpha, s=2)
+    df_zero = df_for_zero_check if df_for_zero_check is not None else data
+    for ax_idx, item in enumerate(plot_items):
+        col_x, col_y = item[0], item[1]
+        r, p = item[2], item[3]
+        ax = axes_flat[ax_idx]
+        valid = data[[col_x, col_y]].dropna()
+        valid_zero = df_zero[[col_x, col_y]].reindex(valid.index).dropna()
+        if remove_pairwise_zeros and len(valid) >= 3 and len(valid_zero) >= 3:
+            zero_frac_c1 = (valid_zero[col_x] <= zeros_eps).mean()
+            zero_frac_c2 = (valid_zero[col_y] <= zeros_eps).mean()
+            keep = ((valid_zero[col_x] > zeros_eps) | (zero_frac_c1 <= zeros_removal_threshold)) & (
+                (valid_zero[col_y] > zeros_eps) | (zero_frac_c2 <= zeros_removal_threshold)
+            )
+            valid = valid[keep]
+        if len(valid) < 3:
+            ax.text(0.5, 0.5, "Insufficient data", ha="center", va="center", transform=ax.transAxes)
+        else:
+            x_vals = valid[col_x].values
+            y_vals = valid[col_y].values
+            ax.scatter(x_vals, y_vals, alpha=alpha, s=s)
+            if use_correlation_mode and add_regression_line and r is not None and p is not None:
+                slope, intercept = np.polyfit(x_vals, y_vals, 1)
+                x_line = np.linspace(x_vals.min(), x_vals.max(), 100)
+                ax.plot(x_line, slope * x_line + intercept, "r-", lw=2)
+            if use_correlation_mode and add_correlation_annotation and r is not None and p is not None:
+                sig = "*" if p < significance_level else ""
+                ax.text(
+                    0.05,
+                    0.95,
+                    f"r = {r:.3f}{sig}\np = {p:.2e}",
+                    transform=ax.transAxes,
+                    fontsize=9,
+                    va="top",
+                    bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.8),
+                )
         ax.set_xlabel(col_x)
         ax.set_ylabel(col_y)
         ax.set_title(f"{col_x} vs {col_y}")
+        if not use_correlation_mode and pairs is not None and ax_idx < len(pairs):
+            _, _, logx, logy = pairs[ax_idx]
+            if logx:
+                ax.set_xscale("symlog")
+            if logy:
+                ax.set_yscale("symlog")
 
-        if logx:
-            ax.set_xscale("symlog")
-        if logy:
-            ax.set_yscale("symlog")
-
-    # Hide unused subplots if any
-    for i in range(num_plots, len(axes)):
-        axes[i].set_visible(False)
+    for i in range(num_plots, len(axes_flat)):
+        axes_flat[i].set_visible(False)
 
     plt.tight_layout()
-    plt.show()
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    else:
+        plt.show()
 
 
 def _prepare_dataframe(time: Series, data: Union[Series, DataFrame], freq: str) -> DataFrame:

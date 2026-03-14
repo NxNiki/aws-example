@@ -23,6 +23,7 @@ pyyaml = "^6.0.2"
 optional = true
 [tool.poetry.group.ds.dependencies]
 scipy = "^1.12.0"
+cca-zoo = "^3.0.0"
 diptest = "^0.10.0"
 pingouin = "^0.5.1"
 openpyxl = "^3.1.5"
