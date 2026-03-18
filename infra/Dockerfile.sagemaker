@@ -30,7 +30,7 @@ ENV PATH="/root/.local/bin:$PATH"
 
 # Copy only the files needed for dependency installation
 COPY pyproject.toml poetry.lock* ./
-RUN poetry lock
+# RUN poetry lock
 
 # Install in separate layers so changes to one group only rebuild that layer.
 RUN poetry install --only main --no-root --no-cache

@@ -113,6 +113,17 @@ def generate_query(stats_agg_col: str, start_date: str) -> str:
             WHERE t.user_bet_count >= 40
             GROUP BY t.{stats_agg_col}
         )
+        ,
+
+        group_user_rtp_median AS (
+            SELECT
+                t.{stats_agg_col},
+                PERCENTILE_CONT(0.50) WITHIN GROUP (
+                    ORDER BY t.user_total_payout * 1.0 / NULLIF(t.user_total_bet, 0)
+                ) AS user_rtp_median
+            FROM user_stats AS t
+            GROUP BY t.{stats_agg_col}
+        )
 
         SELECT
             CAST(us.{stats_agg_col} AS DATE) AS activity_date,
@@ -162,6 +173,8 @@ def generate_query(stats_agg_col: str, start_date: str) -> str:
 
             -- RTP (Return to Player) Calculations (Fix: NULLIF for bet amounts AND RTP numerator error)
             gs.total_payout / NULLIF(gs.total_bet, 0) AS rtp,
+            gm.user_rtp_median,
+            gm.user_rtp_median / NULLIF(gs.total_payout / NULLIF(gs.total_bet, 0), 0) AS user_rtp_ultilization_ratio,
             -- total bet for base game is same to total bet and free game has 0 bet amount:
             gs.total_payout_bg / NULLIF(gs.total_bet, 0) AS rtp_bg,
             us.user_total_payout / NULLIF(us.user_total_bet, 0) AS user_rtp,
@@ -170,6 +183,8 @@ def generate_query(stats_agg_col: str, start_date: str) -> str:
         FROM user_stats AS us
         INNER JOIN group_stats AS gs
             ON us.{stats_agg_col} = gs.{stats_agg_col} 
+        LEFT JOIN group_user_rtp_median AS gm
+            ON us.{stats_agg_col} = gm.{stats_agg_col}
         INNER JOIN user_retention AS ur
             ON us.{stats_agg_col} = ur.{stats_agg_col} 
         ORDER BY us.{stats_agg_col} DESC, us.user_id DESC;

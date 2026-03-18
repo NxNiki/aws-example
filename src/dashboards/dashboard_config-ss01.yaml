@@ -43,6 +43,8 @@ stats_by_date:
     "user_total_bet",
     "user_total_profit",
     "user_rtp",
+    "user_rtp_median",
+    "user_rtp_ultilization_ratio",
     "user_rtp_bg",
     "user_rtp_fg",
     "user_hit_rate",
