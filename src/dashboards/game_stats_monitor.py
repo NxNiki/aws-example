@@ -1621,6 +1621,24 @@ class GameStatsDashboard:
             State("tab-group-g1-state", "data"),
             State("tab-group-g2-state", "data"),
             State("tab-group-g3-state", "data"),
+            State("date-granularity", "value"),
+            State("date-picker-range", "start_date"),
+            State("date-picker-range", "end_date"),
+            State("date-g1-left-metrics", "value"),
+            State("date-g1-right-metrics", "value"),
+            State("date-g1-log", "value"),
+            State("date-g1-thresh", "value"),
+            State("date-g1-group", "value"),
+            State("date-g2-left-metrics", "value"),
+            State("date-g2-right-metrics", "value"),
+            State("date-g2-log", "value"),
+            State("date-g2-thresh", "value"),
+            State("date-g2-group", "value"),
+            State("date-g3-left-metrics", "value"),
+            State("date-g3-right-metrics", "value"),
+            State("date-g3-log", "value"),
+            State("date-g3-thresh", "value"),
+            State("date-g3-group", "value"),
             State("tab-bet-state", "data"),
             prevent_initial_call=True,
         )
@@ -1630,12 +1648,30 @@ class GameStatsDashboard:
             overwrite: Optional[str],
             config_file: str,
             current_tab: str,
-            d1: Optional[Dict],
-            d2: Optional[Dict],
-            d3: Optional[Dict],
-            g1: Optional[Dict],
-            g2: Optional[Dict],
-            g3: Optional[Dict],
+            date_tab_g1_state: Optional[Dict],
+            date_tab_g2_state: Optional[Dict],
+            date_tab_g3_state: Optional[Dict],
+            group_tab_g1_state: Optional[Dict],
+            group_tab_g2_state: Optional[Dict],
+            group_tab_g3_state: Optional[Dict],
+            date_granularity: Optional[str],
+            date_picker_start_date: Any,
+            date_picker_end_date: Any,
+            date_g1_left_metrics: Any,
+            date_g1_right_metrics: Any,
+            date_g1_log: Any,
+            date_g1_thresh: Any,
+            date_g1_group: Any,
+            date_g2_left_metrics: Any,
+            date_g2_right_metrics: Any,
+            date_g2_log: Any,
+            date_g2_thresh: Any,
+            date_g2_group: Any,
+            date_g3_left_metrics: Any,
+            date_g3_right_metrics: Any,
+            date_g3_log: Any,
+            date_g3_thresh: Any,
+            date_g3_group: Any,
             bet: Optional[Dict],
         ):
             if not n_clicks:
@@ -1649,18 +1685,27 @@ class GameStatsDashboard:
                 if not name.endswith(".json"):
                     name = name + ".json"
                 s3_path = f"s3://{bucket}/{prefix_}{name}"
-            # tab_date: shared date_range (one set for all panels), per-panel g1/g2/g3 without start/end
+            # tab_date: shared date_range for the Date tab, plus per-panel (g1/g2/g3) without start/end
             date_keys_date_tab = ("start_date", "end_date")
-            shared_date_range: Dict[str, Any] = {}
-            if d1:
-                shared_date_range = {k: d1.get(k) for k in date_keys_date_tab if d1.get(k) is not None}
+            date_range_tab_date: Dict[str, Any] = {}
+            # Prefer current picker values to avoid stale tab-date store values.
+            if date_picker_start_date is not None and date_picker_end_date is not None:
+                date_range_tab_date = {
+                    "start_date": date_picker_start_date,
+                    "end_date": date_picker_end_date,
+                }
+            elif date_tab_g1_state:
+                date_range_tab_date = {
+                    k: date_tab_g1_state.get(k) for k in date_keys_date_tab if date_tab_g1_state.get(k) is not None
+                }
 
-            def _date_group_for_config(gr: Optional[Dict]) -> Optional[Dict]:
-                if not gr:
-                    return gr
-                return {k: v for k, v in gr.items() if k not in date_keys_date_tab}
+            def _date_tab_panel_for_config(panel_state: Optional[Dict]) -> Optional[Dict]:
+                if not panel_state:
+                    return panel_state
+                # Keep only per-panel fields; strip shared start/end.
+                return {k: v for k, v in panel_state.items() if k not in date_keys_date_tab}
 
-            # tab_group: shared date_ranges (one set for all panels), per-panel g1/g2/g3 without date keys
+            # tab_group: shared date_ranges for the Group tab (range1/2/3), plus per-panel (g1/g2/g3) without those keys
             date_range_keys = (
                 "date_range1_start",
                 "date_range1_end",
@@ -1669,29 +1714,58 @@ class GameStatsDashboard:
                 "date_range3_start",
                 "date_range3_end",
             )
-            shared_date_ranges = {}
-            if g1:
-                shared_date_ranges = {k: g1.get(k) for k in date_range_keys if g1.get(k) is not None}
+            date_range_tab_group: Dict[str, Any] = {}
+            if group_tab_g1_state:
+                date_range_tab_group = {
+                    k: group_tab_g1_state.get(k) for k in date_range_keys if group_tab_g1_state.get(k) is not None
+                }
 
-            def _group_for_config(gr: Optional[Dict]) -> Optional[Dict]:
-                if not gr:
-                    return gr
-                return {k: v for k, v in gr.items() if k not in date_range_keys}
+            def _group_tab_panel_for_config(panel_state: Optional[Dict]) -> Optional[Dict]:
+                if not panel_state:
+                    return panel_state
+                # Keep only per-panel fields; strip shared range1/2/3.
+                return {k: v for k, v in panel_state.items() if k not in date_range_keys}
+
+            # Build tab-date per-panel state from current UI controls so overwrite writes fresh values.
+            date_tab_panel_g1: Dict[str, Any] = {
+                "left_metrics": date_g1_left_metrics,
+                "right_metrics": date_g1_right_metrics,
+                "log": date_g1_log,
+                "thresh": date_g1_thresh,
+                "groups": date_g1_group,
+                "date_granularity": date_granularity,
+            }
+            date_tab_panel_g2: Dict[str, Any] = {
+                "left_metrics": date_g2_left_metrics,
+                "right_metrics": date_g2_right_metrics,
+                "log": date_g2_log,
+                "thresh": date_g2_thresh,
+                "groups": date_g2_group,
+                "date_granularity": date_granularity,
+            }
+            date_tab_panel_g3: Dict[str, Any] = {
+                "left_metrics": date_g3_left_metrics,
+                "right_metrics": date_g3_right_metrics,
+                "log": date_g3_log,
+                "thresh": date_g3_thresh,
+                "groups": date_g3_group,
+                "date_granularity": date_granularity,
+            }
 
             payload: Dict[str, Any] = {
                 "config_file": config_file,
                 "current_tab": current_tab,
                 "tab_date": {
-                    "date_range": shared_date_range,
-                    "g1": _date_group_for_config(d1),
-                    "g2": _date_group_for_config(d2),
-                    "g3": _date_group_for_config(d3),
+                    "date_range": date_range_tab_date,
+                    "g1": _date_tab_panel_for_config(date_tab_panel_g1),
+                    "g2": _date_tab_panel_for_config(date_tab_panel_g2),
+                    "g3": _date_tab_panel_for_config(date_tab_panel_g3),
                 },
                 "tab_group": {
-                    "date_ranges": shared_date_ranges,
-                    "g1": _group_for_config(g1),
-                    "g2": _group_for_config(g2),
-                    "g3": _group_for_config(g3),
+                    "date_ranges": date_range_tab_group,
+                    "g1": _group_tab_panel_for_config(group_tab_g1_state),
+                    "g2": _group_tab_panel_for_config(group_tab_g2_state),
+                    "g3": _group_tab_panel_for_config(group_tab_g3_state),
                 },
                 "tab_bet": bet,
             }
