@@ -28,6 +28,58 @@ logger: logging.Logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())  # Safe for import
 
 
+def _json_sanitize(obj: Any) -> Any:
+    """Convert obj to JSON-serializable types (for S3 save)."""
+    if obj is None:
+        return None
+    if isinstance(obj, (str, int, float, bool)):
+        return obj
+    if isinstance(obj, dict):
+        return {k: _json_sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_sanitize(v) for v in obj]
+    return str(obj)
+
+
+def _normalize_date_value(val: Any) -> Optional[str]:
+    """Normalize date to YYYY-MM-DD string for Dash date pickers."""
+    if val is None:
+        return None
+    s = str(val).strip()
+    if not s:
+        return None
+    if "T" in s:
+        s = s.split("T")[0]
+    return s
+
+
+def _normalize_dates_in_state(state: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Normalize all date-like values in a state dict for saving (YYYY-MM-DD)."""
+    if state is None:
+        return None
+    if not isinstance(state, dict):
+        return state  # type: ignore[return-value]
+    date_keys = {
+        "start_date",
+        "end_date",
+        "date_range1_start",
+        "date_range1_end",
+        "date_range2_start",
+        "date_range2_end",
+        "date_range3_start",
+        "date_range3_end",
+    }
+    out: Dict[str, Any] = {}
+    for k, v in state.items():
+        if k in date_keys and v is not None:
+            out[k] = _normalize_date_value(v)
+        elif isinstance(v, dict):
+            out[k] = _normalize_dates_in_state(v)
+        else:
+            out[k] = v
+    return out
+
+
 class Styles:
     COLORS: List[str] = [
         "#E41A1C",
@@ -259,6 +311,20 @@ class GameStatsDashboard:
         self.df_bet_group_col = ""
         self.bet_metrics = []
         self.plot_metrics = {}
+        # When loading a saved config, we may want to reuse its group date ranges
+        # when rebuilding the group layout instead of recomputing defaults.
+        self._loaded_group_date_ranges: Optional[
+            Tuple[
+                Optional[Any],
+                Optional[Any],
+                Optional[Any],
+                Optional[Any],
+                Optional[Any],
+                Optional[Any],
+                Optional[Any],
+                Optional[Any],
+            ]
+        ] = None
 
     def _find_config_files(self) -> List[Dict[str, str]]:
         config_files: List[Dict[str, str]] = []
@@ -342,7 +408,7 @@ class GameStatsDashboard:
         self.config = load_config(config_file)
         self._load_date_data()
 
-    def _compute_group_date_ranges(self, granularity: Optional[str] = None) -> Tuple[
+    def _compute_group_date_ranges(self) -> Tuple[
         Optional[Any],
         Optional[Any],
         Optional[Any],
@@ -356,8 +422,8 @@ class GameStatsDashboard:
         For Stats by Group: Compute for 3 sequential two-week ranges (6 weeks total, most recent).
         Returns: min_date, max_date, g1_start, g1_end, g2_start, g2_end, g3_start, g3_end
         """
-        if granularity is None:
-            granularity = list(self.date_files_config.keys())[0]
+        # tab_group always uses the "day" dataset.
+        granularity = "day"
         lf_date = self.lfs_by_date.get(granularity, pl.DataFrame().lazy())
         if lf_date.collect_schema().len() == 0 or self.date_col not in lf_date.collect_schema().names():
             return (None, None, None, None, None, None, None, None)
@@ -895,7 +961,8 @@ class GameStatsDashboard:
         )
 
     def _layout_stats_by_group(self) -> html.Div:
-        ranges = self._compute_group_date_ranges()
+        # Use ranges from a loaded config if available; otherwise compute defaults
+        ranges = self._loaded_group_date_ranges or self._compute_group_date_ranges()
 
         # Helper to create range picker blocks
         def range_block(label, idx, start, end, init_month):
@@ -1275,11 +1342,12 @@ class GameStatsDashboard:
         @self.app.callback(
             Output("date-picker-range", "min_date_allowed"),
             Output("date-picker-range", "max_date_allowed"),
-            Output("date-picker-range", "start_date"),
-            Output("date-picker-range", "end_date"),
+            Output("date-picker-range", "start_date", allow_duplicate=True),
+            Output("date-picker-range", "end_date", allow_duplicate=True),
             Output("date-picker-range", "initial_visible_month"),
             Input("date-granularity", "value"),
             State("dashboard-load-trigger", "data"),
+            prevent_initial_call=True,
         )
         def update_date_picker_on_granularity(granularity: str, load_trigger: Any):
             if load_trigger is not None:
@@ -1294,56 +1362,31 @@ class GameStatsDashboard:
             min_date, max_date = agg.item(0, "min_d"), agg.item(0, "max_d")
             return (min_date, max_date, min_date, max_date, min_date)
 
-        # For "Stats by Group": set three pickers for three most recent 2-week ranges
+        # For "Stats by Group" (tab_group): set three date pickers (range1/2/3).
+        # Rules:
+        # - Initial load: compute 3 sequential 2-week default windows.
+        # - Config load: if config provides tab_group.date_ranges, apply them to all 3 pickers.
+        # - Edge case: if config date_ranges is empty/missing, fall back to defaults.
         @self.app.callback(
             Output("date-picker-range1", "min_date_allowed"),
             Output("date-picker-range1", "max_date_allowed"),
-            Output("date-picker-range1", "start_date"),
-            Output("date-picker-range1", "end_date"),
             Output("date-picker-range1", "initial_visible_month"),
             Output("date-picker-range2", "min_date_allowed"),
             Output("date-picker-range2", "max_date_allowed"),
-            Output("date-picker-range2", "start_date"),
-            Output("date-picker-range2", "end_date"),
             Output("date-picker-range2", "initial_visible_month"),
             Output("date-picker-range3", "min_date_allowed"),
             Output("date-picker-range3", "max_date_allowed"),
-            Output("date-picker-range3", "start_date"),
-            Output("date-picker-range3", "end_date"),
             Output("date-picker-range3", "initial_visible_month"),
-            Input("date-granularity", "value"),
-            State("dashboard-load-trigger", "data"),
+            Input("dashboard-load-trigger", "data"),
+            prevent_initial_call=True,
         )
-        def update_group_date_pickers_on_granularity(granularity: str, load_trigger: Any):
-            if load_trigger is not None:
-                return [no_update] * 15
-            (
-                min_date,
-                max_date,
-                group1_start,
-                group1_end,
-                group2_start,
-                group2_end,
-                group3_start,
-                group3_end,
-            ) = self._compute_group_date_ranges(granularity)
-            return (
-                min_date,
-                max_date,
-                group1_start if group1_start is not None else min_date,
-                group1_end if group1_end is not None else group1_start,
-                group1_start if group1_start is not None else min_date,
-                min_date,
-                max_date,
-                group2_start if group2_start is not None else min_date,
-                group2_end if group2_end is not None else group2_start,
-                group2_start if group2_start is not None else min_date,
-                min_date,
-                max_date,
-                group3_start if group3_start is not None else min_date,
-                group3_end if group3_end is not None else max_date,
-                group3_start if group3_start is not None else min_date,
-            )
+        def update_tab_group_date_pickers(load_trigger: Any):
+            # Let `_layout_stats_by_group()` be the single source of truth for:
+            # - min_date_allowed / max_date_allowed
+            # - initial_visible_month
+            # Avoid updating bounds here because it can clamp restored start/end values
+            # back to default windows during config load.
+            return [no_update] * 9
 
         def _wrap_bet_plot(session, groups, left_m, right_m, share_l, share_r, log_v, log_t, filt_c, filt_t):
             fig = self.update_bet_plot(session, groups, left_m, right_m, share_l, share_r, log_v, log_t, filt_c, filt_t)
@@ -1606,17 +1649,59 @@ class GameStatsDashboard:
                 if not name.endswith(".json"):
                     name = name + ".json"
                 s3_path = f"s3://{bucket}/{prefix_}{name}"
-            payload = {
+            # tab_date: shared date_range (one set for all panels), per-panel g1/g2/g3 without start/end
+            date_keys_date_tab = ("start_date", "end_date")
+            shared_date_range: Dict[str, Any] = {}
+            if d1:
+                shared_date_range = {k: d1.get(k) for k in date_keys_date_tab if d1.get(k) is not None}
+
+            def _date_group_for_config(gr: Optional[Dict]) -> Optional[Dict]:
+                if not gr:
+                    return gr
+                return {k: v for k, v in gr.items() if k not in date_keys_date_tab}
+
+            # tab_group: shared date_ranges (one set for all panels), per-panel g1/g2/g3 without date keys
+            date_range_keys = (
+                "date_range1_start",
+                "date_range1_end",
+                "date_range2_start",
+                "date_range2_end",
+                "date_range3_start",
+                "date_range3_end",
+            )
+            shared_date_ranges = {}
+            if g1:
+                shared_date_ranges = {k: g1.get(k) for k in date_range_keys if g1.get(k) is not None}
+
+            def _group_for_config(gr: Optional[Dict]) -> Optional[Dict]:
+                if not gr:
+                    return gr
+                return {k: v for k, v in gr.items() if k not in date_range_keys}
+
+            payload: Dict[str, Any] = {
                 "config_file": config_file,
                 "current_tab": current_tab,
-                "tab_date": {"g1": d1, "g2": d2, "g3": d3},
-                "tab_group": {"g1": g1, "g2": g2, "g3": g3},
+                "tab_date": {
+                    "date_range": shared_date_range,
+                    "g1": _date_group_for_config(d1),
+                    "g2": _date_group_for_config(d2),
+                    "g3": _date_group_for_config(d3),
+                },
+                "tab_group": {
+                    "date_ranges": shared_date_ranges,
+                    "g1": _group_for_config(g1),
+                    "g2": _group_for_config(g2),
+                    "g3": _group_for_config(g3),
+                },
                 "tab_bet": bet,
             }
+            normalized = _normalize_dates_in_state(payload)
+            payload = normalized if normalized is not None else payload
+            payload = _json_sanitize(payload)
             try:
                 write_json_to_s3(payload, s3_path)
             except Exception as e:
-                logger.error(f"Failed to save config: {e}")
+                logger.error("Failed to save config to S3: %s", e, exc_info=True)
             return "", None, modal_hidden
 
         # Load config: show dropdown when Load Config is clicked
@@ -1700,16 +1785,76 @@ class GameStatsDashboard:
                     )
                     if match:
                         config_file = match
+                # Merge shared date_range for tab_date into each g for restore
+                date_range = tab_date.get("date_range") or {}
+
+                def _d_with_range(gi: str) -> Optional[Dict]:
+                    g = tab_date.get(gi)
+                    if not g:
+                        return g
+                    return {**date_range, **g}
+
+                d1_out = _d_with_range("g1")
+                d2_out = _d_with_range("g2")
+                d3_out = _d_with_range("g3")
+
+                # Ensure tab_group has date_ranges; if missing/empty, fall back to default recent ranges
+                if not tab_group.get("date_ranges"):
+                    (
+                        _min_d,
+                        _max_d,
+                        g1_start,
+                        g1_end,
+                        g2_start,
+                        g2_end,
+                        g3_start,
+                        g3_end,
+                    ) = self._compute_group_date_ranges()
+                    tab_group["date_ranges"] = {
+                        "date_range1_start": _normalize_date_value(g1_start),
+                        "date_range1_end": _normalize_date_value(g1_end),
+                        "date_range2_start": _normalize_date_value(g2_start),
+                        "date_range2_end": _normalize_date_value(g2_end),
+                        "date_range3_start": _normalize_date_value(g3_start),
+                        "date_range3_end": _normalize_date_value(g3_end),
+                    }
+
+                # Cache loaded date ranges so the group layout can reuse them instead of recomputing defaults
+                dr = tab_group.get("date_ranges") or {}
+                if dr:
+                    s1, e1 = dr.get("date_range1_start"), dr.get("date_range1_end")
+                    s2, e2 = dr.get("date_range2_start"), dr.get("date_range2_end")
+                    s3, e3 = dr.get("date_range3_start"), dr.get("date_range3_end")
+                    # Compute overall min/max using string comparison (safe for YYYY-MM-DD)
+                    starts = [d for d in [s1, s2, s3] if d is not None]
+                    ends = [d for d in [e1, e2, e3] if d is not None]
+                    min_d = min(starts) if starts else None
+                    max_d = max(ends) if ends else None
+                    self._loaded_group_date_ranges = (min_d, max_d, s1, e1, s2, e2, s3, e3)
+                else:
+                    self._loaded_group_date_ranges = None
+                # Merge shared date_ranges into each g for restore
+                date_ranges = dr
+
+                def _g_with_dates(gi: str) -> Optional[Dict]:
+                    g = tab_group.get(gi)
+                    if not g:
+                        return g
+                    return {**date_ranges, **g}
+
+                g1_out = _g_with_dates("g1")
+                g2_out = _g_with_dates("g2")
+                g3_out = _g_with_dates("g3")
                 return (
                     config_file,
                     current_tab,
                     None,
-                    tab_date.get("g1"),
-                    tab_date.get("g2"),
-                    tab_date.get("g3"),
-                    tab_group.get("g1"),
-                    tab_group.get("g2"),
-                    tab_group.get("g3"),
+                    d1_out,
+                    d2_out,
+                    d3_out,
+                    g1_out,
+                    g2_out,
+                    g3_out,
                     tab_bet,
                     datetime.now().isoformat(),
                 )
@@ -1823,9 +1968,17 @@ class GameStatsDashboard:
         ):
             if trigger is None:
                 return (no_update,) * 68
-            out: List[Any] = [None]
+            # Keep the load trigger token so default-picker callbacks don't recompute
+            # and clamp restored DatePickerRange values.
+            out: List[Any] = [trigger]
             sd = d1 or {}
-            out.extend([sd.get("date_granularity"), sd.get("start_date"), sd.get("end_date")])
+            out.extend(
+                [
+                    sd.get("date_granularity"),
+                    _normalize_date_value(sd.get("start_date")),
+                    _normalize_date_value(sd.get("end_date")),
+                ]
+            )
             for s in [d1, d2, d3]:
                 sd = s or {}
                 out.extend(
@@ -1834,12 +1987,12 @@ class GameStatsDashboard:
             sg = g1 or {}
             out.extend(
                 [
-                    sg.get("date_range1_start"),
-                    sg.get("date_range1_end"),
-                    sg.get("date_range2_start"),
-                    sg.get("date_range2_end"),
-                    sg.get("date_range3_start"),
-                    sg.get("date_range3_end"),
+                    _normalize_date_value(sg.get("date_range1_start")),
+                    _normalize_date_value(sg.get("date_range1_end")),
+                    _normalize_date_value(sg.get("date_range2_start")),
+                    _normalize_date_value(sg.get("date_range2_end")),
+                    _normalize_date_value(sg.get("date_range3_start")),
+                    _normalize_date_value(sg.get("date_range3_end")),
                 ]
             )
             for s in [g1, g2, g3]:
