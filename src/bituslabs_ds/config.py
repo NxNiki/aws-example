@@ -8,6 +8,31 @@ from multiprocessing import Process, Queue
 from pathlib import Path
 from typing import Optional, Union
 
+from dotenv import load_dotenv
+
+
+def _maybe_load_dotenv() -> None:
+    """
+    Load local `.env` automatically for local dev.
+
+    - Loads only when *not* running on ECS (ECS should use Secrets Manager env vars).
+    - Never overrides existing environment variables (`override=False`).
+    - Attempts to load the first existing `.env` from:
+        1) current working directory
+        2) repository root (inferred from this file location)
+    """
+    if os.environ.get("ECS_CONTAINER_METADATA_URI_V4") or os.environ.get("ECS_TASK_ARN"):
+        return
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    candidates = [Path.cwd() / ".env", repo_root / ".env"]
+    for p in candidates:
+        if p.exists():
+            load_dotenv(dotenv_path=str(p), override=False)
+            return
+
+
+_maybe_load_dotenv()
+
 REGION = "us-west-2"
 S3_BUCKET = "bituslabs-team-ai"
 SAGEMAKER_ROLE = "arn:aws:iam::338568447110:role/SageMakerExecutionRole"

@@ -111,7 +111,7 @@ Useful if jobs need different CPU/memory or different secrets. Create `etl-fishh
 
 ETL jobs read credentials from environment variables. **Never commit credentials to the repo.**
 
-- **Local**: Copy `.env.example` to `.env`, fill in `REDSHIFT_USER` and `REDSHIFT_PASSWORD`, then `source .env` or use `python-dotenv` before running jobs.
+- **Local**: Copy `.env.example` to `.env`, fill in `REDSHIFT_USER` and `REDSHIFT_PASSWORD`. ETL jobs auto-load `.env` when importing `bituslabs_ds.config`.
 - **ECS**: Add to task definition `secrets` (from Secrets Manager):
   - `REDSHIFT_USER`
   - `REDSHIFT_PASSWORD`
