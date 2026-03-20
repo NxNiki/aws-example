@@ -301,6 +301,61 @@ class GameStatsDashboard:
     def date_col(self) -> str:
         return self.config["stats_by_date"]["date_col"]
 
+    @property
+    def stats_by_date_filters(self) -> Dict[str, Any]:
+        """
+        Equality filters from YAML under stats_by_date.filter, e.g. { game_id: SS01 } or any column name.
+        Values may be str, int, float, or bool. None values are skipped.
+        """
+        raw = self.config.get("stats_by_date", {}).get("filter")
+        if not isinstance(raw, dict):
+            return {}
+        out: Dict[str, Any] = {}
+        for k, v in raw.items():
+            if k is None:
+                continue
+            col = str(k).strip()
+            if not col or v is None:
+                continue
+            out[col] = v
+        return out
+
+    @staticmethod
+    def _stats_filter_expr(column: str, value: Any) -> pl.Expr:
+        """Build pl.col(column) == value with sensible coercion for YAML scalars."""
+        if isinstance(value, bool):
+            return pl.col(column) == value
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return pl.col(column) == value
+        return pl.col(column).cast(pl.Utf8).str.strip_chars() == str(value).strip()
+
+    def _apply_stats_filters(self, lf: pl.LazyFrame) -> pl.LazyFrame:
+        """
+        Apply stats_by_date.filter as chained equality predicates on the LazyFrame (lazy plan).
+        Missing columns: log a warning and omit that predicate; other predicates still apply.
+        """
+        filters = self.stats_by_date_filters
+        if not filters:
+            return lf
+        if lf.collect_schema().len() == 0:
+            return lf
+        names = lf.collect_schema().names()
+        exprs: List[pl.Expr] = []
+        for col, val in filters.items():
+            if col not in names:
+                logger.warning(
+                    "stats_by_date.filter: column %r not in data; skipping this predicate",
+                    col,
+                )
+                continue
+            exprs.append(self._stats_filter_expr(col, val))
+        if not exprs:
+            return lf
+        combined = exprs[0]
+        for e in exprs[1:]:
+            combined = combined & e
+        return lf.filter(combined)
+
     def _reset_state(self) -> None:
         self.config = {}
         self.lfs_by_date = {}
@@ -395,7 +450,7 @@ class GameStatsDashboard:
             if isinstance(lf_date, pl.LazyFrame) and lf_date.collect_schema().len() > 0:
                 if self.date_col in lf_date.collect_schema().names():
                     lf_date = lf_date.with_columns(pl.col(self.date_col).cast(pl.Datetime))
-                self.lfs_by_date[gran] = lf_date
+                self.lfs_by_date[gran] = self._apply_stats_filters(lf_date)
             else:
                 self.lfs_by_date[gran] = pl.DataFrame().lazy()
 

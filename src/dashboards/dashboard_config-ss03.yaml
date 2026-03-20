@@ -1,7 +1,7 @@
-title: "SS01 (wucaishen) Analytics"
+title: "SS03 Analytics"
 
-stats_by_date: 
-  files: 
+stats_by_date:
+  files:
     day: [
       "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_wucaishen_old/daily_stats",
       "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_wucaishen_old/daily_stats_pa",
@@ -16,7 +16,7 @@ stats_by_date:
     ]
 
   filter:
-    game_id: "SS01"
+    game_id: "SS03"
 
   group_col: "ai_group"
   date_col: "activity_date"
@@ -71,10 +71,9 @@ stats_by_date:
   ]
 
 
-stats_by_bet: 
+stats_by_bet:
   files: [
-    
+
   ]
 
   group_col: ""
-

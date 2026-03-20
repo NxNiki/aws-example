@@ -29,6 +29,7 @@ DATE_START_HOUR = 6
 
 # Shared column list for user_bets_group UNION (reused across group variants)
 _USER_BETS_GROUP_COLS = """
+                t.game_id,
                 t.created_at,
                 t.activity_date,
                 t.activity_week,
@@ -43,7 +44,8 @@ _USER_BETS_GROUP_COLS = """
                 t.mathtable_change,
                 t.prev_bet_type,
                 t.prev_bet_amount,
-                CASE WHEN t.bet_type = 'FREE' AND t.prev_bet_type = 'BASE' THEN t.prev_bet_amount END AS fg_session_trigger_bet,"""
+                CASE WHEN t.bet_type = 'FREE' AND t.prev_bet_type = 'BASE' THEN t.prev_bet_amount END AS fg_session_trigger_bet,
+                """
 
 # TODO:
 # add max/min user daily profit
@@ -55,6 +57,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
         f"""
         WITH user_bets AS (
         SELECT
+            t.game_id,
             t.user_id,
             t.created_at,
             t.script_id AS mathtable,
@@ -81,7 +84,6 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at) >= '{effective_start}'
             AND t.currency_type = 'CNY'
             AND t.status = 'COMPLETED'
-            AND t.game_id = 'SS01'
             AND t.op_code not in ('B26','TST','TSB','TSO') 
         ),
 
@@ -126,6 +128,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
 
         daily_login AS (
             SELECT 
+                t.game_id,
                 t.user_id,
                 MIN(t.created_at) as first_bet_time,
                 MAX(t.created_at) as last_bet_time,
@@ -135,11 +138,12 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 t.ai_group
             FROM
                 user_bets_group AS t
-            GROUP BY t.user_id, t.activity_date, t.activity_week, t.activity_month, t.ai_group
+            GROUP BY t.user_id, t.activity_date, t.activity_week, t.activity_month, t.ai_group, t.game_id
         ),
 
         user_retention AS (
             SELECT
+                t1.game_id,
                 t1.{stats_agg_col},
                 t1.ai_group,
                 COUNT(DISTINCT t1.user_id) AS day0_num_users,
@@ -151,11 +155,12 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 ON t1.user_id = t2.user_id AND t2.activity_date = DATEADD(day, 1, t1.activity_date)
             LEFT JOIN daily_login AS t3
                 ON t1.user_id = t3.user_id AND t3.activity_date = DATEADD(day, 3, t1.activity_date)
-            GROUP BY t1.{stats_agg_col}, t1.ai_group
+            GROUP BY t1.game_id, t1.{stats_agg_col}, t1.ai_group
         ),
 
         user_stats AS (
             SELECT
+                t.game_id,
                 t.{stats_agg_col},
                 t.ai_group,
                 t.user_id,
@@ -187,11 +192,12 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
 
             FROM user_bets_group AS t
             WHERE t.user_bet_count >= 40
-            GROUP BY t.{stats_agg_col}, t.ai_group, t.user_id
+            GROUP BY t.game_id, {stats_agg_col}, t.ai_group, t.user_id
         ),
 
         group_stats AS (
             SELECT
+                t.game_id,
                 t.{stats_agg_col},
                 t.ai_group,
 
@@ -215,54 +221,59 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 COUNT(CASE WHEN t.bet_type = 'FREE' AND t.payout > 0 THEN 1 END) AS total_num_bets_fg_with_payout
             FROM user_bets_group AS t
             WHERE t.user_bet_count >= 40
-            GROUP BY t.{stats_agg_col}, t.ai_group
+            GROUP BY t.game_id, t.{stats_agg_col}, t.ai_group
         ),
 
         group_user_rtp_median AS (
             SELECT
+                t.game_id,
                 t.{stats_agg_col},
                 t.ai_group,
                 PERCENTILE_CONT(0.50) WITHIN GROUP (
                     ORDER BY t.user_total_payout * 1.0 / NULLIF(t.user_total_bet, 0)
                 ) AS user_rtp_median
             FROM user_stats AS t
-            GROUP BY t.{stats_agg_col}, t.ai_group
+            GROUP BY t.game_id, t.{stats_agg_col}, t.ai_group
         ),
 
         group_no_fg AS (
             SELECT
-                {stats_agg_col},
-                ai_group,
+                t.game_id,
+                t.{stats_agg_col},
+                t.ai_group,
                 COUNT(*) AS num_active_users_no_fg
-            FROM user_stats
-            WHERE user_num_bets_fg = 0
-            GROUP BY {stats_agg_col}, ai_group
+            FROM user_stats AS t
+            WHERE t.user_num_bets_fg = 0
+            GROUP BY t.game_id, t.{stats_agg_col}, t.ai_group
         ),
 
         group_0_rtp AS (
             SELECT
-                {stats_agg_col},
-                ai_group,
+                t.game_id,
+                t.{stats_agg_col},
+                t.ai_group,
                 COUNT(*) AS num_active_users_0_rtp
-            FROM user_stats
-            WHERE user_total_payout = 0
-            GROUP BY {stats_agg_col}, ai_group
+            FROM user_stats AS t
+            WHERE t.user_total_payout = 0
+            GROUP BY t.game_id, t.{stats_agg_col}, t.ai_group
         ),
 
         group_rtp_thresholds AS (
             SELECT
+                t.game_id,
                 {stats_agg_col},
-                ai_group,
-                COUNT(CASE WHEN user_total_payout * 1.0 / NULLIF(user_total_bet, 0) < 0.1 THEN 1 END) AS num_rtp_lt_01,
-                COUNT(CASE WHEN user_total_payout * 1.0 / NULLIF(user_total_bet, 0) < 0.2 THEN 1 END) AS num_rtp_lt_02,
-                COUNT(CASE WHEN user_total_payout * 1.0 / NULLIF(user_total_bet, 0) < 0.3 THEN 1 END) AS num_rtp_lt_03,
-                COUNT(CASE WHEN user_total_payout * 1.0 / NULLIF(user_total_bet, 0) < 0.4 THEN 1 END) AS num_rtp_lt_04,
-                COUNT(CASE WHEN user_total_payout * 1.0 / NULLIF(user_total_bet, 0) < 0.5 THEN 1 END) AS num_rtp_lt_05
-            FROM user_stats
-            GROUP BY {stats_agg_col}, ai_group
+                t.ai_group,
+                COUNT(CASE WHEN t.user_total_payout * 1.0 / NULLIF(t.user_total_bet, 0) < 0.1 THEN 1 END) AS num_rtp_lt_01,
+                COUNT(CASE WHEN t.user_total_payout * 1.0 / NULLIF(t.user_total_bet, 0) < 0.2 THEN 1 END) AS num_rtp_lt_02,
+                COUNT(CASE WHEN t.user_total_payout * 1.0 / NULLIF(t.user_total_bet, 0) < 0.3 THEN 1 END) AS num_rtp_lt_03,
+                COUNT(CASE WHEN t.user_total_payout * 1.0 / NULLIF(t.user_total_bet, 0) < 0.4 THEN 1 END) AS num_rtp_lt_04,
+                COUNT(CASE WHEN t.user_total_payout * 1.0 / NULLIF(t.user_total_bet, 0) < 0.5 THEN 1 END) AS num_rtp_lt_05
+            FROM user_stats t
+            GROUP BY t.game_id, {stats_agg_col}, t.ai_group
         )
 
         SELECT
+            us.game_id,
             us.{stats_agg_col} AS activity_date,
             us.ai_group,
             us.user_id,
@@ -340,18 +351,18 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
 
         FROM user_stats AS us
         INNER JOIN group_stats AS gs
-            ON us.{stats_agg_col} = gs.{stats_agg_col} AND us.ai_group = gs.ai_group
+            ON us.game_id = gs.game_id AND us.{stats_agg_col} = gs.{stats_agg_col} AND us.ai_group = gs.ai_group
         LEFT JOIN group_no_fg AS gn
-            ON us.{stats_agg_col} = gn.{stats_agg_col} AND us.ai_group = gn.ai_group
+            ON us.game_id = gn.game_id AND us.{stats_agg_col} = gn.{stats_agg_col} AND us.ai_group = gn.ai_group
         LEFT JOIN group_0_rtp AS gn0
-            ON us.{stats_agg_col} = gn0.{stats_agg_col} AND us.ai_group = gn0.ai_group
+            ON us.game_id = gn0.game_id AND us.{stats_agg_col} = gn0.{stats_agg_col} AND us.ai_group = gn0.ai_group
         LEFT JOIN group_rtp_thresholds AS gr
-            ON us.{stats_agg_col} = gr.{stats_agg_col} AND us.ai_group = gr.ai_group
+            ON us.game_id = gr.game_id AND us.{stats_agg_col} = gr.{stats_agg_col} AND us.ai_group = gr.ai_group
         LEFT JOIN group_user_rtp_median AS gm
-            ON us.{stats_agg_col} = gm.{stats_agg_col} AND us.ai_group = gm.ai_group
+            ON us.game_id = gm.game_id AND us.{stats_agg_col} = gm.{stats_agg_col} AND us.ai_group = gm.ai_group
         INNER JOIN user_retention AS ur
-            ON us.{stats_agg_col} = ur.{stats_agg_col} AND us.ai_group = ur.ai_group
-        ORDER BY us.{stats_agg_col} DESC, us.ai_group DESC, us.user_id DESC;
+            ON us.game_id = ur.game_id AND us.{stats_agg_col} = ur.{stats_agg_col} AND us.ai_group = ur.ai_group
+        ORDER BY us.game_id DESC, us.{stats_agg_col} DESC, us.ai_group DESC, us.user_id DESC;
 
         """
     )
