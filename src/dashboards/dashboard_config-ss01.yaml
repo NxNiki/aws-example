@@ -15,9 +15,6 @@ stats_by_date:
       "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_wucaishen_old/monthly_stats_pa",
     ]
 
-  filter:
-    game_id: "SS01"
-
   group_col: "ai_group"
   date_col: "activity_date"
 

@@ -3,20 +3,17 @@ title: "SS02 Analytics"
 stats_by_date:
   files:
     day: [
-      "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_wucaishen_old/daily_stats",
-      "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_wucaishen_old/daily_stats_pa",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss02_deepdive/daily_stats",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss02_deepdive/daily_stats_pa",
     ]
     week: [
-      "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_wucaishen_old/weekly_stats",
-      "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_wucaishen_old/weekly_stats_pa",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss02_deepdive/weekly_stats",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss02_deepdive/weekly_stats_pa",
     ]
     month: [
-      "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_wucaishen_old/monthly_stats",
-      "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_wucaishen_old/monthly_stats_pa",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss02_deepdive/monthly_stats",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss02_deepdive/monthly_stats_pa",
     ]
-
-  filter:
-    game_id: "SS02"
 
   group_col: "ai_group"
   date_col: "activity_date"

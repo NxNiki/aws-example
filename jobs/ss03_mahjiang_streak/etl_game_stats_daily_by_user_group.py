@@ -6,7 +6,7 @@ from textwrap import dedent
 
 import pandas as pd
 
-# Allow "jobs" package to be found when script is run directly (e.g. python jobs/ss01_wucaishen/...)
+# Allow "jobs" package to be found when script is run directly (e.g. python jobs/ss03_mahjiang_streak/...)
 _root = Path(__file__).resolve().parents[2]
 if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
@@ -27,7 +27,7 @@ from jobs.etl_utils import AggCol, effective_start_date
 # Day boundary: 6 AM Shanghai time (same as fish_hunter)
 DATE_START_HOUR = 6
 
-GAME_ID = "SS01"
+GAME_ID = "SS03"
 
 # Shared column list for user_bets_group UNION (reused across group variants)
 _USER_BETS_GROUP_COLS = """
@@ -394,7 +394,7 @@ if __name__ == "__main__":
     # Initialize Scheduler with a default 3-day lookback
     scheduler = ETLScheduler(
         redshift_loader,
-        f"{DEFAULT_ETL_OUTPUT}/jobs/output_ss01_wucaishen_old",
+        f"{DEFAULT_ETL_OUTPUT}/jobs/output_ss03_mahjiang_streak",
         lookback_days=3,
         overwrite=args.overwrite,
     )

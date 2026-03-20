@@ -764,7 +764,7 @@ class ETLScheduler:
             except Exception as e:
                 logger.error(f"[{job_name}] Failed to save parquet data: {e}")
 
-            self._compact_partitions(job_name=job_name, key_cols=key_cols, partition_level=partition_level)
+        self._compact_partitions(job_name=job_name, key_cols=key_cols, partition_level=partition_level)
 
 
 if __name__ == "__main__":
