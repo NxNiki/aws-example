@@ -28,6 +28,7 @@ from jobs.etl_utils import AggCol, effective_start_date
 DATE_START_HOUR = 6
 
 GAME_ID = "SS03"
+AI_GROUP_ID = "jojpin-9mokha-rexQug"
 
 # Shared column list for user_bets_group UNION (reused across group variants)
 _USER_BETS_GROUP_COLS = """
@@ -92,7 +93,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             SELECT
                 {_USER_BETS_GROUP_COLS}
                 CASE
-                    WHEN t.ab_group_id != 'jojpin-9mokha-rexQug' THEN 'Default'
+                    WHEN t.ab_group_id != '{AI_GROUP_ID}' THEN 'Default'
                     ELSE 'AI'
                 END AS ai_group
             FROM
@@ -103,7 +104,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             SELECT
                 {_USER_BETS_GROUP_COLS}
                 CASE
-                    WHEN t.ab_group_id != 'jojpin-9mokha-rexQug' THEN CONCAT('Default_', t.mathtable)
+                    WHEN t.ab_group_id != '{AI_GROUP_ID}' THEN CONCAT('Default_', t.mathtable)
                 END AS ai_group
             FROM
                 user_bets AS t
@@ -116,7 +117,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             FROM
                 user_bets AS t
             WHERE
-                t.ab_group_id = 'jojpin-9mokha-rexQug'
+                t.ab_group_id = '{AI_GROUP_ID}'
 
             UNION ALL
 
