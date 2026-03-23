@@ -57,7 +57,7 @@ Render setup:
    - `SSH_TUNNEL_HOST`
    - `SSH_TUNNEL_PORT`
    - `SSH_TUNNEL_USER`
-   - `SSH_PRIVATE_KEY_PATH`
+   - `SSH_PRIVATE_KEY_CONTENT` or `SSH_PRIVATE_KEY_BASE64`
    - optional: `GMAIL_CREDENTIALS_PATH`, `GMAIL_TOKEN_PATH`
 
 Notes:
@@ -65,6 +65,9 @@ Notes:
 - On cloud, the app can start with no default CSV.
 - Users can fetch data directly from Redshift from the page.
 - Gmail draft creation should only be enabled after cloud-safe OAuth setup is ready.
+- For Render, do not use your local pem path. Put the bastion private key into a secret env var:
+  - `SSH_PRIVATE_KEY_CONTENT`: paste the full key text
+  - or `SSH_PRIVATE_KEY_BASE64`: paste a base64-encoded key
 
 ## 5. Share with others
 

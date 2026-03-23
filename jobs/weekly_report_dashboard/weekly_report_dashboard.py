@@ -81,8 +81,40 @@ SSH_TUNNEL_CONFIG = {
     "host": env_str("SSH_TUNNEL_HOST"),
     "port": env_int("SSH_TUNNEL_PORT", 22),
     "user": env_str("SSH_TUNNEL_USER"),
-    "private_key": env_str("SSH_PRIVATE_KEY_PATH"),
+    "private_key_path": env_str("SSH_PRIVATE_KEY_PATH"),
+    "private_key_content": env_str("SSH_PRIVATE_KEY_CONTENT"),
+    "private_key_base64": env_str("SSH_PRIVATE_KEY_BASE64"),
 }
+
+_RUNTIME_SSH_KEY_PATH: Optional[str] = None
+
+
+def get_ssh_private_key_path() -> Optional[str]:
+    global _RUNTIME_SSH_KEY_PATH
+
+    if SSH_TUNNEL_CONFIG["private_key_path"]:
+        return SSH_TUNNEL_CONFIG["private_key_path"]
+
+    if _RUNTIME_SSH_KEY_PATH:
+        return _RUNTIME_SSH_KEY_PATH
+
+    key_content = SSH_TUNNEL_CONFIG["private_key_content"]
+    key_base64 = SSH_TUNNEL_CONFIG["private_key_base64"]
+    if not key_content and key_base64:
+        try:
+            key_content = base64.b64decode(key_base64).decode("utf-8")
+        except Exception as exc:
+            raise RuntimeError(f"SSH_PRIVATE_KEY_BASE64 解析失败：{exc}") from exc
+
+    if not key_content:
+        return None
+
+    tmp_dir = Path(tempfile.gettempdir())
+    key_path = tmp_dir / "weekly_report_dashboard_ssh_key.pem"
+    key_path.write_text(key_content)
+    os.chmod(key_path, 0o600)
+    _RUNTIME_SSH_KEY_PATH = str(key_path)
+    return _RUNTIME_SSH_KEY_PATH
 
 
 def redshift_enabled() -> bool:
@@ -96,7 +128,11 @@ def redshift_enabled() -> bool:
             SSH_TUNNEL_CONFIG["host"],
             SSH_TUNNEL_CONFIG["port"],
             SSH_TUNNEL_CONFIG["user"],
-            SSH_TUNNEL_CONFIG["private_key"],
+            (
+                SSH_TUNNEL_CONFIG["private_key_path"]
+                or SSH_TUNNEL_CONFIG["private_key_content"]
+                or SSH_TUNNEL_CONFIG["private_key_base64"]
+            ),
         ]
     )
 
@@ -288,6 +324,9 @@ def empty_figure(message: str) -> go.Figure:
 def fetch_redshift_data(start_date: str, end_date: str, currency_type: str) -> pd.DataFrame:
     if not redshift_enabled():
         raise RuntimeError("Redshift 未配置。请先在 .env 中补齐连接信息。")
+    ssh_private_key_path = get_ssh_private_key_path()
+    if not ssh_private_key_path:
+        raise RuntimeError("缺少 SSH 私钥配置。请设置 SSH_PRIVATE_KEY_PATH 或 SSH_PRIVATE_KEY_CONTENT。")
     try:
         import redshift_connector
         from sshtunnel import SSHTunnelForwarder
@@ -309,7 +348,7 @@ def fetch_redshift_data(start_date: str, end_date: str, currency_type: str) -> p
     with SSHTunnelForwarder(
         (SSH_TUNNEL_CONFIG["host"], SSH_TUNNEL_CONFIG["port"]),
         ssh_username=SSH_TUNNEL_CONFIG["user"],
-        ssh_pkey=SSH_TUNNEL_CONFIG["private_key"],
+        ssh_pkey=ssh_private_key_path,
         remote_bind_address=(REDSHIFT_CONFIG["host"], REDSHIFT_CONFIG["port"]),
     ) as tunnel:
         conn = redshift_connector.connect(
