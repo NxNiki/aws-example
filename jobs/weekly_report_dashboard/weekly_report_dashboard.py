@@ -138,7 +138,7 @@ def redshift_enabled() -> bool:
 
 
 def gmail_enabled() -> bool:
-    return CREDENTIALS_PATH.exists()
+    return env_bool("ENABLE_GMAIL_DRAFT", False) and CREDENTIALS_PATH.exists()
 
 
 @dataclass(frozen=True)
@@ -1307,6 +1307,19 @@ def serve_layout():
                         },
                     ),
                     html.Button(
+                        "Export Email HTML",
+                        id="export-email-html",
+                        style={
+                            "backgroundColor": "#2563eb",
+                            "color": "white",
+                            "border": "none",
+                            "padding": "10px 16px",
+                            "borderRadius": "8px",
+                            "cursor": "pointer",
+                            "fontWeight": "bold",
+                        },
+                    ),
+                    html.Button(
                         "Create Gmail Draft",
                         id="create-gmail-draft",
                         disabled=not gmail_ready,
@@ -1322,7 +1335,7 @@ def serve_layout():
                     ),
                     html.Div(
                         id="gmail-draft-status",
-                        children="" if gmail_ready else "Gmail 未配置，当前不可创建 Draft。",
+                        children="" if gmail_ready else "Gmail Draft 未启用，当前可使用 Export Email HTML。",
                         style={"color": "#475569"},
                     ),
                 ],
@@ -1350,6 +1363,7 @@ def serve_layout():
                 ],
             ),
             dcc.ConfirmDialog(id="gmail-draft-dialog"),
+            dcc.Download(id="email-html-download"),
             html.Div(
                 style={"marginTop": "20px"},
                 children=[
@@ -1463,6 +1477,32 @@ def update_dashboard(source_data_json: str):
         return build_draft_preview(pd.DataFrame(columns=["game_id", "bj_date_key"]))
     source_df = dataframe_from_store(source_data_json)
     return build_draft_preview(source_df)
+
+
+@app.callback(
+    Output("email-html-download", "data"),
+    Output("gmail-draft-status", "children", allow_duplicate=True),
+    Input("export-email-html", "n_clicks"),
+    Input("source-data-store", "data"),
+    Input("draft-subject", "value"),
+    prevent_initial_call=True,
+)
+def export_email_html_callback(n_clicks: Optional[int], source_data_json: Optional[str], subject: Optional[str]):
+    triggered = dash.callback_context.triggered_id
+    if triggered != "export-email-html":
+        return dash.no_update, dash.no_update
+
+    if not source_data_json:
+        return dash.no_update, "暂无数据，请先通过 Redshift 取数。"
+
+    source_df = dataframe_from_store(source_data_json)
+    try:
+        html_body, _ = build_email_html(source_df)
+    except Exception as exc:
+        return dash.no_update, f"导出 HTML 失败：{exc}"
+
+    filename_subject = (subject.strip() if subject else build_default_subject(source_df)).replace("/", "-")
+    return dcc.send_string(html_body, f"{filename_subject}.html"), f"已导出 HTML：{filename_subject}.html"
 
 
 @app.callback(

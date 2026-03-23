@@ -26,7 +26,7 @@ cp .env.example .env
 Notes:
 
 - If you only want local CSV mode, you only need `DEFAULT_CSV_PATH`.
-- If you want Gmail draft support, set `GMAIL_CREDENTIALS_PATH`.
+- If you want Gmail draft support, set `ENABLE_GMAIL_DRAFT=true` and configure `GMAIL_CREDENTIALS_PATH`.
 - If you want Redshift fetch support, fill in all `REDSHIFT_*` and `SSH_*` values.
 
 ## 3. Run
@@ -64,7 +64,8 @@ Notes:
 
 - On cloud, the app can start with no default CSV.
 - Users can fetch data directly from Redshift from the page.
-- Gmail draft creation should only be enabled after cloud-safe OAuth setup is ready.
+- Cloud mode should use `Export Email HTML` by default.
+- Only enable Gmail draft creation if you intentionally set `ENABLE_GMAIL_DRAFT=true` and complete OAuth setup.
 - For Render, do not use your local pem path. Put the bastion private key into a secret env var:
   - `SSH_PRIVATE_KEY_CONTENT`: paste the full key text
   - or `SSH_PRIVATE_KEY_BASE64`: paste a base64-encoded key
