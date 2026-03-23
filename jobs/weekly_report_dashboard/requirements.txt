@@ -2,6 +2,7 @@ dash>=3.0
 pandas>=2.0
 plotly>=6.0
 kaleido>=0.2
+gunicorn>=21.0
 google-api-python-client>=2.0
 google-auth-httplib2>=0.2
 google-auth-oauthlib>=1.0

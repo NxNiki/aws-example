@@ -264,6 +264,27 @@ def dataframe_from_store(source_data_json: str) -> pd.DataFrame:
     return df
 
 
+def empty_figure(message: str) -> go.Figure:
+    fig = go.Figure()
+    fig.update_layout(
+        template="plotly_white",
+        xaxis={"visible": False},
+        yaxis={"visible": False},
+        annotations=[
+            {
+                "text": message,
+                "xref": "paper",
+                "yref": "paper",
+                "showarrow": False,
+                "font": {"size": 16, "color": "#475569"},
+            }
+        ],
+        height=320,
+        margin=dict(l=24, r=24, t=24, b=24),
+    )
+    return fig
+
+
 def fetch_redshift_data(start_date: str, end_date: str, currency_type: str) -> pd.DataFrame:
     if not redshift_enabled():
         raise RuntimeError("Redshift 未配置。请先在 .env 中补齐连接信息。")
@@ -676,6 +697,18 @@ def build_draft_preview(source_df: pd.DataFrame) -> List[object]:
         window_days = get_fixed_window_days(game_df)
         summary = build_summary(game_df, game_id, window_days)
         email_sections.append(build_email_section(game_id, summary, game_df, window_days))
+    if not email_sections:
+        return [
+            html.Div(
+                "暂无数据。请先通过 Redshift 取数。",
+                style={
+                    "backgroundColor": "white",
+                    "padding": "24px",
+                    "borderRadius": "12px",
+                    "color": "#475569",
+                },
+            )
+        ]
     return email_sections
 
 
@@ -887,6 +920,8 @@ def render_chart_images_html(game_id: str, game_df: pd.DataFrame, window_days: i
 
 
 def build_email_html(source_df: pd.DataFrame):
+    if source_df.empty or not get_available_games(source_df):
+        raise RuntimeError("暂无可用于生成邮件的数据，请先通过 Redshift 取数。")
     sections = []
     inline_images = []
     for game_id in get_available_games(source_df):
@@ -975,6 +1010,26 @@ def build_top_chart_panel(source_df: pd.DataFrame) -> html.Div:
         {"label": metric.label, "value": metric.key}
         for metric in METRICS_BY_GAME[default_game]
     ] if default_game else []
+
+    if not available_games:
+        return html.Div(
+            style={"marginBottom": "20px"},
+            children=[
+                html.Div(
+                    style={
+                        "backgroundColor": "white",
+                        "padding": "24px",
+                        "borderRadius": "12px",
+                        "boxShadow": "0 1px 3px rgba(15,23,42,0.08)",
+                        "color": "#475569",
+                    },
+                    children=[
+                        html.H3("趋势图预览", style={"marginTop": "0"}),
+                        html.P("当前还没有报表数据。请先选择日期后点击 `Fetch from Redshift`。", style={"marginBottom": "0"}),
+                    ],
+                )
+            ],
+        )
 
     return html.Div(
         style={"marginBottom": "20px"},
@@ -1111,7 +1166,9 @@ def get_available_port(start_port: int) -> int:
         port += 1
 
 
-def get_default_source_df() -> pd.DataFrame:
+def get_default_source_df() -> Optional[pd.DataFrame]:
+    if not DEFAULT_CSV_PATH.exists():
+        return None
     return load_source_data(DEFAULT_CSV_PATH)
 
 
@@ -1120,13 +1177,30 @@ def get_available_games(source_df: pd.DataFrame) -> List[str]:
 
 app = dash.Dash(__name__, suppress_callback_exceptions=True)
 app.title = "Weekly Report Dashboard"
+server = app.server
 
 def serve_layout():
     source_df = get_default_source_df()
-    min_date = source_df["bj_date_key"].min().date().isoformat()
-    max_date = source_df["bj_date_key"].max().date().isoformat()
+    preview_df = source_df if source_df is not None else pd.DataFrame(columns=["game_id", "bj_date_key"])
     redshift_ready = redshift_enabled()
     gmail_ready = gmail_enabled()
+    today_iso = pd.Timestamp.today().date().isoformat()
+    min_date = today_iso
+    max_date = today_iso
+    store_data = None
+    subject_value = "运营周报"
+    redshift_message = "Redshift 未配置，当前无法在线取数。" if not redshift_ready else ""
+
+    if source_df is not None and not source_df.empty:
+        min_date = source_df["bj_date_key"].min().date().isoformat()
+        max_date = source_df["bj_date_key"].max().date().isoformat()
+        store_data = source_df.to_json(date_format="iso", orient="split")
+        subject_value = build_default_subject(source_df)
+        if redshift_ready:
+            redshift_message = ""
+    elif redshift_ready:
+        redshift_message = "当前未加载数据，请选择日期后点击 Fetch from Redshift。"
+
     return html.Div(
         style={
             "maxWidth": "1600px",
@@ -1137,7 +1211,7 @@ def serve_layout():
         },
         children=[
             html.H2("Weekly Report Dashboard", style={"marginBottom": "8px"}),
-            dcc.Store(id="source-data-store", data=source_df.to_json(date_format="iso", orient="split")),
+            dcc.Store(id="source-data-store", data=store_data),
             html.Div(
                 style={"display": "flex", "gap": "12px", "alignItems": "center", "marginBottom": "20px", "flexWrap": "wrap"},
                 children=[
@@ -1173,7 +1247,8 @@ def serve_layout():
                         },
                     ),
                     html.Div(
-                        "Redshift 未配置，当前仅可使用默认 CSV。" if not redshift_ready else "",
+                        redshift_message,
+                        id="redshift-status",
                         style={"color": "#64748b", "fontSize": "14px"},
                     ),
                 ],
@@ -1184,7 +1259,7 @@ def serve_layout():
                     dcc.Input(
                         id="draft-subject",
                         type="text",
-                        value=build_default_subject(source_df),
+                        value=subject_value,
                         style={
                             "width": "420px",
                             "padding": "10px 12px",
@@ -1239,9 +1314,9 @@ def serve_layout():
             html.Div(
                 style={"marginTop": "20px"},
                 children=[
-                    build_top_chart_panel(source_df),
+                    build_top_chart_panel(preview_df),
                     html.H2("Weekly Draft Preview", style={"marginBottom": "12px"}),
-                    html.Div(id="gmail-draft-preview", children=build_draft_preview(source_df)),
+                    html.Div(id="gmail-draft-preview", children=build_draft_preview(preview_df)),
                 ],
             ),
         ],
@@ -1253,6 +1328,7 @@ app.layout = serve_layout
 
 @app.callback(
     Output("source-data-store", "data"),
+    Output("redshift-status", "children"),
     Input("fetch-redshift-data", "n_clicks"),
     Input("redshift-start-date", "date"),
     Input("redshift-end-date", "date"),
@@ -1274,9 +1350,14 @@ def update_uploaded_data(
                 (currency_value or "CNY").strip().upper(),
             )
         except Exception as exc:
-            raise RuntimeError(f"Redshift 取数失败：{exc}") from exc
-        return df.to_json(date_format="iso", orient="split")
-    return dash.no_update
+            return dash.no_update, f"Redshift 取数失败：{exc}"
+        date_min = df["bj_date_key"].min().date()
+        date_max = df["bj_date_key"].max().date()
+        return (
+            df.to_json(date_format="iso", orient="split"),
+            f"Redshift 取数成功，日期范围 {date_min} 至 {date_max}。",
+        )
+    return dash.no_update, dash.no_update
 
 
 @app.callback(
@@ -1286,8 +1367,12 @@ def update_uploaded_data(
     Input("game-select", "value"),
 )
 def update_metric_options(source_data_json: str, current_game_id: Optional[str]):
+    if not source_data_json:
+        return [], None
     source_df = dataframe_from_store(source_data_json)
     available_games = get_available_games(source_df)
+    if not available_games:
+        return [], None
     game_value = current_game_id if current_game_id in available_games else available_games[0]
     metric_options = [{"label": metric.label, "value": metric.key} for metric in METRICS_BY_GAME[game_value]]
     return metric_options, metric_options[0]["value"]
@@ -1298,6 +1383,8 @@ def update_metric_options(source_data_json: str, current_game_id: Optional[str])
     Input("source-data-store", "data"),
 )
 def update_draft_subject(source_data_json: str):
+    if not source_data_json:
+        return "运营周报"
     source_df = dataframe_from_store(source_data_json)
     return build_default_subject(source_df)
 
@@ -1310,8 +1397,18 @@ def update_draft_subject(source_data_json: str):
     Input("metric-select", "value"),
 )
 def update_metric_chart(source_data_json: str, game_id: str, metric_key: str):
+    if not source_data_json or not game_id or not metric_key:
+        return empty_figure("请先通过 Redshift 取数。"), html.Div(
+            "暂无数据",
+            style={"color": "#475569", "fontWeight": "bold"},
+        )
     source_df = dataframe_from_store(source_data_json)
     game_df = source_df[source_df["game_id"] == game_id].sort_values("bj_date_key")
+    if game_df.empty:
+        return empty_figure("当前游戏暂无数据。"), html.Div(
+            "当前游戏暂无数据",
+            style={"color": "#475569", "fontWeight": "bold"},
+        )
     window_days = get_fixed_window_days(game_df)
     metric = next(spec for spec in METRICS_BY_GAME[game_id] if spec.key == metric_key)
     metric_summary = compare_metric(game_df, metric, window_days)
@@ -1323,6 +1420,8 @@ def update_metric_chart(source_data_json: str, game_id: str, metric_key: str):
     Input("source-data-store", "data"),
 )
 def update_dashboard(source_data_json: str):
+    if not source_data_json:
+        return build_draft_preview(pd.DataFrame(columns=["game_id", "bj_date_key"]))
     source_df = dataframe_from_store(source_data_json)
     return build_draft_preview(source_df)
 
@@ -1364,6 +1463,10 @@ def create_gmail_draft_callback(n_clicks: Optional[int], source_data_json: str, 
     triggered = dash.callback_context.triggered_id
     if triggered != "create-gmail-draft":
         return dash.no_update, False, dash.no_update
+
+    if not source_data_json:
+        message = "暂无数据，请先通过 Redshift 取数。"
+        return message, True, message
 
     source_df = dataframe_from_store(source_data_json)
     draft_subject = subject.strip() if subject else build_default_subject(source_df)

@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: weekly-report-dashboard
+    runtime: python
+    rootDir: jobs/weekly_report_dashboard
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn weekly_report_dashboard:server --bind 0.0.0.0:$PORT
+    autoDeploy: true
