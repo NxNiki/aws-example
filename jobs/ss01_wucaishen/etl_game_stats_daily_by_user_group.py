@@ -93,8 +93,8 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             SELECT
                 {_USER_BETS_GROUP_COLS}
                 CASE
-                    WHEN t.ab_group_id != '{AI_GROUP_ID}' THEN 'Default'
-                    ELSE 'AI'
+                    WHEN t.ab_group_id = '{AI_GROUP_ID}' THEN 'AI'
+                    ELSE 'Default'
                 END AS ai_group
             FROM
                 user_bets AS t
