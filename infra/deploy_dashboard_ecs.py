@@ -426,7 +426,6 @@ def main() -> None:
     except ClientError as e:
         if "Duplicate" not in str(e):
             raise
-    except ClientError as e:
         if "InvalidGroup.Duplicate" not in str(e):
             raise
         sg_task_id = ec2.describe_security_groups(
