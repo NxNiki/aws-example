@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+from collections.abc import Mapping
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from decimal import Decimal
 from functools import lru_cache, partial
@@ -82,7 +83,7 @@ def read_to_pandas_df(
     key: str,
     columns: Optional[List[str]] = None,
     row_filters: Optional[Dict] = None,
-    data_types: Optional[Dict] = None,
+    data_types: Optional[Mapping[str, Any]] = None,
 ) -> pd.DataFrame:
     """
     Read a CSV or Parquet file from S3 and return it as a Pandas DataFrame.
@@ -98,8 +99,8 @@ def read_to_pandas_df(
     _, ext = os.path.splitext(key.lower())
     if ext == ".csv":
         response = get_s3_client().get_object(Bucket=bucket, Key=key)
-        data = pd.read_csv(response["Body"], usecols=columns, low_memory=True, dtype=data_types)
-    elif ext == ".parquet":
+        data = pd.read_csv(response["Body"], usecols=columns, dtype=data_types, low_memory=True)  # pyright: ignore
+    elif ext in (".parquet", ".pq"):
         s3 = fs.S3FileSystem(region=REGION)
         s3_path = f"{bucket}/{key}"
         with s3.open_input_file(s3_path) as f:
@@ -109,21 +110,23 @@ def read_to_pandas_df(
     else:
         raise ValueError(f"Unsupported file extension for S3 object: {key}")
 
+    df: pd.DataFrame = cast(pd.DataFrame, data)
+
     if row_filters:
         for column_name, allowed in row_filters.items():
-            if column_name not in data.columns:
-                logger.warning(f"Row filter column '{column_name}' not in data; skipping this filter")
+            if column_name not in df.columns:
+                logger.warning(f"Row filter column '{column_name}' not in df; skipping this filter")
                 continue
             if isinstance(allowed, (list, set, tuple)):
-                data = data[data[column_name].isin(list(allowed))]
+                df = cast(pd.DataFrame, df[df[column_name].isin(list(allowed))])
                 logger.info(
-                    f"Applied filter on '{column_name}' with {len(list(allowed))} allowed values; remaining {len(data)} rows"
+                    f"Applied filter on '{column_name}' with {len(list(allowed))} allowed values; remaining {len(df)} rows"
                 )
             else:
-                data = data[data[column_name] == allowed]
-                logger.info(f"Applied filter on '{column_name}' == {allowed!r}; remaining {len(data)} rows")
+                df = cast(pd.DataFrame, df[df[column_name] == allowed])
+                logger.info(f"Applied filter on '{column_name}' == {allowed!r}; remaining {len(df)} rows")
 
-    return data
+    return df
 
 
 def write_df_to_s3(data: Union[pd.DataFrame, "SparkDataFrame"], bucket: str, key: str) -> None:
@@ -361,7 +364,7 @@ def _read_lazy(path: Path, columns: Optional[List[str]], data_types: Optional[Di
     # 1. Scan the file (Metadata only)
     if path.suffix == ".csv":
         lf = pl.scan_csv(path)
-    elif path.suffix == ".parquet":
+    elif path.suffix.lower() in (".parquet", ".pq"):
         lf = pl.scan_parquet(path)
     else:
         raise ValueError(f"Unsupported file type for lazy load: {path.suffix}")
@@ -379,11 +382,11 @@ def _read_lazy(path: Path, columns: Optional[List[str]], data_types: Optional[Di
     return lf
 
 
-def _read_eager(path: Path, columns: Optional[List[str]], data_types: Optional[Dict]) -> pd.DataFrame:
+def _read_eager(path: Path, columns: Optional[List[str]], data_types: Optional[Dict[str, Any]]) -> pd.DataFrame:
     """Internal handler for Pandas Eager loading."""
     if path.suffix == ".csv":
-        data = pd.read_csv(path, usecols=columns, dtype=data_types)
-    elif path.suffix == ".parquet":
+        data = pd.read_csv(path, usecols=columns, dtype=data_types, low_memory=True)  # pyright: ignore
+    elif path.suffix.lower() in (".parquet", ".pq"):
         data = pd.read_parquet(path, columns=columns)
     else:
         raise ValueError(f"Unsupported file type: {path.suffix}")
@@ -391,7 +394,7 @@ def _read_eager(path: Path, columns: Optional[List[str]], data_types: Optional[D
     # OPTIMIZATION: Vectorized Decimal conversion
     # The original .map(lambda...) is very slow.
     # We check object columns specifically to see if they contain Decimals.
-    if path.suffix == ".parquet":
+    if path.suffix.lower() in (".parquet", ".pq"):
         for col in data.select_dtypes(include=["object", "float"]).columns:
             # Check a sample to see if it's actually Decimal objects
             if len(data) > 0 and isinstance(data[col].iloc[0], Decimal):
@@ -410,7 +413,7 @@ def _read_s3_lazy(s3_uri: str, columns: Optional[List[str]], data_types: Optiona
     _, ext = os.path.splitext(s3_uri.lower())
     if ext == ".csv":
         lf = pl.scan_csv(s3_uri)
-    elif ext == ".parquet":
+    elif ext in (".parquet", ".pq"):
         lf = pl.scan_parquet(s3_uri)
     else:
         raise ValueError(f"Unsupported file type for S3 lazy load: {ext}")
@@ -477,21 +480,71 @@ def output_path_as_str(path: OutputDir) -> str:
 
 # --------------- Path expansion and file reading ---------------
 
-_SUPPORTED_EXTENSIONS = (".parquet", ".csv")
+_SUPPORTED_EXTENSIONS = (".parquet", ".csv", ".pq")
+
+
+def _path_endswith_tabular_ext(path_lower: str) -> bool:
+    return any(path_lower.endswith(ext) for ext in _SUPPORTED_EXTENSIONS)
+
+
+def normalize_s3_prefix_for_listing(uri: str) -> str:
+    """
+    For S3 listing, treat paths that are not explicit .csv/.parquet/.pq files as directory prefixes.
+
+    Appends '/' when missing so Prefix does not accidentally match sibling keys (e.g. prefix
+    ``foo`` matching ``foobar/...``). Single-file URIs are left unchanged.
+    """
+    trimmed = uri.rstrip("/")
+    if not trimmed:
+        return uri
+    path_only = trimmed.split("?", 1)[0].lower()
+    if _path_endswith_tabular_ext(path_only):
+        return trimmed
+    return trimmed + "/"
+
+
+def _local_path_to_tabular_files(p: str) -> List[str]:
+    """Expand a local path to zero or more .csv/.parquet/.pq files (recursive under directories)."""
+    path = Path(p).expanduser()
+    if not path.exists():
+        logger.warning("Local path does not exist: %s", p)
+        return []
+    if path.is_file():
+        if _path_endswith_tabular_ext(path.name.lower()):
+            return [str(path.resolve())]
+        logger.warning("Local file is not a supported tabular format (.csv/.parquet/.pq): %s", p)
+        return []
+    if path.is_dir():
+        out: List[str] = []
+        for f in sorted(path.rglob("*")):
+            if not f.is_file():
+                continue
+            name_lower = f.name.lower()
+            if _path_endswith_tabular_ext(name_lower):
+                out.append(str(f.resolve()))
+        if not out:
+            logger.warning("No .csv/.parquet/.pq files under local directory: %s", p)
+        return out
+    return [p]
 
 
 def expand_paths_to_files(paths: List[str]) -> List[str]:
     """
-    Expand S3 prefixes to individual file URIs. Local paths are returned as-is.
-    For S3 paths, list objects under the prefix and return only .parquet/.csv files.
-    If listing returns empty, the prefix is skipped (and a warning is logged).
+    Expand S3 prefixes to individual file URIs. Local directories are expanded to tabular files.
+
+    For S3 paths, list objects under the prefix and return only .parquet/.csv/.pq files.
+    Directory-style prefixes (anything not ending in a tabular extension) are normalized with a
+    trailing ``/`` before listing. If listing returns empty, the prefix is skipped (and a warning is logged).
+
+    Local files are included as-is; local directories are scanned recursively for tabular files.
     """
     result: List[str] = []
     for p in paths:
         if not p or not isinstance(p, str):
             continue
         if _is_s3_path(p):
-            bucket, prefix = parse_s3_path(p)
+            uri_for_list = normalize_s3_prefix_for_listing(p)
+            bucket, prefix = parse_s3_path(uri_for_list)
             all_objects = list_s3_files(bucket, prefix)
             # Keep only files with supported extensions (exclude directory markers, etc.)
             files = [uri for uri in all_objects if uri.lower().endswith(_SUPPORTED_EXTENSIONS)]
@@ -500,15 +553,21 @@ def expand_paths_to_files(paths: List[str]) -> List[str]:
             else:
                 if not all_objects:
                     logger.warning(
-                        f"No objects found under S3 prefix {p}. Skipping. " "Check bucket/prefix and credentials."
+                        "No objects found under S3 prefix %s (normalized: %s). Skipping. "
+                        "Check bucket/prefix and credentials.",
+                        p,
+                        uri_for_list,
                     )
                 else:
                     logger.warning(
-                        f"No .parquet or .csv files under S3 prefix {p} "
-                        f"(found {len(all_objects)} object(s)). Skipping."
+                        "No .parquet/.csv/.pq files under S3 prefix %s (normalized: %s) "
+                        "(found %s object(s)). Skipping.",
+                        p,
+                        uri_for_list,
+                        len(all_objects),
                     )
         else:
-            result.append(p)
+            result.extend(_local_path_to_tabular_files(p))
     return result
 
 
@@ -775,13 +834,13 @@ def read_files(
         read_func = partial(_read_file, columns=columns, row_filters=row_filters, data_types=data_types)
 
     if parallel_mode == "none" or max_workers <= 1 or len(file_paths) == 1:
-        dfs = [read_func(f) for f in file_paths]
+        dfs = [read_func(f) for f in file_paths]  # pyright: ignore
     else:
         logger.info(f"read files using {max_workers} workers")
         executor_cls: Callable = ThreadPoolExecutor if parallel_mode == "thread" else ProcessPoolExecutor
         dfs = []
         with executor_cls(max_workers=max_workers) as executor:
-            future_to_file = {executor.submit(read_func, f): f for f in file_paths}
+            future_to_file = {executor.submit(read_func, f): f for f in file_paths}  # pyright: ignore
             for future in as_completed(future_to_file):
                 file = future_to_file[future]
                 try:
@@ -802,7 +861,7 @@ def read_files(
 
             save_local_cache(df, local_cache_path, append)
             logger.info(f"Written {len(df)} rows to cache (file {i+1}/{len(dfs)})")
-            dfs[i] = None
+            dfs[i] = None  # pyright: ignore
             gc.collect()
 
         # Read the final cached file and return

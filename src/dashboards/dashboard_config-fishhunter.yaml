@@ -96,3 +96,10 @@ stats_by_bet:
 
   group_col: "session_group"
 
+# Weekly ops report (ETL: jobs/operation_daily_report/etl_weekly_report_all_games.py)
+weekly_report:
+  game_id: "FM01"
+  currency_type: "CNY"
+  files:
+    - "s3://bituslabs-team-ai/etl-results/jobs/output_weekly_report_all_games/ops_daily_report"
+

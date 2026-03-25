@@ -26,6 +26,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+from slack_sdk import WebClient
+from slack_sdk.errors import SlackApiError
+
 from bituslabs_ds.config import LOCAL_ROOT, setup_logging
 
 OP_DIR = Path(__file__).resolve().parent
@@ -44,9 +47,6 @@ def _send_report_to_slack(report_text: str, channel: str | None = None) -> bool:
         return False
 
     try:
-        from slack_sdk import WebClient
-        from slack_sdk.errors import SlackApiError
-
         client = WebClient(token=token)
         # Slack text field has 40k char limit; split if needed
         max_len = 39_000

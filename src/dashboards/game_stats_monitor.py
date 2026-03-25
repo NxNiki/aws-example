@@ -10,15 +10,32 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union, 
 
 import matplotlib.colors as mcolors
 import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
 import polars as pl
 from dash import Dash, Input, Output, State, callback_context, dcc, html, no_update
+from dash.development.base_component import Component
 from flask import request
 from plotly.subplots import make_subplots
 
 from bituslabs_ds.config import DASHBOARD_CONFIG_S3_PATH, LOCAL_ROOT, setup_logging
 from bituslabs_ds.dashboard_utils import bootstrap_worker, load_config
 from bituslabs_ds.s3_utils import list_s3_files, parse_s3_path, read_files, read_json_from_s3, write_json_to_s3
+from dashboards.weekly_report import (
+    METRICS_BY_GAME,
+    build_chart,
+    build_draft_preview_single,
+    build_metric_summary_card,
+    compare_metric,
+    dataframe_from_split_json,
+    empty_figure,
+    format_weekly_report_subject,
+    get_fixed_window_days,
+    layout_weekly_report_panel,
+    slice_weekly_report_by_end_date,
+    transform_source_data,
+    weekly_report_end_date_bounds,
+)
 
 # ==========================================
 # Styling & Constants
@@ -249,9 +266,7 @@ class GameStatsDashboard:
     sessions: List[str]
     bet_metrics: List[str]
     plot_metrics: Dict[str, List[str]]
-    host_ip: str
-    config_dir: str
-    app: Dash
+    _weekly_report_df: Optional[pd.DataFrame]
 
     def __init__(self, config_dir: str, host_ip: str = "127.0.0.1"):
         self.host_ip: str = host_ip
@@ -292,6 +307,7 @@ class GameStatsDashboard:
             return response
 
         self._load_date_data()
+        self._load_weekly_report_data()
         self._ensure_date_plot_groups()
         self._ensure_bet_groups()
         self._build_main_layout()
@@ -325,6 +341,7 @@ class GameStatsDashboard:
                 Optional[Any],
             ]
         ] = None
+        self._weekly_report_df = None
 
     def _find_config_files(self) -> List[Dict[str, str]]:
         config_files: List[Dict[str, str]] = []
@@ -404,9 +421,26 @@ class GameStatsDashboard:
         self.plot_metrics["g2"] = self.config["stats_by_date"]["group2_columns"]
         self.plot_metrics["g3"] = self.config["stats_by_date"]["group3_columns"]
 
+    def _load_weekly_report_data(self) -> None:
+        self._weekly_report_df = None
+        wr = self.config.get("weekly_report")
+        if not wr:
+            return
+        paths = [f for f in wr.get("files", []) if f]
+        if not paths:
+            return
+        try:
+            raw = read_files(paths, lazy_load=False, expand_s3_prefixes=True)
+            if isinstance(raw, pd.DataFrame) and not raw.empty:
+                self._weekly_report_df = transform_source_data(raw)
+        except Exception as e:
+            logger.warning("Failed to load weekly report data: %s", e)
+            self._weekly_report_df = None
+
     def _reload_config(self, config_file: str) -> None:
         self.config = load_config(config_file)
         self._load_date_data()
+        self._load_weekly_report_data()
 
     def _compute_group_date_ranges(self) -> Tuple[
         Optional[Any],
@@ -459,10 +493,10 @@ class GameStatsDashboard:
 
     @property
     def date_files_config(self) -> Dict[str, Union[str, List[str]]]:
-        files_config = self.config["stats_by_date"].get("files", {})
-        if isinstance(files_config, list):
-            files_config = {"day": files_config}
-        return files_config
+        raw = self.config["stats_by_date"].get("files", {})
+        if isinstance(raw, list):
+            return {"day": cast(List[str], raw)}
+        return cast(Dict[str, Union[str, List[str]]], raw)
 
     @staticmethod
     def to_rgba(color: str, alpha: float = 0.2) -> str:
@@ -647,13 +681,19 @@ class GameStatsDashboard:
                                     selected_style=Styles.NAV_TAB_SELECTED,
                                 ),
                                 dcc.Tab(
+                                    label="Weekly Report",
+                                    value="tab-weekly",
+                                    style=Styles.NAV_TAB,
+                                    selected_style=Styles.NAV_TAB_SELECTED,
+                                ),
+                                dcc.Tab(
                                     label="Stats by Bet",
                                     value="tab-bet",
                                     style=Styles.NAV_TAB,
                                     selected_style=Styles.NAV_TAB_SELECTED,
                                 ),
                             ],
-                            style={"width": "1050px"},
+                            style={"width": "1280px"},
                         ),
                         html.Div(
                             [
@@ -801,6 +841,11 @@ class GameStatsDashboard:
                 html.Div(
                     self._layout_stats_by_group(),
                     id="tab-group-content",
+                    style={**Styles.PAGE_CONTENT, "display": "none"},
+                ),
+                html.Div(
+                    self._layout_weekly_report(),
+                    id="tab-weekly-content",
                     style={**Styles.PAGE_CONTENT, "display": "none"},
                 ),
                 html.Div(
@@ -1168,6 +1213,85 @@ class GameStatsDashboard:
             ]
         )
 
+    def _layout_weekly_report(self) -> html.Div:
+        wr = self.config.get("weekly_report") or {}
+        game_id = wr.get("game_id")
+        if not game_id:
+            return html.Div(
+                html.P(
+                    "Weekly report is not configured for this dashboard. Add a weekly_report section "
+                    "(game_id, files, currency_type) to the YAML.",
+                    style={"color": "#64748b"},
+                ),
+                style=Styles.PAGE_CONTENT,
+            )
+
+        df = self._weekly_report_df
+        currency = (wr.get("currency_type") or "CNY").upper()
+
+        if df is None or df.empty:
+            return html.Div(
+                html.P(
+                    "No weekly report data loaded. Run jobs/operation_daily_report/etl_weekly_report_all_games.py "
+                    "and set weekly_report.files to the S3 path (see dashboard_config-*.yaml).",
+                    style={"color": "#64748b"},
+                ),
+                style=Styles.PAGE_CONTENT,
+            )
+
+        if "game_id" not in df.columns or "currency_type" not in df.columns:
+            return html.Div(
+                html.P(
+                    "Weekly report data must include game_id and currency_type columns.",
+                    style={"color": "#b91c1c"},
+                ),
+                style=Styles.PAGE_CONTENT,
+            )
+
+        _mask = (df["game_id"] == game_id) & (df["currency_type"] == currency)
+        game_df = df.loc[_mask].sort_values(by="bj_date_key")
+        if game_df.empty:
+            return html.Div(
+                html.P(
+                    f"No rows for game_id={game_id!r} and currency_type={currency!r}. "
+                    "Check ETL output and weekly_report.game_id in this config.",
+                    style={"color": "#64748b"},
+                ),
+                style=Styles.PAGE_CONTENT,
+            )
+
+        store_json = game_df.to_json(date_format="iso", orient="split")
+        _, _, default_end = weekly_report_end_date_bounds(game_df)
+        sliced_for_draft = slice_weekly_report_by_end_date(game_df, default_end) if default_end else game_df
+        weekly_draft_children: List[Component] = build_draft_preview_single(sliced_for_draft, game_id)
+        subject_line = format_weekly_report_subject(default_end) if default_end else "运营周报"
+
+        return html.Div(
+            style=Styles.PAGE_CONTENT,
+            children=[
+                html.H2("Weekly Report", style={**Styles.PANEL_HEADER, "marginBottom": "12px"}),
+                html.P(
+                    f"Configured game: {game_id} · Currency: {currency}",
+                    style={"color": "#64748b", "marginBottom": "16px"},
+                ),
+                dcc.Store(id="weekly-report-store", data=store_json),
+                html.Div(
+                    style={"marginBottom": "16px"},
+                    children=[
+                        html.Label("Suggested subject line", style=Styles.CONTROL_LABEL),
+                        html.Div(
+                            id="weekly-report-subject-line",
+                            children=subject_line,
+                            style={"fontWeight": "600", "color": "#0f172a"},
+                        ),
+                    ],
+                ),
+                layout_weekly_report_panel(game_df, game_id),
+                html.H3("Weekly summary (figures & table)", style={**Styles.PANEL_HEADER, "fontSize": "18px"}),
+                html.Div(id="weekly-report-draft", children=weekly_draft_children),
+            ],
+        )
+
     def _layout_stats_by_bet(self) -> html.Div:
         return html.Div(
             [
@@ -1311,6 +1435,7 @@ class GameStatsDashboard:
         @self.app.callback(
             Output("tab-date-content", "children"),
             Output("tab-group-content", "children"),
+            Output("tab-weekly-content", "children"),
             Output("tab-bet-content", "children"),
             Input("config-dropdown", "value"),
             prevent_initial_call=True,
@@ -1322,12 +1447,14 @@ class GameStatsDashboard:
             return (
                 self._layout_stats_by_date(),
                 self._layout_stats_by_group(),
+                self._layout_weekly_report(),
                 self._layout_stats_by_bet(),
             )
 
         @self.app.callback(
             Output("tab-date-content", "style"),
             Output("tab-group-content", "style"),
+            Output("tab-weekly-content", "style"),
             Output("tab-bet-content", "style"),
             Input("navigator-tabs", "value"),
             prevent_initial_call=False,
@@ -1335,8 +1462,61 @@ class GameStatsDashboard:
         def render_content(tab: str) -> Any:
             date_style = {**Styles.PAGE_CONTENT, "display": "block" if tab == "tab-date" else "none"}
             group_style = {**Styles.PAGE_CONTENT, "display": "block" if tab == "tab-group" else "none"}
+            weekly_style = {**Styles.PAGE_CONTENT, "display": "block" if tab == "tab-weekly" else "none"}
             bet_style = {**Styles.PAGE_CONTENT, "display": "block" if tab == "tab-bet" else "none"}
-            return date_style, group_style, bet_style
+            return date_style, group_style, weekly_style, bet_style
+
+        @self.app.callback(
+            Output("weekly-report-chart", "figure"),
+            Output("weekly-report-summary-card", "children"),
+            Input("weekly-report-store", "data"),
+            Input("weekly-report-metric-select", "value"),
+            Input("weekly-report-end-date", "date"),
+        )
+        def update_weekly_report_chart(
+            store_json: Optional[str],
+            metric_key: Optional[str],
+            end_date_iso: Optional[str],
+        ):
+            if not store_json or not metric_key or not end_date_iso:
+                return empty_figure("Select a metric or load data."), html.Div(
+                    "暂无数据",
+                    style={"color": "#475569", "fontWeight": "bold"},
+                )
+            game_df = dataframe_from_split_json(store_json)
+            game_df = slice_weekly_report_by_end_date(game_df, end_date_iso)
+            if game_df.empty:
+                return empty_figure("No data."), html.Div(
+                    "暂无数据",
+                    style={"color": "#475569", "fontWeight": "bold"},
+                )
+            gid = str(game_df["game_id"].iloc[0])
+            window_days = get_fixed_window_days(game_df)
+            metric = next((m for m in METRICS_BY_GAME.get(gid, []) if m.key == metric_key), None)
+            if metric is None:
+                return empty_figure("Unknown metric."), html.Div()
+            metric_summary = compare_metric(game_df, metric, window_days)
+            return build_chart(game_df, metric, window_days), build_metric_summary_card(metric_summary, window_days)
+
+        @self.app.callback(
+            Output("weekly-report-subject-line", "children"),
+            Output("weekly-report-draft", "children"),
+            Input("weekly-report-store", "data"),
+            Input("weekly-report-end-date", "date"),
+            prevent_initial_call=True,
+        )
+        def update_weekly_report_subject_draft(
+            store_json: Optional[str],
+            end_date_iso: Optional[str],
+        ):
+            if not store_json or not end_date_iso:
+                return no_update, no_update
+            game_df = dataframe_from_split_json(store_json)
+            sliced = slice_weekly_report_by_end_date(game_df, end_date_iso)
+            gid = str(sliced["game_id"].iloc[0]) if not sliced.empty and "game_id" in sliced.columns else ""
+            subject = format_weekly_report_subject(end_date_iso)
+            draft_children: List[Component] = build_draft_preview_single(sliced, gid)
+            return subject, draft_children
 
         # For "Stats by Date": update picker to full range on granularity switch
         @self.app.callback(
@@ -2142,6 +2322,8 @@ class GameStatsDashboard:
         elif current_tab == "tab-group":
             self._ensure_tab_data_loaded()
             return self._layout_stats_by_group()
+        elif current_tab == "tab-weekly":
+            return self._layout_weekly_report()
         elif current_tab == "tab-bet":
             self._ensure_tab_data_loaded()
             return self._layout_stats_by_bet()
@@ -2153,11 +2335,13 @@ class GameStatsDashboard:
         self._ensure_tab_data_loaded()
         date_visible = "block" if current_tab == "tab-date" else "none"
         group_visible = "block" if current_tab == "tab-group" else "none"
+        weekly_visible = "block" if current_tab == "tab-weekly" else "none"
         bet_visible = "block" if current_tab == "tab-bet" else "none"
         return html.Div(
             [
                 html.Div(self._layout_stats_by_date(), id="tab-date-content", style={"display": date_visible}),
                 html.Div(self._layout_stats_by_group(), id="tab-group-content", style={"display": group_visible}),
+                html.Div(self._layout_weekly_report(), id="tab-weekly-content", style={"display": weekly_visible}),
                 html.Div(self._layout_stats_by_bet(), id="tab-bet-content", style={"display": bet_visible}),
             ]
         )
@@ -2709,17 +2893,22 @@ class GameStatsDashboard:
                             )
                         )
                     fig.update_layout(annotations=annotations, margin=dict(l=220))
-                    for i, bar in enumerate(fig.data):
-                        if hasattr(bar, "customdata") and bar.customdata is not None:
-                            mcolors_box = bar.customdata
-                            fig.data[i].marker.color = [m["color"] for m in mcolors_box]
-                            if any("pattern" in m for m in mcolors_box):
-                                if not hasattr(fig.data[i].marker, "pattern"):
-                                    fig.data[i].marker.pattern = dict(shape=[""] * len(bar.x))
-                                fig.data[i].marker.pattern.shape = [
-                                    m.get("pattern", {}).get("shape", "") for m in mcolors_box
-                                ]
-                            fig.data[i].marker.opacity = [m.get("opacity", 1.0) for m in mcolors_box]
+                    # Plotly Figure.data / trace stubs omit dynamic attributes (customdata, marker, x).
+                    fig_data = cast(Any, fig.data)
+                    for i in range(len(fig_data)):
+                        trace = fig_data[i]
+                        if getattr(trace, "customdata", None) is None:
+                            continue
+                        mcolors_box = trace.customdata
+                        marker = cast(Any, trace.marker)
+                        marker.color = [m["color"] for m in mcolors_box]
+                        if any("pattern" in m for m in mcolors_box):
+                            if not hasattr(marker, "pattern"):
+                                marker.pattern = dict(shape=[""] * len(trace.x))
+                            cast(Any, marker.pattern).shape = [
+                                m.get("pattern", {}).get("shape", "") for m in mcolors_box
+                            ]
+                        marker.opacity = [m.get("opacity", 1.0) for m in mcolors_box]
 
             mode_title = "Box Plot" if display_mode == "box" else "Bar (Mean ± 95% CI, 500 bootstrap)"
             subtitle = ""

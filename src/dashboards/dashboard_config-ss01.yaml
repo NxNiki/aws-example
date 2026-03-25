@@ -75,3 +75,9 @@ stats_by_bet:
 
   group_col: ""
 
+weekly_report:
+  game_id: "SS01"
+  currency_type: "CNY"
+  files:
+    - "s3://bituslabs-team-ai/etl-results/jobs/output_weekly_report_all_games/ops_daily_report"
+

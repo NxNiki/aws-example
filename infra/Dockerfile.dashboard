@@ -26,7 +26,7 @@ FROM python:3.11-slim AS runtime
 
 ENV VIRTUAL_ENV=/app/.venv \
     PATH="/app/.venv/bin:$PATH" \
-    PYTHONPATH="/app" \
+    PYTHONPATH="/app/src" \
     LOCAL_ROOT=/app
 
 WORKDIR /app
@@ -38,8 +38,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /app/.venv /app/.venv
 
-# Dashboard code and configs
-COPY src/bituslabs_ds ./bituslabs_ds
+# Application code (matches repo layout: src/bituslabs_ds, src/dashboards)
+COPY src/bituslabs_ds ./src/bituslabs_ds
 COPY src/dashboards ./src/dashboards
 
 # Run dashboard on 0.0.0.0 so it's reachable from outside the container

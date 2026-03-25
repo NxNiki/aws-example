@@ -4,7 +4,10 @@ version = "0.1.0"
 description = "A data science project using AWS SageMaker, PySpark, and Scikit-learn"
 authors = ["Xin Niu <michaelniki1988@.gmail.com>"]
 readme = "README.md"
-packages = [{ include = "bituslabs_ds", from = "src" }]
+packages = [
+    { include = "bituslabs_ds", from = "src" },
+    { include = "dashboards", from = "src" },
+]
 
 [tool.poetry.dependencies]
 python = ">=3.10.0.0,<3.13"
@@ -127,10 +130,14 @@ exclude = '''
 )/
 '''
 
+[tool.pyright]
+# Resolve `from dashboards.*` / `from bituslabs_ds.*` without sys.path hacks
+extraPaths = ["src"]
+
 [tool.isort]
 profile = "black"
 line_length = 120
-known_first_party = ["bituslabs_ds"]
+known_first_party = ["bituslabs_ds", "dashboards"]
 known_third_party = ["numpy", "pandas"]
 combine_as_imports = true
 include_trailing_comma = true
