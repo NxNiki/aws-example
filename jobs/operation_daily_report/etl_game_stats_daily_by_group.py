@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 from textwrap import dedent
 
+import pandas as pd
+
 from bituslabs_ds.config import (
     DEFAULT_BASTION_IP,
     LOCAL_ROOT,
@@ -197,6 +199,8 @@ if __name__ == "__main__":
     output_dir.mkdir(parents=True, exist_ok=True)
     file_path = output_dir / "stats_by_date.parquet"
     df_rs = redshift_loader.query_to_df(query=query, local_cache=str(file_path), reload=True)
+    # query_to_df is typed as DataFrame | LazyFrame (read_local_cache); this path is always pandas.
+    assert isinstance(df_rs, pd.DataFrame)
     print(
         df_rs[
             [

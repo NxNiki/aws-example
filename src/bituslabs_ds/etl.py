@@ -8,9 +8,9 @@ import sys
 import threading
 import time
 from abc import ABC, abstractmethod
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Callable, List, Literal, Optional, Union
+from typing import Any, Callable, List, Literal, Optional, Sequence, Union
 
 import awswrangler as wr
 import boto3
@@ -125,7 +125,7 @@ class SafeAthenaQuery:
             return str(value)
         if isinstance(value, bool):
             return "TRUE" if value else "FALSE"
-        if isinstance(value, (datetime.date, datetime.datetime)):
+        if isinstance(value, (date, datetime)):
             return f"'{value.isoformat()}'"
         if isinstance(value, str):
             safe_value = value.replace("'", "''")
@@ -145,19 +145,19 @@ class DatabaseBackend(ABC):
     """Abstract base class for all database backends."""
 
     @abstractmethod
-    def execute(self, query, params=None):
+    def execute(self, query, params=None) -> Sequence[Any]:
         """Executes a query and returns raw results (list of rows/dicts)."""
-        pass
+        raise NotImplementedError
 
     @abstractmethod
-    def query_to_df(self, query, params=None):
+    def query_to_df(self, query, params=None) -> pd.DataFrame:
         """Executes a query and returns a pandas DataFrame."""
-        pass
+        raise NotImplementedError
 
     @abstractmethod
-    def close(self):
+    def close(self) -> None:
         """Closes the connection and cleans up resources."""
-        pass
+        raise NotImplementedError
 
 
 # ---------------- Redshift backend ----------------
@@ -276,7 +276,7 @@ class RedshiftBackend(DatabaseBackend):
 
         return self.conn
 
-    def execute(self, query, params=None):
+    def execute(self, query, params=None) -> Sequence[Any]:
 
         self._check_query(query)
         conn = self.connect()
@@ -293,7 +293,7 @@ class RedshiftBackend(DatabaseBackend):
         finally:
             cursor.close()
 
-    def query_to_df(self, query, params=None):
+    def query_to_df(self, query, params=None) -> pd.DataFrame:
 
         self._check_query(query)
         conn = self.connect()
@@ -305,7 +305,7 @@ class RedshiftBackend(DatabaseBackend):
         # We pass the existing tunnel connection 'con'
         return wr.redshift.read_sql_query(query, con=conn)
 
-    def close(self):
+    def close(self) -> None:
         self._stop_tunnel.set()  # Tell the thread to stop
         if self.conn:
             self.conn.close()
@@ -326,12 +326,12 @@ class AthenaBackend(DatabaseBackend):
         self.session = boto3.Session(region_name=region)
         self.ctas_approach = ctas_approach
 
-    def execute(self, query, params=None):
+    def execute(self, query, params=None) -> Sequence[Any]:
 
         df = self.query_to_df(query, params)
         return df.to_dict("records")
 
-    def query_to_df(self, query, params=None):
+    def query_to_df(self, query, params=None) -> pd.DataFrame:
 
         if params:
             query = SafeAthenaQuery.build(query, params)
@@ -349,7 +349,7 @@ class AthenaBackend(DatabaseBackend):
         )
         return df
 
-    def close(self):
+    def close(self) -> None:
         pass  # Athena is stateless
 
 
@@ -358,10 +358,10 @@ class DataLoader:
     def __init__(self, backend: DatabaseBackend):
         self.backend = backend
 
-    def execute(self, query, params=None):
+    def execute(self, query, params=None) -> Sequence[Any]:
         return self.backend.execute(query, params)
 
-    def query_to_df(self, query, local_cache: Optional[str] = None, reload: bool = False, params=None):
+    def query_to_df(self, query, local_cache: Optional[str] = None, reload: bool = False, params=None) -> Any:
 
         logger.info(f"Execute query: \n{query}")
 
@@ -377,7 +377,7 @@ class DataLoader:
                 save_local_cache(df, local_cache_path=local_cache)
         return df
 
-    def close(self):
+    def close(self) -> None:
         self.backend.close()
 
 
