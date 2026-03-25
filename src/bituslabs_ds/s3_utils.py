@@ -44,6 +44,16 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())  # Safe for import
 
 
+def _preview_df_for_log(df: pd.DataFrame, n: int = 5) -> str:
+    """Log-friendly table preview; falls back if ``to_markdown()`` fails (e.g. missing ``tabulate``)."""
+    head = df.head(n)
+    try:
+        md = head.to_markdown()
+    except Exception:
+        return head.to_string()
+    return md if md is not None else head.to_string()
+
+
 def parse_bucket_name(bucket: str) -> str:
     if bucket.endswith("/"):
         logger.info(f"remove '/' from {bucket}")
@@ -827,7 +837,7 @@ def read_files(
         if return_as_list and lazy_load:
             return [cast(pl.LazyFrame, data)]
         if not lazy_load:
-            logger.info("first 5 rows of dataframe: \n%s", cast(pd.DataFrame, data).head(5).to_markdown())
+            logger.info("first 5 rows of dataframe: \n%s", _preview_df_for_log(cast(pd.DataFrame, data)))
         return data
 
     logger.info(f"read data with data types spec: {data_types}")
@@ -898,7 +908,7 @@ def read_files(
 
         # Read the final cached file and return
         data = cast(pd.DataFrame, read_local_cache(local_cache_path, lazy_load=False))
-        logger.info("first 5 rows of dataframe: \n%s", data.head(5).to_markdown())
+        logger.info("first 5 rows of dataframe: \n%s", _preview_df_for_log(data))
         return data
     else:
         if lazy_load:
@@ -920,7 +930,7 @@ def read_files(
                 data = data.reset_index(level=0).rename(columns={"level_0": "source_file"})
             else:
                 data = pd.concat(aligned_dfs, ignore_index=True)
-            logger.info("first 5 rows of dataframe: \n%s", data.head(5).to_markdown())
+            logger.info("first 5 rows of dataframe: \n%s", _preview_df_for_log(data))
             return data
 
 
