@@ -428,6 +428,7 @@ class GameStatsDashboard:
             return
         paths = [f for f in wr.get("files", []) if f]
         if not paths:
+            logger.warning("weekly_report is present but weekly_report.files is empty; no data will load.")
             return
         try:
             raw = read_files(paths, lazy_load=False, expand_s3_prefixes=True)

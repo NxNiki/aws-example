@@ -88,10 +88,10 @@ stats_by_date:
     "avg_kill_streak_ultra",
   ]
 
-stats_by_bet: 
+stats_by_bet:
   files: [
-    "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_index.parquet",
-    "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/bullet_stats_by_index_pa.parquet"
+    "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/bullet_stats_by_index.parquet",
+    "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/bullet_stats_by_index_pa.parquet",
   ]
 
   group_col: "session_group"

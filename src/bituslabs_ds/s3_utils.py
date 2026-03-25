@@ -306,9 +306,9 @@ def list_s3_files(bucket: str, prefix: str, pattern: Optional[str] = None) -> Li
                 if pattern is None or re.search(pattern, key):
                     s3_uri = f"s3://{bucket}/{key}"
                     matching_keys.append(s3_uri)
-                    logging.info(f"Found {s3_uri}")
+                    logger.debug("Listed S3 object: %s", s3_uri)
 
-        logger.info(f"Found {len(matching_keys)} S3 keys")
+        logger.info("Listed %d S3 object(s) under s3://%s/%s", len(matching_keys), bucket, prefix)
     return matching_keys
 
 
@@ -549,6 +549,17 @@ def expand_paths_to_files(paths: List[str]) -> List[str]:
             # Keep only files with supported extensions (exclude directory markers, etc.)
             files = [uri for uri in all_objects if uri.lower().endswith(_SUPPORTED_EXTENSIONS)]
             if files:
+                logger.info(
+                    "S3: %d tabular file(s) (.parquet/.csv/.pq) under input %r (list prefix: %s)",
+                    len(files),
+                    p,
+                    uri_for_list,
+                )
+                _sample = files[:8]
+                for uri in _sample:
+                    logger.info("  S3 data file: %s", uri)
+                if len(files) > len(_sample):
+                    logger.info("  ... and %d more tabular file(s)", len(files) - len(_sample))
                 result.extend(files)
             else:
                 if not all_objects:
@@ -567,7 +578,18 @@ def expand_paths_to_files(paths: List[str]) -> List[str]:
                         len(all_objects),
                     )
         else:
-            result.extend(_local_path_to_tabular_files(p))
+            local_files = _local_path_to_tabular_files(p)
+            if local_files:
+                logger.info(
+                    "Local: %d tabular file(s) for input %r",
+                    len(local_files),
+                    p,
+                )
+                for uri in local_files[:8]:
+                    logger.info("  local data file: %s", uri)
+                if len(local_files) > 8:
+                    logger.info("  ... and %d more", len(local_files) - 8)
+            result.extend(local_files)
     return result
 
 
@@ -823,6 +845,16 @@ def read_files(
         file_paths = expand_paths_to_files(valid_files)
     else:
         file_paths = valid_files
+
+    if file_paths:
+        n_s3 = sum(1 for p in file_paths if _is_s3_path(p))
+        logger.info(
+            "read_files: will load %d path(s) (%d S3, %d local) from inputs %s",
+            len(file_paths),
+            n_s3,
+            len(file_paths) - n_s3,
+            valid_files,
+        )
 
     has_local = any(not _is_s3_path(p) for p in file_paths)
     use_single_file = lazy_load or has_local
