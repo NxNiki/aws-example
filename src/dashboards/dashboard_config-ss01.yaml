@@ -17,6 +17,10 @@ stats_by_date:
 
   group_col: "ai_group"
   date_col: "activity_date"
+  user_group_col: "user_group"
+  aggregate_stats_from_user_rows: true
+  # Parquet columns required before enrich: ENRICH_USER_ROW_INPUT_COLUMNS ∪ (columns below − enrich outputs)
+  # — see dashboards/user_stats_aggregates.py.
 
   group1_label: "DAU and Retention"
   group1_columns: [
@@ -38,7 +42,6 @@ stats_by_date:
 
   group2_label: "User RTP and Profit"
   group2_columns: [
-    "user_mathtable_change",
     "user_num_bets",
     "user_total_bet",
     "user_total_profit",
@@ -49,6 +52,8 @@ stats_by_date:
     "user_hit_rate_bg",
     "user_hit_rate_fg",
     "user_fg_ratio",
+    "user_avg_delta_t_seconds",
+    "user_mathtable_change",
   ]
 
   group3_label: "Total RTP and Profit"

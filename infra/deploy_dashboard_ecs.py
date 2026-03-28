@@ -426,15 +426,7 @@ def main() -> None:
     except ClientError as e:
         if "Duplicate" not in str(e):
             raise
-        if "InvalidGroup.Duplicate" not in str(e):
-            raise
-        sg_task_id = ec2.describe_security_groups(
-            Filters=[
-                {"Name": "vpc-id", "Values": [vpc_id]},
-                {"Name": "group-name", "Values": [sg_name_task]},
-            ]
-        )["SecurityGroups"][0]["GroupId"]
-        print(f"  Task security group exists: {sg_task_id}")
+        print("  Task outbound rule already exists, skipping")
 
     # 5. Application Load Balancer
     print("\n5. Application Load Balancer...")

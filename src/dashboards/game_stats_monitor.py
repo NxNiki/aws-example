@@ -2,7 +2,6 @@ import logging
 import os
 import re
 import socket
-from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timedelta
 from math import inf
 from pathlib import Path
@@ -21,6 +20,12 @@ from plotly.subplots import make_subplots
 from bituslabs_ds.config import DASHBOARD_CONFIG_S3_PATH, LOCAL_ROOT, setup_logging
 from bituslabs_ds.dashboard_utils import bootstrap_worker, load_config
 from bituslabs_ds.s3_utils import list_s3_files, parse_s3_path, read_files, read_json_from_s3, write_json_to_s3
+from dashboards.user_stats_aggregates import (
+    ENRICH_PRODUCED_COLUMNS,
+    ENRICH_USER_ROW_INPUT_COLUMNS,
+    RETENTION_LOAD_EXTRA_DAYS,
+    DataMetrics,
+)
 from dashboards.weekly_report import (
     METRICS_BY_GAME,
     build_chart,
@@ -263,6 +268,8 @@ class GameStatsDashboard:
     df_bet_groups: List[str]
     df_date_group_col: str
     df_bet_group_col: str
+    df_user_group_col: str
+    df_user_group_dropdown_options: List[Dict[str, str]]
     sessions: List[str]
     bet_metrics: List[str]
     plot_metrics: Dict[str, List[str]]
@@ -325,6 +332,8 @@ class GameStatsDashboard:
         self.df_bet_groups = []
         self.df_date_group_col = ""
         self.df_bet_group_col = ""
+        self.df_user_group_col = ""
+        self.df_user_group_dropdown_options = [{"label": "all", "value": "all"}]
         self.bet_metrics = []
         self.plot_metrics = {}
         # When loading a saved config, we may want to reuse its group date ranges
@@ -880,8 +889,24 @@ class GameStatsDashboard:
                             style={"verticalAlign": "middle", "marginRight": "30px"},
                         ),
                         html.Label(
-                            "Granularity:",
+                            "Filter_user_group:",
                             style={**Styles.CONTROL_LABEL, "marginRight": "10px", "display": "inline-block"},
+                        ),
+                        dcc.Dropdown(
+                            id="filter-user-group-date",
+                            options=cast(Any, self.df_user_group_dropdown_options),
+                            value="all",
+                            clearable=False,
+                            style=Styles.DROPDOWN_NARROW,
+                        ),
+                        html.Label(
+                            "Granularity:",
+                            style={
+                                **Styles.CONTROL_LABEL,
+                                "marginRight": "10px",
+                                "display": "inline-block",
+                                "marginLeft": "20px",
+                            },
                         ),
                         dcc.Dropdown(
                             id="date-granularity",
@@ -1036,8 +1061,21 @@ class GameStatsDashboard:
                         range_block("Range 1 (Oldest)", 1, ranges[2], ranges[3], ranges[2]),
                         range_block("Range 2", 2, ranges[4], ranges[5], ranges[4]),
                         range_block("Range 3 (Newest)", 3, ranges[6], ranges[7], ranges[6]),
+                        html.Div(
+                            [
+                                html.Label("Filter_user_group:", style=Styles.CONTROL_LABEL),
+                                dcc.Dropdown(
+                                    id="filter-user-group-group",
+                                    options=cast(Any, self.df_user_group_dropdown_options),
+                                    value="all",
+                                    clearable=False,
+                                    style=Styles.DROPDOWN_NARROW,
+                                ),
+                            ],
+                            style={"marginLeft": "8px", "marginRight": "0", "flexShrink": 0},
+                        ),
                     ],
-                    style=Styles.FLEX_ROW_CENTER,
+                    style={**Styles.FLEX_ROW_CENTER, "alignItems": "flex-start", "flexWrap": "wrap"},
                 ),
             ],
             style=Styles.SECTION_GROUP,
@@ -1612,8 +1650,9 @@ class GameStatsDashboard:
                 gran: Any,
                 start_d: Any,
                 end_d: Any,
+                user_group_f: Any,
             ):
-                fig = self.update_date_plot(left_m, right_m, log_v, thresh, groups, gran, start_d, end_d)
+                fig = self.update_date_plot(left_m, right_m, log_v, thresh, groups, gran, start_d, end_d, user_group_f)
                 state = {
                     "left_metrics": left_m,
                     "right_metrics": right_m,
@@ -1623,6 +1662,7 @@ class GameStatsDashboard:
                     "date_granularity": gran,
                     "start_date": start_d,
                     "end_date": end_d,
+                    "user_group_filter": user_group_f,
                 }
                 return fig, state
 
@@ -1641,6 +1681,7 @@ class GameStatsDashboard:
                     Input("date-granularity", "value"),
                     Input("date-picker-range", "start_date"),
                     Input("date-picker-range", "end_date"),
+                    Input("filter-user-group-date", "value"),
                 ],
             )(_date_plot_with_state_factory(f"g{i}"))
 
@@ -1665,6 +1706,7 @@ class GameStatsDashboard:
                 clip_en: Any,
                 clip_min: Any,
                 clip_max: Any,
+                user_group_f: Any,
             ):
                 fig = orig(
                     metrics,
@@ -1684,6 +1726,7 @@ class GameStatsDashboard:
                     clip_en,
                     clip_min,
                     clip_max,
+                    user_group_f,
                 )
                 state = {
                     "metrics": metrics,
@@ -1703,6 +1746,7 @@ class GameStatsDashboard:
                     "clip_enable": clip_en,
                     "clip_min": clip_min,
                     "clip_max": clip_max,
+                    "user_group_filter": user_group_f,
                 }
                 return fig, state
 
@@ -1730,6 +1774,7 @@ class GameStatsDashboard:
                     Input(f"group-g{i}-clip-enable", "value"),
                     Input(f"group-g{i}-clip-min", "value"),
                     Input(f"group-g{i}-clip-max", "value"),
+                    Input("filter-user-group-group", "value"),
                 ],
             )(_group_plot_with_state_factory(f"g{i}"))
 
@@ -1805,6 +1850,8 @@ class GameStatsDashboard:
             State("date-granularity", "value"),
             State("date-picker-range", "start_date"),
             State("date-picker-range", "end_date"),
+            State("filter-user-group-date", "value"),
+            State("filter-user-group-group", "value"),
             State("date-g1-left-metrics", "value"),
             State("date-g1-right-metrics", "value"),
             State("date-g1-log", "value"),
@@ -1838,6 +1885,8 @@ class GameStatsDashboard:
             date_granularity: Optional[str],
             date_picker_start_date: Any,
             date_picker_end_date: Any,
+            filter_user_group_date: Any,
+            filter_user_group_group: Any,
             date_g1_left_metrics: Any,
             date_g1_right_metrics: Any,
             date_g1_log: Any,
@@ -1883,8 +1932,9 @@ class GameStatsDashboard:
             def _date_tab_panel_for_config(panel_state: Optional[Dict]) -> Optional[Dict]:
                 if not panel_state:
                     return panel_state
-                # Keep only per-panel fields; strip shared start/end.
-                return {k: v for k, v in panel_state.items() if k not in date_keys_date_tab}
+                # Keep only per-panel fields; strip shared start/end and tab-level user_group_filter.
+                strip_date = set(date_keys_date_tab) | {"user_group_filter"}
+                return {k: v for k, v in panel_state.items() if k not in strip_date}
 
             # tab_group: shared date_ranges for the Group tab (range1/2/3), plus per-panel (g1/g2/g3) without those keys
             date_range_keys = (
@@ -1904,8 +1954,9 @@ class GameStatsDashboard:
             def _group_tab_panel_for_config(panel_state: Optional[Dict]) -> Optional[Dict]:
                 if not panel_state:
                     return panel_state
-                # Keep only per-panel fields; strip shared range1/2/3.
-                return {k: v for k, v in panel_state.items() if k not in date_range_keys}
+                # Keep only per-panel fields; strip shared range1/2/3 and tab-level user_group_filter.
+                strip_group = set(date_range_keys) | {"user_group_filter"}
+                return {k: v for k, v in panel_state.items() if k not in strip_group}
 
             # Build tab-date per-panel state from current UI controls so overwrite writes fresh values.
             date_tab_panel_g1: Dict[str, Any] = {
@@ -1938,12 +1989,14 @@ class GameStatsDashboard:
                 "current_tab": current_tab,
                 "tab_date": {
                     "date_range": date_range_tab_date,
+                    "user_group_filter": filter_user_group_date,
                     "g1": _date_tab_panel_for_config(date_tab_panel_g1),
                     "g2": _date_tab_panel_for_config(date_tab_panel_g2),
                     "g3": _date_tab_panel_for_config(date_tab_panel_g3),
                 },
                 "tab_group": {
                     "date_ranges": date_range_tab_group,
+                    "user_group_filter": filter_user_group_group,
                     "g1": _group_tab_panel_for_config(group_tab_g1_state),
                     "g2": _group_tab_panel_for_config(group_tab_g2_state),
                     "g3": _group_tab_panel_for_config(group_tab_g3_state),
@@ -2042,12 +2095,15 @@ class GameStatsDashboard:
                         config_file = match
                 # Merge shared date_range for tab_date into each g for restore
                 date_range = tab_date.get("date_range") or {}
+                ug_date = tab_date.get("user_group_filter", "all")
 
                 def _d_with_range(gi: str) -> Optional[Dict]:
                     g = tab_date.get(gi)
                     if not g:
                         return g
-                    return {**date_range, **g}
+                    merged: Dict[str, Any] = {**date_range, **g}
+                    merged["user_group_filter"] = ug_date
+                    return merged
 
                 d1_out = _d_with_range("g1")
                 d2_out = _d_with_range("g2")
@@ -2090,12 +2146,15 @@ class GameStatsDashboard:
                     self._loaded_group_date_ranges = None
                 # Merge shared date_ranges into each g for restore
                 date_ranges = dr
+                ug_group = tab_group.get("user_group_filter", "all")
 
                 def _g_with_dates(gi: str) -> Optional[Dict]:
                     g = tab_group.get(gi)
                     if not g:
                         return g
-                    return {**date_ranges, **g}
+                    merged_g: Dict[str, Any] = {**date_ranges, **g}
+                    merged_g["user_group_filter"] = ug_group
+                    return merged_g
 
                 g1_out = _g_with_dates("g1")
                 g2_out = _g_with_dates("g2")
@@ -2135,6 +2194,7 @@ class GameStatsDashboard:
             Output("date-granularity", "value", allow_duplicate=True),
             Output("date-picker-range", "start_date", allow_duplicate=True),
             Output("date-picker-range", "end_date", allow_duplicate=True),
+            Output("filter-user-group-date", "value", allow_duplicate=True),
             Output("date-g1-left-metrics", "value", allow_duplicate=True),
             Output("date-g1-right-metrics", "value", allow_duplicate=True),
             Output("date-g1-log", "value", allow_duplicate=True),
@@ -2156,6 +2216,7 @@ class GameStatsDashboard:
             Output("date-picker-range2", "end_date", allow_duplicate=True),
             Output("date-picker-range3", "start_date", allow_duplicate=True),
             Output("date-picker-range3", "end_date", allow_duplicate=True),
+            Output("filter-user-group-group", "value", allow_duplicate=True),
             Output("group-g1-metrics", "value", allow_duplicate=True),
             Output("group-g1-display", "value", allow_duplicate=True),
             Output("group-g1-group", "value", allow_duplicate=True),
@@ -2222,7 +2283,7 @@ class GameStatsDashboard:
             bet: Optional[Dict],
         ):
             if trigger is None:
-                return (no_update,) * 68
+                return (no_update,) * 70
             # Keep the load trigger token so default-picker callbacks don't recompute
             # and clamp restored DatePickerRange values.
             out: List[Any] = [trigger]
@@ -2232,6 +2293,7 @@ class GameStatsDashboard:
                     sd.get("date_granularity"),
                     _normalize_date_value(sd.get("start_date")),
                     _normalize_date_value(sd.get("end_date")),
+                    sd.get("user_group_filter", "all"),
                 ]
             )
             for s in [d1, d2, d3]:
@@ -2248,6 +2310,7 @@ class GameStatsDashboard:
                     _normalize_date_value(sg.get("date_range2_end")),
                     _normalize_date_value(sg.get("date_range3_start")),
                     _normalize_date_value(sg.get("date_range3_end")),
+                    sg.get("user_group_filter", "all"),
                 ]
             )
             for s in [g1, g2, g3]:
@@ -2295,6 +2358,84 @@ class GameStatsDashboard:
             return sorted(groups, key=str)
         return []
 
+    def _ensure_user_group_filter(self) -> None:
+        """Set df_user_group_col from YAML; dropdown options are unique values from data plus ``all``."""
+        sd = self.config.get("stats_by_date", {})
+        col = (sd.get("user_group_col") or "").strip()
+        self.df_user_group_col = col
+        if not col:
+            self.df_user_group_dropdown_options = [{"label": "all", "value": "all"}]
+            return
+        default_gran = list(self.date_files_config.keys())[0]
+        lf = self.lfs_by_date.get(default_gran, pl.DataFrame().lazy())
+        if lf.collect_schema().len() == 0 or col not in lf.collect_schema().names():
+            self.df_user_group_dropdown_options = [{"label": "all", "value": "all"}]
+            return
+        uniq = self._get_plot_groups(lf, col)
+        self.df_user_group_dropdown_options = [{"label": "all", "value": "all"}] + [
+            {"label": str(u), "value": str(u)} for u in uniq
+        ]
+
+    def _apply_user_group_filter(self, df: pl.DataFrame, user_group_val: Any) -> pl.DataFrame:
+        col = self.df_user_group_col
+        if not col or col not in df.columns:
+            return df
+        v = user_group_val if user_group_val is not None else "all"
+        if str(v) == "all":
+            return df
+        return df.filter(pl.col(col) == v)
+
+    def _aggregate_stats_from_user_rows_enabled(self) -> bool:
+        return bool(self.config.get("stats_by_date", {}).get("aggregate_stats_from_user_rows", False))
+
+    def _stats_by_date_all_chart_columns(self) -> List[str]:
+        """Union of group1/2/3 column lists (order preserved, first occurrence wins)."""
+        sd = self.config.get("stats_by_date", {})
+        seen: List[str] = []
+        for k in ("group1_columns", "group2_columns", "group3_columns"):
+            for c in sd.get(k) or []:
+                if c not in seen:
+                    seen.append(c)
+        return seen
+
+    def _parquet_required_columns_for_enrich(self) -> set[str]:
+        """Columns that must exist in the loaded frame before enrich: registry inputs, plotted Parquet metrics, keys.
+
+        ``user_group_col`` is intentionally excluded: DataMetrics handles its absence gracefully
+        via ``_has_user_group`` and falls back to ``[date_col, group_col]`` keys.
+        """
+        chart_non_enrich = set(self._stats_by_date_all_chart_columns()) - ENRICH_PRODUCED_COLUMNS
+        return (
+            set(ENRICH_USER_ROW_INPUT_COLUMNS)
+            | chart_non_enrich
+            | {
+                self.date_col,
+                self.df_date_group_col,
+            }
+        )
+
+    def _make_data_metrics(
+        self,
+        df: pl.DataFrame,
+        start_dt: datetime,
+        end_dt: datetime,
+        granularity: str,
+    ) -> DataMetrics:
+        """Return a ``DataMetrics`` instance configured for this dashboard.
+
+        ``df`` must already be filtered to the desired user_group *before* this
+        call.  user_group is therefore not included in ``key_cols``; DataMetrics
+        computes all metrics for the cohort as supplied.
+        """
+        key_cols = [c for c in [self.date_col, self.df_date_group_col] if c]
+        return DataMetrics(
+            df,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            key_cols=key_cols,
+            granularity=granularity or "day",
+        )
+
     def _ensure_date_plot_groups(self) -> None:
         """Populate df_date_group_col and df_plot_groups from config and date data."""
         if self.config.get("stats_by_date", {}).get("group_col"):
@@ -2302,6 +2443,7 @@ class GameStatsDashboard:
             default_gran = list(self.date_files_config.keys())[0]
             lf = self.lfs_by_date.get(default_gran, pl.DataFrame().lazy())
             self.df_plot_groups = self._get_plot_groups(lf, self.df_date_group_col)
+        self._ensure_user_group_filter()
 
     def _ensure_bet_groups(self) -> None:
         """Populate df_bet_group_col and df_bet_groups from config and bet data."""
@@ -2351,6 +2493,12 @@ class GameStatsDashboard:
     # Plot Logic
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _user_group_label(user_group_filter: Any) -> str:
+        """Return `` (new)`` style suffix when a specific user-group filter is active."""
+        val = str(user_group_filter).strip() if user_group_filter is not None else ""
+        return f" ({val})" if val and val.lower() not in ("all", "") else ""
+
     def update_date_plot(
         self,
         left_metrics: Any,
@@ -2361,6 +2509,7 @@ class GameStatsDashboard:
         date_granularity: Any,
         start_date: Any,
         end_date: Any,
+        user_group_filter: Any,
     ) -> go.Figure:
         if not left_metrics and not right_metrics:
             return go.Figure()
@@ -2379,7 +2528,22 @@ class GameStatsDashboard:
         if start_dt is None or end_dt is None:
             return fig
 
-        df_date = lf.filter((pl.col(self.date_col) >= start_dt) & (pl.col(self.date_col) <= end_dt)).collect()
+        load_end = (
+            end_dt + timedelta(days=RETENTION_LOAD_EXTRA_DAYS)
+            if self._aggregate_stats_from_user_rows_enabled()
+            else end_dt
+        )
+        df_raw = lf.filter((pl.col(self.date_col) >= start_dt) & (pl.col(self.date_col) <= load_end)).collect()
+        if df_raw.is_empty():
+            return fig
+
+        # Filter user_group BEFORE DataMetrics so metrics are computed on the
+        # correct cohort (e.g. "new" users only, not all users then filtered).
+        df_raw = self._apply_user_group_filter(df_raw, user_group_filter)
+        dm = self._make_data_metrics(df_raw, start_dt, end_dt, str(date_granularity or "day"))
+
+        # df_date: display window only (dm._df keeps extra days for retention)
+        df_date = df_raw.filter((pl.col(self.date_col) >= start_dt) & (pl.col(self.date_col) <= end_dt))
         if df_date.is_empty():
             return fig
 
@@ -2412,89 +2576,76 @@ class GameStatsDashboard:
                 for j, s in enumerate(groups)
             }
 
-        with ProcessPoolExecutor() as executor:
-            for strat in groups:
-                print(f"Processing group: {strat}")
-                df_group = df_date.filter(pl.col(group_col) == strat).sort(self.date_col)
-                if df_group.is_empty():
-                    continue
+        # Accumulate y values per axis for log-scale tick calculation.
+        all_y_left: List[float] = []
+        all_y_right: List[float] = []
 
-                def add_scatter_plot(metrics: Any, secondary_y: bool) -> None:
-                    date_vals = df_group.get_column(self.date_col)
-                    for m in metrics:
-                        if m not in df_group.columns:
-                            continue
+        for strat in groups:
+            print(f"Processing group: {strat}")
+            df_group = df_date.filter(pl.col(group_col) == strat).sort(self.date_col)
+            if df_group.is_empty():
+                continue
 
-                        if self.date_col in df_group.columns:
-                            agg_df = (
-                                df_group.group_by(self.date_col)
-                                .agg(pl.col(m).mean().alias("_mean"))
-                                .sort(self.date_col)
-                            )
-                            dates = agg_df.get_column(self.date_col)
-                            mean_vals = agg_df.get_column("_mean")
-                            arrays_to_bootstrap = [
-                                df_group.filter(pl.col(self.date_col) == d).get_column(m).drop_nulls().to_numpy()
-                                for d in dates
-                            ]
-                            ci_results = list(executor.map(bootstrap_worker, arrays_to_bootstrap))
-                            lowers, uppers = zip(*ci_results)
-                            y_raw = mean_vals.to_numpy()
-                            y_lower = np.array([l if l == l else y_raw[i] for i, l in enumerate(lowers)])
-                            y_upper = np.array([u if u == u else y_raw[i] for i, u in enumerate(uppers)])
-                            x = dates.to_list()
-                            y_plot = self.hybrid_transform(y_raw, thresh) if log_scale else y_raw
-                            y_lower_plot = self.hybrid_transform(y_lower, thresh) if log_scale else y_lower
-                            y_upper_plot = self.hybrid_transform(y_upper, thresh) if log_scale else y_upper
-                        else:
-                            y_raw = df_group.get_column(m).to_numpy()
-                            y_plot = self.hybrid_transform(y_raw, thresh) if log_scale else y_raw
-                            x = date_vals.to_list()
-                            y_lower_plot = y_plot
-                            y_upper_plot = y_plot
+            def add_scatter_plot(metrics: Any, secondary_y: bool) -> None:
+                for m in metrics:
+                    x, y_raw, y_lower, y_upper = dm.plot_values(m, df_group)
+                    if len(x) == 0:
+                        continue
 
+                    y_plot = self.hybrid_transform(y_raw, thresh) if log_scale else y_raw
+                    y_lower_plot = self.hybrid_transform(y_lower, thresh) if log_scale else y_lower
+                    y_upper_plot = self.hybrid_transform(y_upper, thresh) if log_scale else y_upper
+
+                    if secondary_y:
+                        all_y_right.extend(y_raw[~np.isnan(y_raw)].tolist())
+                    else:
+                        all_y_left.extend(y_raw[~np.isnan(y_raw)].tolist())
+
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x,
+                            y=y_plot.tolist() if hasattr(y_plot, "tolist") else list(y_plot),
+                            name=f"{strat}:{m}",
+                            mode="lines+markers",
+                            line=dict(
+                                color=color_map.get(f"{strat}:{m}", "black"),
+                                dash=line_style_map.get(f"{strat}:{m}", "solid"),
+                            ),
+                            legendgroup=strat,
+                        ),
+                        secondary_y=secondary_y,
+                    )
+
+                    lower_arr = np.asarray(y_lower_plot)
+                    upper_arr = np.asarray(y_upper_plot)
+                    if not np.allclose(lower_arr, upper_arr, equal_nan=True):
+                        base_color = color_map.get(f"{strat}:{m}", "black")
+                        x_list = x if isinstance(x, list) else list(x)
                         fig.add_trace(
                             go.Scatter(
-                                x=x,
-                                y=y_plot.tolist() if hasattr(y_plot, "tolist") else list(y_plot),
-                                name=f"{strat}:{m}",
-                                mode="lines+markers",
-                                line=dict(
-                                    color=color_map.get(f"{strat}:{m}", "black"),
-                                    dash=line_style_map.get(f"{strat}:{m}", "solid"),
-                                ),
+                                x=x_list + x_list[::-1],
+                                y=(upper_arr.tolist() if hasattr(upper_arr, "tolist") else list(upper_arr))
+                                + (lower_arr.tolist() if hasattr(lower_arr, "tolist") else list(lower_arr))[::-1],
+                                fill="toself",
+                                fillcolor=self.to_rgba(base_color, 0.1),
+                                line=dict(color="rgba(255,255,255,0)"),
+                                hoverinfo="skip",
+                                showlegend=False,
                                 legendgroup=strat,
+                                name=f"{strat}:{m} 95% CI",
                             ),
                             secondary_y=secondary_y,
                         )
 
-                        lower_arr = y_lower_plot if isinstance(y_lower_plot, np.ndarray) else np.asarray(y_lower_plot)
-                        upper_arr = y_upper_plot if isinstance(y_upper_plot, np.ndarray) else np.asarray(y_upper_plot)
-                        if not np.allclose(lower_arr, upper_arr):
-                            base_color = color_map.get(f"{strat}:{m}", "black")
-                            x_list = x if isinstance(x, list) else list(x)
-                            fig.add_trace(
-                                go.Scatter(
-                                    x=x_list + x_list[::-1],
-                                    y=(upper_arr.tolist() if hasattr(upper_arr, "tolist") else list(upper_arr))
-                                    + (lower_arr.tolist() if hasattr(lower_arr, "tolist") else list(lower_arr))[::-1],
-                                    fill="toself",
-                                    fillcolor=self.to_rgba(base_color, 0.1),
-                                    line=dict(color="rgba(255,255,255,0)"),
-                                    hoverinfo="skip",
-                                    showlegend=False,
-                                    legendgroup=strat,
-                                    name=f"{strat}:{m} 95% CI",
-                                ),
-                                secondary_y=secondary_y,
-                            )
+            add_scatter_plot(left_metrics or [], False)
+            add_scatter_plot(right_metrics or [], True)
 
-                add_scatter_plot(left_metrics or [], False)
-                add_scatter_plot(right_metrics or [], True)
-
+        metrics_label = ", ".join(m for m in [*(left_metrics or []), *(right_metrics or [])] if m)
+        ug_label = self._user_group_label(user_group_filter)
         fig.update_layout(
+            title=f"{metrics_label}{ug_label}" if metrics_label else None,
             height=400,
-            margin=dict(l=50, r=10, t=5, b=15),
+            margin=dict(l=50, r=10, t=40, b=15),
             template="plotly_white",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=0.90),
             hovermode="x unified",
@@ -2506,23 +2657,15 @@ class GameStatsDashboard:
         )
 
         if log_scale:
-            all_y: List[float] = []
-            for c in left_metrics or []:
-                if c in df_date.columns:
-                    all_y.extend(df_date.get_column(c).cast(pl.Float64).to_numpy().tolist())
-            if all_y:
-                yticks = self.get_ticks(all_y, thresh)
+            if all_y_left:
+                yticks = self.get_ticks(all_y_left, thresh)
                 fig.update_yaxes(
                     tickvals=self.hybrid_transform(yticks, thresh).tolist(),
                     ticktext=[f"{v:.0f}" for v in yticks],
                     secondary_y=False,
                 )
-            all_y_r: List[float] = []
-            for c in right_metrics or []:
-                if c in df_date.columns:
-                    all_y_r.extend(df_date.get_column(c).cast(pl.Float64).to_numpy().tolist())
-            if all_y_r:
-                yticks_r = self.get_ticks(all_y_r, thresh)
+            if all_y_right:
+                yticks_r = self.get_ticks(all_y_right, thresh)
                 fig.update_yaxes(
                     tickvals=self.hybrid_transform(yticks_r, thresh).tolist(),
                     ticktext=[f"{v:.0f}" for v in yticks_r],
@@ -2697,6 +2840,7 @@ class GameStatsDashboard:
             clip_enable: Any,
             clip_min: Any,
             clip_max: Any,
+            user_group_filter: Any,
         ) -> go.Figure:
             if not metric or not groups or r1_start is None or r1_end is None:
                 return go.Figure()
@@ -2719,9 +2863,35 @@ class GameStatsDashboard:
             if not valid_dates:
                 return go.Figure()
             min_d, max_d = min(valid_dates), max(valid_dates)
-            df_date = lf.filter((pl.col(self.date_col) >= min_d) & (pl.col(self.date_col) <= max_d)).collect()
-            if df_date.is_empty() or self.df_date_group_col not in df_date.columns or metric not in df_date.columns:
+            # Retention metrics need a few extra days beyond max_d.
+            load_end = (
+                max_d + timedelta(days=RETENTION_LOAD_EXTRA_DAYS)
+                if self._aggregate_stats_from_user_rows_enabled()
+                else max_d
+            )
+            file_gran = list(self.date_files_config.keys())[0]
+
+            # Single collect covering the wider range needed for retention metrics.
+            df_loaded = lf.filter((pl.col(self.date_col) >= min_d) & (pl.col(self.date_col) <= load_end)).collect()
+            if df_loaded.is_empty() or self.df_date_group_col not in df_loaded.columns:
                 return go.Figure()
+
+            # Apply user_group filter once on the loaded data.
+            df_loaded = self._apply_user_group_filter(df_loaded, user_group_filter)
+
+            # DataMetrics gets the full loaded range (extra days needed for retention).
+            dm_cmp = self._make_data_metrics(df_loaded, min_d, max_d, file_gran)
+
+            # df_date is just the display window sliced from already-loaded data.
+            df_date = df_loaded.filter((pl.col(self.date_col) >= min_d) & (pl.col(self.date_col) <= max_d))
+            if df_date.is_empty():
+                return go.Figure()
+
+            if metric not in dm_cmp:
+                logger.warning("plot metric %r not found in loaded data; check YAML column name or ETL output", metric)
+                return go.Figure()
+            # dm_cmp[metric] is now the single source for all metrics — computed or raw.
+            metric_df: pl.DataFrame = dm_cmp[str(metric)]  # type: ignore[assignment]
             base_colors = Styles.COLORS
             fig = go.Figure()
 
@@ -2756,16 +2926,23 @@ class GameStatsDashboard:
             data_ranges = [r for r in data_ranges if r["start"] is not None and r["end"] is not None]
             # Only keep enabled
             data_by_range = [r for r in data_ranges if r["show"]]
-            drop_cols: List[str] = []
-            if drop_activity_date and "activity_date" in (drop_activity_date or []):
-                date_col_name = "activity_date" if "activity_date" in df_date.columns else self.date_col
-                if date_col_name in df_date.columns:
-                    drop_cols.append(date_col_name)
-            if drop_user_id and "user_id" in (drop_user_id or []):
-                drop_cols.append("user_id")
             enable_clip = clip_enable is not None and "ON" in (clip_enable or [])
             cmin = clip_min if enable_clip and clip_min is not None else None
             cmax = clip_max if enable_clip and clip_max is not None else None
+
+            def _get_vals(group: str, start_dt: datetime, end_dt: datetime) -> np.ndarray:
+                """Filter metric_df to (group, date range) and return values array."""
+                return (
+                    metric_df.filter(
+                        (pl.col(self.date_col) >= start_dt)
+                        & (pl.col(self.date_col) <= end_dt)
+                        & (pl.col(self.df_date_group_col) == group)
+                    )
+                    .get_column(str(metric))
+                    .drop_nulls()
+                    .to_numpy()
+                    .astype(float)
+                )
 
             if display_mode == "box":
                 for gi, group in enumerate(groups):
@@ -2775,15 +2952,7 @@ class GameStatsDashboard:
                         end_dt = range_info["end"]
                         if start_dt is None or end_dt is None:
                             continue
-                        df_g = df_date.filter(
-                            (pl.col(self.date_col) >= start_dt)
-                            & (pl.col(self.date_col) <= end_dt)
-                            & (pl.col(self.df_date_group_col) == group)
-                        )
-                        valid_drop = [c for c in drop_cols if c in df_g.columns]
-                        if valid_drop:
-                            df_g = df_g.unique(subset=valid_drop)
-                        vals = df_g.get_column(metric).drop_nulls().to_numpy()
+                        vals = _get_vals(group, cast(datetime, start_dt), cast(datetime, end_dt))
                         if enable_clip and (cmin is not None or cmax is not None):
                             vals = np.clip(
                                 vals, cmin if cmin is not None else -np.inf, cmax if cmax is not None else np.inf
@@ -2817,15 +2986,7 @@ class GameStatsDashboard:
                         end_dt = range_info["end"]
                         if start_dt is None or end_dt is None:
                             continue
-                        df_g = df_date.filter(
-                            (pl.col(self.date_col) >= start_dt)
-                            & (pl.col(self.date_col) <= end_dt)
-                            & (pl.col(self.df_date_group_col) == group)
-                        )
-                        valid_drop = [c for c in drop_cols if c in df_g.columns]
-                        if valid_drop:
-                            df_g = df_g.unique(subset=valid_drop)
-                        vals = df_g.get_column(metric).drop_nulls().to_numpy()
+                        vals = _get_vals(group, cast(datetime, start_dt), cast(datetime, end_dt))
                         if enable_clip and (cmin is not None or cmax is not None):
                             vals = np.clip(
                                 vals, cmin if cmin is not None else -np.inf, cmax if cmax is not None else np.inf
@@ -2920,8 +3081,9 @@ class GameStatsDashboard:
                 if cmax is not None:
                     subtitle += f" max={cmax}"
                 subtitle += ")"
+            ug_label = self._user_group_label(user_group_filter)
             fig.update_layout(
-                title=f"{mode_title}: {metric}{subtitle}",
+                title=f"{mode_title}: {metric}{subtitle}{ug_label}",
                 yaxis_title=metric,
                 template="plotly_white",
                 hovermode="closest",

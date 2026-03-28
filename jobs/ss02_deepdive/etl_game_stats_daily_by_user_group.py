@@ -178,7 +178,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 SUM(CASE WHEN t.bet_type = 'BASE' THEN t.payout END) AS user_total_payout_bg,
                 SUM(CASE WHEN t.bet_type = 'FREE' THEN t.payout END) AS user_total_payout_fg,
 
-                SUM(t.fg_session_trigger_bet) AS user_total_bet_fg_for_rtp,
+                SUM(t.fg_session_trigger_bet) AS user_total_bet_fg,
 
                 COUNT(CASE WHEN t.payout > 0 THEN 1 END) AS user_num_bets_with_payout,
                 COUNT(CASE WHEN t.bet_type = 'BASE' AND t.payout > 0 THEN 1 END) AS user_num_bets_bg_with_payout,
@@ -212,7 +212,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 SUM(CASE WHEN t.bet_type = 'BASE' THEN t.payout END) AS total_payout_bg,
                 SUM(CASE WHEN t.bet_type = 'FREE' THEN t.payout END) AS total_payout_fg,
 
-                SUM(t.fg_session_trigger_bet) AS total_bet_fg_for_rtp,
+                SUM(t.fg_session_trigger_bet) AS total_bet_fg,
 
                 COUNT(CASE WHEN t.payout > 0 THEN 1 END) AS total_num_bets_with_payout,
                 COUNT(CASE WHEN t.bet_type = 'BASE' AND t.payout > 0 THEN 1 END) AS total_num_bets_bg_with_payout,
@@ -331,8 +331,8 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             us.user_total_payout_bg / NULLIF(us.user_total_bet, 0) AS user_rtp_bg,
 
             -- Free game RTP: payout of free games / trigger bet (bet before free game)
-            us.user_total_payout_fg / NULLIF(us.user_total_bet_fg_for_rtp, 0) AS user_rtp_fg,
-            gs.total_payout_fg / NULLIF(gs.total_bet_fg_for_rtp, 0) AS rtp_fg,
+            us.user_total_payout_fg / NULLIF(us.user_total_bet_fg, 0) AS user_rtp_fg,
+            gs.total_payout_fg / NULLIF(gs.total_bet_fg, 0) AS rtp_fg,
 
             -- Hit rate: proportion of bets with payout > 0
             us.user_num_bets_with_payout * 1.0 / NULLIF(us.user_num_bets, 0) AS user_hit_rate,

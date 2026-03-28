@@ -247,22 +247,22 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
                 u.daily_group,
                 t.user_id,
                 u.{stats_agg_col},
-                SUM(t.num_streak_sessions) AS num_streak_sessions,
-                AVG(t.avg_streak_length) AS avg_streak_length,
-                MAX(t.max_streak_length) AS max_streak_length,
-                MIN(t.min_streak_length) AS min_streak_length,
+                SUM(t.num_streak_sessions)      AS user_num_streak_sessions,
+                AVG(t.avg_streak_length)        AS user_avg_streak_length,
+                MAX(t.max_streak_length)        AS user_max_streak_length,
+                MIN(t.min_streak_length)        AS user_min_streak_length,
 
-                AVG(t.seconds_to_kill_fish) AS seconds_to_kill_fish,
-                AVG(t.seconds_to_kill_fish_low) AS seconds_to_kill_fish_low,
-                AVG(t.seconds_to_kill_fish_medium) AS seconds_to_kill_fish_medium,
-                AVG(t.seconds_to_kill_fish_high) AS seconds_to_kill_fish_high,
-                AVG(t.seconds_to_kill_fish_ultra) AS seconds_to_kill_fish_ultra,
+                AVG(t.seconds_to_kill_fish)         AS user_seconds_to_kill_fish,
+                AVG(t.seconds_to_kill_fish_low)     AS user_seconds_to_kill_fish_low,
+                AVG(t.seconds_to_kill_fish_medium)  AS user_seconds_to_kill_fish_medium,
+                AVG(t.seconds_to_kill_fish_high)    AS user_seconds_to_kill_fish_high,
+                AVG(t.seconds_to_kill_fish_ultra)   AS user_seconds_to_kill_fish_ultra,
 
-                AVG(t.bets_to_kill_fish) AS bets_to_kill_fish,
-                AVG(t.bets_to_kill_fish_low) AS bets_to_kill_fish_low,
-                AVG(t.bets_to_kill_fish_medium) AS bets_to_kill_fish_medium,
-                AVG(t.bets_to_kill_fish_high) AS bets_to_kill_fish_high,
-                AVG(t.bets_to_kill_fish_ultra) AS bets_to_kill_fish_ultra
+                AVG(t.bets_to_kill_fish)        AS user_bets_to_kill_fish,
+                AVG(t.bets_to_kill_fish_low)    AS user_bets_to_kill_fish_low,
+                AVG(t.bets_to_kill_fish_medium) AS user_bets_to_kill_fish_medium,
+                AVG(t.bets_to_kill_fish_high)   AS user_bets_to_kill_fish_high,
+                AVG(t.bets_to_kill_fish_ultra)  AS user_bets_to_kill_fish_ultra
             FROM user_session_stats t
             JOIN user_daily_group u ON t.user_id = u.user_id AND t.activity_date = u.activity_date
             GROUP BY u.daily_group, t.user_id, u.{stats_agg_col}
@@ -273,208 +273,163 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
                 u.daily_group,
                 t.user_id,
                 u.{stats_agg_col},
-                MAX(t.max_kill_streak) AS max_kill_streak,
-                MAX(t.max_kill_streak_low) AS max_kill_streak_low,
-                MAX(t.max_kill_streak_medium) AS max_kill_streak_medium,
-                MAX(t.max_kill_streak_high) AS max_kill_streak_high,
-                MAX(t.max_kill_streak_ultra) AS max_kill_streak_ultra,
+                MAX(t.max_kill_streak)          AS user_max_kill_streak,
+                MAX(t.max_kill_streak_low)      AS user_max_kill_streak_low,
+                MAX(t.max_kill_streak_medium)   AS user_max_kill_streak_medium,
+                MAX(t.max_kill_streak_high)     AS user_max_kill_streak_high,
+                MAX(t.max_kill_streak_ultra)    AS user_max_kill_streak_ultra,
 
-                AVG(t.avg_kill_streak) AS avg_kill_streak,
-                AVG(t.avg_kill_streak_low) AS avg_kill_streak_low,
-                AVG(t.avg_kill_streak_medium) AS avg_kill_streak_medium,
-                AVG(t.avg_kill_streak_high) AS avg_kill_streak_high,
-                AVG(t.avg_kill_streak_ultra) AS avg_kill_streak_ultra
+                AVG(t.avg_kill_streak)          AS user_avg_kill_streak,
+                AVG(t.avg_kill_streak_low)      AS user_avg_kill_streak_low,
+                AVG(t.avg_kill_streak_medium)   AS user_avg_kill_streak_medium,
+                AVG(t.avg_kill_streak_high)     AS user_avg_kill_streak_high,
+                AVG(t.avg_kill_streak_ultra)    AS user_avg_kill_streak_ultra
             FROM max_kill_streak_length t
             JOIN user_daily_group u ON t.user_id = u.user_id AND t.activity_date = u.activity_date
             GROUP BY u.daily_group, t.user_id, u.{stats_agg_col}
         ),
 
-        -- 3. CALCULATE RETENTION (Pure Date Math)
-        retention_stats AS (
-            SELECT
-                t1.daily_group,
-                t1.{stats_agg_col},
-                COUNT(DISTINCT t1.user_id) AS num_users_day0,
-                COUNT(DISTINCT t2.user_id) AS num_users_day1,
-                COUNT(DISTINCT t3.user_id) AS num_users_day3,
-                COUNT(DISTINCT t4.user_id) AS num_users_day7
-                -- COUNT(DISTINCT t5.user_id) AS num_users_week1,
-                -- COUNT(DISTINCT t6.user_id) AS num_users_month1
-            FROM user_daily_group t1
-            LEFT JOIN user_daily_group t2
-                ON t1.user_id = t2.user_id AND t2.activity_date = DATEADD(day, 1, t1.activity_date)
-            LEFT JOIN user_daily_group t3
-                ON t1.user_id = t3.user_id AND t3.activity_date = DATEADD(day, 3, t1.activity_date)
-            LEFT JOIN user_daily_group t4
-                ON t1.user_id = t4.user_id AND t4.activity_date = DATEADD(day, 7, t1.activity_date)
-            -- LEFT JOIN user_daily_group t5
-            --    ON t1.user_id = t5.user_id AND t5.activity_week = DATEADD(week, 1, t1.activity_week)
-            -- LEFT JOIN user_daily_group t6
-            --    ON t1.user_id = t6.user_id AND t6.activity_month = DATEADD(month, 1, t1.activity_month)
-            GROUP BY t1.daily_group, t1.{stats_agg_col}
-        ),
-
-        -- 4. AGGREGATE STATS BY ASSIGNED DAILY GROUP
-        stats_by_date AS (
-            SELECT
-                u.daily_group,
-                b.{stats_agg_col},
-                COUNT(DISTINCT b.user_id) AS num_users,
-                COUNT(DISTINCT
-                    CASE
-                        WHEN
-                            DATEDIFF('day', u.bj_date_last_bet, u.activity_date) > {RETURN_USER_DAYS}
-                        THEN u.user_id
-                    END
-                ) AS num_return_users,
-                COUNT(DISTINCT CASE WHEN b.killed = 1 THEN b.user_id END) AS num_users_killed_fish,
-                ROUND(CAST(SUM(b.payout) AS FLOAT) / NULLIF(SUM(b.bet), 0), 3) AS group_rtp
-            FROM base_data b
-            JOIN user_daily_group u ON b.user_id = u.user_id AND b.activity_date = u.activity_date
-            GROUP BY u.daily_group, b.{stats_agg_col}
-        ),
-
+        -- 4. USER-LEVEL STATS BY ASSIGNED DAILY GROUP
         stats_by_user_date AS (
             SELECT
                 b.user_id,
                 u.daily_group,
                 b.{stats_agg_col},
-                COUNT(DISTINCT b.user_id || '-' || b.room_id) AS num_rooms,
-                COUNT(b.user_id) AS num_bullets,
-                
-                -- Bullets info by fish type:
-                SUM(CASE WHEN b.fish_type = 'low' THEN 1 END) AS num_hits_fish_low,
-                SUM(CASE WHEN b.fish_type = 'medium' THEN 1 END) AS num_hits_fish_medium,
-                SUM(CASE WHEN b.fish_type = 'high' THEN 1 END) AS num_hits_fish_high,
-                SUM(CASE WHEN b.fish_type = 'ultra' THEN 1 END) AS num_hits_fish_ultra,
+                COUNT(DISTINCT b.user_id || '-' || b.room_id) AS user_num_rooms,
+                COUNT(b.user_id)                              AS user_num_bets,
 
-                -- Killed Fish info by fish type:
-                SUM(b.killed) AS num_killed_bullets,
-                SUM(CASE WHEN b.fish_type = 'low' THEN b.killed END) AS num_killed_fish_low,
-                SUM(CASE WHEN b.fish_type = 'medium' THEN b.killed END) AS num_killed_fish_medium,
-                SUM(CASE WHEN b.fish_type = 'high' THEN b.killed END) AS num_killed_fish_high,
-                SUM(CASE WHEN b.fish_type = 'ultra' THEN b.killed END) AS num_killed_fish_ultra,
-                
-                SUM(b.bet) AS total_bet,
-                SUM(b.profit) AS total_profit,
-                MAX(b.profit) AS max_profit,
-                ROUND(CAST(SUM(b.payout) AS FLOAT) / NULLIF(SUM(b.bet), 0), 3) AS user_rtp,
-                STDDEV(b.profit) / NULLIF(ABS(AVG(b.profit)), 0) AS profit_coef_var,
-                MAX(CASE WHEN b.killed >= 1 THEN 1 ELSE 0 END) AS user_killed_fish,
-                
-                AVG(b.fish_value) AS avg_fish_value,
-                AVG(CASE WHEN b.fish_value > 19 AND b.fish_value < 201 THEN b.fish_value END) AS avg_fish_value_20_200,
-                AVG(CASE WHEN b.killed = 1 THEN b.fish_value END) AS avg_killed_fish_value,
-                AVG(CASE WHEN b.fish_value > 19 AND b.fish_value < 201 AND b.killed = 1 THEN b.fish_value END) AS avg_killed_fish_value_20_200,
-                AVG(b.profit) AS bullet_avg_profit,
-                AVG(CASE WHEN b.killed = 1 THEN b.profit END) AS bullet_kill_avg_profit
+                -- Bullets info by fish type:
+                SUM(CASE WHEN b.fish_type = 'low'    THEN 1 END) AS user_num_hits_fish_low,
+                SUM(CASE WHEN b.fish_type = 'medium' THEN 1 END) AS user_num_hits_fish_medium,
+                SUM(CASE WHEN b.fish_type = 'high'   THEN 1 END) AS user_num_hits_fish_high,
+                SUM(CASE WHEN b.fish_type = 'ultra'  THEN 1 END) AS user_num_hits_fish_ultra,
+
+                -- Killed fish info by fish type:
+                SUM(b.killed)                                                          AS user_num_killed_bullets,
+                SUM(CASE WHEN b.fish_type = 'low'    THEN b.killed END)               AS user_num_killed_fish_low,
+                SUM(CASE WHEN b.fish_type = 'medium' THEN b.killed END)               AS user_num_killed_fish_medium,
+                SUM(CASE WHEN b.fish_type = 'high'   THEN b.killed END)               AS user_num_killed_fish_high,
+                SUM(CASE WHEN b.fish_type = 'ultra'  THEN b.killed END)               AS user_num_killed_fish_ultra,
+
+                SUM(b.bet)                                                             AS user_total_bet,
+                SUM(b.payout)                                                          AS user_total_payout,
+                SUM(b.profit)                                                          AS user_total_profit,
+                MAX(b.profit)                                                          AS user_max_profit,
+                ROUND(CAST(SUM(b.payout) AS FLOAT) / NULLIF(SUM(b.bet), 0), 3)        AS user_rtp,
+                STDDEV(b.profit) / NULLIF(ABS(AVG(b.profit)), 0)                      AS user_profit_coef_var,
+                MAX(CASE WHEN b.killed >= 1 THEN 1 ELSE 0 END)                        AS user_killed_fish,
+
+                AVG(b.fish_value)                                                      AS user_avg_fish_value,
+                AVG(CASE WHEN b.fish_value > 19 AND b.fish_value < 201 THEN b.fish_value END)                          AS user_avg_fish_value_20_200,
+                AVG(CASE WHEN b.killed = 1 THEN b.fish_value END)                     AS user_avg_killed_fish_value,
+                AVG(CASE WHEN b.fish_value > 19 AND b.fish_value < 201 AND b.killed = 1 THEN b.fish_value END)         AS user_avg_killed_fish_value_20_200,
+                AVG(b.profit)                                                          AS user_bullet_avg_profit,
+                AVG(CASE WHEN b.killed = 1 THEN b.profit END)                         AS user_bullet_kill_avg_profit
             FROM base_data b
             JOIN user_daily_group u ON b.user_id = u.user_id AND b.activity_date = u.activity_date
             GROUP BY b.user_id, u.daily_group, b.{stats_agg_col}
             HAVING MAX(b.killed) > 0
+        ),
+
+        user_first_bet AS (
+            SELECT
+                user_id,
+                MIN(CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', created_at))) AS DATE)) AS first_bet_date
+            FROM public.bullet
+            WHERE currency_type = 'CNY'
+              AND op_code NOT IN ('B26','TST','TSB','TSO')
+            GROUP BY user_id
         )
 
-        -- 6. FINAL JOIN & FORMATTING (Fully Restored)
+        -- 5. FINAL JOIN & FORMATTING
         SELECT
             t1.user_id,
             t1.daily_group,
             t1.{stats_agg_col} AS activity_date,
-            t1.num_rooms,
-            t1.num_bullets,
-            t1.total_bet,
-            t1.num_killed_bullets,
-            
-            -- Fish type hit counts:
-            t1.num_hits_fish_low,
-            t1.num_hits_fish_medium,
-            t1.num_hits_fish_high,
-            t1.num_hits_fish_ultra,
-            t1.num_hits_fish_low * 1.0 / NULLIF(t1.num_bullets, 0) AS hits_fish_low_ratio,
-            t1.num_hits_fish_medium * 1.0 / NULLIF(t1.num_bullets, 0) AS hits_fish_medium_ratio,
-            t1.num_hits_fish_high * 1.0 / NULLIF(t1.num_bullets, 0) AS hits_fish_high_ratio,
-            t1.num_hits_fish_ultra * 1.0 / NULLIF(t1.num_bullets, 0) AS hits_fish_ultra_ratio,
-            
-            -- Fish type kill counts:
-            t1.num_killed_fish_low,
-            t1.num_killed_fish_medium,
-            t1.num_killed_fish_high,
-            t1.num_killed_fish_ultra,
-            t1.num_killed_fish_low * 1.0 / NULLIF(t1.num_killed_bullets, 0) AS killed_fish_low_ratio,
-            t1.num_killed_fish_medium * 1.0 / NULLIF(t1.num_killed_bullets, 0) AS killed_fish_medium_ratio,
-            t1.num_killed_fish_high * 1.0 / NULLIF(t1.num_killed_bullets, 0) AS killed_fish_high_ratio,
-            t1.num_killed_fish_ultra * 1.0 / NULLIF(t1.num_killed_bullets, 0) AS killed_fish_ultra_ratio,
-            
+            CASE
+                WHEN DATEDIFF('day', fb.first_bet_date, t1.{stats_agg_col}) <= 3 THEN 'new'
+                WHEN DATEDIFF('day', fb.first_bet_date, t1.{stats_agg_col}) <= 7 THEN 'beginner'
+                ELSE 'old'
+            END AS user_group,
+
+            -- Core user-level counts (user_ prefix = one row per user per period):
+            t1.user_num_rooms,
+            t1.user_num_bets,
+            t1.user_num_killed_bullets,
+            t1.user_killed_fish,
+
+            -- Bullet/hit counts by fish type:
+            t1.user_num_hits_fish_low,
+            t1.user_num_hits_fish_medium,
+            t1.user_num_hits_fish_high,
+            t1.user_num_hits_fish_ultra,
+            t1.user_num_hits_fish_low    * 1.0 / NULLIF(t1.user_num_bets, 0) AS user_hits_fish_low_ratio,
+            t1.user_num_hits_fish_medium * 1.0 / NULLIF(t1.user_num_bets, 0) AS user_hits_fish_medium_ratio,
+            t1.user_num_hits_fish_high   * 1.0 / NULLIF(t1.user_num_bets, 0) AS user_hits_fish_high_ratio,
+            t1.user_num_hits_fish_ultra  * 1.0 / NULLIF(t1.user_num_bets, 0) AS user_hits_fish_ultra_ratio,
+
+            -- Kill counts by fish type:
+            t1.user_num_killed_fish_low,
+            t1.user_num_killed_fish_medium,
+            t1.user_num_killed_fish_high,
+            t1.user_num_killed_fish_ultra,
+            t1.user_num_killed_fish_low    * 1.0 / NULLIF(t1.user_num_killed_bullets, 0) AS user_killed_fish_low_ratio,
+            t1.user_num_killed_fish_medium * 1.0 / NULLIF(t1.user_num_killed_bullets, 0) AS user_killed_fish_medium_ratio,
+            t1.user_num_killed_fish_high   * 1.0 / NULLIF(t1.user_num_killed_bullets, 0) AS user_killed_fish_high_ratio,
+            t1.user_num_killed_fish_ultra  * 1.0 / NULLIF(t1.user_num_killed_bullets, 0) AS user_killed_fish_ultra_ratio,
+
+            -- Bet / payout / profit:
+            t1.user_total_bet,
+            t1.user_total_payout,
+            t1.user_total_profit,
+            t1.user_max_profit,
             t1.user_rtp,
-            t1.avg_fish_value,
-            t1.avg_fish_value_20_200,
-            t1.avg_killed_fish_value,
-            t1.avg_killed_fish_value_20_200,
-            t1.bullet_avg_profit,
-            t1.bullet_kill_avg_profit,
-            t1.total_profit,
-            t1.max_profit,
-            t1.profit_coef_var,
+            t1.user_profit_coef_var,
+            ROUND(CAST(t1.user_num_killed_bullets AS FLOAT) / NULLIF(t1.user_num_bets, 0), 3) AS user_bullet_kill_ratio,
 
-            t2.num_users_day0,
-            t2.num_users_day1,
-            t2.num_users_day3,
-            t2.num_users_day7,
-            -- t2.num_users_week1,
-            -- t2.num_users_month1,
-
-            t3.num_users,
-            t3.num_return_users,
-            t3.num_users_killed_fish,
-            t3.group_rtp,
-
-            ROUND(CAST(t2.num_users_day1 AS FLOAT) / NULLIF(t2.num_users_day0, 0), 3) AS retention_rate_day1,
-            ROUND(CAST(t2.num_users_day3 AS FLOAT) / NULLIF(t2.num_users_day0, 0), 3) AS retention_rate_day3,
-            ROUND(CAST(t2.num_users_day7 AS FLOAT) / NULLIF(t2.num_users_day0, 0), 3) AS retention_rate_day7,
-            ROUND(CAST(t1.num_killed_bullets AS FLOAT) / NULLIF(t1.num_bullets, 0), 3) AS bullet_kill_ratio,
+            -- Fish value:
+            t1.user_avg_fish_value,
+            t1.user_avg_fish_value_20_200,
+            t1.user_avg_killed_fish_value,
+            t1.user_avg_killed_fish_value_20_200,
+            t1.user_bullet_avg_profit,
+            t1.user_bullet_kill_avg_profit,
 
             -- Session stats:
-            t4.num_streak_sessions,
-            t4.avg_streak_length,
-            t4.max_streak_length,
-            t4.min_streak_length,
-
-            t4.seconds_to_kill_fish,
-            t4.seconds_to_kill_fish_low,
-            t4.seconds_to_kill_fish_medium,
-            t4.seconds_to_kill_fish_high,
-            t4.seconds_to_kill_fish_ultra,
-
-            t4.bets_to_kill_fish,
-            t4.bets_to_kill_fish_low,
-            t4.bets_to_kill_fish_medium,
-            t4.bets_to_kill_fish_high,
-            t4.bets_to_kill_fish_ultra,
+            t4.user_num_streak_sessions,
+            t4.user_avg_streak_length,
+            t4.user_max_streak_length,
+            t4.user_min_streak_length,
+            t4.user_seconds_to_kill_fish,
+            t4.user_seconds_to_kill_fish_low,
+            t4.user_seconds_to_kill_fish_medium,
+            t4.user_seconds_to_kill_fish_high,
+            t4.user_seconds_to_kill_fish_ultra,
+            t4.user_bets_to_kill_fish,
+            t4.user_bets_to_kill_fish_low,
+            t4.user_bets_to_kill_fish_medium,
+            t4.user_bets_to_kill_fish_high,
+            t4.user_bets_to_kill_fish_ultra,
 
             -- Kill streak stats:
-            t5.max_kill_streak,
-            t5.max_kill_streak_low,
-            t5.max_kill_streak_medium,
-            t5.max_kill_streak_high,
-            t5.max_kill_streak_ultra,
-
-            t5.avg_kill_streak,
-            t5.avg_kill_streak_low,
-            t5.avg_kill_streak_medium,
-            t5.avg_kill_streak_high,
-            t5.avg_kill_streak_ultra
+            t5.user_max_kill_streak,
+            t5.user_max_kill_streak_low,
+            t5.user_max_kill_streak_medium,
+            t5.user_max_kill_streak_high,
+            t5.user_max_kill_streak_ultra,
+            t5.user_avg_kill_streak,
+            t5.user_avg_kill_streak_low,
+            t5.user_avg_kill_streak_medium,
+            t5.user_avg_kill_streak_high,
+            t5.user_avg_kill_streak_ultra
         FROM stats_by_user_date t1
-        INNER JOIN retention_stats t2 
-            ON t1.{stats_agg_col} = t2.{stats_agg_col} 
-            AND t1.daily_group = t2.daily_group
-        INNER JOIN stats_by_date t3 
-            ON t1.{stats_agg_col} = t3.{stats_agg_col} 
-            AND t1.daily_group = t3.daily_group
-        LEFT JOIN user_session_stats_agg t4 
-            ON t1.user_id = t4.user_id 
+        LEFT JOIN user_first_bet AS fb ON t1.user_id = fb.user_id
+        LEFT JOIN user_session_stats_agg t4
+            ON t1.user_id = t4.user_id
             AND t1.{stats_agg_col} = t4.{stats_agg_col}
             AND t1.daily_group = t4.daily_group
-        LEFT JOIN max_kill_streak_length_agg t5 
-            ON t1.user_id = t5.user_id 
+        LEFT JOIN max_kill_streak_length_agg t5
+            ON t1.user_id = t5.user_id
             AND t1.{stats_agg_col} = t5.{stats_agg_col}
             AND t1.daily_group = t5.daily_group
         WHERE t1.{stats_agg_col} >= '{effective_start}'
