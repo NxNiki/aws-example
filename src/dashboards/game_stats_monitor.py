@@ -1887,9 +1887,16 @@ class GameStatsDashboard:
             )(_group_plot_with_state_factory(f"g{i}"))
 
         # Save config: open modal and fetch existing configs
+        # NOTE: Output("save-config-overwrite", "value") is included so the dropdown is
+        # always reset to None when the modal opens.  Without this, a value selected in a
+        # previous session (including a cancelled save) would persist and cause
+        # save_config_confirm to treat it as an overwrite target even when the user types a
+        # brand-new filename — silently writing to the old path and never creating the new file.
         @self.app.callback(
             Output("save-config-modal", "style"),
             Output("save-config-overwrite", "options"),
+            Output("save-config-overwrite", "value"),
+            Output("save-config-filename", "value"),
             Input("save-config-btn", "n_clicks"),
             Input("save-config-cancel", "n_clicks"),
             prevent_initial_call=True,
@@ -1905,8 +1912,28 @@ class GameStatsDashboard:
                 except Exception as e:
                     logger.warning(f"Failed to list configs: {e}")
                     opts = []
-                return {
-                    "display": "flex",
+                # Clear both fields every time the modal opens so stale state can't
+                # accidentally route a "save as new" into an old overwrite path.
+                return (
+                    {
+                        "display": "flex",
+                        "position": "fixed",
+                        "top": 0,
+                        "left": 0,
+                        "width": "100%",
+                        "height": "100%",
+                        "backgroundColor": "rgba(0,0,0,0.5)",
+                        "zIndex": 1000,
+                        "justifyContent": "center",
+                        "alignItems": "center",
+                    },
+                    opts,
+                    None,
+                    "",
+                )
+            return (
+                {
+                    "display": "none",
                     "position": "fixed",
                     "top": 0,
                     "left": 0,
@@ -1914,19 +1941,11 @@ class GameStatsDashboard:
                     "height": "100%",
                     "backgroundColor": "rgba(0,0,0,0.5)",
                     "zIndex": 1000,
-                    "justifyContent": "center",
-                    "alignItems": "center",
-                }, opts
-            return {
-                "display": "none",
-                "position": "fixed",
-                "top": 0,
-                "left": 0,
-                "width": "100%",
-                "height": "100%",
-                "backgroundColor": "rgba(0,0,0,0.5)",
-                "zIndex": 1000,
-            }, []
+                },
+                [],
+                None,
+                no_update,
+            )
 
         # Save config: perform save to S3 (full state)
         modal_hidden = {
@@ -3241,9 +3260,28 @@ class GameStatsDashboard:
         self.app.run(debug=debug, host="0.0.0.0", port=8050)
 
 
+# ── WSGI entry-point (used by both Gunicorn and direct `python` execution) ──────────────
+#
+# Gunicorn needs a module-level WSGI callable.  We initialise the dashboard once here so
+# that `gunicorn dashboards.game_stats_monitor:server` works out of the box.
+#
+# Why Gunicorn instead of Flask's dev server (app.run()):
+#   • Flask's Werkzeug dev server is single-threaded: one long callback (e.g. DataMetrics
+#     bootstrap CI on a large dataset) blocks every other request → 503s under real load.
+#   • Gunicorn with --worker-class gthread spins up N threads per worker, so concurrent
+#     callbacks from different browser tabs are handled in parallel without the memory cost
+#     of multiple full-process workers (each of which would independently reload S3 data).
+#   • --timeout 300 gives heavy computations 5 min before the worker is killed and replaced,
+#     preventing indefinite hangs without killing short requests unnecessarily.
+setup_logging(f"{LOCAL_ROOT}/jobs/log", log_filename=os.path.splitext(os.path.basename(__file__))[0] + ".log")
+_config_dir = os.environ.get("DASHBOARD_CONFIG_DIR", str(Path(__file__).resolve().parent))
+_dashboard = GameStatsDashboard(_config_dir)
+
+# `server` is the Flask WSGI app Gunicorn binds to:
+#   gunicorn --workers 1 --worker-class gthread --threads 8 --timeout 300 \
+#            --bind 0.0.0.0:8050 dashboards.game_stats_monitor:server
+server = _dashboard.app.server
+
 if __name__ == "__main__":
-    setup_logging(f"{LOCAL_ROOT}/jobs/log", log_filename=os.path.splitext(os.path.basename(__file__))[0] + ".log")
-    config_dir = os.environ.get("DASHBOARD_CONFIG_DIR", str(Path(__file__).resolve().parent))
     debug = os.environ.get("DASHBOARD_DEBUG", "true").lower() in ("1", "true", "yes")
-    dashboard = GameStatsDashboard(config_dir)
-    dashboard.run(debug=debug)
+    _dashboard.run(debug=debug)

@@ -206,8 +206,8 @@ def main() -> None:
         default=None,
         help="Comma-separated subnet IDs (default: public subnets)",
     )
-    parser.add_argument("--task-cpu", type=int, default=512, help="Task CPU units")
-    parser.add_argument("--task-memory", type=int, default=1024, help="Task memory MB")
+    parser.add_argument("--task-cpu", type=int, default=1024, help="Task CPU units (1 vCPU = 1024)")
+    parser.add_argument("--task-memory", type=int, default=2048, help="Task memory MB")
     parser.add_argument(
         "--desired-count",
         type=int,

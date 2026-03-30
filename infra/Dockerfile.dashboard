@@ -49,4 +49,23 @@ ENV DASHBOARD_CONFIG_DIR=/app/src/dashboards \
     DASHBOARD_DEBUG=false
 EXPOSE 8050
 
-CMD ["python", "src/dashboards/game_stats_monitor.py"]
+# Use Gunicorn (production WSGI server) instead of Flask's single-threaded dev server.
+#
+# --workers 1          Single process so S3 data is only loaded once (memory-efficient).
+# --worker-class gthread  Thread-based concurrency: multiple callbacks handled in parallel
+#                      without duplicating in-memory data across processes.
+# --threads 8          Up to 8 concurrent callback requests per container.
+# --timeout 300        Allow up to 5 min for heavy callbacks (DataMetrics bootstrap CI).
+#                      Flask's dev server has no timeout, making it easy to block forever.
+# --keep-alive 65      Keep ALB connections alive slightly longer than ALB's 60 s idle
+#                      timeout to avoid spurious 502/503s on long-idle connections.
+# --access-logfile -   Emit access logs to stdout so CloudWatch captures them.
+CMD ["gunicorn", \
+     "--workers", "1", \
+     "--worker-class", "gthread", \
+     "--threads", "8", \
+     "--timeout", "300", \
+     "--keep-alive", "65", \
+     "--bind", "0.0.0.0:8050", \
+     "--access-logfile", "-", \
+     "dashboards.game_stats_monitor:server"]
