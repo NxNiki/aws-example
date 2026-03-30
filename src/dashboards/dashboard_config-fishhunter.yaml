@@ -20,7 +20,7 @@ stats_by_date:
 
   group_col: "daily_group"
   date_col: "activity_date"
-  user_group_col: "user_group"
+  user_group_cols: [user_group, daily_group]
 
   group1_label: "DAU and Retention"
   group1_columns: [
