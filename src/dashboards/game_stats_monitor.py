@@ -1960,8 +1960,8 @@ class GameStatsDashboard:
         }
 
         @self.app.callback(
-            Output("save-config-filename", "value"),
-            Output("save-config-overwrite", "value"),
+            Output("save-config-filename", "value", allow_duplicate=True),
+            Output("save-config-overwrite", "value", allow_duplicate=True),
             Output("save-config-modal", "style", allow_duplicate=True),
             Input("save-config-confirm", "n_clicks"),
             State("save-config-filename", "value"),
