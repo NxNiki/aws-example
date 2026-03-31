@@ -868,11 +868,99 @@ class GameStatsDashboard:
             ]
         )
 
+    def _layout_inline_group_column_dropdown(
+        self,
+        label: str,
+        elem_id: str,
+        options: Any,
+        value: Any,
+        *,
+        clearable: bool,
+        margin_left: str = "8px",
+        extra_style: Optional[Dict[str, Any]] = None,
+    ) -> html.Div:
+        """Label and group-column dropdown on one row (shared by tab_date header and tab_group header)."""
+        style: Dict[str, Any] = {
+            **Styles.FLEX_ROW_CENTER,
+            "alignItems": "center",
+            "marginLeft": margin_left,
+            "marginRight": "0",
+            "flexShrink": 0,
+        }
+        if extra_style:
+            style.update(extra_style)
+        return html.Div(
+            [
+                html.Label(label, style={**Styles.CONTROL_LABEL, "marginRight": "6px", "whiteSpace": "nowrap"}),
+                dcc.Dropdown(
+                    id=elem_id,
+                    options=cast(Any, options),
+                    value=value,
+                    clearable=clearable,
+                    style=Styles.DROPDOWN_NARROW,
+                ),
+            ],
+            style=style,
+        )
+
+    def _layout_show_group_checklist_sections(
+        self,
+        checklist_id_prefix: str,
+        ug1_opts: list,
+        ug1_defaults: list,
+        ug2_opts: list,
+        ug2_defaults: list,
+        col2_hide_style: Dict[str, str],
+    ) -> List[Component]:
+        """Show Group 1 / Show Group 2 blocks (same structure in tab_date and tab_group plot panels)."""
+        return [
+            html.Div(
+                [
+                    html.Label("Show Group 1:", style=Styles.CONTROL_LABEL),
+                    dcc.Checklist(
+                        id=f"{checklist_id_prefix}-show-ug-1",
+                        options=cast(Any, ug1_opts),
+                        value=cast(Any, ug1_defaults),
+                        labelStyle=Styles.CHECKLIST_BLOCK,
+                        style={"columnCount": 3, "columnGap": "8px"},
+                    ),
+                ],
+                style=Styles.CONTROL_GROUP,
+            ),
+            html.Div(
+                [
+                    html.Hr(style=Styles.HR),
+                    html.Div(
+                        [
+                            html.Label("Show Group 2:", style=Styles.CONTROL_LABEL),
+                            dcc.Checklist(
+                                id=f"{checklist_id_prefix}-show-ug-2",
+                                options=cast(Any, ug2_opts),
+                                value=cast(Any, ug2_defaults),
+                                labelStyle=Styles.CHECKLIST_BLOCK,
+                                style={"columnCount": 3, "columnGap": "8px"},
+                            ),
+                        ],
+                        style=Styles.CONTROL_GROUP,
+                    ),
+                ],
+                style=col2_hide_style,
+            ),
+        ]
+
     def _layout_stats_by_date(self) -> html.Div:
-        granularity: str = list(self.date_files_config.keys())[0]
         min_date, max_date = self.date_range
 
-        date_picker = html.Div(
+        col1 = self.df_user_group_cols[0] if self.df_user_group_cols else None
+        col2 = self.df_user_group_cols[1] if len(self.df_user_group_cols) > 1 else None
+        has_col2 = col2 is not None
+
+        ug1_opts, ug1_defaults = self._col_opts_and_default(col1)
+        ug2_opts, ug2_defaults = self._col_opts_and_default(col2)
+        _col2_hide = {"display": "none"} if not has_col2 else {}
+
+        # Top bar only: matches tab_group (date ranges + column selectors on one row; no per-panel controls here).
+        date_header_bar = html.Div(
             [
                 html.Div(
                     [
@@ -889,17 +977,6 @@ class GameStatsDashboard:
                             end_date=max_date,
                             display_format="YYYY-MM-DD",
                             style={"verticalAlign": "middle", "marginRight": "30px"},
-                        ),
-                        html.Label(
-                            "Filter_user_group:",
-                            style={**Styles.CONTROL_LABEL, "marginRight": "10px", "display": "inline-block"},
-                        ),
-                        dcc.Dropdown(
-                            id="filter-user-group-date",
-                            options=cast(Any, self.df_user_group_dropdown_options),
-                            value="all",
-                            clearable=False,
-                            style=Styles.DROPDOWN_NARROW,
                         ),
                         html.Label(
                             "Granularity:",
@@ -919,11 +996,28 @@ class GameStatsDashboard:
                             clearable=False,
                             style=Styles.DROPDOWN_NARROW,
                         ),
+                        self._layout_inline_group_column_dropdown(
+                            "Group Column 1:",
+                            "date-ug-col-1",
+                            self.df_user_group_col_options,
+                            col1,
+                            clearable=False,
+                            margin_left="20px",
+                        ),
+                        self._layout_inline_group_column_dropdown(
+                            "Group Column 2:",
+                            "date-ug-col-2",
+                            self.df_user_group_col_options,
+                            col2,
+                            clearable=True,
+                            margin_left="8px",
+                            extra_style=_col2_hide,
+                        ),
                     ],
-                    style=Styles.FLEX_ROW_CENTER,
+                    style={**Styles.FLEX_ROW_CENTER, "alignItems": "flex-start", "flexWrap": "wrap"},
                 ),
             ],
-            style=Styles.SECTION,
+            style=Styles.SECTION_GROUP,
         )
 
         download_config = dict(
@@ -937,7 +1031,6 @@ class GameStatsDashboard:
                     html.H4(label, style=Styles.PANEL_HEADER),
                     html.Div(
                         [
-                            # --- LEFT CONTROL PANEL ---
                             html.Div(
                                 [
                                     html.Div(
@@ -973,6 +1066,28 @@ class GameStatsDashboard:
                                     html.Hr(style=Styles.HR),
                                     html.Div(
                                         [
+                                            html.Label("Groups to Show:", style=Styles.CONTROL_LABEL),
+                                            dcc.Checklist(
+                                                id=f"date-{group_id}-group",
+                                                options=cast(Any, self.df_plot_groups),
+                                                value=self.df_plot_groups[: self.DEFAULT_VISIBLE_GROUPS],
+                                                labelStyle=Styles.CHECKLIST_BLOCK,
+                                            ),
+                                        ],
+                                        style=Styles.CONTROL_GROUP,
+                                    ),
+                                    html.Hr(style=Styles.HR),
+                                    *self._layout_show_group_checklist_sections(
+                                        f"date-{group_id}",
+                                        ug1_opts,
+                                        ug1_defaults,
+                                        ug2_opts,
+                                        ug2_defaults,
+                                        _col2_hide,
+                                    ),
+                                    html.Hr(style=Styles.HR),
+                                    html.Div(
+                                        [
                                             html.Label("Logarithmic Scaling:", style=Styles.CONTROL_LABEL),
                                             html.Div(
                                                 [
@@ -989,20 +1104,8 @@ class GameStatsDashboard:
                                                         value=10,
                                                         style=Styles.INPUT_SMALL,
                                                     ),
-                                                ]
-                                            ),
-                                        ],
-                                        style=Styles.CONTROL_GROUP,
-                                    ),
-                                    html.Hr(style=Styles.HR),
-                                    html.Div(
-                                        [
-                                            html.Label("Groups to Show:", style=Styles.CONTROL_LABEL),
-                                            dcc.Checklist(
-                                                id=f"date-{group_id}-group",
-                                                options=cast(Any, self.df_plot_groups),
-                                                value=self.df_plot_groups[: self.DEFAULT_VISIBLE_GROUPS],
-                                                labelStyle=Styles.CHECKLIST_BLOCK,
+                                                ],
+                                                style=Styles.FLEX_ROW_CENTER,
                                             ),
                                         ],
                                         style=Styles.CONTROL_GROUP,
@@ -1010,10 +1113,13 @@ class GameStatsDashboard:
                                 ],
                                 style=Styles.CONTROL_PANEL_CONTAINER,
                             ),
-                            # --- RIGHT GRAPH PANEL ---
                             html.Div(
                                 [
-                                    dcc.Graph(id=f"date-{group_id}-plot", style={"height": "400px"}, config=download_config)  # type: ignore
+                                    dcc.Graph(
+                                        id=f"date-{group_id}-plot",
+                                        style={"height": "430px"},
+                                        config=cast(Any, download_config),
+                                    )
                                 ],
                                 style=Styles.GRAPH_CONTAINER,
                             ),
@@ -1024,12 +1130,13 @@ class GameStatsDashboard:
                 style=Styles.BOX,
             )
 
+        sd_cfg = self.config["stats_by_date"]
         return html.Div(
             [
-                date_picker,
-                create_group_panel("g1", f"Date Metrics: {self.config['stats_by_date']['group1_label']}"),
-                create_group_panel("g2", f"Date Metrics: {self.config['stats_by_date']['group2_label']}"),
-                create_group_panel("g3", f"Date Metrics: {self.config['stats_by_date']['group3_label']}"),
+                date_header_bar,
+                create_group_panel("g1", f"DateMetrics: {sd_cfg['group1_label']}"),
+                create_group_panel("g2", f"DateMetrics: {sd_cfg['group2_label']}"),
+                create_group_panel("g3", f"DateMetrics: {sd_cfg['group3_label']}"),
             ]
         )
 
@@ -1037,26 +1144,12 @@ class GameStatsDashboard:
         # Use ranges from a loaded config if available; otherwise compute defaults
         ranges = self._loaded_group_date_ranges or self._compute_group_date_ranges()
 
-        def _col_opts_and_default(col: Optional[str]):
-            """Return (options, [first_value]) for a user-group column checklist."""
-            if not col:
-                return [], []
-            gran = list(self.date_files_config.keys())[0]
-            lf = self.lfs_by_date.get(gran, pl.DataFrame().lazy())
-            schema = lf.collect_schema()
-            if schema.len() == 0 or col not in schema.names():
-                return [{"label": "all", "value": "all"}], ["all"]
-            uniq = self._get_plot_groups(lf, col)
-            opts = [{"label": "all", "value": "all"}] + [{"label": str(u), "value": str(u)} for u in uniq]
-            # Default: select only the first value ("all")
-            return opts, [opts[0]["value"]] if opts else []
-
         col1 = self.df_user_group_cols[0] if self.df_user_group_cols else None
         col2 = self.df_user_group_cols[1] if len(self.df_user_group_cols) > 1 else None
         has_col2 = col2 is not None
 
-        ug1_opts, ug1_defaults = _col_opts_and_default(col1)
-        ug2_opts, ug2_defaults = _col_opts_and_default(col2)
+        ug1_opts, ug1_defaults = self._col_opts_and_default(col1)
+        ug2_opts, ug2_defaults = self._col_opts_and_default(col2)
 
         # Both dropdowns always show all available columns; auto-swap handles conflicts at runtime
         col1_init_opts = self.df_user_group_col_options
@@ -1090,31 +1183,22 @@ class GameStatsDashboard:
                         range_block("Range 1 (Oldest)", 1, ranges[2], ranges[3], ranges[2]),
                         range_block("Range 2", 2, ranges[4], ranges[5], ranges[4]),
                         range_block("Range 3 (Newest)", 3, ranges[6], ranges[7], ranges[6]),
-                        html.Div(
-                            [
-                                html.Label("Group Column 1:", style=Styles.CONTROL_LABEL),
-                                dcc.Dropdown(
-                                    id="group-ug-col-1",
-                                    options=cast(Any, col1_init_opts),
-                                    value=col1,
-                                    clearable=False,
-                                    style=Styles.DROPDOWN_NARROW,
-                                ),
-                            ],
-                            style={"marginLeft": "8px", "marginRight": "0", "flexShrink": 0},
+                        self._layout_inline_group_column_dropdown(
+                            "Group Column 1:",
+                            "group-ug-col-1",
+                            col1_init_opts,
+                            col1,
+                            clearable=False,
+                            margin_left="8px",
                         ),
-                        html.Div(
-                            [
-                                html.Label("Group Column 2:", style=Styles.CONTROL_LABEL),
-                                dcc.Dropdown(
-                                    id="group-ug-col-2",
-                                    options=cast(Any, col2_init_opts),
-                                    value=col2,
-                                    clearable=True,
-                                    style=Styles.DROPDOWN_NARROW,
-                                ),
-                            ],
-                            style={"marginLeft": "8px", "marginRight": "0", "flexShrink": 0, **_col2_hide},
+                        self._layout_inline_group_column_dropdown(
+                            "Group Column 2:",
+                            "group-ug-col-2",
+                            col2_init_opts,
+                            col2,
+                            clearable=True,
+                            margin_left="8px",
+                            extra_style=_col2_hide,
                         ),
                     ],
                     style={**Styles.FLEX_ROW_CENTER, "alignItems": "flex-start", "flexWrap": "wrap"},
@@ -1198,37 +1282,13 @@ class GameStatsDashboard:
                                         style=Styles.CONTROL_GROUP,
                                     ),
                                     html.Hr(style=Styles.HR),
-                                    html.Div(
-                                        [
-                                            html.Label("Show Group 1:", style=Styles.CONTROL_LABEL),
-                                            dcc.Checklist(
-                                                id=f"group-{group_id}-show-ug-1",
-                                                options=cast(Any, ug1_opts),
-                                                value=cast(Any, ug1_defaults),
-                                                labelStyle=Styles.CHECKLIST_BLOCK,
-                                                style={"columnCount": 3, "columnGap": "8px"},
-                                            ),
-                                        ],
-                                        style=Styles.CONTROL_GROUP,
-                                    ),
-                                    html.Div(
-                                        [
-                                            html.Hr(style=Styles.HR),
-                                            html.Div(
-                                                [
-                                                    html.Label("Show Group 2:", style=Styles.CONTROL_LABEL),
-                                                    dcc.Checklist(
-                                                        id=f"group-{group_id}-show-ug-2",
-                                                        options=cast(Any, ug2_opts),
-                                                        value=cast(Any, ug2_defaults),
-                                                        labelStyle=Styles.CHECKLIST_BLOCK,
-                                                        style={"columnCount": 3, "columnGap": "8px"},
-                                                    ),
-                                                ],
-                                                style=Styles.CONTROL_GROUP,
-                                            ),
-                                        ],
-                                        style=_col2_hide,
+                                    *self._layout_show_group_checklist_sections(
+                                        f"group-{group_id}",
+                                        ug1_opts,
+                                        ug1_defaults,
+                                        ug2_opts,
+                                        ug2_defaults,
+                                        _col2_hide,
                                     ),
                                     html.Div(
                                         [
@@ -1266,9 +1326,7 @@ class GameStatsDashboard:
                             ),
                             # --- GRAPH PANEL ---
                             html.Div(
-                                [
-                                    dcc.Graph(id=dl_id, style={"height": "430px"}, config=download_config)  # type: ignore
-                                ],
+                                [dcc.Graph(id=dl_id, style={"height": "430px"}, config=cast(Any, download_config))],
                                 style=Styles.GRAPH_CONTAINER,
                             ),
                         ],
@@ -1642,25 +1700,6 @@ class GameStatsDashboard:
             # back to default windows during config load.
             return [no_update] * 9
 
-        def _make_ug_opts(col: Any) -> list:
-            """Return checklist options for a user-group column."""
-            if not col:
-                return []
-            gran = list(self.date_files_config.keys())[0]
-            lf = self.lfs_by_date.get(gran, pl.DataFrame().lazy())
-            schema = lf.collect_schema()
-            if schema.len() == 0 or col not in schema.names():
-                return [{"label": "all", "value": "all"}]
-            uniq = self._get_plot_groups(lf, col)
-            return [{"label": "all", "value": "all"}] + [{"label": str(u), "value": str(u)} for u in uniq]
-
-        def _next_col(chosen: Any) -> Optional[str]:
-            """Return the first configured column that is not ``chosen``."""
-            for c in self.df_user_group_cols:
-                if c != chosen:
-                    return c
-            return None
-
         # Asymmetric auto-swap to avoid a Dash dependency cycle:
         # col1 change → may auto-update col2 (no cycle, since col2-change callback never outputs col1)
         # col2 change → only updates its own checklists; if col2==col1 the plot handles it gracefully
@@ -1701,8 +1740,8 @@ class GameStatsDashboard:
         )
         def on_ug_col_1_change(col1_val: Any, current_col2: Any):
             # Auto-swap col2 if it would clash with the new col1; refresh show-ug-1 options only.
-            new_col2 = current_col2 if current_col2 != col1_val else _next_col(col1_val)
-            opts = _make_ug_opts(col1_val)
+            new_col2 = current_col2 if current_col2 != col1_val else self._next_col(col1_val)
+            opts = self._make_ug_opts(col1_val)
             return [new_col2] + [opts] * 3
 
         @self.app.callback(
@@ -1712,7 +1751,31 @@ class GameStatsDashboard:
         )
         def on_ug_col_2_change(col2_val: Any):
             # Refresh show-ug-2 options only; see note above for why value is not touched.
-            opts = _make_ug_opts(col2_val)
+            opts = self._make_ug_opts(col2_val)
+            return [opts] * 3
+
+        # ── Date-tab column selectors: same asymmetric pattern as tab_group ────────────────────────
+        # on_date_ug_col_1_change: auto-swap col2 to avoid conflict, refresh show-ug-1 checklist options.
+        # on_date_ug_col_2_change: only refresh show-ug-2 options (no output to col1 → no DAG cycle).
+        # Neither callback touches checklist VALUES — owned by layout defaults and restore_dashboard_state.
+        @self.app.callback(
+            [Output("date-ug-col-2", "value")] + [Output(f"date-g{i}-show-ug-1", "options") for i in range(1, 4)],
+            Input("date-ug-col-1", "value"),
+            State("date-ug-col-2", "value"),
+            prevent_initial_call=True,
+        )
+        def on_date_ug_col_1_change(col1_val: Any, current_col2: Any):
+            new_col2 = current_col2 if current_col2 != col1_val else self._next_col(col1_val)
+            opts = self._make_ug_opts(col1_val)
+            return [new_col2] + [opts] * 3
+
+        @self.app.callback(
+            [Output(f"date-g{i}-show-ug-2", "options") for i in range(1, 4)],
+            Input("date-ug-col-2", "value"),
+            prevent_initial_call=True,
+        )
+        def on_date_ug_col_2_change(col2_val: Any):
+            opts = self._make_ug_opts(col2_val)
             return [opts] * 3
 
         def _wrap_bet_plot(session, groups, left_m, right_m, share_l, share_r, log_v, log_t, filt_c, filt_t):
@@ -1758,9 +1821,25 @@ class GameStatsDashboard:
                 gran: Any,
                 start_d: Any,
                 end_d: Any,
-                user_group_f: Any,
+                date_ug_col_1: Any,
+                date_ug_col_2: Any,
+                show_ug_1: Any,
+                show_ug_2: Any,
             ):
-                fig = self.update_date_plot(left_m, right_m, log_v, thresh, groups, gran, start_d, end_d, user_group_f)
+                fig = self.update_date_plot(
+                    left_m,
+                    right_m,
+                    log_v,
+                    thresh,
+                    groups,
+                    gran,
+                    start_d,
+                    end_d,
+                    date_ug_col_1,
+                    date_ug_col_2,
+                    show_ug_1,
+                    show_ug_2,
+                )
                 state = {
                     "left_metrics": left_m,
                     "right_metrics": right_m,
@@ -1770,7 +1849,10 @@ class GameStatsDashboard:
                     "date_granularity": gran,
                     "start_date": start_d,
                     "end_date": end_d,
-                    "user_group_filter": user_group_f,
+                    "date_ug_col_1": date_ug_col_1,
+                    "date_ug_col_2": date_ug_col_2,
+                    "show_ug_1": show_ug_1,
+                    "show_ug_2": show_ug_2,
                 }
                 return fig, state
 
@@ -1789,7 +1871,10 @@ class GameStatsDashboard:
                     Input("date-granularity", "value"),
                     Input("date-picker-range", "start_date"),
                     Input("date-picker-range", "end_date"),
-                    Input("filter-user-group-date", "value"),
+                    Input("date-ug-col-1", "value"),
+                    Input("date-ug-col-2", "value"),
+                    Input(f"date-g{i}-show-ug-1", "value"),
+                    Input(f"date-g{i}-show-ug-2", "value"),
                 ],
             )(_date_plot_with_state_factory(f"g{i}"))
 
@@ -1977,7 +2062,8 @@ class GameStatsDashboard:
             State("date-granularity", "value"),
             State("date-picker-range", "start_date"),
             State("date-picker-range", "end_date"),
-            State("filter-user-group-date", "value"),
+            State("date-ug-col-1", "value"),
+            State("date-ug-col-2", "value"),
             State("group-ug-col-1", "value"),
             State("group-ug-col-2", "value"),
             State("date-g1-left-metrics", "value"),
@@ -2013,7 +2099,8 @@ class GameStatsDashboard:
             date_granularity: Optional[str],
             date_picker_start_date: Any,
             date_picker_end_date: Any,
-            filter_user_group_date: Any,
+            date_ug_col_1: Any,
+            date_ug_col_2: Any,
             group_ug_col_1: Any,
             group_ug_col_2: Any,
             date_g1_left_metrics: Any,
@@ -2061,9 +2148,13 @@ class GameStatsDashboard:
             def _date_tab_panel_for_config(panel_state: Optional[Dict]) -> Optional[Dict]:
                 if not panel_state:
                     return panel_state
-                # Keep only per-panel fields; strip shared start/end and tab-level user_group_filter.
-                strip_date = set(date_keys_date_tab) | {"user_group_filter"}
+                # Strip shared date range and tab-level column keys (show_ug_* stay per-panel).
+                strip_date = set(date_keys_date_tab) | {"date_ug_col_1", "date_ug_col_2"}
                 return {k: v for k, v in panel_state.items() if k not in strip_date}
+
+            def _merge_date_tab_panel_for_save(store: Optional[Dict], ui_fields: Dict[str, Any]) -> Optional[Dict]:
+                merged = {**(store or {}), **ui_fields}
+                return _date_tab_panel_for_config(merged)
 
             # tab_group: shared date_ranges for the Group tab (range1/2/3), plus per-panel (g1/g2/g3) without those keys
             date_range_keys = (
@@ -2087,41 +2178,50 @@ class GameStatsDashboard:
                 strip_group = set(date_range_keys) | {"ug_col_1", "ug_col_2"}
                 return {k: v for k, v in panel_state.items() if k not in strip_group}
 
-            # Build tab-date per-panel state from current UI controls so overwrite writes fresh values.
-            date_tab_panel_g1: Dict[str, Any] = {
-                "left_metrics": date_g1_left_metrics,
-                "right_metrics": date_g1_right_metrics,
-                "log": date_g1_log,
-                "thresh": date_g1_thresh,
-                "groups": date_g1_group,
-                "date_granularity": date_granularity,
-            }
-            date_tab_panel_g2: Dict[str, Any] = {
-                "left_metrics": date_g2_left_metrics,
-                "right_metrics": date_g2_right_metrics,
-                "log": date_g2_log,
-                "thresh": date_g2_thresh,
-                "groups": date_g2_group,
-                "date_granularity": date_granularity,
-            }
-            date_tab_panel_g3: Dict[str, Any] = {
-                "left_metrics": date_g3_left_metrics,
-                "right_metrics": date_g3_right_metrics,
-                "log": date_g3_log,
-                "thresh": date_g3_thresh,
-                "groups": date_g3_group,
-                "date_granularity": date_granularity,
-            }
+            date_tab_panel_g1 = _merge_date_tab_panel_for_save(
+                date_tab_g1_state,
+                {
+                    "left_metrics": date_g1_left_metrics,
+                    "right_metrics": date_g1_right_metrics,
+                    "log": date_g1_log,
+                    "thresh": date_g1_thresh,
+                    "groups": date_g1_group,
+                    "date_granularity": date_granularity,
+                },
+            )
+            date_tab_panel_g2 = _merge_date_tab_panel_for_save(
+                date_tab_g2_state,
+                {
+                    "left_metrics": date_g2_left_metrics,
+                    "right_metrics": date_g2_right_metrics,
+                    "log": date_g2_log,
+                    "thresh": date_g2_thresh,
+                    "groups": date_g2_group,
+                    "date_granularity": date_granularity,
+                },
+            )
+            date_tab_panel_g3 = _merge_date_tab_panel_for_save(
+                date_tab_g3_state,
+                {
+                    "left_metrics": date_g3_left_metrics,
+                    "right_metrics": date_g3_right_metrics,
+                    "log": date_g3_log,
+                    "thresh": date_g3_thresh,
+                    "groups": date_g3_group,
+                    "date_granularity": date_granularity,
+                },
+            )
 
             payload: Dict[str, Any] = {
                 "config_file": config_file,
                 "current_tab": current_tab,
                 "tab_date": {
                     "date_range": date_range_tab_date,
-                    "user_group_filter": filter_user_group_date,
-                    "g1": _date_tab_panel_for_config(date_tab_panel_g1),
-                    "g2": _date_tab_panel_for_config(date_tab_panel_g2),
-                    "g3": _date_tab_panel_for_config(date_tab_panel_g3),
+                    "date_ug_col_1": date_ug_col_1,
+                    "date_ug_col_2": date_ug_col_2,
+                    "g1": date_tab_panel_g1,
+                    "g2": date_tab_panel_g2,
+                    "g3": date_tab_panel_g3,
                 },
                 "tab_group": {
                     "date_ranges": date_range_tab_group,
@@ -2223,16 +2323,28 @@ class GameStatsDashboard:
                     )
                     if match:
                         config_file = match
-                # Merge shared date_range for tab_date into each g for restore
+                # Merge shared date_range and group-selector values into each panel for restore
                 date_range = tab_date.get("date_range") or {}
-                ug_date = tab_date.get("user_group_filter", "all")
+                _date_ug_col_1 = tab_date.get(
+                    "date_ug_col_1", self.df_user_group_cols[0] if self.df_user_group_cols else None
+                )
+                _date_ug_col_2 = tab_date.get(
+                    "date_ug_col_2", self.df_user_group_cols[1] if len(self.df_user_group_cols) > 1 else None
+                )
+                _legacy_date_show_ug_1 = tab_date.get("date_show_ug_1")
+                _legacy_date_show_ug_2 = tab_date.get("date_show_ug_2")
 
                 def _d_with_range(gi: str) -> Optional[Dict]:
                     g = tab_date.get(gi)
                     if not g:
                         return g
                     merged: Dict[str, Any] = {**date_range, **g}
-                    merged["user_group_filter"] = ug_date
+                    merged["date_ug_col_1"] = _date_ug_col_1
+                    merged["date_ug_col_2"] = _date_ug_col_2
+                    if _legacy_date_show_ug_1 is not None and merged.get("show_ug_1") is None:
+                        merged["show_ug_1"] = _legacy_date_show_ug_1
+                    if _legacy_date_show_ug_2 is not None and merged.get("show_ug_2") is None:
+                        merged["show_ug_2"] = _legacy_date_show_ug_2
                     return merged
 
                 d1_out = _d_with_range("g1")
@@ -2328,22 +2440,29 @@ class GameStatsDashboard:
             Output("date-granularity", "value", allow_duplicate=True),
             Output("date-picker-range", "start_date", allow_duplicate=True),
             Output("date-picker-range", "end_date", allow_duplicate=True),
-            Output("filter-user-group-date", "value", allow_duplicate=True),
+            Output("date-ug-col-1", "value", allow_duplicate=True),
+            Output("date-ug-col-2", "value", allow_duplicate=True),
             Output("date-g1-left-metrics", "value", allow_duplicate=True),
             Output("date-g1-right-metrics", "value", allow_duplicate=True),
             Output("date-g1-log", "value", allow_duplicate=True),
             Output("date-g1-thresh", "value", allow_duplicate=True),
             Output("date-g1-group", "value", allow_duplicate=True),
+            Output("date-g1-show-ug-1", "value", allow_duplicate=True),
+            Output("date-g1-show-ug-2", "value", allow_duplicate=True),
             Output("date-g2-left-metrics", "value", allow_duplicate=True),
             Output("date-g2-right-metrics", "value", allow_duplicate=True),
             Output("date-g2-log", "value", allow_duplicate=True),
             Output("date-g2-thresh", "value", allow_duplicate=True),
             Output("date-g2-group", "value", allow_duplicate=True),
+            Output("date-g2-show-ug-1", "value", allow_duplicate=True),
+            Output("date-g2-show-ug-2", "value", allow_duplicate=True),
             Output("date-g3-left-metrics", "value", allow_duplicate=True),
             Output("date-g3-right-metrics", "value", allow_duplicate=True),
             Output("date-g3-log", "value", allow_duplicate=True),
             Output("date-g3-thresh", "value", allow_duplicate=True),
             Output("date-g3-group", "value", allow_duplicate=True),
+            Output("date-g3-show-ug-1", "value", allow_duplicate=True),
+            Output("date-g3-show-ug-2", "value", allow_duplicate=True),
             Output("date-picker-range1", "start_date", allow_duplicate=True),
             Output("date-picker-range1", "end_date", allow_duplicate=True),
             Output("date-picker-range2", "start_date", allow_duplicate=True),
@@ -2415,7 +2534,7 @@ class GameStatsDashboard:
             bet: Optional[Dict],
         ):
             if trigger is None:
-                return (no_update,) * 68
+                return (no_update,) * 75
             # Keep the load trigger token so default-picker callbacks don't recompute
             # and clamp restored DatePickerRange values.
             out: List[Any] = [trigger]
@@ -2425,13 +2544,22 @@ class GameStatsDashboard:
                     sd.get("date_granularity"),
                     _normalize_date_value(sd.get("start_date")),
                     _normalize_date_value(sd.get("end_date")),
-                    sd.get("user_group_filter", "all"),
+                    sd.get("date_ug_col_1", self.df_user_group_cols[0] if self.df_user_group_cols else None),
+                    sd.get("date_ug_col_2", self.df_user_group_cols[1] if len(self.df_user_group_cols) > 1 else None),
                 ]
             )
             for s in [d1, d2, d3]:
                 sd = s or {}
                 out.extend(
-                    [sd.get("left_metrics"), sd.get("right_metrics"), sd.get("log"), sd.get("thresh"), sd.get("groups")]
+                    [
+                        sd.get("left_metrics"),
+                        sd.get("right_metrics"),
+                        sd.get("log"),
+                        sd.get("thresh"),
+                        sd.get("groups"),
+                        sd.get("show_ug_1", no_update),
+                        sd.get("show_ug_2", no_update),
+                    ]
                 )
             sg = g1 or {}
             out.extend(
@@ -2494,9 +2622,9 @@ class GameStatsDashboard:
         """Set df_user_group_col(s) from YAML.
 
         Accepts either the new ``user_group_cols`` list or the legacy ``user_group_col`` string.
-        ``df_user_group_col`` is kept as the first configured column for backward-compat with the
-        date-tab filter.  ``df_user_group_col_options`` drives the group-tab column picker dropdown.
-        ``df_user_group_dropdown_options`` is built from the first column's unique values (date tab).
+        ``df_user_group_col`` is the first configured column (used as default filter column).
+        ``df_user_group_col_options`` drives both the date-tab and group-tab column picker dropdowns.
+        ``df_user_group_dropdown_options`` is kept for backward-compat but no longer used in the UI.
         """
         sd = self.config.get("stats_by_date", {})
         # Accept list (new) or scalar string (legacy).
@@ -2536,6 +2664,45 @@ class GameStatsDashboard:
         if str(v) == "all":
             return df
         return df.filter(pl.col(col) == v)
+
+    def _apply_ug_filter_list(self, df: pl.DataFrame, selected_vals: Any, col: Optional[str] = None) -> pl.DataFrame:
+        """Filter df to rows where col is in selected_vals (union). 'all' means no filter."""
+        col = col or self.df_user_group_col
+        if not col or col not in df.columns:
+            return df
+        vals_raw = selected_vals if isinstance(selected_vals, list) else ([selected_vals] if selected_vals else [])
+        clean = [v for v in vals_raw if str(v) != "all"]
+        if not clean:
+            return df
+        return df.filter(pl.col(col).is_in(clean))
+
+    def _make_ug_opts(self, col: Any) -> list:
+        """Return dropdown/checklist options for a user-group column (includes 'all' first)."""
+        if not col:
+            return []
+        gran = list(self.date_files_config.keys())[0]
+        lf = self.lfs_by_date.get(gran, pl.DataFrame().lazy())
+        schema = lf.collect_schema()
+        if schema.len() == 0 or col not in schema.names():
+            return [{"label": "all", "value": "all"}]
+        uniq = self._get_plot_groups(lf, col)
+        return [{"label": "all", "value": "all"}] + [{"label": str(u), "value": str(u)} for u in uniq]
+
+    def _col_opts_and_default(self, col: Optional[str]):
+        """Return (options, [first_value]) for a user-group column checklist/dropdown."""
+        if not col:
+            return [], []
+        opts = self._make_ug_opts(col)
+        if not opts:
+            return [], []
+        return opts, [opts[0]["value"]]
+
+    def _next_col(self, chosen: Any) -> Optional[str]:
+        """Return the first configured user-group column that is not ``chosen``."""
+        for c in self.df_user_group_cols:
+            if c != chosen:
+                return c
+        return None
 
     def _aggregate_stats_from_user_rows_enabled(self) -> bool:
         return bool(self.config.get("stats_by_date", {}).get("aggregate_stats_from_user_rows", False))
@@ -2661,7 +2828,10 @@ class GameStatsDashboard:
         date_granularity: Any,
         start_date: Any,
         end_date: Any,
-        user_group_filter: Any,
+        date_ug_col_1: Any = None,
+        date_ug_col_2: Any = None,
+        show_ug_1: Any = None,
+        show_ug_2: Any = None,
     ) -> go.Figure:
         if not left_metrics and not right_metrics:
             return go.Figure()
@@ -2689,9 +2859,12 @@ class GameStatsDashboard:
         if df_raw.is_empty():
             return fig
 
-        # Filter user_group BEFORE DataMetrics so metrics are computed on the
+        # Filter by group columns BEFORE DataMetrics so metrics are computed on the
         # correct cohort (e.g. "new" users only, not all users then filtered).
-        df_raw = self._apply_user_group_filter(df_raw, user_group_filter)
+        df_raw = self._apply_ug_filter_list(df_raw, show_ug_1, col=date_ug_col_1 or None)
+        effective_col2 = date_ug_col_2 if (date_ug_col_2 and date_ug_col_2 != date_ug_col_1) else None
+        if effective_col2:
+            df_raw = self._apply_ug_filter_list(df_raw, show_ug_2, col=effective_col2)
         dm = self._make_data_metrics(df_raw, start_dt, end_dt, str(date_granularity or "day"))
 
         # df_date: display window only (dm._df keeps extra days for retention)
@@ -2793,7 +2966,15 @@ class GameStatsDashboard:
             add_scatter_plot(right_metrics or [], True)
 
         metrics_label = ", ".join(m for m in [*(left_metrics or []), *(right_metrics or [])] if m)
-        ug_label = self._user_group_label(user_group_filter)
+
+        # Build a compact filter label from the selected checklist values
+        def _label_from_vals(vals: Any) -> str:
+            clean = [v for v in (vals or []) if str(v) != "all"]
+            return f"({', '.join(str(v) for v in clean)})" if clean else ""
+
+        ug1_lbl = _label_from_vals(show_ug_1)
+        ug2_lbl = _label_from_vals(show_ug_2) if effective_col2 else ""
+        ug_label = " " + " ".join(p for p in [ug1_lbl, ug2_lbl] if p) if (ug1_lbl or ug2_lbl) else ""
         fig.update_layout(
             title=f"{metrics_label}{ug_label}" if metrics_label else None,
             height=400,
