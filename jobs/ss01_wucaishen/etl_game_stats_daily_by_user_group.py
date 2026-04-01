@@ -187,6 +187,12 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 ELSE 'old'
             END AS user_group,
 
+            CASE
+                WHEN DATEDIFF('day', fb.first_bet_date, us.{stats_agg_col}) < 1 THEN 'day0_user'
+                WHEN DATEDIFF('day', fb.first_bet_date, us.{stats_agg_col}) < 7 THEN 'day1-6_user'
+                ELSE 'day7+_user'
+            END AS user_group2,
+
             -- DataMetrics input columns (user-level raw stats):
             us.user_num_bets,
             us.user_num_bets_bg,
