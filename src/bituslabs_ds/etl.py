@@ -1,3 +1,4 @@
+import calendar
 import logging
 import numbers
 import os
@@ -387,6 +388,63 @@ class DataLoader:
 PartitionLevel = Literal["none", "year", "month", "day"]
 
 
+def _partition_intersects_incremental_start(partition_level: PartitionLevel, part: dict[str, str], start: date) -> bool:
+    """
+    True if a hive partition may contain rows with activity on or after ``start``.
+    Used to scope compaction to partitions touched by an incremental window.
+    """
+    try:
+        y = int(part["year"])
+    except (KeyError, ValueError):
+        return False
+    if partition_level == "year":
+        return date(y, 12, 31) >= start
+    try:
+        m = int(part["month"])
+    except (KeyError, ValueError):
+        return False
+    if partition_level == "month":
+        last_d = calendar.monthrange(y, m)[1]
+        return date(y, m, last_d) >= start
+    try:
+        d = int(part["day"])
+    except (KeyError, ValueError):
+        return False
+    if partition_level == "day":
+        return date(y, m, d) >= start
+    return False
+
+
+def _local_leaf_partition_dirs(
+    root: Path, partition_cols: List[str], partition_level: PartitionLevel, start: date
+) -> List[Path]:
+    """Hive leaf directories under root that intersect the incremental start date."""
+    if not partition_cols:
+        return [root] if root.exists() else []
+    depth = len(partition_cols)
+    seen: set[Path] = set()
+    for f in root.rglob("*.parquet"):
+        rel_parts = f.relative_to(root).parts
+        if len(rel_parts) < 2:
+            continue
+        dir_parts = rel_parts[:-1]
+        if len(dir_parts) < depth:
+            continue
+        leaf = dir_parts[:depth]
+        dims: dict[str, str] = {}
+        ok = True
+        for seg, col in zip(leaf, partition_cols, strict=True):
+            if "=" not in seg or not seg.startswith(f"{col}="):
+                ok = False
+                break
+            dims[col] = seg.split("=", 1)[1]
+        if not ok:
+            continue
+        if _partition_intersects_incremental_start(partition_level, dims, start):
+            seen.add(root.joinpath(*leaf))
+    return sorted(seen)
+
+
 class ETLScheduler:
     """
     A scheduler to manage incremental ETL jobs with partitioned Parquet storage.
@@ -557,63 +615,129 @@ class ETLScheduler:
             logger.warning(f"Could not detect watermark in {job_path}: {e}")
             return None
 
-    def _compact_partitions(self, job_name: str, key_cols: List[str], partition_level: PartitionLevel = "month"):
+    def _compact_partitions(
+        self,
+        job_name: str,
+        key_cols: List[str],
+        partition_level: PartitionLevel = "month",
+        *,
+        overwrite: bool,
+        start_date_str: str,
+        default_start_date: str,
+    ) -> None:
         """
-        Internal housekeeping: Merges files and removes duplicates using _processed_at.
+        Merge small files and drop duplicate keys (keep latest by _processed_at when present).
+
+        Runs only for incremental jobs: skipped when ``overwrite`` is True or when the job
+        used ``default_start_date`` (initial / full-history load). When skipped, historical
+        partitions are not scanned.
+
+        For hive-partitioned data, only partitions that can contain rows on or after the
+        incremental ``start_date_str`` are read and rewritten (e.g. month-level layout and a
+        start date in late March compacts only ``year=…/month=3/`` onward, not older months).
         """
-        logger.info(f"[{job_name}] Starting de-duplicating compaction...")
+        if overwrite:
+            logger.info(f"[{job_name}] Skipping compaction (overwrite mode).")
+            return
+        if start_date_str == default_start_date:
+            logger.info(f"[{job_name}] Skipping compaction (default start date / full window).")
+            return
+
+        incremental_start = pd.to_datetime(start_date_str).date()
+        partition_cols = self._get_partition_cols(partition_level)
+        logger.info(
+            f"[{job_name}] Starting scoped de-duplicating compaction from {incremental_start} "
+            f"(partition_level={partition_level})..."
+        )
 
         job_path = self._job_path(job_name)
+        local_target_dirs: Optional[List[Path]] = None
         try:
-            # 1. Load the entire dataset using the modern API
             if self._is_s3:
                 path_str = output_path_as_str(job_path)
                 if not path_str.endswith("/"):
                     path_str = path_str + "/"
-                df = wr.s3.read_parquet(path=path_str, dataset=True)
+                if partition_level == "none":
+                    df = wr.s3.read_parquet(path=path_str, dataset=True)
+                else:
+
+                    def _pf(part: dict[str, str]) -> bool:
+                        return _partition_intersects_incremental_start(partition_level, part, incremental_start)
+
+                    df = wr.s3.read_parquet(path=path_str, dataset=True, partition_filter=_pf)
             else:
                 path = job_path if isinstance(job_path, Path) else Path(job_path)
                 if not path.exists() or not any(path.iterdir()):
                     return
-                dataset = ds.dataset(output_path_as_str(path), format="parquet", partitioning="hive")
-                table = dataset.to_table()
-                df = table.to_pandas()
+                if partition_level == "none":
+                    dataset = ds.dataset(output_path_as_str(path), format="parquet")
+                    df = dataset.to_table().to_pandas()
+                else:
+                    local_target_dirs = _local_leaf_partition_dirs(
+                        path, partition_cols, partition_level, incremental_start
+                    )
+                    if not local_target_dirs:
+                        logger.info(f"[{job_name}] No partitions intersect incremental start; compaction skipped.")
+                        return
+                    chunks: List[pd.DataFrame] = []
+                    for d in local_target_dirs:
+                        sub = ds.dataset(output_path_as_str(d), format="parquet")
+                        chunks.append(sub.to_table().to_pandas())
+                    df = pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
 
             if df.empty:
+                logger.info(f"[{job_name}] Compaction found no rows in selected scope.")
                 return
 
-            # 2. De-duplication Logic
+            # De-duplication (full rows within each selected partition set; keys should not span partitions)
             sort_cols = key_cols + ["_processed_at"] if "_processed_at" in df.columns else key_cols
             df = df.sort_values(by=sort_cols, ascending=True)
             df = df.drop_duplicates(subset=key_cols, keep="last")
 
-            partition_cols = self._get_partition_cols(partition_level)
             if self._is_s3:
+                s3_write_mode: Literal["overwrite", "overwrite_partitions"] = (
+                    "overwrite_partitions" if partition_cols else "overwrite"
+                )
                 wr.s3.to_parquet(
                     df=df,
                     path=output_path_as_str(job_path),
                     dataset=True,
                     partition_cols=partition_cols,
-                    mode="overwrite",
+                    mode=s3_write_mode,
                     index=False,
                 )
             else:
                 path = job_path if isinstance(job_path, Path) else Path(job_path)
-                temp_path = path.with_suffix(".tmp")
-                if temp_path.exists():
-                    shutil.rmtree(temp_path)
-                clean_table = pa.Table.from_pandas(df, preserve_index=False)
-                pq.write_to_dataset(
-                    clean_table,
-                    root_path=output_path_as_str(temp_path),
-                    partition_cols=partition_cols,
-                    basename_template="compact_part_{i}.parquet",
-                    existing_data_behavior="overwrite_or_ignore",
-                )
-                shutil.rmtree(path)
-                temp_path.rename(path)
+                if partition_level == "none":
+                    temp_path = path.with_suffix(".tmp")
+                    if temp_path.exists():
+                        shutil.rmtree(temp_path)
+                    clean_table = pa.Table.from_pandas(df, preserve_index=False)
+                    pq.write_to_dataset(
+                        clean_table,
+                        root_path=output_path_as_str(temp_path),
+                        partition_cols=partition_cols,
+                        basename_template="compact_part_{i}.parquet",
+                        existing_data_behavior="overwrite_or_ignore",
+                    )
+                    shutil.rmtree(path)
+                    temp_path.rename(path)
+                else:
+                    if local_target_dirs is None:
+                        raise RuntimeError("local_target_dirs unset during hive compaction")
+                    for d in local_target_dirs:
+                        if d.exists():
+                            shutil.rmtree(d)
+                    clean_table = pa.Table.from_pandas(df, preserve_index=False)
+                    pq.write_to_dataset(
+                        clean_table,
+                        root_path=output_path_as_str(path),
+                        partition_cols=partition_cols,
+                        basename_template="compact_part_{i}.parquet",
+                        existing_data_behavior="overwrite_or_ignore",
+                    )
 
-            logger.info(f"[{job_name}] Compaction complete. Partitions consolidated and de-duplicated.")
+            logger.info(f"[{job_name}] Scoped compaction complete (partitions consolidated and de-duplicated).")
         except Exception as e:
             logger.error(f"[{job_name}] Compaction failed: {e}")
 
@@ -764,7 +888,14 @@ class ETLScheduler:
             except Exception as e:
                 logger.error(f"[{job_name}] Failed to save parquet data: {e}")
 
-        self._compact_partitions(job_name=job_name, key_cols=key_cols, partition_level=partition_level)
+        self._compact_partitions(
+            job_name=job_name,
+            key_cols=key_cols,
+            partition_level=partition_level,
+            overwrite=self.overwrite,
+            start_date_str=start_date_str,
+            default_start_date=self.default_start_date,
+        )
 
 
 if __name__ == "__main__":
