@@ -40,14 +40,26 @@ def generate_query(start_date: str):
             cast(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_date,
             cast(DATE_TRUNC('week', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_week,
             cast(DATE_TRUNC('month', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_month,
-            * 
-            from public.fct_bet_orders t
-            where game_id = '{GAME_ID}'
-            and t.currency_type = 'CNY'
-            and t.status = 'COMPLETED'
-            and t.op_code not in ('B26','TST','TSB','TSO')
-            and t.created_at >= '{start_date}'
-
+            t.user_id,
+            t.bet_type,
+            -- t."snapshot",
+            t.created_at,
+            t.trigger_type,
+            t.retrigger,
+            t.bet_amount,
+            t.actual_payout,
+            t.balance_after_bet,
+            t.balance_after_payout,
+            t.base_bet,
+            t.factor,
+            t.multiplier,
+            t.credit 
+        FROM public.fct_bet_orders t
+        WHERE t.game_id = '{GAME_ID}'
+            AND t.currency_type = 'CNY'
+            AND t.status = 'COMPLETED'
+            AND t.op_code not in ('B26','TST','TSB','TSO')
+            AND t.created_at >= '{start_date}'
         """
     )
 
