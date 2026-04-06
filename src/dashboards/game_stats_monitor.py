@@ -264,7 +264,6 @@ class GameStatsDashboard:
     config: dict
     lfs_by_date: Dict[str, pl.LazyFrame]
     lf_bet: pl.LazyFrame
-    df_plot_groups: List[str]
     df_bet_groups: List[str]
     df_date_group_col: str
     df_bet_group_col: str
@@ -328,7 +327,6 @@ class GameStatsDashboard:
         self.config = {}
         self.lfs_by_date = {}
         self.lf_bet = pl.DataFrame().lazy()
-        self.df_plot_groups = []
         self.df_bet_groups = []
         self.df_date_group_col = ""
         self.df_bet_group_col = ""
@@ -948,6 +946,54 @@ class GameStatsDashboard:
             ),
         ]
 
+    def _layout_date_tab_show_ug_and_log_controls(
+        self,
+        checklist_id_prefix: str,
+        panel_id: str,
+        ug1_opts: list,
+        ug1_defaults: list,
+        ug2_opts: list,
+        ug2_defaults: list,
+        col2_hide_style: Dict[str, str],
+    ) -> List[Component]:
+        """Tail of tab_date sidebar: same rhythm as tab_group (HR → Show Group 1/2 → HR → bottom controls)."""
+        return [
+            html.Hr(style=Styles.HR),
+            *self._layout_show_group_checklist_sections(
+                checklist_id_prefix,
+                ug1_opts,
+                ug1_defaults,
+                ug2_opts,
+                ug2_defaults,
+                col2_hide_style,
+            ),
+            html.Hr(style=Styles.HR),
+            html.Div(
+                [
+                    html.Label("Logarithmic Scaling:", style=Styles.CONTROL_LABEL),
+                    html.Div(
+                        [
+                            dcc.Checklist(
+                                id=f"date-{panel_id}-log",
+                                options=cast(Any, [{"label": " Hybrid Log", "value": "ON"}]),
+                                value=[],
+                                style=Styles.CHECKLIST_INLINE,
+                            ),
+                            html.Span("Thresh: ", style={"fontSize": "0.9em"}),
+                            dcc.Input(
+                                id=f"date-{panel_id}-thresh",
+                                type="number",
+                                value=10,
+                                style=Styles.INPUT_SMALL,
+                            ),
+                        ],
+                        style=Styles.FLEX_ROW_CENTER,
+                    ),
+                ],
+                style=Styles.CONTROL_GROUP,
+            ),
+        ]
+
     def _layout_stats_by_date(self) -> html.Div:
         min_date, max_date = self.date_range
 
@@ -1063,52 +1109,14 @@ class GameStatsDashboard:
                                         ],
                                         style=Styles.CONTROL_GROUP,
                                     ),
-                                    html.Hr(style=Styles.HR),
-                                    html.Div(
-                                        [
-                                            html.Label("Groups to Show:", style=Styles.CONTROL_LABEL),
-                                            dcc.Checklist(
-                                                id=f"date-{group_id}-group",
-                                                options=cast(Any, self.df_plot_groups),
-                                                value=self.df_plot_groups[: self.DEFAULT_VISIBLE_GROUPS],
-                                                labelStyle=Styles.CHECKLIST_BLOCK,
-                                            ),
-                                        ],
-                                        style=Styles.CONTROL_GROUP,
-                                    ),
-                                    html.Hr(style=Styles.HR),
-                                    *self._layout_show_group_checklist_sections(
+                                    *self._layout_date_tab_show_ug_and_log_controls(
                                         f"date-{group_id}",
+                                        group_id,
                                         ug1_opts,
                                         ug1_defaults,
                                         ug2_opts,
                                         ug2_defaults,
                                         _col2_hide,
-                                    ),
-                                    html.Hr(style=Styles.HR),
-                                    html.Div(
-                                        [
-                                            html.Label("Logarithmic Scaling:", style=Styles.CONTROL_LABEL),
-                                            html.Div(
-                                                [
-                                                    dcc.Checklist(
-                                                        id=f"date-{group_id}-log",
-                                                        options=cast(Any, [{"label": " Hybrid Log", "value": "ON"}]),
-                                                        value=[],
-                                                        style=Styles.CHECKLIST_INLINE,
-                                                    ),
-                                                    html.Span("Thresh: ", style={"fontSize": "0.9em"}),
-                                                    dcc.Input(
-                                                        id=f"date-{group_id}-thresh",
-                                                        type="number",
-                                                        value=10,
-                                                        style=Styles.INPUT_SMALL,
-                                                    ),
-                                                ],
-                                                style=Styles.FLEX_ROW_CENTER,
-                                            ),
-                                        ],
-                                        style=Styles.CONTROL_GROUP,
                                     ),
                                 ],
                                 style=Styles.CONTROL_PANEL_CONTAINER,
@@ -1817,7 +1825,6 @@ class GameStatsDashboard:
                 right_m: Any,
                 log_v: Any,
                 thresh: Any,
-                groups: Any,
                 gran: Any,
                 start_d: Any,
                 end_d: Any,
@@ -1831,7 +1838,6 @@ class GameStatsDashboard:
                     right_m,
                     log_v,
                     thresh,
-                    groups,
                     gran,
                     start_d,
                     end_d,
@@ -1845,7 +1851,6 @@ class GameStatsDashboard:
                     "right_metrics": right_m,
                     "log": log_v,
                     "thresh": thresh,
-                    "groups": groups,
                     "date_granularity": gran,
                     "start_date": start_d,
                     "end_date": end_d,
@@ -1867,7 +1872,6 @@ class GameStatsDashboard:
                     Input(f"date-g{i}-right-metrics", "value"),
                     Input(f"date-g{i}-log", "value"),
                     Input(f"date-g{i}-thresh", "value"),
-                    Input(f"date-g{i}-group", "value"),
                     Input("date-granularity", "value"),
                     Input("date-picker-range", "start_date"),
                     Input("date-picker-range", "end_date"),
@@ -2070,17 +2074,14 @@ class GameStatsDashboard:
             State("date-g1-right-metrics", "value"),
             State("date-g1-log", "value"),
             State("date-g1-thresh", "value"),
-            State("date-g1-group", "value"),
             State("date-g2-left-metrics", "value"),
             State("date-g2-right-metrics", "value"),
             State("date-g2-log", "value"),
             State("date-g2-thresh", "value"),
-            State("date-g2-group", "value"),
             State("date-g3-left-metrics", "value"),
             State("date-g3-right-metrics", "value"),
             State("date-g3-log", "value"),
             State("date-g3-thresh", "value"),
-            State("date-g3-group", "value"),
             State("tab-bet-state", "data"),
             prevent_initial_call=True,
         )
@@ -2107,17 +2108,14 @@ class GameStatsDashboard:
             date_g1_right_metrics: Any,
             date_g1_log: Any,
             date_g1_thresh: Any,
-            date_g1_group: Any,
             date_g2_left_metrics: Any,
             date_g2_right_metrics: Any,
             date_g2_log: Any,
             date_g2_thresh: Any,
-            date_g2_group: Any,
             date_g3_left_metrics: Any,
             date_g3_right_metrics: Any,
             date_g3_log: Any,
             date_g3_thresh: Any,
-            date_g3_group: Any,
             bet: Optional[Dict],
         ):
             if not n_clicks:
@@ -2149,7 +2147,7 @@ class GameStatsDashboard:
                 if not panel_state:
                     return panel_state
                 # Strip shared date range and tab-level column keys (show_ug_* stay per-panel).
-                strip_date = set(date_keys_date_tab) | {"date_ug_col_1", "date_ug_col_2"}
+                strip_date = set(date_keys_date_tab) | {"date_ug_col_1", "date_ug_col_2", "groups"}
                 return {k: v for k, v in panel_state.items() if k not in strip_date}
 
             def _merge_date_tab_panel_for_save(store: Optional[Dict], ui_fields: Dict[str, Any]) -> Optional[Dict]:
@@ -2185,7 +2183,6 @@ class GameStatsDashboard:
                     "right_metrics": date_g1_right_metrics,
                     "log": date_g1_log,
                     "thresh": date_g1_thresh,
-                    "groups": date_g1_group,
                     "date_granularity": date_granularity,
                 },
             )
@@ -2196,7 +2193,6 @@ class GameStatsDashboard:
                     "right_metrics": date_g2_right_metrics,
                     "log": date_g2_log,
                     "thresh": date_g2_thresh,
-                    "groups": date_g2_group,
                     "date_granularity": date_granularity,
                 },
             )
@@ -2207,7 +2203,6 @@ class GameStatsDashboard:
                     "right_metrics": date_g3_right_metrics,
                     "log": date_g3_log,
                     "thresh": date_g3_thresh,
-                    "groups": date_g3_group,
                     "date_granularity": date_granularity,
                 },
             )
@@ -2446,21 +2441,18 @@ class GameStatsDashboard:
             Output("date-g1-right-metrics", "value", allow_duplicate=True),
             Output("date-g1-log", "value", allow_duplicate=True),
             Output("date-g1-thresh", "value", allow_duplicate=True),
-            Output("date-g1-group", "value", allow_duplicate=True),
             Output("date-g1-show-ug-1", "value", allow_duplicate=True),
             Output("date-g1-show-ug-2", "value", allow_duplicate=True),
             Output("date-g2-left-metrics", "value", allow_duplicate=True),
             Output("date-g2-right-metrics", "value", allow_duplicate=True),
             Output("date-g2-log", "value", allow_duplicate=True),
             Output("date-g2-thresh", "value", allow_duplicate=True),
-            Output("date-g2-group", "value", allow_duplicate=True),
             Output("date-g2-show-ug-1", "value", allow_duplicate=True),
             Output("date-g2-show-ug-2", "value", allow_duplicate=True),
             Output("date-g3-left-metrics", "value", allow_duplicate=True),
             Output("date-g3-right-metrics", "value", allow_duplicate=True),
             Output("date-g3-log", "value", allow_duplicate=True),
             Output("date-g3-thresh", "value", allow_duplicate=True),
-            Output("date-g3-group", "value", allow_duplicate=True),
             Output("date-g3-show-ug-1", "value", allow_duplicate=True),
             Output("date-g3-show-ug-2", "value", allow_duplicate=True),
             Output("date-picker-range1", "start_date", allow_duplicate=True),
@@ -2534,7 +2526,7 @@ class GameStatsDashboard:
             bet: Optional[Dict],
         ):
             if trigger is None:
-                return (no_update,) * 75
+                return (no_update,) * 72
             # Keep the load trigger token so default-picker callbacks don't recompute
             # and clamp restored DatePickerRange values.
             out: List[Any] = [trigger]
@@ -2556,7 +2548,6 @@ class GameStatsDashboard:
                         sd.get("right_metrics"),
                         sd.get("log"),
                         sd.get("thresh"),
-                        sd.get("groups"),
                         sd.get("show_ug_1", no_update),
                         sd.get("show_ug_2", no_update),
                     ]
@@ -2756,12 +2747,9 @@ class GameStatsDashboard:
         )
 
     def _ensure_date_plot_groups(self) -> None:
-        """Populate df_date_group_col and df_plot_groups from config and date data."""
+        """Set ``df_date_group_col`` from YAML. Plot lines use distinct values in that column after user-group filters."""
         if self.config.get("stats_by_date", {}).get("group_col"):
             self.df_date_group_col = self.config["stats_by_date"]["group_col"]
-            default_gran = list(self.date_files_config.keys())[0]
-            lf = self.lfs_by_date.get(default_gran, pl.DataFrame().lazy())
-            self.df_plot_groups = self._get_plot_groups(lf, self.df_date_group_col)
         self._ensure_user_group_filter()
 
     def _ensure_bet_groups(self) -> None:
@@ -2824,7 +2812,6 @@ class GameStatsDashboard:
         right_metrics: Any,
         log_val: Any,
         log_thresh: Any,
-        groups: Any,
         date_granularity: Any,
         start_date: Any,
         end_date: Any,
@@ -2877,36 +2864,40 @@ class GameStatsDashboard:
             logger.warning(f"Using default group column 'group'")
             group_col = "group"
             df_date = df_date.with_columns(pl.lit("total").alias("group"))
-            groups = ["total"]
+            plot_groups: List[Any] = ["total"]
             color_map = {
                 f"{s}:{m}": Styles.COLORS[i % len(Styles.COLORS)]
                 for i, m in enumerate(left_metrics + right_metrics)
-                for j, s in enumerate(groups)
+                for j, s in enumerate(plot_groups)
             }
             line_style_map = {
                 f"{s}:{m}": Styles.LINE_SHAPE[0]
                 for i, m in enumerate(left_metrics + right_metrics)
-                for j, s in enumerate(groups)
+                for j, s in enumerate(plot_groups)
             }
         else:
             group_col = self.df_date_group_col
+            uniq_ser = df_date.select(pl.col(group_col).unique()).to_series()
+            raw_vals = [x for x in uniq_ser.to_list() if x is not None]
+            plot_groups = sorted(raw_vals, key=str)
+            if not plot_groups:
+                return fig
             color_map = {
                 f"{s}:{m}": Styles.COLORS[j % len(Styles.COLORS)]
                 for i, m in enumerate(left_metrics + right_metrics)
-                for j, s in enumerate(groups)
+                for j, s in enumerate(plot_groups)
             }
             line_style_map = {
                 f"{s}:{m}": Styles.LINE_SHAPE[i % len(Styles.LINE_SHAPE)]
                 for i, m in enumerate(left_metrics + right_metrics)
-                for j, s in enumerate(groups)
+                for j, s in enumerate(plot_groups)
             }
 
         # Accumulate y values per axis for log-scale tick calculation.
         all_y_left: List[float] = []
         all_y_right: List[float] = []
 
-        for strat in groups:
-            print(f"Processing group: {strat}")
+        for strat in plot_groups:
             df_group = df_date.filter(pl.col(group_col) == strat).sort(self.date_col)
             if df_group.is_empty():
                 continue
