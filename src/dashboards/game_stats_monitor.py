@@ -369,9 +369,27 @@ class GameStatsDashboard:
                     config_files.append({"label": file_path.stem, "value": str(file_path.absolute())})
         return sorted(config_files, key=lambda x: x["label"])
 
-    def _load_data(self) -> None:
-        self._load_bet_data()
-        self._load_date_data()
+    def _load_date_data(self) -> None:
+        for gran, file_paths in self.date_files_config.items():
+            if isinstance(file_paths, str):
+                file_paths = [file_paths]
+            valid_paths = [f for f in file_paths if f]
+            if not valid_paths:
+                self.lfs_by_date[gran] = pl.DataFrame().lazy()
+                continue
+
+            lf_date = read_files(valid_paths, lazy_load=True, return_as_list=False, expand_s3_prefixes=True)
+            if isinstance(lf_date, pl.LazyFrame) and lf_date.collect_schema().len() > 0:
+                if self.date_col in lf_date.collect_schema().names():
+                    lf_date = lf_date.with_columns(pl.col(self.date_col).cast(pl.Datetime))
+                self.lfs_by_date[gran] = lf_date
+            else:
+                self.lfs_by_date[gran] = pl.DataFrame().lazy()
+
+        self.plot_metrics = {}
+        self.plot_metrics["g1"] = self.config["stats_by_date"]["group1_columns"]
+        self.plot_metrics["g2"] = self.config["stats_by_date"]["group2_columns"]
+        self.plot_metrics["g3"] = self.config["stats_by_date"]["group3_columns"]
 
     def _load_bet_data(self) -> None:
         if self.lf_bet.collect_schema().len() > 0 and self.sessions:
@@ -400,36 +418,6 @@ class GameStatsDashboard:
         sessions_df = self.lf_bet.select(pl.col("session_start_date").unique().cast(pl.Utf8)).collect()
         self.sessions = sorted(sessions_df.to_series().to_list()) if not sessions_df.is_empty() else []
 
-    def _ensure_plot_metrics_loaded(self) -> None:
-        """Ensure plot_metrics has g1/g2/g3 keys; repopulate from config if missing."""
-        if "g1" not in self.plot_metrics and "stats_by_date" in self.config:
-            sd = self.config["stats_by_date"]
-            self.plot_metrics["g1"] = sd.get("group1_columns", [])
-            self.plot_metrics["g2"] = sd.get("group2_columns", [])
-            self.plot_metrics["g3"] = sd.get("group3_columns", [])
-
-    def _load_date_data(self) -> None:
-        for gran, file_paths in self.date_files_config.items():
-            if isinstance(file_paths, str):
-                file_paths = [file_paths]
-            valid_paths = [f for f in file_paths if f]
-            if not valid_paths:
-                self.lfs_by_date[gran] = pl.DataFrame().lazy()
-                continue
-
-            lf_date = read_files(valid_paths, lazy_load=True, return_as_list=False, expand_s3_prefixes=True)
-            if isinstance(lf_date, pl.LazyFrame) and lf_date.collect_schema().len() > 0:
-                if self.date_col in lf_date.collect_schema().names():
-                    lf_date = lf_date.with_columns(pl.col(self.date_col).cast(pl.Datetime))
-                self.lfs_by_date[gran] = lf_date
-            else:
-                self.lfs_by_date[gran] = pl.DataFrame().lazy()
-
-        self.plot_metrics = {}
-        self.plot_metrics["g1"] = self.config["stats_by_date"]["group1_columns"]
-        self.plot_metrics["g2"] = self.config["stats_by_date"]["group2_columns"]
-        self.plot_metrics["g3"] = self.config["stats_by_date"]["group3_columns"]
-
     def _load_weekly_report_data(self) -> None:
         self._weekly_report_df = None
         wr = self.config.get("weekly_report")
@@ -447,10 +435,19 @@ class GameStatsDashboard:
             logger.warning("Failed to load weekly report data: %s", e)
             self._weekly_report_df = None
 
+    def _ensure_plot_metrics_loaded(self) -> None:
+        """Ensure plot_metrics has g1/g2/g3 keys; repopulate from config if missing."""
+        if "g1" not in self.plot_metrics and "stats_by_date" in self.config:
+            sd = self.config["stats_by_date"]
+            self.plot_metrics["g1"] = sd.get("group1_columns", [])
+            self.plot_metrics["g2"] = sd.get("group2_columns", [])
+            self.plot_metrics["g3"] = sd.get("group3_columns", [])
+
     def _reload_config(self, config_file: str) -> None:
         self.config = load_config(config_file)
         self._load_date_data()
         self._load_weekly_report_data()
+        # self._load_bet_data()
 
     def _compute_group_date_ranges(self) -> Tuple[
         Optional[Any],
@@ -1767,7 +1764,12 @@ class GameStatsDashboard:
         # on_date_ug_col_2_change: only refresh show-ug-2 options (no output to col1 → no DAG cycle).
         # Neither callback touches checklist VALUES — owned by layout defaults and restore_dashboard_state.
         @self.app.callback(
-            [Output("date-ug-col-2", "value")] + [Output(f"date-g{i}-show-ug-1", "options") for i in range(1, 4)],
+            [
+                Output("date-ug-col-2", "value"),
+                Output(f"date-g1-show-ug-1", "options"),
+                Output(f"date-g2-show-ug-1", "options"),
+                Output(f"date-g3-show-ug-1", "options"),
+            ],
             Input("date-ug-col-1", "value"),
             State("date-ug-col-2", "value"),
             prevent_initial_call=True,
@@ -1778,7 +1780,11 @@ class GameStatsDashboard:
             return [new_col2] + [opts] * 3
 
         @self.app.callback(
-            [Output(f"date-g{i}-show-ug-2", "options") for i in range(1, 4)],
+            [
+                Output(f"date-g1-show-ug-2", "options"),
+                Output(f"date-g2-show-ug-2", "options"),
+                Output(f"date-g3-show-ug-2", "options"),
+            ],
             Input("date-ug-col-2", "value"),
             prevent_initial_call=True,
         )
