@@ -1,3 +1,56 @@
+"""SS03 mahjong streak incentive stats: merge user-day stats with AB group file, aggregate, plot RTP, export CSV.
+
+Summary DataFrame columns (``analyze()[0]``, also ``incentive_stats_summary.csv``)
+--------------------------------------------------------------------------------
+date
+    Day from incentive stats, matched to ``activity_date`` in the group file.
+partition_ab
+    AB cohort id (UUID string); arm is inferred from the first two characters
+    (``4a`` vs ``4f``) for thresholds.
+num_users
+    Count of distinct ``user_id`` with merged stats for this date and partition.
+num_users_with_fg: users with at least one free game (not incentivized) row that day
+    Users with at least one detail row where ``type == 1`` (free game) that day
+    in this partition.
+num_users_low_spin
+    Users whose **base-game** spin total (``type == 0`` ``spin_count`` summed)
+    is **strictly less** than the arm spin threshold (100 for ``4a*``, 130 for ``4f*``).
+num_users_high_rtp
+    Users with base-game spin total **greater than or equal** to the arm spin
+    threshold **and** mean base-game ``rtp`` **greater than** the arm RTP cutoff
+    (0.5 for ``4a*``, 0.6 for ``4f*``).
+num_users_incentivized
+    Users with any detail row where ``incentivized == 1`` that day.
+median_spin_below_thresh
+    Median of base-game spin totals among users in ``num_users_low_spin`` only;
+    missing (NaN) when there are no users below the spin threshold for that row.
+ratio_users_with_fg
+    ``num_users_with_fg / num_users``; NaN if ``num_users`` is 0.
+ratio_users_low_spin
+    ``num_users_low_spin / num_users``; NaN if ``num_users`` is 0.
+ratio_users_high_rtp
+    ``num_users_high_rtp / num_users``; NaN if ``num_users`` is 0.
+ratio_users_incentivized
+    ``num_users_incentivized / num_users``; NaN if ``num_users`` is 0.
+
+Per-user working frame ``user_day`` (``analyze()[1]``)
+------------------------------------------------------
+total_spin
+    Sum of ``spin_count`` over rows with ``type == 0`` only (base game).
+has_fg
+    True if any row that day has ``type == 1``.
+has_incentivized
+    True if any row that day has ``incentivized == 1``.
+spin_thresh / rtp_thresh
+    Arm-specific cutoffs copied from merged detail rows.
+rtp
+    Mean of ``rtp`` over ``type == 0`` rows only (missing if no base-game rows).
+low_spin
+    ``total_spin < spin_thresh``.
+high_rtp
+    ``total_spin >= spin_thresh`` and ``rtp > rtp_thresh`` (requires finite ``rtp``).
+"""
+
 import argparse
 import logging
 import sys
@@ -61,6 +114,7 @@ def analyze(
     path_stats: str = file1,
     path_groups: str = file2,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Load CSVs, merge, aggregate. See module docstring for column definitions."""
     data1 = pd.read_csv(path_stats)
     data2 = pd.read_csv(path_groups)
 
@@ -113,6 +167,16 @@ def analyze(
         num_users_high_rtp=("high_rtp", "sum"),
         num_users_incentivized=("has_incentivized", "sum"),
     )
+    # Median base-game spin (total_spin) among users below this row's group threshold only.
+    med_below = cast(
+        pd.DataFrame,
+        user_day[user_day["low_spin"]]
+        .groupby(["date", "partition_ab"], as_index=False)
+        .agg(
+            median_spin_below_thresh=("total_spin", "median"),
+        ),
+    )
+    summary = cast(pd.DataFrame, summary.merge(med_below, on=["date", "partition_ab"], how="left"))
     summary = summary.sort_values(["date", "partition_ab"]).reset_index(drop=True)  # pyright: ignore[reportCallIssue]
 
     nu = summary["num_users"].replace(0, np.nan)
