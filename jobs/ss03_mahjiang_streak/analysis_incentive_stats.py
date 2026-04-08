@@ -21,9 +21,19 @@ num_users_high_rtp
     (0.5 for ``4a*``, 0.6 for ``4f*``).
 num_users_incentivized
     Users with any detail row where ``incentivized == 1`` that day.
+num_users_high_rtp_incentivized
+    Users who satisfy ``high_rtp`` **and** have ``has_incentivized`` true (any
+    incentivized row that day).
 median_spin_below_thresh
     Median of base-game spin totals among users in ``num_users_low_spin`` only;
     missing (NaN) when there are no users below the spin threshold for that row.
+mean_rtp_no_fg_not_incentivized
+    Mean of per-user base-game ``rtp`` among users with **no** ``type == 1`` row and
+    **no** ``incentivized == 1`` row that day. Rows with missing ``rtp`` are ignored in
+    the mean; NaN if no such user has a defined ``rtp``.
+avg_base_spin_no_fg_not_incentivized
+    Mean of ``total_spin`` (base-game spin sum) over the same user subset as
+    ``mean_rtp_no_fg_not_incentivized``. NaN when that subset is empty.
 ratio_users_with_fg
     ``num_users_with_fg / num_users``; NaN if ``num_users`` is 0.
 ratio_users_low_spin
@@ -32,6 +42,8 @@ ratio_users_high_rtp
     ``num_users_high_rtp / num_users``; NaN if ``num_users`` is 0.
 ratio_users_incentivized
     ``num_users_incentivized / num_users``; NaN if ``num_users`` is 0.
+ratio_users_high_rtp_incentivized
+    ``num_users_high_rtp_incentivized / num_users``; NaN if ``num_users`` is 0.
 
 Per-user working frame ``user_day`` (``analyze()[1]``)
 ------------------------------------------------------
@@ -49,6 +61,10 @@ low_spin
     ``total_spin < spin_thresh``.
 high_rtp
     ``total_spin >= spin_thresh`` and ``rtp > rtp_thresh`` (requires finite ``rtp``).
+high_rtp_incentivized
+    ``high_rtp`` and ``has_incentivized`` (high RTP bucket and got incentivized).
+no_fg_not_incentivized
+    True when the user had no free-game (``type == 1``) and no incentivized row that day.
 """
 
 import argparse
@@ -159,6 +175,8 @@ def analyze(
     user_day["high_rtp"] = (user_day["total_spin"] >= user_day["spin_thresh"]) & (
         user_day["rtp"] > user_day["rtp_thresh"]
     )
+    user_day["high_rtp_incentivized"] = user_day["high_rtp"] & user_day["has_incentivized"]
+    user_day["no_fg_not_incentivized"] = (~user_day["has_fg"]) & (~user_day["has_incentivized"])
 
     summary = user_day.groupby(["date", "partition_ab"], as_index=False).agg(
         num_users=("user_id", "count"),
@@ -166,6 +184,7 @@ def analyze(
         num_users_low_spin=("low_spin", "sum"),
         num_users_high_rtp=("high_rtp", "sum"),
         num_users_incentivized=("has_incentivized", "sum"),
+        num_users_high_rtp_incentivized=("high_rtp_incentivized", "sum"),
     )
     # Median base-game spin (total_spin) among users below this row's group threshold only.
     med_below = cast(
@@ -177,6 +196,17 @@ def analyze(
         ),
     )
     summary = cast(pd.DataFrame, summary.merge(med_below, on=["date", "partition_ab"], how="left"))
+
+    pure = user_day[user_day["no_fg_not_incentivized"]]
+    pure_stats = cast(
+        pd.DataFrame,
+        pure.groupby(["date", "partition_ab"], as_index=False).agg(
+            mean_rtp_no_fg_not_incentivized=("rtp", "mean"),
+            avg_base_spin_no_fg_not_incentivized=("total_spin", "mean"),
+        ),
+    )
+    summary = cast(pd.DataFrame, summary.merge(pure_stats, on=["date", "partition_ab"], how="left"))
+
     summary = summary.sort_values(["date", "partition_ab"]).reset_index(drop=True)  # pyright: ignore[reportCallIssue]
 
     nu = summary["num_users"].replace(0, np.nan)
@@ -184,6 +214,7 @@ def analyze(
     summary["ratio_users_low_spin"] = summary["num_users_low_spin"] / nu
     summary["ratio_users_high_rtp"] = summary["num_users_high_rtp"] / nu
     summary["ratio_users_incentivized"] = summary["num_users_incentivized"] / nu
+    summary["ratio_users_high_rtp_incentivized"] = summary["num_users_high_rtp_incentivized"] / nu
 
     return summary, user_day
 
