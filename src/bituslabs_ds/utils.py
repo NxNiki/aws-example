@@ -4,9 +4,11 @@ import logging
 import os
 import shutil
 import subprocess
+import urllib.request
 from collections import Counter
 from collections.abc import Sequence
 from decimal import Decimal
+from functools import lru_cache
 from pprint import pformat
 from typing import Any, Dict, Iterable, Iterator, List, Literal, Optional, Tuple, Union
 
@@ -167,9 +169,9 @@ def remove_outliers(
 
     if isinstance(data, pd.DataFrame):
         numeric_columns = data.select_dtypes(include="number").columns.tolist()
-        arr = data[numeric_columns].values
+        arr = np.asarray(data[numeric_columns])
     else:
-        arr = data
+        arr = np.asarray(data)
 
     # Ensure 2D
     if arr.ndim == 1:
@@ -223,7 +225,7 @@ def clip_outliers(
     if isinstance(data, pd.Series):
         df = data.to_frame()
     elif isinstance(data, np.ndarray) and data.ndim == 1:
-        df = pd.DataFrame(data, columns=["col_0"])
+        df = pd.DataFrame({"col_0": data})
     elif isinstance(data, pd.DataFrame):
         df = data.copy()
     elif isinstance(data, np.ndarray):
@@ -317,14 +319,15 @@ def df_power_transform(
     data_transformed = data.copy()
 
     if col_names is None:
-        col_names = data.columns.tolist()
-
-    if isinstance(col_names, str):
-        col_names = [col_names]
+        columns_to_transform: List[str] = data.columns.tolist()
+    elif isinstance(col_names, str):
+        columns_to_transform = [col_names]
+    else:
+        columns_to_transform = col_names
 
     results = []
     with concurrent.futures.ProcessPoolExecutor(max_workers=DEFAULT_MAX_JOBS) as executor:
-        futures = {executor.submit(_transform_column, data_transformed[col]): col for col in col_names}
+        futures = {executor.submit(_transform_column, data_transformed[col]): col for col in columns_to_transform}
         for future in concurrent.futures.as_completed(futures):
             result = future.result()
             if result is not None:
@@ -438,10 +441,10 @@ def column_iterator(
                 f"selected columns ({n}) larger than max length ({max_n}) of the specified ordered columns \n"
                 f"will only select {max_n} columns."
             )
-            yield data[ordered_column_names], max_n
+            yield data.loc[:, ordered_column_names], max_n
             break
         else:
-            yield data[ordered_column_names[:n]], n
+            yield data.loc[:, ordered_column_names[:n]], n
 
 
 def group_iterator(
@@ -464,7 +467,8 @@ def group_iterator(
     group_vals = sorted(pd.Series(data[group_col].unique()).dropna())
     index = 0
     for group in group_vals:
-        res = data[data[group_col] == group].copy()
+        mask = data[group_col] == group
+        res: pd.DataFrame = data.loc[mask].copy()
         if len(res) < count_thresh:
             continue
 
@@ -521,7 +525,10 @@ def convert_numpy_types(obj):
         new_dict = {}
         for k, v in obj.items():
             # Convert the KEY to string if it's a Decimal or non-standard type
-            if isinstance(k, (Decimal, np.integer, np.floating)):
+            if isinstance(k, Decimal) or (
+                isinstance(k, np.generic)
+                and (np.issubdtype(type(k), np.integer) or np.issubdtype(type(k), np.floating))
+            ):
                 new_key = str(k)
             else:
                 new_key = k
@@ -543,12 +550,12 @@ def convert_numpy_types(obj):
         return convert_numpy_types(dict(obj))
 
     # Handle Individual Scalars
-    elif isinstance(obj, (np.integer, np.int64)):
-        return int(obj)
-    elif isinstance(obj, (np.floating, np.float64)):
-        return float(obj)
     elif isinstance(obj, np.bool_):
         return bool(obj)
+    elif isinstance(obj, np.generic) and np.issubdtype(type(obj), np.integer):
+        return int(obj)
+    elif isinstance(obj, np.generic) and np.issubdtype(type(obj), np.floating):
+        return float(obj)
     elif isinstance(obj, Decimal):
         return float(obj)
 
@@ -573,3 +580,33 @@ def bootstrap_worker(arr_np: np.ndarray, n_boot: int = 1000, ci_level: float = 0
     lower = float(np.percentile(boot_means, (1 - ci_level) / 2 * 100))
     upper = float(np.percentile(boot_means, (1 + ci_level) / 2 * 100))
     return lower, upper
+
+
+@lru_cache(maxsize=None)
+def _resolve_ip_location(ip: str, timeout: float, lang: str) -> str:
+    """HTTP lookup; cached by :func:`functools.lru_cache` on ``(ip, timeout, lang)``."""
+    url = f"http://ip-api.com/json/{ip}?lang={lang}"
+    location = "Timeout/Failed"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            data = json.loads(response.read().decode())
+            if data.get("status") == "success":
+                location = f"{data.get('country')} {data.get('regionName')} {data.get('city')}"
+    except Exception:
+        pass
+    return location
+
+
+def get_ip_location(ip: str, *, timeout: float = 5.0, lang: str = "zh-CN") -> str:
+    """
+    Look up a rough geographic location for an IP via ip-api.com (Chinese labels when lang=zh-CN).
+
+    Results are memoized with :func:`functools.lru_cache` on ``(ip, timeout, lang)`` inside this module,
+    so all importers share one cache per process. Empty IP returns Timeout/Failed without caching.
+
+    To inspect or reset the cache: ``_resolve_ip_location.cache_info()`` / ``cache_clear()``.
+    """
+    key = (ip or "").strip()
+    if not key:
+        return "Timeout/Failed"
+    return _resolve_ip_location(key, timeout, lang)
