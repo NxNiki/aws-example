@@ -14,8 +14,7 @@ from bituslabs_ds.config import (
     get_redshift_user,
     setup_logging,
 )
-from bituslabs_ds.etl import DataLoader, ETLScheduler, RedshiftBackend
-from jobs.etl_utils import AggCol, effective_start_date
+from bituslabs_ds.etl import AggCol, DataLoader, ETLScheduler, RedshiftBackend, effective_start_date
 
 # Day boundary: 6 AM Shanghai time (same as fish_hunter)
 DATE_START_HOUR = 6

@@ -7,7 +7,7 @@ This script:
 3) saves 5 count-based plots per user:
    - bullet_level
    - strategy_name
-   - ip (single stacked bar; no legend)
+   - ip location city (single stacked bar; city legend)
    - fish_value
    - multiplier x bullet_level
 
@@ -21,6 +21,7 @@ import os
 from pathlib import Path
 from typing import Any, cast
 
+import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import pandas as pd
 
@@ -37,8 +38,22 @@ REPORT_DIR = DATA_ROOT / "risk_control_reports"
 PLOT_DIR = REPORT_DIR / "plots"
 LOCAL_CACHE_FILE = CACHE_DIR / "risk_user_stats.parquet"
 IP_STACK_TOP_N = 20
+CITY_LEGEND_TOP_N = 20
 ALL_USERS_MD_NAME = "risk_user_all_users.md"
 ALL_USERS_HTML_NAME = "risk_user_all_users_stats.html"
+CITY_COLOR_PALETTE = [
+    "#4E79A7",
+    "#F28E2B",
+    "#E15759",
+    "#76B7B2",
+    "#59A14F",
+    "#EDC948",
+    "#B07AA1",
+    "#FF9DA7",
+    "#9C755F",
+    "#BAB0AC",
+]
+CITY_PATTERN_PALETTE = ["", "/", "\\", "x", "-", "|", "+", "."]
 
 
 def _sanitize_filename(value: str) -> str:
@@ -98,6 +113,60 @@ def _sum_numeric(df: pd.DataFrame, column: str) -> float:
     return float(s.sum())
 
 
+def _user_time_stats(df_user: pd.DataFrame, *, session_gap_seconds: int = 30 * 60) -> dict[str, float | int]:
+    if "event_timestamp" not in df_user.columns:
+        return {
+            "account_duration_hours": 0.0,
+            "average_bet_interval_seconds": 0.0,
+            "num_bet_sessions": 0,
+        }
+
+    ts = pd.to_datetime(pd.Series(df_user["event_timestamp"]), errors="coerce").dropna().sort_values()
+    if ts.empty:
+        return {
+            "account_duration_hours": 0.0,
+            "average_bet_interval_seconds": 0.0,
+            "num_bet_sessions": 0,
+        }
+
+    duration_hours = float((ts.iloc[-1] - ts.iloc[0]).total_seconds() / 3600.0) if len(ts) > 1 else 0.0
+    diffs = ts.diff().dt.total_seconds().dropna()
+    valid_diffs = diffs[(diffs >= 0) & (diffs <= session_gap_seconds)]
+    avg_interval = float(valid_diffs.mean()) if len(valid_diffs) > 0 else 0.0
+    num_sessions = int(1 + (diffs > session_gap_seconds).sum())
+
+    return {
+        "account_duration_hours": duration_hours,
+        "average_bet_interval_seconds": avg_interval,
+        "num_bet_sessions": num_sessions,
+    }
+
+
+def _location_to_city(location: str) -> str:
+    if location in {"N/A", "Timeout/Failed", "", "UNKNOWN"}:
+        return "Unknown"
+    parts = [p for p in str(location).split(" ") if p and p != "None"]
+    return parts[-1] if parts else "Unknown"
+
+
+def _city_or_ip_label(ip: str, location: str) -> str:
+    city = _location_to_city(location)
+    if city == "Unknown":
+        return f"IP {ip}"
+    return city
+
+
+def _city_style_map(cities: list[str]) -> dict[str, dict[str, str]]:
+    unique_cities = sorted(set(cities))
+    styles: dict[str, dict[str, str]] = {}
+    for i, city in enumerate(unique_cities):
+        styles[city] = {
+            "color": CITY_COLOR_PALETTE[i % len(CITY_COLOR_PALETTE)],
+            "pattern": CITY_PATTERN_PALETTE[i % len(CITY_PATTERN_PALETTE)],
+        }
+    return styles
+
+
 def _combo_label_rows(combo_counts: pd.Series) -> list[tuple[str, int]]:
     rows: list[tuple[str, int]] = []
     for idx, c in combo_counts.items():
@@ -124,9 +193,6 @@ def _counts_matrix(
     df = cast(pd.DataFrame, events_df.loc[events_df["user_name"].isin(user_names)].copy())
     if df.empty:
         return {"labels": [], "traces": [], "showlegend": True}
-    top_ips: list[str] = []
-    city_map: dict[str, str] = {}
-
     if metric == "bullet_level":
         values = (
             pd.Series(pd.to_numeric(pd.Series(df["bullet_level"]), errors="coerce")).dropna().astype(int).astype(str)
@@ -159,23 +225,19 @@ def _counts_matrix(
         categories = sorted(df["_metric"].unique().tolist())
         showlegend = True
     elif metric == "ip":
-        df["_metric"] = df["ip"].fillna("UNKNOWN").astype(str)
-        ip_totals = df["_metric"].value_counts()
-        top_ips = [str(ip) for ip in ip_totals.head(IP_STACK_TOP_N).index.tolist()]
-        loc_map = {str(ip): get_ip_location(str(ip)) if str(ip) != "UNKNOWN" else "N/A" for ip in top_ips}
-        for ip in top_ips:
-            ip_key = str(ip)
-            location = loc_map[ip_key]
-            if location == "Timeout/Failed":
-                city_map[ip_key] = "未知"
-                continue
-            parts = [p for p in location.split(" ") if p and p != "None"]
-            city_map[ip_key] = parts[-1] if parts else "未知"
-        df["_metric"] = df["_metric"].apply(lambda ip: f"{ip} ({loc_map[str(ip)]})" if str(ip) in loc_map else "OTHERS")
-        categories = [f"{ip} ({loc_map[str(ip)]})" for ip in top_ips]
-        if "OTHERS" in df["_metric"].values:
-            categories.append("OTHERS")
-        showlegend = False
+        df["_ip_value"] = df["ip"].fillna("UNKNOWN").astype(str)
+        ip_values = [str(v) for v in df["_ip_value"].dropna().astype(str).unique().tolist()]
+        loc_map = {ip: get_ip_location(ip) if ip != "UNKNOWN" else "N/A" for ip in ip_values}
+        city_map = {ip: _city_or_ip_label(ip, loc_map[ip]) for ip in ip_values}
+        df["_city"] = df["_ip_value"].apply(lambda ip: city_map.get(str(ip), "Unknown"))
+        city_totals = df["_city"].value_counts()
+        top_cities = [str(city) for city in city_totals.head(CITY_LEGEND_TOP_N).index.tolist()]
+        df["_metric"] = df["_city"].apply(lambda city: city if str(city) in top_cities else "Others")
+        categories = top_cities.copy()
+        has_others = bool((df["_metric"] == "Others").any())
+        if has_others:
+            categories.append("Others")
+        showlegend = True
     else:
         raise ValueError(f"Unsupported metric: {metric}")
 
@@ -184,28 +246,18 @@ def _counts_matrix(
     pivot = cast(pd.DataFrame, cast(Any, pivot_idx).reindex(user_names, axis=1, fill_value=0))
 
     traces: list[dict[str, Any]] = []
-    ip_label_enabled: set[str] = set()
+    city_styles: dict[str, dict[str, str]] = {}
     if metric == "ip":
-        if len(top_ips) > 5:
-            ip_label_enabled = {str(ip) for ip in top_ips[:5]}
-        else:
-            ip_label_enabled = {str(ip) for ip in top_ips}
+        city_styles = _city_style_map(categories)
 
     for label in categories:
         y_vals = [int(v) for v in pivot.loc[label].tolist()]
         trace: dict[str, Any] = {"name": label, "x": user_names, "y": y_vals, "type": "bar"}
         if metric == "ip":
-            if label == "OTHERS":
-                trace["text"] = ["" for _ in y_vals]
-            else:
-                ip_key = label.split(" (", 1)[0]
-                city = city_map.get(ip_key, "未知")
-                show_city = ip_key in ip_label_enabled
-                trace["text"] = [city if (show_city and val > 0) else "" for val in y_vals]
-                trace["textposition"] = "inside"
-                trace["insidetextanchor"] = "middle"
-                trace["textfont"] = {"size": 10, "color": "white"}
-                trace["cliponaxis"] = False
+            style = city_styles.get(label, {"color": "#BAB0AC", "pattern": ""})
+            trace["marker"] = {"color": style["color"], "pattern": {"shape": style["pattern"]}}
+            trace["legendgroup"] = label
+            trace["hovertemplate"] = "city=%{fullData.name}<br>" "user=%{x}<br>" "count=%{y}<extra></extra>"
         traces.append(trace)
 
     return {"labels": categories, "traces": traces, "showlegend": showlegend}
@@ -229,17 +281,29 @@ def _write_all_users_html_report(
     )
     rtp_vals = []
     profit_vals = []
+    account_duration_vals = []
+    avg_bet_interval_vals = []
+    num_sessions_vals = []
     for _, row in per_user.iterrows():
         bet = float(row["bet"])
         payout = float(row["payout"])
         profit = float(row["profit"])
         rtp_vals.append((payout / bet) * 100 if bet > 0 else 0.0)
         profit_vals.append(profit)
+    for user_name in user_names:
+        df_user = cast(pd.DataFrame, events_df.loc[events_df["user_name"] == user_name].copy())
+        time_stats = _user_time_stats(df_user)
+        account_duration_vals.append(float(time_stats["account_duration_hours"]))
+        avg_bet_interval_vals.append(float(time_stats["average_bet_interval_seconds"]))
+        num_sessions_vals.append(int(time_stats["num_bet_sessions"]))
 
     line_payload = {
         "none": {"name": "None", "y": []},
         "rtp": {"name": "RTP %", "y": rtp_vals},
         "total_profit": {"name": "Total Profit", "y": profit_vals},
+        "account_duration_hours": {"name": "Account Duration (Hours)", "y": account_duration_vals},
+        "average_bet_interval_seconds": {"name": "Average Bet Interval (Seconds)", "y": avg_bet_interval_vals},
+        "num_bet_sessions": {"name": "Number of Bet Sessions", "y": num_sessions_vals},
     }
 
     payload: dict[str, Any] = {}
@@ -288,6 +352,9 @@ def _write_all_users_html_report(
       <option value="none">None</option>
       <option value="rtp">RTP %</option>
       <option value="total_profit">Total Profit</option>
+      <option value="account_duration_hours">Account Duration (Hours)</option>
+      <option value="average_bet_interval_seconds">Average Bet Interval (Seconds)</option>
+      <option value="num_bet_sessions">Number of Bet Sessions</option>
     </select>
   </div>
   <div id="chart"></div>
@@ -337,7 +404,7 @@ def _write_all_users_markdown_report(
     out_path: Path,
     html_path: Path,
 ) -> None:
-    rows: list[dict[str, Any]] = []
+    user_blocks: list[dict[str, Any]] = []
     for user_name in user_names:
         df_user = cast(pd.DataFrame, events_df.loc[events_df["user_name"] == user_name].copy())
         if df_user.empty:
@@ -348,12 +415,53 @@ def _write_all_users_markdown_report(
         total_payout = _sum_numeric(df_user, "payout")
         total_profit = _sum_numeric(df_user, "profit")
         rtp = (total_payout / total_bet) * 100 if total_bet > 0 else 0.0
-        ip_counts = _value_counts(df_user, "ip", fill_unknown=True)
-        top_ip = str(ip_counts.index[0]) if len(ip_counts) > 0 else "N/A"
-        top_ip_loc = get_ip_location(top_ip) if top_ip not in {"N/A", "UNKNOWN"} else "N/A"
-        strategy_counts = _value_counts(df_user, "strategy_name", fill_unknown=True)
-        top_strategy = str(strategy_counts.index[0]) if len(strategy_counts) > 0 else "N/A"
-        rows.append(
+        time_stats = _user_time_stats(df_user)
+
+        ip_profit_rows: list[dict[str, Any]] = []
+        df_user_ip = df_user.copy()
+        df_user_ip["ip_key"] = pd.Series(df_user_ip["ip"]).fillna("UNKNOWN").astype(str)
+        ip_grouped = cast(
+            pd.DataFrame,
+            cast(Any, df_user_ip.groupby("ip_key")[["bet", "payout", "profit"]]).sum(min_count=1).fillna(0),
+        )
+        ip_grouped = ip_grouped.sort_values(by="profit", ascending=False)
+        for ip_key, ip_row in ip_grouped.iterrows():
+            ip_bet = float(ip_row["bet"])
+            ip_payout = float(ip_row["payout"])
+            ip_profit = float(ip_row["profit"])
+            ip_rtp = (ip_payout / ip_bet) * 100 if ip_bet > 0 else 0.0
+            ip_location = get_ip_location(str(ip_key)) if str(ip_key) not in {"UNKNOWN"} else "N/A"
+            ip_profit_rows.append(
+                {
+                    "ip": str(ip_key),
+                    "location": ip_location,
+                    "total_profit": ip_profit,
+                    "rtp_pct": ip_rtp,
+                }
+            )
+
+        strategy_profit_rows: list[dict[str, Any]] = []
+        df_user_strategy = df_user.copy()
+        df_user_strategy["strategy_key"] = pd.Series(df_user_strategy["strategy_name"]).fillna("UNKNOWN").astype(str)
+        strategy_grouped = cast(
+            pd.DataFrame,
+            cast(Any, df_user_strategy.groupby("strategy_key")[["bet", "payout", "profit"]]).sum(min_count=1).fillna(0),
+        )
+        strategy_grouped = strategy_grouped.sort_values(by="profit", ascending=False)
+        for strategy_key, strategy_row in strategy_grouped.iterrows():
+            strategy_bet = float(strategy_row["bet"])
+            strategy_payout = float(strategy_row["payout"])
+            strategy_profit = float(strategy_row["profit"])
+            strategy_rtp = (strategy_payout / strategy_bet) * 100 if strategy_bet > 0 else 0.0
+            strategy_profit_rows.append(
+                {
+                    "strategy_name": str(strategy_key),
+                    "total_profit": strategy_profit,
+                    "rtp_pct": strategy_rtp,
+                }
+            )
+
+        user_blocks.append(
             {
                 "user_name": user_name,
                 "user_id": user_id,
@@ -361,14 +469,16 @@ def _write_all_users_markdown_report(
                 "total_bet": total_bet,
                 "total_payout": total_payout,
                 "total_profit": total_profit,
-                "actual_rtp_pct": rtp,
-                "top_strategy": top_strategy,
-                "top_ip": top_ip,
-                "top_ip_location": top_ip_loc,
+                "rtp_pct": rtp,
+                "account_duration_hours": float(time_stats["account_duration_hours"]),
+                "average_bet_interval_seconds": float(time_stats["average_bet_interval_seconds"]),
+                "num_bet_sessions": int(time_stats["num_bet_sessions"]),
+                "ip_rows": ip_profit_rows,
+                "strategy_rows": strategy_profit_rows,
             }
         )
 
-    summary_df = pd.DataFrame(rows)
+    summary_df = pd.DataFrame(user_blocks)
     if not summary_df.empty:
         summary_df = summary_df.sort_values(by="total_profit", ascending=False)
 
@@ -382,29 +492,43 @@ def _write_all_users_markdown_report(
         f"[Open interactive chart report]({html_path.name})",
         "",
         "## User Summary",
-        "| user_name | user_id | total_orders | total_bet | total_payout | total_profit | actual_rtp_pct | top_strategy | top_ip | top_ip_location |",
-        "|---|---|---:|---:|---:|---:|---:|---|---|---|",
     ]
 
-    for _, row in summary_df.iterrows():
-        lines.append(
-            "| "
-            + " | ".join(
-                [
-                    str(row["user_name"]),
-                    str(row["user_id"]),
-                    str(int(row["total_orders"])),
-                    f"{float(row['total_bet']):,.2f}",
-                    f"{float(row['total_payout']):,.2f}",
-                    f"{float(row['total_profit']):,.2f}",
-                    f"{float(row['actual_rtp_pct']):.2f}",
-                    str(row["top_strategy"]),
-                    str(row["top_ip"]),
-                    str(row["top_ip_location"]),
-                ]
-            )
-            + " |"
+    for idx, (_, row) in enumerate(summary_df.iterrows()):
+        if idx > 0:
+            lines.extend(["", "---", ""])
+        lines.extend(
+            [
+                f"### {str(row['user_name'])} ({str(row['user_id'])})",
+                (
+                    f"**total_orders:** {int(row['total_orders'])}, "
+                    f"**total_bet:** {float(row['total_bet']):,.2f}, "
+                    f"**total_payout:** {float(row['total_payout']):,.2f}, "
+                    f"**total_profit:** {float(row['total_profit']):,.2f}, "
+                    f"**rtp:** {float(row['rtp_pct']):.2f}%"
+                ),
+                (
+                    f"**account_duration_hours:** {float(row['account_duration_hours']):.2f}, "
+                    f"**average_bet_interval_seconds:** {float(row['average_bet_interval_seconds']):.2f}, "
+                    f"**num_bet_sessions:** {int(row['num_bet_sessions'])}"
+                ),
+                "",
+                "**IP Breakdown**",
+            ]
         )
+        for ip_row in cast(list[dict[str, Any]], row["ip_rows"]):
+            lines.append(
+                f"- ip {ip_row['ip']} ({ip_row['location']}): total_profit: {float(ip_row['total_profit']):,.2f}, "
+                f"rtp: {float(ip_row['rtp_pct']):.2f}%"
+            )
+        lines.append("")
+        lines.append("**Strategy Breakdown**")
+        for strategy_row in cast(list[dict[str, Any]], row["strategy_rows"]):
+            lines.append(
+                f"- strategy_name {strategy_row['strategy_name']}: total_profit: {float(strategy_row['total_profit']):,.2f}, "
+                f"rtp: {float(strategy_row['rtp_pct']):.2f}%"
+            )
+        lines.append("")
 
     out_path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -463,30 +587,52 @@ def _plot_user_distributions(
         rotate_x=20,
     )
 
-    ip_counts = _value_counts(df_user, "ip", fill_unknown=True)
-    top_ip_counts = ip_counts.head(IP_STACK_TOP_N)
-    other_ip_count = int(ip_counts.iloc[IP_STACK_TOP_N:].sum()) if len(ip_counts) > IP_STACK_TOP_N else 0
-    stack_counts = top_ip_counts.tolist()
-    if other_ip_count > 0:
-        stack_counts.append(other_ip_count)
+    ip_values = pd.Series(df_user["ip"]).fillna("UNKNOWN").astype(str)
+    unique_ips = [str(v) for v in ip_values.unique().tolist()]
+    loc_map = {ip: get_ip_location(ip) if ip != "UNKNOWN" else "N/A" for ip in unique_ips}
+    city_series = ip_values.apply(lambda ip: _city_or_ip_label(str(ip), loc_map.get(str(ip), "N/A")))
+    city_counts = city_series.value_counts()
+    top_city_counts = city_counts.head(CITY_LEGEND_TOP_N)
+    other_city_count = int(city_counts.iloc[CITY_LEGEND_TOP_N:].sum()) if len(city_counts) > CITY_LEGEND_TOP_N else 0
 
+    city_stack_rows: list[dict[str, Any]] = [
+        {"city": str(city), "count": int(count)} for city, count in top_city_counts.items()
+    ]
+    if other_city_count > 0:
+        city_stack_rows.append({"city": "Others", "count": other_city_count})
+
+    city_stack_df = pd.DataFrame(city_stack_rows)
+    city_styles = _city_style_map(city_stack_df["city"].tolist() if not city_stack_df.empty else [])
     left = 0
-    for i, count in enumerate(stack_counts):
-        color = plt.get_cmap("tab20")(i % 20)
-        axes[2].barh([target_name], [count], left=left, color=color, height=0.55)
+    for _, row in city_stack_df.iterrows():
+        count = int(row["count"])
+        city = str(row["city"])
+        style = city_styles.get(city, {"color": "#BAB0AC", "pattern": ""})
+        axes[2].barh(
+            [target_name],
+            [count],
+            left=left,
+            color=style["color"],
+            hatch=style["pattern"],
+            edgecolor="#222222",
+            linewidth=0.3,
+            height=0.55,
+        )
         left += count
-    axes[2].set_title("IP Count (Stacked, No Legend)")
+    axes[2].set_title("IP Location Count (Top Cities + Others)")
     axes[2].set_xlabel("Count")
-
-    annotate_n = min(5, len(top_ip_counts))
-    cursor = 0
-    for i in range(annotate_n):
-        ip = top_ip_counts.index[i]
-        count = int(top_ip_counts.iloc[i])
-        location = get_ip_location(str(ip))
-        mid = cursor + count / 2
-        axes[2].text(mid, 0, location, ha="center", va="center", fontsize=8, color="white")
-        cursor += count
+    legend_handles = [
+        mpatches.Patch(
+            facecolor=style["color"],
+            hatch=style["pattern"],
+            edgecolor="#222222",
+            linewidth=0.3,
+            label=city,
+        )
+        for city, style in city_styles.items()
+    ]
+    if legend_handles:
+        axes[2].legend(handles=legend_handles, title="City", loc="upper right")
 
     fish_counts = _value_counts(df_user, "fish_value", numeric_int=True, sort_index=True)
     _plot_count_bar(
@@ -543,6 +689,7 @@ def analyze_user_by_name(
     total_payout = _sum_numeric(df_user, "payout")
     total_profit = _sum_numeric(df_user, "profit")
     rtp = (total_payout / total_bet) * 100 if total_bet > 0 else 0.0
+    time_stats = _user_time_stats(df_user)
 
     bullet_counts = _value_counts(df_user, "bullet_level", numeric_int=True, sort_index=True)
     strategy_counts = _value_counts(df_user, "strategy_name", fill_unknown=True)
@@ -566,6 +713,9 @@ def analyze_user_by_name(
         f"- total_payout: `{total_payout:,.2f}`",
         f"- total_profit: `{total_profit:,.2f}`",
         f"- actual_rtp: `{rtp:.2f}%`",
+        f"- account_duration_hours: `{float(time_stats['account_duration_hours']):.2f}`",
+        f"- average_bet_interval_seconds: `{float(time_stats['average_bet_interval_seconds']):.2f}`",
+        f"- num_bet_sessions: `{int(time_stats['num_bet_sessions'])}`",
         "",
         "## Distribution Plot",
         f"![{target_name} plots]({plot_rel.as_posix()})",

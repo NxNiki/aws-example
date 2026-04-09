@@ -12,8 +12,7 @@ from bituslabs_ds.config import (
     get_redshift_user,
     setup_logging,
 )
-from bituslabs_ds.etl import DataLoader, ETLScheduler, RedshiftBackend
-from jobs.etl_utils import AggCol, effective_start_date
+from bituslabs_ds.etl import AggCol, DataLoader, ETLScheduler, RedshiftBackend, effective_start_date
 
 DEFAULT_DATE_START = "2025-10-20"
 RETURN_USER_DAYS = 30
