@@ -74,18 +74,11 @@ NULL for an IP+currency when no user has at least two bets with a qualifying gap
 import argparse
 import logging
 import os
-import sys
 from datetime import datetime
-from pathlib import Path
 from textwrap import dedent
 
 import awswrangler as wr
 import pandas as pd
-
-# Allow "jobs" package to be found when script is run directly (e.g. python jobs/risk_control/...)
-_root = Path(__file__).resolve().parents[2]
-if str(_root) not in sys.path:
-    sys.path.insert(0, str(_root))
 
 from bituslabs_ds.config import (
     DEFAULT_BASTION_IP,

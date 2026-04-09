@@ -9,15 +9,9 @@ import argparse
 import logging
 import os
 import re
-import sys
-from pathlib import Path
 from textwrap import dedent
 
 import awswrangler as wr
-
-_root = Path(__file__).resolve().parents[2]
-if str(_root) not in sys.path:
-    sys.path.insert(0, str(_root))
 
 from bituslabs_ds.config import (
     DEFAULT_BASTION_IP,

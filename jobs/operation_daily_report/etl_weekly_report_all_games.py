@@ -14,14 +14,7 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
-from pathlib import Path
 from textwrap import dedent
-
-# Allow repo root imports when run as script
-_root = Path(__file__).resolve().parents[2]
-if str(_root) not in sys.path:
-    sys.path.insert(0, str(_root))
 
 from bituslabs_ds.config import (
     DEFAULT_BASTION_IP,

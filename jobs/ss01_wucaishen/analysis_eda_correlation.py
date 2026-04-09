@@ -24,12 +24,7 @@ Uses bituslabs_ds.s3_utils for S3 reads, bituslabs_ds.eda (DataProfiler, DataVis
 and heatmap/scatter, bituslabs_ds.utils for power transform.
 """
 
-import sys
 from pathlib import Path
-
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
 
 import matplotlib
 

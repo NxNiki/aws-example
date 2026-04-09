@@ -20,16 +20,10 @@ Outputs (all written to --output, which SageMaker uploads to S3):
 """
 
 import argparse
-import sys
 import time
 from datetime import datetime
 from multiprocessing import cpu_count
 from pathlib import Path
-
-# Allow running as script (e.g. python predict_transition_mcmc.py) from any cwd
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
 
 import arviz as az
 import numpy as np

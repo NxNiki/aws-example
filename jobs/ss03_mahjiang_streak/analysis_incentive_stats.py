@@ -69,7 +69,6 @@ no_fg_not_incentivized
 
 import argparse
 import logging
-import sys
 from pathlib import Path
 from typing import cast
 
@@ -80,17 +79,13 @@ import seaborn as sns
 
 logger = logging.getLogger(__name__)
 
-_root = Path(__file__).resolve().parents[2]
-if str(_root) not in sys.path:
-    sys.path.insert(0, str(_root))
-
-from bituslabs_ds.config import S3_BUCKET
+from bituslabs_ds.config import LOCAL_ROOT, S3_BUCKET
 from bituslabs_ds.s3_utils import upload_file_to_s3
 
 file1 = "/Users/niuxin/Documents/data_ss03/ss03_incentive_stats.csv"
 file2 = "/Users/niuxin/Documents/data_ss03/ss03_incentive_user_group_by_day.csv"
 
-OUTPUT_DIR = _root / "jobs" / "output" / "ss03_mahjiang_streak"
+OUTPUT_DIR = Path(LOCAL_ROOT) / "jobs" / "output" / "ss03_mahjiang_streak"
 S3_ANALYSIS_PREFIX = "ds-analysis/ss03_mahjiang_streak"
 
 DEFAULT_LOCAL_FIGURE = OUTPUT_DIR / "base_game_rtp_by_day.png"

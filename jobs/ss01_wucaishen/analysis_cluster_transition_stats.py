@@ -4,14 +4,8 @@ compute transition labels (from_cluster:to_cluster), run two-way ANOVA
 (current cluster × next cluster) and plot boxplots/barplots with p-values.
 """
 
-import sys
 from pathlib import Path
-from typing import Any
-
-# Allow running as script (e.g. python analysis_cluster_transition_stats.py) from any cwd
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
+from typing import Any, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -69,7 +63,8 @@ def _two_way_anova_one_feature(merged: pd.DataFrame, col: str) -> dict[str, floa
     Returns dict with p_current, p_next, p_interaction; or None if invalid.
     """
     df = merged[[FACTOR_CURRENT, FACTOR_NEXT, col]].dropna()
-    if df[col].nunique() < 2 or len(df) < 10:
+    col_series = pd.Series(df[col])
+    if col_series.nunique() < 2 or len(df) < 10:
         return None
     try:
         aov = pg.anova(
@@ -112,19 +107,20 @@ def _two_way_kruskal_one_feature(merged: pd.DataFrame, col: str) -> dict[str, fl
     Returns dict with p_current, p_next, p_interaction; or None if invalid.
     """
     df = merged[[FACTOR_CURRENT, FACTOR_NEXT, "transition", col]].dropna()
-    if df[col].nunique() < 2 or len(df) < 10:
+    col_series = pd.Series(df[col])
+    if col_series.nunique() < 2 or len(df) < 10:
         return None
     out = {}
     try:
-        groups_current = [g[col].values for _, g in df.groupby(FACTOR_CURRENT) if len(g) >= 2]
+        groups_current = [pd.Series(g[col]).to_numpy() for _, g in df.groupby(FACTOR_CURRENT) if len(g) >= 2]
         if len(groups_current) >= 2:
             _, p = stats.kruskal(*groups_current)
             out["p_current"] = float(p)
-        groups_next = [g[col].values for _, g in df.groupby(FACTOR_NEXT) if len(g) >= 2]
+        groups_next = [pd.Series(g[col]).to_numpy() for _, g in df.groupby(FACTOR_NEXT) if len(g) >= 2]
         if len(groups_next) >= 2:
             _, p = stats.kruskal(*groups_next)
             out["p_next"] = float(p)
-        groups_tr = [g[col].values for _, g in df.groupby("transition") if len(g) >= 2]
+        groups_tr = [pd.Series(g[col]).to_numpy() for _, g in df.groupby("transition") if len(g) >= 2]
         if len(groups_tr) >= 2:
             _, p = stats.kruskal(*groups_tr)
             out["p_interaction"] = float(p)
@@ -234,7 +230,7 @@ def plot_transition_counts(merged: pd.DataFrame, output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     order = _transition_order(merged)
     counts = merged["transition"].value_counts().reindex(order)
-    vals = np.where(np.isnan(counts.values), 0, counts.values).astype(int)
+    vals = pd.Series(counts).fillna(0).to_numpy(dtype=int)
     # Percentage within current cluster: e.g. cluster0:0 / (cluster0:0 + cluster0:1 + cluster0:2)
     sum_by_current: dict[int, float] = {}
     for i, tr in enumerate(order):
@@ -396,7 +392,7 @@ def main():
     # 1) Merged data: use cache if present, else build from S3 cluster labels + features
     merged_path = output_dir / "merged_with_transitions.parquet"
     ensure_merged_parquet(merged_path)
-    merged = read_local_cache(merged_path)
+    merged = cast(pd.DataFrame, read_local_cache(str(merged_path), lazy_load=False))
     print(f"Merged shape: {merged.shape}, transitions: {merged['transition'].nunique()}")
 
     # 3) Stats for requested columns

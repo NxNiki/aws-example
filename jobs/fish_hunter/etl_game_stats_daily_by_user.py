@@ -1,13 +1,6 @@
 import argparse
 import os
-import sys
-from pathlib import Path
 from textwrap import dedent
-
-# Allow "jobs" package to be found when script is run directly (e.g. python jobs/fish_hunter/...)
-_root = Path(__file__).resolve().parents[2]
-if str(_root) not in sys.path:
-    sys.path.insert(0, str(_root))
 
 from bituslabs_ds.config import (
     DEFAULT_BASTION_IP,
