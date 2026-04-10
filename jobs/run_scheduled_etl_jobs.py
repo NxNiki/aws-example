@@ -50,6 +50,11 @@ def main() -> int:
     # Set args per script directly in this list, e.g. ["--overwrite"] or ["--bastion-ip", "..."].
     jobs: list[tuple[str, Path, list[str]]] = [
         (
+            "operation daily report",
+            JOBS_DIR / "operation_daily_report" / "run_daily_report.py",
+            ["--lookback-days", "1", "--send-slack"],
+        ),
+        (
             "ss01_wucaishen ETL",
             JOBS_DIR / "ss01_wucaishen" / "etl_game_stats_daily_by_user_group.py",
             [],
@@ -63,11 +68,6 @@ def main() -> int:
             "operation daily weekly report ETL",
             JOBS_DIR / "operation_daily_report" / "etl_weekly_report_all_games.py",
             [],
-        ),
-        (
-            "operation daily report",
-            JOBS_DIR / "operation_daily_report" / "run_daily_report.py",
-            ["--lookback-days", "1", "--send-slack"],
         ),
     ]
 

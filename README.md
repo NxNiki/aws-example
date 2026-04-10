@@ -139,6 +139,25 @@ ETL jobs auto-load `.env` when importing `bituslabs_ds.config` locally (see `_ma
 - `jobs/fish_hunter/etl_*.py` — game stats, bets, retention, etc.
 - `jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py` — builds `DataLoader` and runs queries
 - `jobs/operation_daily_report/run_daily_report.py` — daily report orchestration ([README](jobs/operation_daily_report/README.md))
+- `jobs/run_scheduled_etl_jobs.py` — sequential ETL/report orchestrator entrypoint for scheduled runs
+
+### Scheduled ETL orchestrator script
+
+Use `jobs/run_scheduled_etl_jobs.py` as a single entrypoint for cron/EventBridge/ECS scheduled execution.
+It combines the four jobs listed below into one fixed sequence and returns a non-zero exit code if any step fails.
+
+Current sequence:
+
+1. `jobs/operation_daily_report/run_daily_report.py --lookback-days 1 --send-slack`
+2. `jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py`
+3. `jobs/fish_hunter/etl_game_stats_daily_by_user.py`
+4. `jobs/operation_daily_report/etl_weekly_report_all_games.py`
+
+Run locally:
+
+```bash
+poetry run python jobs/run_scheduled_etl_jobs.py
+```
 
 ### Scheduled ETL on AWS (Fargate / EventBridge)
 
