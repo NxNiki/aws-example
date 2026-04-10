@@ -2673,6 +2673,37 @@ class GameStatsDashboard:
             return df
         return df.filter(pl.col(col).is_in(clean))
 
+    @staticmethod
+    def _effective_ug_col2(ug_col_1: Any, ug_col_2: Any) -> Optional[str]:
+        """Return second UG column only when configured and distinct from the first."""
+        return ug_col_2 if (ug_col_2 and ug_col_2 != ug_col_1) else None
+
+    @staticmethod
+    def _normalize_ug_selection(selected_vals: Any) -> List[Any]:
+        """Normalize checklist values; strips 'all' so empty means no explicit filter."""
+        vals_raw = selected_vals if isinstance(selected_vals, list) else ([selected_vals] if selected_vals else [])
+        return [v for v in vals_raw if str(v) != "all"]
+
+    def _filter_df_for_ug_selection(
+        self,
+        df: pl.DataFrame,
+        ug_col_1: Any,
+        ug_col_2: Any,
+        show_ug_1: Any,
+        show_ug_2: Any,
+    ) -> Tuple[pl.DataFrame, Optional[str], List[Any], List[Any]]:
+        """
+        Apply the two user-group checklist filters and return:
+        (filtered_df, effective_col2, clean_vals1, clean_vals2).
+        """
+        clean_1 = self._normalize_ug_selection(show_ug_1)
+        effective_col2 = self._effective_ug_col2(ug_col_1, ug_col_2)
+        clean_2 = self._normalize_ug_selection(show_ug_2) if effective_col2 else []
+        out = self._apply_ug_filter_list(df, clean_1, col=ug_col_1 or None)
+        if effective_col2:
+            out = self._apply_ug_filter_list(out, clean_2, col=effective_col2)
+        return out, effective_col2, clean_1, clean_2
+
     def _make_ug_opts(self, col: Any) -> list:
         """Return dropdown/checklist options for a user-group column (includes 'all' first)."""
         if not col:
@@ -2736,6 +2767,7 @@ class GameStatsDashboard:
         start_dt: datetime,
         end_dt: datetime,
         granularity: str,
+        include_group_col: bool = True,
     ) -> DataMetrics:
         """Return a ``DataMetrics`` instance configured for this dashboard.
 
@@ -2743,7 +2775,9 @@ class GameStatsDashboard:
         call.  user_group is therefore not included in ``key_cols``; DataMetrics
         computes all metrics for the cohort as supplied.
         """
-        key_cols = [c for c in [self.date_col, self.df_date_group_col] if c]
+        key_cols = [self.date_col]
+        if include_group_col and self.df_date_group_col:
+            key_cols.append(self.df_date_group_col)
         return DataMetrics(
             df,
             start_dt=start_dt,
@@ -2852,61 +2886,91 @@ class GameStatsDashboard:
         if df_raw.is_empty():
             return fig
 
-        # Filter by group columns BEFORE DataMetrics so metrics are computed on the
-        # correct cohort (e.g. "new" users only, not all users then filtered).
-        df_raw = self._apply_ug_filter_list(df_raw, show_ug_1, col=date_ug_col_1 or None)
-        effective_col2 = date_ug_col_2 if (date_ug_col_2 and date_ug_col_2 != date_ug_col_1) else None
-        if effective_col2:
-            df_raw = self._apply_ug_filter_list(df_raw, show_ug_2, col=effective_col2)
-        dm = self._make_data_metrics(df_raw, start_dt, end_dt, str(date_granularity or "day"))
+        def _vals_with_all(sel: Any) -> List[Any]:
+            vals_raw = sel if isinstance(sel, list) else ([sel] if sel else [])
+            if not vals_raw:
+                return ["all"]
+            vals = []
+            seen = set()
+            for v in vals_raw:
+                key = str(v)
+                if key in seen:
+                    continue
+                seen.add(key)
+                vals.append(v)
+            return vals
 
-        # df_date: display window only (dm._df keeps extra days for retention)
-        df_date = df_raw.filter((pl.col(self.date_col) >= start_dt) & (pl.col(self.date_col) <= end_dt))
-        if df_date.is_empty():
+        effective_col2 = self._effective_ug_col2(date_ug_col_1, date_ug_col_2)
+        ug1_vals = _vals_with_all(show_ug_1)
+        ug2_vals = _vals_with_all(show_ug_2) if effective_col2 else ["all"]
+        clean_ug1 = self._normalize_ug_selection(show_ug_1)
+        clean_ug2 = self._normalize_ug_selection(show_ug_2) if effective_col2 else []
+
+        def _cohort_label(v1: Any, v2: Any) -> str:
+            s1, s2 = str(v1), str(v2)
+            if not effective_col2:
+                return "all" if s1 == "all" else s1
+            if s1 == "all" and s2 == "all":
+                return "all"
+            if s1 == "all":
+                return s2
+            if s2 == "all":
+                return s1
+            return f"{s1}|{s2}"
+
+        # Build one combined (all strategy groups) DataMetrics per selected UG cohort.
+        cohort_entries: List[Tuple[str, DataMetrics, pl.DataFrame]] = []
+        seen_labels: set[str] = set()
+        for v1 in ug1_vals:
+            for v2 in ug2_vals:
+                df_c = self._apply_ug_filter_list(
+                    df_raw,
+                    [] if str(v1) == "all" else [v1],
+                    col=date_ug_col_1 or None,
+                )
+                if effective_col2:
+                    df_c = self._apply_ug_filter_list(
+                        df_c,
+                        [] if str(v2) == "all" else [v2],
+                        col=effective_col2,
+                    )
+                if df_c.is_empty():
+                    continue
+                df_c_date = df_c.filter((pl.col(self.date_col) >= start_dt) & (pl.col(self.date_col) <= end_dt))
+                if df_c_date.is_empty():
+                    continue
+                label = _cohort_label(v1, v2)
+                if label in seen_labels:
+                    continue
+                seen_labels.add(label)
+                dm_c = self._make_data_metrics(
+                    df_c,
+                    start_dt,
+                    end_dt,
+                    str(date_granularity or "day"),
+                    include_group_col=False,
+                )
+                cohort_entries.append((label, dm_c, df_c_date))
+
+        if not cohort_entries:
             return fig
 
-        if self.df_date_group_col == "" or self.df_date_group_col not in df_date.columns:
-            logger.warning(f"Group column {self.df_date_group_col} not found in dataframe")
-            logger.warning(f"Using default group column 'group'")
-            group_col = "group"
-            df_date = df_date.with_columns(pl.lit("total").alias("group"))
-            plot_groups: List[Any] = ["total"]
-            color_map = {
-                f"{s}:{m}": Styles.COLORS[i % len(Styles.COLORS)]
-                for i, m in enumerate(left_metrics + right_metrics)
-                for j, s in enumerate(plot_groups)
-            }
-            line_style_map = {
-                f"{s}:{m}": Styles.LINE_SHAPE[0]
-                for i, m in enumerate(left_metrics + right_metrics)
-                for j, s in enumerate(plot_groups)
-            }
-        else:
-            group_col = self.df_date_group_col
-            uniq_ser = df_date.select(pl.col(group_col).unique()).to_series()
-            raw_vals = [x for x in uniq_ser.to_list() if x is not None]
-            plot_groups = sorted(raw_vals, key=str)
-            if not plot_groups:
-                return fig
-            color_map = {
-                f"{s}:{m}": Styles.COLORS[j % len(Styles.COLORS)]
-                for i, m in enumerate(left_metrics + right_metrics)
-                for j, s in enumerate(plot_groups)
-            }
-            line_style_map = {
-                f"{s}:{m}": Styles.LINE_SHAPE[i % len(Styles.LINE_SHAPE)]
-                for i, m in enumerate(left_metrics + right_metrics)
-                for j, s in enumerate(plot_groups)
-            }
+        color_map = {
+            f"{label}:{m}": Styles.COLORS[j % len(Styles.COLORS)]
+            for i, m in enumerate(left_metrics + right_metrics)
+            for j, (label, _, _) in enumerate(cohort_entries)
+        }
+        line_style_map = {
+            f"{label}:{m}": Styles.LINE_SHAPE[i % len(Styles.LINE_SHAPE)]
+            for i, m in enumerate(left_metrics + right_metrics)
+            for j, (label, _, _) in enumerate(cohort_entries)
+        }
 
         # Accumulate y values per axis for log-scale tick calculation.
         all_y_left: List[float] = []
         all_y_right: List[float] = []
 
-        for strat in plot_groups:
-            df_group = df_date.filter(pl.col(group_col) == strat).sort(self.date_col)
-            if df_group.is_empty():
-                continue
+        for strat, dm, df_group in cohort_entries:
 
             def add_scatter_plot(metrics: Any, secondary_y: bool) -> None:
                 for m in metrics:
@@ -2969,9 +3033,10 @@ class GameStatsDashboard:
             clean = [v for v in (vals or []) if str(v) != "all"]
             return f"({', '.join(str(v) for v in clean)})" if clean else ""
 
-        ug1_lbl = _label_from_vals(show_ug_1)
-        ug2_lbl = _label_from_vals(show_ug_2) if effective_col2 else ""
+        ug1_lbl = _label_from_vals(clean_ug1)
+        ug2_lbl = _label_from_vals(clean_ug2) if effective_col2 else ""
         ug_label = " " + " ".join(p for p in [ug1_lbl, ug2_lbl] if p) if (ug1_lbl or ug2_lbl) else ""
+        # ug_label = (ug_label + " [all groups combined]").strip()
         fig.update_layout(
             title=f"{metrics_label}{ug_label}" if metrics_label else None,
             height=400,
@@ -3205,22 +3270,26 @@ class GameStatsDashboard:
             if df_loaded.is_empty() or self.df_date_group_col not in df_loaded.columns:
                 return go.Figure()
 
-            def _sorted_vals(sel: Any) -> List[str]:
-                return sorted(sel, key=lambda u: ("" if u == "all" else u)) if sel else ["all"]
-
-            g1_vals = _sorted_vals(show_ug_1)
-            # Only apply a second filter when col2 is configured AND different from col1
-            effective_col2 = ug_col_2 if (ug_col_2 and ug_col_2 != ug_col_1) else None
-            g2_vals = _sorted_vals(show_ug_2) if effective_col2 else ["all"]
+            selected_g1 = self._normalize_ug_selection(show_ug_1)
+            effective_col2 = self._effective_ug_col2(ug_col_1, ug_col_2)
+            selected_g2 = self._normalize_ug_selection(show_ug_2) if effective_col2 else []
+            g1_vals = sorted(selected_g1, key=str) if selected_g1 else ["all"]
+            g2_vals = (sorted(selected_g2, key=str) if selected_g2 else ["all"]) if effective_col2 else ["all"]
 
             # Build one DataMetrics per (g1, g2) combination, filtering data before metrics.
             # combo_entries: list of (g1_val, g2_val, metric_df)
             combo_entries: List[Tuple[str, str, pl.DataFrame]] = []
             for g1 in g1_vals:
                 for g2 in g2_vals:
-                    df_c = self._apply_user_group_filter(df_loaded, g1, col=ug_col_1 or None)
-                    if effective_col2:
-                        df_c = self._apply_user_group_filter(df_c, g2, col=effective_col2)
+                    g1_sel = [g1] if g1 != "all" else []
+                    g2_sel = [g2] if (effective_col2 and g2 != "all") else []
+                    df_c, _, _, _ = self._filter_df_for_ug_selection(
+                        df_loaded,
+                        ug_col_1,
+                        effective_col2,
+                        g1_sel,
+                        g2_sel,
+                    )
                     if df_c.is_empty():
                         continue
                     dm_c = self._make_data_metrics(df_c, min_d, max_d, file_gran)
