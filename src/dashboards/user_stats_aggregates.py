@@ -115,6 +115,7 @@ class DataMetrics:
         {
             # user counts
             "num_active_users",
+            "num_new_users",
             "num_active_user_0_rtp",
             "day0_num_users",
             "day1_num_users",
@@ -141,6 +142,7 @@ class DataMetrics:
         {
             # direct group-by aggregates
             "num_active_users",
+            "num_new_users",
             "total_num_bets",
             "total_num_bets_bg",
             "total_num_bets_fg",
@@ -433,6 +435,19 @@ class DataMetrics:
         if ur.is_empty():
             return None
         return ur.group_by(self._key_cols).agg(pl.col("user_id").n_unique().alias("num_active_users"))
+
+    @cached_property
+    def _num_new_users(self) -> Optional[pl.DataFrame]:
+        ur = self._user_rows
+        if ur.is_empty():
+            return None
+        if "user_group" not in ur.columns:
+            return None
+        return (
+            ur.filter(pl.col("user_group") == "new")
+            .group_by(self._key_cols)
+            .agg(pl.col("user_id").n_unique().alias("num_new_users"))
+        )
 
     @cached_property
     def _total_num_bets(self) -> Optional[pl.DataFrame]:

@@ -25,6 +25,7 @@ stats_by_date:
   group1_label: "DAU and Retention"
   group1_columns: [
     "num_active_users",
+    "num_new_users",
     "day0_num_users",
     "day1_num_users",
     "day2_num_users",

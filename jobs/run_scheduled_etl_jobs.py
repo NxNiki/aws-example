@@ -2,7 +2,7 @@
 Run scheduled ETL/report jobs in a fixed sequence.
 
 Intended usage:
-  poetry run python jobs/run_scheduled_etl_jobs.py [--bastion-ip IP]
+  poetry run python jobs/run_scheduled_etl_jobs.py [--skip-daily_report]
 
 This orchestrator is code-level job logic and should live under `jobs/`.
 Infrastructure tooling (EventBridge/ECS/Step Functions/Terraform/CDK) should call
@@ -11,6 +11,7 @@ this script as a single entrypoint.
 
 from __future__ import annotations
 
+import argparse
 import os
 import subprocess
 import sys
@@ -47,6 +48,14 @@ def _run_python_script(script_path: Path, script_args: list[str]) -> bool:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Run scheduled ETL/report jobs.")
+    parser.add_argument(
+        "--skip-daily_report",
+        action="store_true",
+        help="Skip the first job in the scheduled jobs list (operation daily report).",
+    )
+    args = parser.parse_args()
+
     # Set args per script directly in this list, e.g. ["--overwrite"] or ["--bastion-ip", "..."].
     jobs: list[tuple[str, Path, list[str]]] = [
         (
@@ -60,6 +69,11 @@ def main() -> int:
             [],
         ),
         (
+            "ss02_deepdive ETL",
+            JOBS_DIR / "ss02_deepdive" / "etl_game_stats_daily_by_user_group.py",
+            [],
+        ),
+        (
             "fish_hunter ETL",
             JOBS_DIR / "fish_hunter" / "etl_game_stats_daily_by_user.py",
             [],
@@ -70,6 +84,10 @@ def main() -> int:
             [],
         ),
     ]
+
+    if args.skip_daily_report:
+        print("[INFO] --skip-daily_report enabled, skipping first scheduled job.")
+        jobs = jobs[1:]
 
     failures: list[str] = []
 
