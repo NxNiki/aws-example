@@ -100,6 +100,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 END AS ai_group
             FROM
                 user_bets AS t
+            WHERE t.ab_group_id != '{AI_GROUP_ID}'
 
             UNION ALL
 
