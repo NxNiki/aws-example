@@ -17,7 +17,7 @@ from bituslabs_ds.config import (
 from bituslabs_ds.etl import AggCol, DataLoader, ETLScheduler, RedshiftBackend, effective_start_date
 
 # Day boundary: 6 AM Shanghai time (same as fish_hunter)
-DATE_START_HOUR = 6
+DATE_START_HOUR = 0
 
 GAME_ID = "SS02"
 AI_GROUP_ID = "jojpin-9mokha-rexQug"
@@ -145,7 +145,6 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 SUM(t.mathtable_change) AS user_mathtable_change
 
             FROM user_bets_group AS t
-            WHERE t.user_bet_count >= 40
             GROUP BY t.{stats_agg_col}, t.ai_group, t.user_id
         ),
 

@@ -153,7 +153,6 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 SUM(t.mathtable_change) AS user_mathtable_change
 
             FROM user_bets_group AS t
-            WHERE t.user_bet_count >= 40
             GROUP BY t.{stats_agg_col}, t.ai_group, t.user_id
         ),
 
