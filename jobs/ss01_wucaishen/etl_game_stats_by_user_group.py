@@ -1,9 +1,18 @@
+import argparse
 import os
 from textwrap import dedent
 
 import pandas as pd
 
-from bituslabs_ds.config import LOCAL_ROOT, setup_logging
+from bituslabs_ds.config import (
+    DEFAULT_BASTION_IP,
+    LOCAL_ROOT,
+    REDSHIFT_HOST,
+    REDSHIFT_PORT,
+    get_redshift_password,
+    get_redshift_user,
+    setup_logging,
+)
 from bituslabs_ds.etl import DataLoader, RedshiftBackend
 
 DATE_START_HOUR = 6
@@ -27,6 +36,10 @@ def generate_query():
                 t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.created_at) AS delta_t,
                 COUNT(t.user_id) OVER (PARTITION BY t.user_id) AS user_bet_count,
                 CASE
+                    WHEN CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', t.created_at) <= '2026-01-14 18:00:00' THEN 'origin'
+                    ELSE 'updated'
+                    END AS math_policy,
+                CASE
                     WHEN LAG(t.script_id) OVER (PARTITION BY t.user_id ORDER BY t.created_at) IS NULL THEN 0
                     WHEN LAG(t.script_id) OVER (PARTITION BY t.user_id ORDER BY t.created_at) <> t.script_id THEN 1
                     ELSE 0
@@ -34,7 +47,7 @@ def generate_query():
             FROM
                 public.fct_bet_orders AS t
             WHERE
-                CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', t.created_at) >= '2025-12-21 06:00:00'
+                CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', t.created_at) >= '2026-01-01 06:00:00'
             AND t.currency_type = 'CNY'
             AND t.status = 'COMPLETED'
             AND t.game_id = 'SS01'
@@ -44,6 +57,7 @@ def generate_query():
             user_bets_group AS (
                 SELECT
                     t.created_at,
+                    t.math_policy,
                     t.activity_date,
                     t.user_id,
                     t.bet_amount,
@@ -64,6 +78,7 @@ def generate_query():
 
                 SELECT
                     t.created_at,
+                    t.math_policy,
                     t.activity_date,
                     t.user_id,
                     t.bet_amount,
@@ -83,17 +98,21 @@ def generate_query():
             daily_login AS (
                 SELECT
                     t.user_id,
+                    t.math_policy,
+                    t.activity_date,
                     MIN(t.created_at) as first_bet_time,
                     MAX(t.created_at) as last_bet_time,
                     t.ai_group
                 FROM
                     user_bets_group AS t
-                GROUP BY t.user_id, t.ai_group, t.activity_date
+                GROUP BY t.user_id, t.ai_group, t.activity_date, t.math_policy
             ),
 
             user_retention AS (
                 SELECT
                     t1.ai_group,
+                    t1.math_policy,
+                    t1.activity_date,
                     COUNT(DISTINCT t1.user_id) AS day0_num_users,
                     COUNT(DISTINCT t2.user_id) AS day1_num_users,
                     COUNT(DISTINCT t3.user_id) AS day3_num_users
@@ -103,13 +122,15 @@ def generate_query():
                                 ON t2.first_bet_time < DATE_ADD('hour', 48, t1.first_bet_time) AND t2.last_bet_time >= DATE_ADD('hour', 24, t1.first_bet_time) AND t1.user_id = t2.user_id
                         LEFT JOIN daily_login AS t3
                                 ON t3.first_bet_time < DATE_ADD('hour', 96, t1.first_bet_time) AND t3.last_bet_time >= DATE_ADD('hour', 72, t1.first_bet_time) AND t1.user_id = t3.user_id
-                GROUP BY t1.ai_group
+                GROUP BY t1.ai_group, t1.math_policy, t1.activity_date
             ),
 
             user_stats AS (
                 SELECT
                     t.ai_group,
+                    t.math_policy,
                     t.user_id,
+                    t.activity_date,
 
                     -- total number of bets:
                     COUNT(t.user_id) AS user_num_bets,
@@ -132,12 +153,14 @@ def generate_query():
 
                 FROM user_bets_group AS t
                 WHERE t.user_bet_count >= 40
-                GROUP BY t.ai_group, t.user_id
+                GROUP BY t.ai_group, t.user_id, t.math_policy, t.activity_date
             ),
 
             group_stats AS (
                 SELECT
                     t.ai_group,
+                    t.math_policy,
+                    t.activity_date,
 
                     COUNT(DISTINCT t.user_id) AS num_active_users,
                     COUNT(t.user_id) AS total_num_bets,
@@ -153,12 +176,14 @@ def generate_query():
                     SUM(CASE WHEN t.bet_type = 'FREE' THEN t.payout END) AS total_payout_fg
                 FROM user_bets_group AS t
                 WHERE t.user_bet_count >= 40
-                GROUP BY t.ai_group
+                GROUP BY t.ai_group, t.math_policy, t.activity_date
             )
 
         SELECT
             us.ai_group,
+            us.math_policy,
             us.user_id,
+            us.activity_date,
             us.user_mathtable_change,
 
             gs.num_active_users,
@@ -211,13 +236,9 @@ def generate_query():
             us.user_total_payout_bg / NULLIF(us.user_total_bet, 0) AS user_rtp_bg
 
         FROM user_stats AS us
-                INNER JOIN group_stats AS gs
-                            ON us.ai_group = gs.ai_group
-                INNER JOIN user_retention AS ur
-                            ON  us.ai_group = ur.ai_group
-        ORDER BY us.ai_group DESC, us.user_id DESC;
-
-
+            INNER JOIN group_stats AS gs ON us.ai_group = gs.ai_group AND us.math_policy = gs.math_policy AND us.activity_date = gs.activity_date
+            INNER JOIN user_retention AS ur ON  us.ai_group = ur.ai_group AND us.math_policy = ur.math_policy AND us.activity_date = ur.activity_date
+        ORDER BY us.ai_group DESC, us.user_id DESC, ur.math_policy, us.activity_date;
 
         """
     )
@@ -254,13 +275,23 @@ if __name__ == "__main__":
 
     setup_logging(f"{LOCAL_ROOT}/jobs/log", log_filename=os.path.splitext(os.path.basename(__file__))[0] + ".log")
 
+    parser = argparse.ArgumentParser(description="ETL Game Stats Daily by User Group")
+    parser.add_argument(
+        "--bastion-ip",
+        type=str,
+        default=DEFAULT_BASTION_IP,
+        help=f"Bastion IP address for Redshift tunnel (default: {DEFAULT_BASTION_IP})",
+    )
+    args = parser.parse_args()
+
     redshift_loader = DataLoader(
         backend=RedshiftBackend(
-            host="production-redshift-cluster.cwiqzcm13zcn.ap-southeast-1.redshift.amazonaws.com",
+            host=REDSHIFT_HOST,
             database="slot-machine",
-            user="anaylsis_user",
-            password="oZ4ztMx0yEXPLbJL733L",
-            port=5439,
+            user=get_redshift_user(),
+            password=get_redshift_password(),
+            port=REDSHIFT_PORT,
+            bastion_ip=args.bastion_ip,
         )
     )
 

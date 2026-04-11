@@ -1,0 +1,42 @@
+{
+  "family": "etl-operation-daily-report",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "etl",
+      "image": "ECR_IMAGE_URI",
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/etl-operation-daily-report",
+          "awslogs-region": "us-west-2"
+        }
+      },
+      "command": [
+        "jobs/operation_daily_report/run_daily_report.py",
+        "--bastion-ip",
+        "13.215.212.244",
+        "--send-slack"
+      ],
+      "secrets": [
+        {
+          "name": "BASTION_KEY_CONTENT",
+          "valueFrom": "arn:aws:secretsmanager:us-west-2:ACCOUNT_ID:secret:etl/bastion-key"
+        },
+        {
+          "name": "SLACK_BOT_TOKEN",
+          "valueFrom": "arn:aws:secretsmanager:us-west-2:ACCOUNT_ID:secret:etl/slack-bot-token"
+        },
+        {
+          "name": "SLACK_CHANNEL_ID",
+          "valueFrom": "arn:aws:secretsmanager:us-west-2:ACCOUNT_ID:secret:etl/slack-channel-id"
+        }
+      ]
+    }
+  ]
+}

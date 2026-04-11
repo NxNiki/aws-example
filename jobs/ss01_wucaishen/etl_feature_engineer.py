@@ -30,7 +30,7 @@
 -- withdraw: -deposit if it is negative.
 
 -- aggregate 40 consecutive raw bet rounds in the same session_group (free game aggregated into the previous base game
--- so won't be counted)
+-- so won't be counted). agg_group = ROUND((row_number - 1) / 40), so the last group in a session may have < 40 rows.
 -- and get statistics such as mean, median, std, and:
 -- accumulative positive delta bet amount
 -- accumulative negative delta bet amount
@@ -52,12 +52,21 @@
 
 """
 
+import argparse
 import os
 from textwrap import dedent
 
 import pandas as pd
 
-from bituslabs_ds.config import LOCAL_ROOT, setup_logging
+from bituslabs_ds.config import (
+    DEFAULT_BASTION_IP,
+    LOCAL_ROOT,
+    REDSHIFT_HOST,
+    REDSHIFT_PORT,
+    get_redshift_password,
+    get_redshift_user,
+    setup_logging,
+)
 from bituslabs_ds.etl import DataLoader, RedshiftBackend
 
 DATE_START = "2025-11-24 00:00:00"
@@ -402,7 +411,7 @@ def generate_query():
                 MAX(t.profit) AS profit_max,
                 SUM(CASE WHEN t.profit > 0 THEN t.profit ELSE 0 END) AS accum_pos_profit,
                 SUM(CASE WHEN t.profit < 0 THEN t.profit ELSE 0 END) AS accum_neg_profit,
-                SUM(CASE WHEN t.profit > 0 THEN 1 END) * 1.0 / NULLIF(COUNT(t.user_id), 0) AS profit_rate,
+                SUM(CASE WHEN t.profit > 0 THEN 1 ELSE 0 END) * 1.0 / NULLIF(COUNT(t.user_id), 0) AS profit_rate,
                 AVG(t.delta_payout) AS delta_payout_avg,
                 STDDEV(t.delta_payout) AS delta_payout_std,
                 MIN(t.delta_payout) AS delta_payout_min,
@@ -432,6 +441,8 @@ def generate_query():
                 t.user_id,
                 t.session_group,
                 t.agg_group
+            -- Only keep groups with exactly SESSION_LENGTH (40) rows. Incomplete "tail" groups are dropped,
+            -- so unique (user_id, session_group, agg_group) in ss01_features_grouped <= ss01_features_enriched.
             HAVING COUNT(t.user_id) = {SESSION_LENGTH}
         )
 
@@ -552,27 +563,27 @@ def generate_query():
         b.accum_withdraw,
         b.accum_withdraw * 1.0 / NULLIF(b.bet_amount_avg, 0) AS accum_withdraw_ratio,
         -- streaks
-        b.streak_avg,
-        p10.streak_p25,
-        p10.streak_median,
-        p10.streak_p75,
-        b.streak_std,
-        b.streak_min,
-        b.streak_max,
-        b.win_streak_avg,
-        p11.win_streak_p25,
-        p11.win_streak_median,
-        p11.win_streak_p75,
-        b.win_streak_std,
-        b.win_streak_min,
-        b.win_streak_max,
-        b.lose_streak_avg,
-        p12.lose_streak_p25,
-        p12.lose_streak_median,
-        p12.lose_streak_p75,
-        b.lose_streak_std,
-        b.lose_streak_min,
-        b.lose_streak_max
+        COALESCE(b.streak_avg, 0) AS streak_avg,
+        COALESCE(p10.streak_p25, 0) AS streak_p25,
+        COALESCE(p10.streak_median, 0) AS streak_median,
+        COALESCE(p10.streak_p75, 0) AS streak_p75,
+        COALESCE(b.streak_std, 0) AS streak_std,
+        COALESCE(b.streak_min, 0) AS streak_min,
+        COALESCE(b.streak_max, 0) AS streak_max,
+        COALESCE(b.win_streak_avg, 0) AS win_streak_avg,
+        COALESCE(p11.win_streak_p25, 0) AS win_streak_p25,
+        COALESCE(p11.win_streak_median, 0) AS win_streak_median,
+        COALESCE(p11.win_streak_p75, 0) AS win_streak_p75,
+        COALESCE(b.win_streak_std, 0) AS win_streak_std,
+        COALESCE(b.win_streak_min, 0) AS win_streak_min,
+        COALESCE(b.win_streak_max, 0) AS win_streak_max,
+        COALESCE(b.lose_streak_avg, 0) AS lose_streak_avg,
+        COALESCE(p12.lose_streak_p25, 0) AS lose_streak_p25,
+        COALESCE(p12.lose_streak_median, 0) AS lose_streak_median,
+        COALESCE(p12.lose_streak_p75, 0) AS lose_streak_p75,
+        COALESCE(b.lose_streak_std, 0) AS lose_streak_std,
+        COALESCE(b.lose_streak_min, 0) AS lose_streak_min,
+        COALESCE(b.lose_streak_max, 0) AS lose_streak_max
     FROM stats_base AS b
             JOIN perc_delta_t AS p1
                 ON b.user_id = p1.user_id
@@ -634,16 +645,11 @@ def generate_query():
     return query_raw_stats, query_grouped_stats
 
 
-def execute_query(redshift_loader, output_file) -> None:
+def execute_query(redshift_loader, output_file, query) -> None:
 
-    file_path = f"{LOCAL_ROOT}/jobs/output_ss01_wucaishen/{output_file}_enriched.parquet"
-    query_raw_stats, query_grouped_stats = generate_query()
-    df_rs = redshift_loader.query_to_df(query=query_raw_stats, local_cache=file_path, reload=True)
+    file_path = f"{LOCAL_ROOT}/jobs/output_ss01_wucaishen/{output_file}.parquet"
+    df_rs = redshift_loader.query_to_df(query=query, local_cache=file_path, reload=True)
 
-    print(df_rs.head(5))
-
-    file_path = f"{LOCAL_ROOT}/jobs/output_ss01_wucaishen/{output_file}_grouped.parquet"
-    df_rs = redshift_loader.query_to_df(query=query_grouped_stats, local_cache=file_path, reload=True)
     print(df_rs.head(5))
 
 
@@ -651,16 +657,28 @@ if __name__ == "__main__":
 
     setup_logging(f"{LOCAL_ROOT}/jobs/log", log_filename=os.path.splitext(os.path.basename(__file__))[0] + ".log")
 
+    parser = argparse.ArgumentParser(description="ETL Feature Engineer for SS01 Wucaishen")
+    parser.add_argument(
+        "--bastion-ip",
+        type=str,
+        default=DEFAULT_BASTION_IP,
+        help=f"Bastion IP address for Redshift tunnel (default: {DEFAULT_BASTION_IP})",
+    )
+    args = parser.parse_args()
+
     redshift_loader = DataLoader(
         backend=RedshiftBackend(
-            host="production-redshift-cluster.cwiqzcm13zcn.ap-southeast-1.redshift.amazonaws.com",
+            host=REDSHIFT_HOST,
             database="slot-machine",
-            user="anaylsis_user",
-            password="oZ4ztMx0yEXPLbJL733L",
-            port=5439,
+            user=get_redshift_user(),
+            password=get_redshift_password(),
+            port=REDSHIFT_PORT,
+            bastion_ip=args.bastion_ip,
         )
     )
 
-    execute_query(redshift_loader, "ss01_features")
+    query_raw_stats, query_grouped_stats = generate_query()
+    execute_query(redshift_loader, "ss01_features_enriched", query_raw_stats)
+    execute_query(redshift_loader, "ss01_features_grouped", query_grouped_stats)
 
     redshift_loader.close()

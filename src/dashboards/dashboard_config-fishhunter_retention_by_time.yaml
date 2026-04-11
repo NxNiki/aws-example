@@ -1,11 +1,11 @@
-# WIP... Not finished yet.
+# WIP... 
 
 title: "Fish Hunter Analytics (retention by time and fish type)"
 
 stats_by_date: 
   files: 
     all_time: [
-      "/Users/niuxin/Documents/aws-example/jobs/output_fish_hunter/retention_by_time_fishtype.parquet",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/retention_by_time_fishtype.parquet",
     ]
 
     # week: [

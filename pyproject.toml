@@ -4,54 +4,93 @@ version = "0.1.0"
 description = "A data science project using AWS SageMaker, PySpark, and Scikit-learn"
 authors = ["Xin Niu <michaelniki1988@.gmail.com>"]
 readme = "README.md"
-packages = [{ include = "bituslabs_ds", from = "src" }]
+packages = [
+    { include = "bituslabs_ds", from = "src" },
+    { include = "dashboards", from = "src" },
+]
 
 [tool.poetry.dependencies]
-python = ">=3.9.0.0,<3.13"
+python = ">=3.10.0.0,<3.13"
 numpy = "^1.26.0"
-pandas = "2.1.0"
-skl2onnx = "1.16.0"
-onnx = "^1.17.0"
-scipy = "^1.12.0"
-scikit-learn = "^1.5.0"
-torch = "^2.8.0"
-torchvision = "^0.23.0"
-sagemaker = "2.247.0"
-smdebug = "1.0.34"
+pandas = "^2.2.0"
 boto3 = "1.38.22"
 pyarrow = "^14.0.1"
 fastparquet = "2024.11.0"
-openpyxl = "^3.1.5"
-pingouin = "^0.5.1"
-statannotations = "^0.7.1"
-matplotlib = "^3.9.0"
-seaborn = "^0.13.2"
-diptest = "^0.10.0"
+pyyaml = "^6.0.2"
+python-dotenv = "^1.2.1"
 # stable_baselines3 = "^2.2.1"
 # gymnasium = "^0.29.0"
 # imitation = "^1.0.1"
 # giotto-tda = "^0.6.0"
-pyyaml = "^6.0.2"
-pyspark = "3.0.0" # do not build package with pyspark when submit job to AWS EMR
+
+[tool.poetry.group.ds]
+optional = true
+[tool.poetry.group.ds.dependencies]
+scipy = "^1.12.0"
+cca-zoo = "^3.0.0"
+diptest = "^0.10.0"
+pingouin = "^0.5.1"
+openpyxl = "^3.1.5"
+matplotlib = "^3.9.0"
+seaborn = "^0.13.2"
+statannotations = "^0.7.1"
+pymc = "^5.10"
+arviz = "^0.18.0"
+
+[tool.poetry.group.ml]
+optional = true
+[tool.poetry.group.ml.dependencies]
+scikit-learn = "^1.5.0"
+sagemaker = "2.247.0"
+skl2onnx = "1.16.0"
+onnx = "^1.17.0"
+smdebug = "1.0.34"
+
+[tool.poetry.group.dl]
+optional = true
+[tool.poetry.group.dl.dependencies]
+torch = "^2.10.0"
+torchvision = "^0.25.0"
+torchaudio = "^2.10.0" 
+lightning = "^2.4.0" # Modern standard for organizing PyTorch code
+
+[tool.poetry.group.dashboard]
+optional = true
+[tool.poetry.group.dashboard.dependencies]
+matplotlib = "^3.9.0"
+plotly = "^6.3.1"
+dash = "^3.2.0"
+polars = "^1.38.1"  # avoid 1.38.0 (yanked on PyPI)
+gunicorn = "^22.0"  # production WSGI server; replaces Flask dev server in Docker
+
+[tool.poetry.group.etl]
+optional = true 
+[tool.poetry.group.etl.dependencies]
+redshift_connector = "^2.0.0"
+paramiko = "^4.0.0"
+awswrangler = "^3.7.0"
+slack-sdk = "^3.27.0"
+
+[tool.poetry.group.spark]
+optional = true
+[tool.poetry.group.spark.dependencies]
+pyspark = "3.5.0"  # do not build package with pyspark when submit job to AWS EMR
 
 [tool.poetry.group.dev.dependencies]
-jupyter = "^1.0"
 isort = "^6.0.1"
 black = "^24.3"
 mypy = "^1.10"
 flake8 = "^7.0"
 pre-commit = "^4.2.0"
 pyjanitor = "^0.31.0"
-ydata-profiling = "^4.16.1"
-pyspark-stubs = "^3.0.0.post3"
-bokeh = "^3.4.3"
+# pyspark-stubs = "^3.0.0.post3"
 types-pyyaml = "^6.0.12.20250822"
+types-paramiko = "^3.4.0"
+jupyter = "^1.0"
+bokeh = "^3.4.3"
+ydata-profiling = "^4.16.1"
 plotly = "^6.3.1"
 dash = "^3.2.0"
-redshift_connector = "^2.0.0"
-paramiko = "^4.0.0"
-types-paramiko = "^3.4.0"
-awswrangler = "^3.7.0"
 
 [tool.poetry.group.test.dependencies]
 # Core testing framework
@@ -92,10 +131,14 @@ exclude = '''
 )/
 '''
 
+[tool.pyright]
+# Resolve `from dashboards.*` / `from bituslabs_ds.*` without sys.path hacks
+extraPaths = ["src"]
+
 [tool.isort]
 profile = "black"
 line_length = 120
-known_first_party = ["bituslabs_ds"]
+known_first_party = ["bituslabs_ds", "dashboards"]
 known_third_party = ["numpy", "pandas"]
 combine_as_imports = true
 include_trailing_comma = true

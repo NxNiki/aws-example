@@ -1,11 +1,12 @@
+import argparse
 import os
 from textwrap import dedent
 
 from bituslabs_ds.config import LOCAL_ROOT, S3_BUCKET, setup_logging
-from bituslabs_ds.etl import AthenaBackend, DataLoader
+from bituslabs_ds.etl import AthenaBackend, DataLoader, ETLScheduler
 
 
-def generate_query(stats_agg_col):
+def generate_query(stats_agg_col: str, start_date: str) -> str:
     query = dedent(
         f"""
         WITH user_bets AS (
@@ -32,6 +33,9 @@ def generate_query(stats_agg_col):
             t.currency = 'CNY'
             AND gametype = 'SB28' 
             AND flag != -8.0
+            AND date_trunc('day', from_unixtime(t.billtime / 1.0E9)
+                AT TIME ZONE 'UTC' 
+                AT TIME ZONE 'Asia/Shanghai' - INTERVAL '6' HOUR) > CAST('{start_date}' AS timestamp)
         ),
 
         daily_login AS (
@@ -109,9 +113,20 @@ def generate_query(stats_agg_col):
             WHERE t.user_bet_count >= 40
             GROUP BY t.{stats_agg_col}
         )
+        ,
+
+        group_user_rtp_median AS (
+            SELECT
+                t.{stats_agg_col},
+                PERCENTILE_CONT(0.50) WITHIN GROUP (
+                    ORDER BY t.user_total_payout * 1.0 / NULLIF(t.user_total_bet, 0)
+                ) AS user_rtp_median
+            FROM user_stats AS t
+            GROUP BY t.{stats_agg_col}
+        )
 
         SELECT
-            DATE_ADD('year', 1, CAST(us.{stats_agg_col} AS DATE)) AS "activity_date",
+            CAST(us.{stats_agg_col} AS DATE) AS activity_date,
             'PA' AS ai_group,
             us.user_id,
             0 AS user_mathtable_change,
@@ -158,6 +173,8 @@ def generate_query(stats_agg_col):
 
             -- RTP (Return to Player) Calculations (Fix: NULLIF for bet amounts AND RTP numerator error)
             gs.total_payout / NULLIF(gs.total_bet, 0) AS rtp,
+            gm.user_rtp_median,
+            gm.user_rtp_median / NULLIF(gs.total_payout / NULLIF(gs.total_bet, 0), 0) AS user_rtp_ultilization_ratio,
             -- total bet for base game is same to total bet and free game has 0 bet amount:
             gs.total_payout_bg / NULLIF(gs.total_bet, 0) AS rtp_bg,
             us.user_total_payout / NULLIF(us.user_total_bet, 0) AS user_rtp,
@@ -166,6 +183,8 @@ def generate_query(stats_agg_col):
         FROM user_stats AS us
         INNER JOIN group_stats AS gs
             ON us.{stats_agg_col} = gs.{stats_agg_col} 
+        LEFT JOIN group_user_rtp_median AS gm
+            ON us.{stats_agg_col} = gm.{stats_agg_col}
         INNER JOIN user_retention AS ur
             ON us.{stats_agg_col} = ur.{stats_agg_col} 
         ORDER BY us.{stats_agg_col} DESC, us.user_id DESC;
@@ -176,23 +195,66 @@ def generate_query(stats_agg_col):
 
 
 def execute_query(output_file, stats_agg_col):
-    data_loader = DataLoader(
-        backend=AthenaBackend(
-            database="agfish",
-            output_location=f"s3://{S3_BUCKET}/ds-data-ss01/{output_file}",
-        )
-    )
+
     file_path = f"{LOCAL_ROOT}/jobs/output_ss01_wucaishen/{output_file}.parquet"
     query = generate_query(stats_agg_col)
     df_rs = data_loader.query_to_df(query=query, local_cache=file_path, reload=True)
     print(df_rs)
-    data_loader.close()
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="ETL Game Stats Daily by User Group (Athena)")
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        default=False,
+        help="Overwrite existing S3/local output (full reload from default start date)",
+    )
+    args = parser.parse_args()
+
+    data_loader = DataLoader(
+        backend=AthenaBackend(
+            database="agfish",
+            output_location=f"s3://{S3_BUCKET}/ds-data-pa_wucaishen/",
+        )
+    )
 
     setup_logging(f"{LOCAL_ROOT}/jobs/log", log_filename=os.path.splitext(os.path.basename(__file__))[0] + ".log")
 
-    execute_query("stats_by_date_user_pa", "activity_date")
-    execute_query("stats_by_week_user_pa", "activity_week")
-    execute_query("stats_by_month_user_pa", "activity_month")
+    # Initialize Scheduler
+    scheduler = ETLScheduler(
+        data_loader=data_loader,
+        storage_root=f"{LOCAL_ROOT}/jobs/output_ss01_wucaishen",
+        lookback_days=3,
+        overwrite=args.overwrite,
+    )
+
+    scheduler.run_incremental_job(
+        job_name="daily_stats_pa",
+        query_func=lambda start_date: generate_query("activity_date", start_date),
+        key_cols=["activity_date", "user_id", "ai_group"],
+        date_col="activity_date",
+        partition_level="none",
+    )
+
+    # Overrides to 7 days because weekly data takes longer to settle
+    scheduler.run_incremental_job(
+        job_name="weekly_stats_pa",
+        query_func=lambda start_date: generate_query("activity_week", start_date),
+        key_cols=["activity_date", "user_id", "ai_group"],
+        date_col="activity_date",  # Always check max activity_date
+        partition_level="none",
+        lookback=7,
+    )
+
+    # Overrides to 31 days because weekly data takes longer to settle
+    scheduler.run_incremental_job(
+        job_name="monthly_stats_pa",
+        query_func=lambda start_date: generate_query("activity_month", start_date),
+        key_cols=["activity_date", "user_id", "ai_group"],
+        date_col="activity_date",  # Always check max activity_date
+        partition_level="none",
+        lookback=31,
+    )
+
+    data_loader.close()

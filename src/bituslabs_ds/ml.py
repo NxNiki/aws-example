@@ -19,7 +19,8 @@ from joblib import parallel_backend
 from scipy.stats import skew
 from skl2onnx import convert_sklearn
 from skl2onnx.common.data_types import FloatTensorType
-from sklearn.cluster import KMeans
+from sklearn.base import ClusterMixin
+from sklearn.cluster import AgglomerativeClustering, KMeans
 from sklearn.compose import ColumnTransformer
 from sklearn.decomposition import PCA
 from sklearn.feature_selection import VarianceThreshold
@@ -77,11 +78,15 @@ class ClusterAnalysisPipeline:
     def _setup_directories(self) -> None:
         """Create necessary directories for the project."""
         self.work_dir = LOCAL_ROOT / "jobs" / self._config["work_dir"]
-        self.output_path = self.work_dir / self._config["project_name"]
+        self.output_path = self.work_dir / self._config["project_name"] / self.cluster_model
 
         # Create directories
         for dir_name in ["output", "features", "figures", "models"]:
             os.makedirs(self.output_path / dir_name, exist_ok=True)
+
+    @property
+    def cluster_model(self):
+        return self._config["cluster_analysis"].get("model", "kmeans")
 
     @property
     def key_features(self):
@@ -144,8 +149,8 @@ class ClusterAnalysisPipeline:
         )
 
     @property
-    def run_fit_cluster_model(self):
-        return self._config["pipeline"]["fit_cluster_model"]
+    def run_test_model(self):
+        return self._config["pipeline"]["test_model"]
 
     @property
     def run_attach_cluster_label(self):
@@ -383,9 +388,29 @@ class ClusterAnalysisPipeline:
         plt.xlabel("Importance Score", fontsize=12)
         plt.ylabel("Feature", fontsize=12)
         plt.grid(axis="x", linestyle="--", alpha=0.6)
-        plt.tight_layout(rect=[0.1, 0, 1, 1])  # Increase left margin to show all y-tick labels
+        plt.tight_layout(rect=(0.1, 0, 1, 1))  # Increase left margin to show all y-tick labels
         plt.savefig(self.output_path / "figures" / "Feature Importance Rank.png")
         plt.close()
+
+    def create_cluster_model(self, n_clusters: int) -> ClusterMixin:
+        if self.cluster_model == "kmeans":
+            return KMeans(
+                n_clusters=n_clusters,
+                random_state=self._config["cluster_analysis"]["random_state"],
+                n_init=self._config["cluster_analysis"].get("n_init", 10),
+            )
+        elif self.cluster_model == "hierarchical":
+            # AgglomerativeClustering does not use random_state or n_init
+            return AgglomerativeClustering(
+                n_clusters=n_clusters, linkage=self._config["cluster_analysis"].get("linkage", "ward")
+            )
+        else:
+            logger.critical(f"{self.cluster_model} not supported, fallback to kmeans")
+            return KMeans(
+                n_clusters=n_clusters,
+                random_state=self._config["cluster_analysis"]["random_state"],
+                n_init=self._config["cluster_analysis"].get("n_init", 10),
+            )
 
     def create_clustering_pipeline(
         self,
@@ -415,13 +440,13 @@ class ClusterAnalysisPipeline:
             pipeline_steps.append(("power_transform", preprocessor))
 
         # avoid robust scaler as it gives werid data pattern and destroys clustering analyis.
-        pipeline_steps.extend(
-            [("scaler", self.get_scaler()), ("cluster", KMeans(n_clusters=n_clusters, random_state=42))]
-        )
+        cluster_model = self.create_cluster_model(n_clusters)
+        pipeline_steps.extend([("scaler", self.get_scaler()), ("cluster", cluster_model)])
         pipeline = Pipeline(pipeline_steps)
 
         logger.info(f"Created clustering pipeline with {len(pipeline_steps)} steps")
         logger.info(f"Pipeline steps: {[step[0] for step in pipeline_steps]}")
+        logger.info(f"clustering algorithm: {self.cluster_model}")
         logger.info(f"n_clusters: {n_clusters}")
 
         return pipeline
@@ -430,13 +455,15 @@ class ClusterAnalysisPipeline:
         self,
         data: pd.DataFrame,
         features_ordered_by_importance: List[str],
-    ) -> Dict[Any, Dict[Any, Any]]:
+    ) -> Tuple[Dict[Any, Dict[Any, Any]], List[float], List[float]]:
         """Run elbow method to determine optimal number of clusters."""
 
         k_range = self._config["elbow_method"]["k_range"]
         n_features = self._config["elbow_method"]["top_features"]
         cluster_indices = {}
-        data = clip_outliers(data[features_ordered_by_importance], self.clip_threshold[0], self.clip_threshold[1])
+        data, upper_bounds, lower_bounds = clip_outliers(
+            data[features_ordered_by_importance], self.clip_threshold[0], self.clip_threshold[1]
+        )
 
         for df_x, n in column_iterator(data, features_ordered_by_importance, n_features):
             cluster_indices_by_k = {}
@@ -450,7 +477,10 @@ class ClusterAnalysisPipeline:
                     n_clusters=k, transform_columns_index=transform_columns_index
                 )
                 labels = cluster_pipeline.fit_predict(df_x)
-                inertia_val = cluster_pipeline.named_steps["cluster"].inertia_
+                if self.cluster_model == "kmeans":
+                    inertia_val = cluster_pipeline.named_steps["cluster"].inertia_
+                else:
+                    inertia_val = np.nan
                 x_transformed = cluster_pipeline[:-1].transform(df_x)
                 silhouette = calculate_silhouette_score(x_transformed, labels)
                 cluster_counts = np.bincount(labels)
@@ -474,7 +504,9 @@ class ClusterAnalysisPipeline:
             cluster_indices[n] = cluster_indices_by_k
             self._plot_elbow_method(k_range, inertia, silhouette_scores, cluster_sizes, n)
 
-        return cluster_indices
+        save_list(upper_bounds, str(self.output_path / "features" / "upper_bounds.json"))
+        save_list(lower_bounds, str(self.output_path / "features" / "lower_bounds.json"))
+        return cluster_indices, upper_bounds, lower_bounds
 
     def _plot_elbow_method(self, k_range, inertia, silhouette_scores, cluster_sizes, n_features):
         """Plot elbow method results."""
@@ -532,7 +564,9 @@ class ClusterAnalysisPipeline:
         """Run K-means clustering analysis using pipeline approach."""
 
         feature_columns = features_ordered_by_importance[: self.n_top_features]
-        clustering_data = clip_outliers(data[feature_columns], self.clip_threshold[0], self.clip_threshold[1])
+        # don't use clip_outliers as this is skipped in deployment:
+        # clustering_data = clip_outliers(data[feature_columns], self.clip_threshold[0], self.clip_threshold[1])
+        clustering_data = data[feature_columns]
         transform_columns, transform_columns_index = self.get_transform_columns(clustering_data)
         pipeline = self.create_clustering_pipeline(
             n_clusters=self.n_clusters,
@@ -545,12 +579,15 @@ class ClusterAnalysisPipeline:
         logger.info(f"Cluster sizes: {cluster_counts}")
 
         # Save cluster centers
-        centroids_df = pd.DataFrame(pipeline.named_steps["cluster"].cluster_centers_, columns=feature_columns)
-        logger.info(f"Cluster centers:\n{centroids_df}")
-        centroids_df.to_csv(
-            self.output_path / "models" / f"cluster_centers_standardized_{self.n_top_features}_k_{self.n_clusters}.csv",
-            index=False,
-        )
+        if self.cluster_model == "kmeans":
+            centroids_df = pd.DataFrame(pipeline.named_steps["cluster"].cluster_centers_, columns=feature_columns)
+            logger.info(f"Cluster centers:\n{centroids_df}")
+            centroids_df.to_csv(
+                self.output_path
+                / "models"
+                / f"cluster_centers_standardized_{self.n_top_features}_k_{self.n_clusters}.csv",
+                index=False,
+            )
 
         # Save cluster labels:
         data_with_cluster_label = data[self.merge_features].copy()
@@ -579,6 +616,26 @@ class ClusterAnalysisPipeline:
         )
 
         return cluster_label, pipeline
+
+    def model_inference(
+        self, data: pd.DataFrame, features_ordered_by_importance: List[str], model_path: Optional[str] = None
+    ) -> np.ndarray:
+        """Run model inference on new data."""
+        pipeline = self.load_trained_model(model_path)
+        cluster_labels = pipeline.predict(data[features_ordered_by_importance])
+
+        unique_labels, counts = np.unique(cluster_labels, return_counts=True)
+        for label, count in zip(unique_labels, counts):
+            logger.info(f"Cluster {label}: {count} samples")
+
+        data["cluster"] = cluster_labels
+        for cluster in np.unique(cluster_labels):
+            print(f"save cluster: {cluster}")
+            data.loc[data["cluster"] == cluster, :].drop(columns="cluster").to_csv(
+                f"{self.output_path}/output/grouped_data_2025_cluster_{cluster}.csv", index=False
+            )
+
+        return cluster_labels
 
     def plot_pca(
         self,
@@ -653,10 +710,24 @@ class ClusterAnalysisPipeline:
             ax.fill(angles, vals, alpha=0.2)
 
         ax.set_xticks(angles[:-1])
-        ax.set_xticklabels(categories, fontsize=12)
-        plt.title("Cluster Feature Means (Standardized) - Radar Chart")
+        ax.set_xticklabels(categories, fontsize=16)
+        # Align labels by side (same approach as make_radar_plot in simulation_report):
+        # left side → ha="right" so text extends left; right side → ha="left" so text extends right;
+        # top and bottom → do not change.
+        top_bottom_band = np.pi / 12  # no change when angle near pi/2 (top) or 3*pi/2 (bottom)
+        for label, angle_rad in zip(ax.get_xticklabels(), angles[:-1]):
+            in_top = np.pi / 2 - top_bottom_band <= angle_rad <= np.pi / 2 + top_bottom_band
+            in_bottom = 3 * np.pi / 2 - top_bottom_band <= angle_rad <= 3 * np.pi / 2 + top_bottom_band
+            if in_top or in_bottom:
+                continue
+            if np.pi / 2 < angle_rad < 3 * np.pi / 2:  # left side → text extends left
+                label.set_horizontalalignment("right")
+            else:  # right side → text extends right
+                label.set_horizontalalignment("left")
+            label.set_y(label.get_position()[1] + 0.05)  # slight radial nudge outward
+        plt.title("Cluster Feature Means (Standardized) - Radar Chart", pad=28, fontsize=14)
         plt.legend(loc="upper right")
-        plt.subplots_adjust(left=0.1, bottom=0.1)
+        plt.subplots_adjust(left=0.1, bottom=0.1, top=0.92)
         plt.savefig(
             self.output_path
             / "figures"
@@ -684,16 +755,18 @@ class ClusterAnalysisPipeline:
                 logger.info(f"Cluster {cluster} feature statistics:")
                 logger.info(stats[["mean", "std", "min", "25%", "50%", "75%", "max"]])
 
-    def load_trained_model(self) -> KMeans:
+    def load_trained_model(self, model_path: Optional[str] = None) -> KMeans:
         """Load the trained K-means model."""
-        model_path = self.output_path / "models" / self.pickle_model_name
+        if model_path is None:
+            model_path = self.output_path / "models" / self.pickle_model_name
+
         if not os.path.exists(model_path):
             raise ValueError("clustering model is not trained!")
         return joblib.load(model_path)
 
-    def predict_clusters(self, data: pd.DataFrame, features: List[str]) -> np.ndarray:
+    def predict_clusters(self, data: pd.DataFrame, features: List[str], model_path: Optional[str] = None) -> np.ndarray:
         """Predict clusters for new data using trained model."""
-        model = self.load_trained_model()
+        model = self.load_trained_model(model_path)
         return model.predict(data[features])
 
     def save_pipeline_model(self, pipeline: Pipeline) -> None:
@@ -702,19 +775,21 @@ class ClusterAnalysisPipeline:
         pickle_model_name = self.pickle_model_name
         joblib.dump(pipeline, self.output_path / "models" / pickle_model_name)
 
-        # Save ONNX model with version from config
-        onnx_opset_version = self.onnx_opset_version
-        logger.info(f"Using ONNX opset version: {onnx_opset_version}")
-        initial_type = [("float_input", FloatTensorType([None, self.n_top_features]))]
-        onnx_model = convert_sklearn(pipeline, initial_types=initial_type, target_opset=onnx_opset_version)
-
-        onnx_model_name = self.onnx_model_name
-        with open(self.output_path / "models" / onnx_model_name, "wb") as f:
-            f.write(onnx_model.SerializeToString())
-
         logger.info(f"Clustering pipeline model saved to: {self.output_path / 'models'}")
         logger.info(f"Pickle model saved as: {pickle_model_name}")
-        logger.info(f"ONNX model saved as: {onnx_model_name}")
+
+        # Save ONNX model with version from config
+        if self.cluster_model == "kmeans":
+            onnx_opset_version = self.onnx_opset_version
+            logger.info(f"Using ONNX opset version: {onnx_opset_version}")
+            initial_type = [("float_input", FloatTensorType([None, self.n_top_features]))]
+            onnx_model = convert_sklearn(pipeline, initial_types=initial_type, target_opset=onnx_opset_version)
+
+            onnx_model_name = self.onnx_model_name
+            with open(self.output_path / "models" / onnx_model_name, "wb") as f:
+                f.write(onnx_model.SerializeToString())
+
+            logger.info(f"ONNX model saved as: {onnx_model_name}")
 
     def set_n_clusters(self, pipeline: Pipeline, n_clusters: int) -> Pipeline:
         """
@@ -755,7 +830,16 @@ class ClusterAnalysisPipeline:
         return cluster_labels
 
     def attach_cluster_label(self, reload: bool = False):
+        """Attach cluster labels to enriched (attach) data and save per-cluster parquet files.
 
+        Row removal can happen in two places:
+        1. load_attach_data(): keeps only (merge_features) groups with exactly session_length rows,
+           so incomplete groups are already dropped before this method.
+        2. Merge with cluster labels: cluster labels come from clustering output, which used
+           cluster_data after dropna(how='any'). So any attach_data key that was dropped in
+           clustering (e.g. due to NaN in cluster features) has no label; with how='inner'
+           those rows are dropped here.
+        """
         cluster_column = "cluster_label"
         data_with_cluster_label = pd.read_parquet(
             self.output_path
@@ -768,6 +852,27 @@ class ClusterAnalysisPipeline:
         attach_data = self.load_attach_data(reload=reload)
         feature_columns = attach_data.select_dtypes(include="number").columns.to_list()
 
+        # Log key counts to explain row removal
+        attach_keys = attach_data[self.merge_features].drop_duplicates()
+        label_keys = data_with_cluster_label[self.merge_features].drop_duplicates()
+        keys_only_in_attach = attach_keys.merge(label_keys, on=self.merge_features, how="left", indicator=True)
+        keys_only_in_attach = keys_only_in_attach[keys_only_in_attach["_merge"] == "left_only"]
+        n_keys_attach = len(attach_keys)
+        n_keys_label = len(label_keys)
+        n_keys_dropped = len(keys_only_in_attach)
+        n_rows_dropped = attach_data.merge(
+            keys_only_in_attach[self.merge_features], on=self.merge_features, how="inner"
+        ).shape[0]
+        logger.info(
+            f"attach_cluster_label: attach_data keys={n_keys_attach}, cluster_label keys={n_keys_label}, "
+            f"keys in attach but not in labels={n_keys_dropped}, enriched rows dropped by merge={n_rows_dropped}"
+        )
+        if n_keys_dropped > 0:
+            logger.warning(
+                f"Dropped {n_keys_dropped} (user_id, session_group, agg_group) groups "
+                f"({n_rows_dropped} rows) because they have no cluster label (e.g. were removed by dropna before clustering)."
+            )
+
         num_samples = 0
         for cluster in unique_clusters:
             logger.info(f"save attach data for cluster: {cluster}")
@@ -778,7 +883,8 @@ class ClusterAnalysisPipeline:
                 how="inner",
                 suffixes=("", "_y"),
             )
-            cluster_data[attach_data.columns].to_parquet(self.output_path / "output" / file_name, index=False)
+            cluster_data = cluster_data[attach_data.columns]
+            cluster_data.to_parquet(self.output_path / "output" / file_name, index=False)
             num_samples += len(cluster_data)
 
             if feature_columns is not None:

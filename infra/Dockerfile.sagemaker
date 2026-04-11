@@ -1,0 +1,69 @@
+#########################
+# Data Science Dockerfile
+# - Installs ONLY main + ds groups from pyproject.toml
+# - Used to build the bituslabs-ds-sagemaker image for SageMaker Processing / DS jobs
+#########################
+
+# --- Stage 1: Builder ---
+# We use a full python image to install build tools
+FROM python:3.11-slim AS builder
+
+# Set environment variables for Poetry and pip (longer timeout for slow PyPI)
+ENV POETRY_NO_INTERACTION=1 \
+    POETRY_VIRTUALENVS_IN_PROJECT=1 \
+    POETRY_VIRTUALENVS_CREATE=1 \
+    POETRY_CACHE_DIR=/tmp/poetry_cache \
+    PIP_DEFAULT_TIMEOUT=600
+
+WORKDIR /app
+
+# Install system dependencies needed for scientific Python packages
+RUN apt-get update && apt-get install -y \
+    gcc \
+    libpq-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Poetry
+RUN curl -sSL https://install.python-poetry.org | python3 -
+ENV PATH="/root/.local/bin:$PATH"
+
+# Copy only the files needed for dependency installation
+COPY pyproject.toml poetry.lock* ./
+# RUN poetry lock
+
+# Install in separate layers so changes to one group only rebuild that layer.
+RUN poetry install --only main --no-root --no-cache
+RUN poetry install --only ds --no-root --no-cache
+RUN poetry install --only ml --no-root --no-cache
+
+RUN rm -rf $POETRY_CACHE_DIR
+
+# --- Stage 2: Runtime ---
+# We use the same slim image for the final runtime
+FROM python:3.11-slim AS runtime
+
+ENV VIRTUAL_ENV=/app/.venv \
+    PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH="/app"
+WORKDIR /app
+
+# Install lightweight runtime system dependencies
+RUN apt-get update && apt-get install -y \
+    libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the virtual environment from the builder
+COPY --from=builder /app/.venv /app/.venv
+
+# Copy your source code so DS scripts (e.g. analysis / MCMC jobs) are available
+COPY entry_points/ ./entry_points/
+COPY src/bituslabs_ds ./bituslabs_ds
+COPY jobs/ ./jobs/
+
+# Default entry point (overridden by SageMaker ScriptProcessor command)
+ENTRYPOINT ["python"]
+
+# Helpful default command for manual runs
+CMD ["-c", "print('bituslabs-ds-sagemaker DS image (main+ds groups). Override CMD to run your job.')"]
+

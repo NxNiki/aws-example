@@ -1,17 +1,52 @@
+import argparse
 import os
 from textwrap import dedent
 
 import pandas as pd
 
-from bituslabs_ds.config import LOCAL_ROOT, setup_logging
-from bituslabs_ds.etl import DataLoader, RedshiftBackend
+from bituslabs_ds.config import (
+    DEFAULT_BASTION_IP,
+    DEFAULT_ETL_OUTPUT,
+    LOCAL_ROOT,
+    REDSHIFT_HOST,
+    REDSHIFT_PORT,
+    get_redshift_password,
+    get_redshift_user,
+    setup_logging,
+)
+from bituslabs_ds.etl import AggCol, DataLoader, ETLScheduler, RedshiftBackend, effective_start_date
+
+# Day boundary: 6 AM Shanghai time (same as fish_hunter)
+DATE_START_HOUR = 6
+
+GAME_ID = "SS01"
+AI_GROUP_ID = "jojpin-9mokha-rexQug"
+
+# Shared column list for user_bets_group UNION (reused across group variants)
+_USER_BETS_GROUP_COLS = """
+                t.created_at,
+                t.activity_date,
+                t.activity_week,
+                t.activity_month,
+                t.user_id,
+                t.bet_amount,
+                t.payout,
+                t.bet_type,
+                t.profit,
+                t.delta_t,
+                t.user_bet_count,
+                t.mathtable_change,
+                t.prev_bet_type,
+                t.prev_bet_amount,
+                CASE WHEN t.bet_type = 'FREE' AND t.prev_bet_type = 'BASE' THEN t.prev_bet_amount END AS fg_session_trigger_bet,
+                """
 
 # TODO:
 # add max/min user daily profit
 
 
-def generate_query(stats_agg_col: str):
-
+def generate_query(stats_agg_col: AggCol, start_date: str):
+    effective_start = effective_start_date(stats_agg_col, start_date)
     query = dedent(
         f"""
         WITH user_bets AS (
@@ -23,11 +58,13 @@ def generate_query(stats_agg_col: str):
             t.actual_payout AS payout,
             t.bet_type,
             t.actual_payout - t.bet_amount AS profit,
-            TRUNC(DATEADD(hour, -6, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS activity_date,
-            CAST(DATE_TRUNC('week', DATEADD(hour, -6, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_week,
-            CAST(DATE_TRUNC('month', DATEADD(hour, -6, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_month,
+            CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_date,
+            CAST(DATE_TRUNC('week', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_week,
+            CAST(DATE_TRUNC('month', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_month,
             t.partition_ab[0] AS ab_group_id,
             t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.created_at) AS delta_t,
+            LAG(t.bet_type) OVER (PARTITION BY t.user_id ORDER BY t.created_at) AS prev_bet_type,
+            LAG(t.bet_amount) OVER (PARTITION BY t.user_id ORDER BY t.created_at) AS prev_bet_amount,
             COUNT(t.user_id) OVER (PARTITION BY t.user_id) AS user_bet_count,
             CASE
                 WHEN LAG(t.script_id) OVER (PARTITION BY t.user_id ORDER BY t.created_at) IS NULL THEN 0
@@ -37,30 +74,19 @@ def generate_query(stats_agg_col: str):
         FROM
             public.fct_bet_orders AS t
         WHERE
-            CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', t.created_at) >= '2025-12-01 06:00:00'
+            t.game_id = '{GAME_ID}'
+            AND CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at) >= '{effective_start}'
             AND t.currency_type = 'CNY'
             AND t.status = 'COMPLETED'
-            AND t.game_id = 'SS01'
             AND t.op_code not in ('B26','TST','TSB','TSO') 
         ),
 
         user_bets_group AS (
             SELECT
-                t.created_at,
-                t.activity_date,
-                t.activity_week,
-                t.activity_month,
-                t.user_id,
-                t.bet_amount,
-                t.payout,
-                t.bet_type,
-                t.profit,
-                t.delta_t,
-                t.user_bet_count,
-                t.mathtable_change,
+                {_USER_BETS_GROUP_COLS}
                 CASE
-                    WHEN t.ab_group_id != 'jojpin-9mokha-rexQug' THEN 'Default'
-                    ELSE 'AI'
+                    WHEN t.ab_group_id = '{AI_GROUP_ID}' THEN 'AI'
+                    ELSE 'Default'
                 END AS ai_group
             FROM
                 user_bets AS t
@@ -68,53 +94,31 @@ def generate_query(stats_agg_col: str):
             UNION ALL
 
             SELECT
-                t.created_at,
-                t.activity_date,
-                t.activity_week,
-                t.activity_month,
-                t.user_id,
-                t.bet_amount,
-                t.payout,
-                t.bet_type,
-                t.profit,
-                t.delta_t,
-                t.user_bet_count,
-                t.mathtable_change,
+                {_USER_BETS_GROUP_COLS}
+                CASE
+                    WHEN t.ab_group_id != '{AI_GROUP_ID}' THEN CONCAT('Default_', t.mathtable)
+                END AS ai_group
+            FROM
+                user_bets AS t
+            WHERE t.ab_group_id != '{AI_GROUP_ID}'
+
+            UNION ALL
+
+            SELECT
+                {_USER_BETS_GROUP_COLS}
                 t.mathtable AS ai_group
             FROM
                 user_bets AS t
             WHERE
-                t.ab_group_id = 'jojpin-9mokha-rexQug'
-        ),
+                t.ab_group_id = '{AI_GROUP_ID}'
 
-        daily_login AS (
-            SELECT 
-                t.user_id,
-                MIN(t.created_at) as first_bet_time,
-                MAX(t.created_at) as last_bet_time,
-                t.activity_date,
-                t.activity_week,
-                t.activity_month,
-                t.ai_group
-            FROM
-                user_bets_group AS t
-            GROUP BY t.user_id, t.activity_date, t.activity_week, t.activity_month, t.ai_group
-        ),
+            UNION ALL
 
-        user_retention AS (
             SELECT
-                t1.{stats_agg_col},
-                t1.ai_group,
-                COUNT(DISTINCT t1.user_id) AS day0_num_users,
-                COUNT(DISTINCT t2.user_id) AS day1_num_users,
-                COUNT(DISTINCT t3.user_id) AS day3_num_users
+                {_USER_BETS_GROUP_COLS}
+                CAST('HG' AS VARCHAR(10)) AS ai_group
             FROM
-                daily_login AS t1
-            LEFT JOIN daily_login AS t2
-                ON t2.first_bet_time < DATE_ADD('hour', 48, t1.first_bet_time) AND t2.last_bet_time >= DATE_ADD('hour', 24, t1.first_bet_time) AND t1.user_id = t2.user_id
-            LEFT JOIN daily_login AS t3
-                ON t3.first_bet_time < DATE_ADD('hour', 96, t1.first_bet_time) AND t3.last_bet_time >= DATE_ADD('hour', 72, t1.first_bet_time) AND t1.user_id = t3.user_id
-            GROUP BY t1.{stats_agg_col}, t1.ai_group
+                user_bets AS t
         ),
 
         user_stats AS (
@@ -137,36 +141,31 @@ def generate_query(stats_agg_col: str):
                 SUM(CASE WHEN t.bet_type = 'BASE' THEN t.payout END) AS user_total_payout_bg,
                 SUM(CASE WHEN t.bet_type = 'FREE' THEN t.payout END) AS user_total_payout_fg,
 
+                SUM(t.fg_session_trigger_bet) AS user_total_bet_fg,
+
+                COUNT(CASE WHEN t.payout > 0 THEN 1 END) AS user_num_bets_with_payout,
+                COUNT(CASE WHEN t.bet_type = 'BASE' AND t.payout > 0 THEN 1 END) AS user_num_bets_bg_with_payout,
+                COUNT(CASE WHEN t.bet_type = 'FREE' AND t.payout > 0 THEN 1 END) AS user_num_bets_fg_with_payout,
+
                 AVG(CASE WHEN EXTRACT(EPOCH FROM t.delta_t) BETWEEN 0 AND 86400 THEN EXTRACT(EPOCH FROM t.delta_t) END)
                     AS user_avg_delta_t_seconds,
 
                 SUM(t.mathtable_change) AS user_mathtable_change
 
             FROM user_bets_group AS t
-            WHERE t.user_bet_count >= 40
             GROUP BY t.{stats_agg_col}, t.ai_group, t.user_id
         ),
 
-        group_stats AS (
+        user_first_bet AS (
             SELECT
-                t.{stats_agg_col},
-                t.ai_group,
-
-                COUNT(DISTINCT t.user_id) AS num_active_users,
-                COUNT(t.user_id) AS total_num_bets,
-                COUNT(CASE WHEN t.bet_type = 'BASE' THEN t.user_id END) AS total_num_bets_bg,
-                COUNT(CASE WHEN t.bet_type = 'FREE' THEN t.user_id END) AS total_num_bets_fg,
-
-                -- total bet amount:
-                SUM(t.bet_amount) AS total_bet,
-                SUM(CASE WHEN t.bet_type = 'BASE' THEN t.bet_amount END) AS total_bet_bg,
-
-                SUM(t.payout) AS total_payout,
-                SUM(CASE WHEN t.bet_type = 'BASE' THEN t.payout END) AS total_payout_bg,
-                SUM(CASE WHEN t.bet_type = 'FREE' THEN t.payout END) AS total_payout_fg
-            FROM user_bets_group AS t
-            WHERE t.user_bet_count >= 40
-            GROUP BY t.{stats_agg_col}, t.ai_group
+                user_id,
+                MIN(CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', created_at))) AS DATE)) AS first_bet_date
+            FROM public.fct_bet_orders
+            WHERE game_id = '{GAME_ID}'
+              AND currency_type = 'CNY'
+              AND status = 'COMPLETED'
+              AND op_code NOT IN ('B26','TST','TSB','TSO')
+            GROUP BY user_id
         )
 
         SELECT
@@ -174,59 +173,46 @@ def generate_query(stats_agg_col: str):
             us.ai_group,
             us.user_id,
             us.user_mathtable_change,
+            CASE
+                WHEN DATEDIFF('day', fb.first_bet_date, us.{stats_agg_col}) <= 3 THEN 'new'
+                WHEN DATEDIFF('day', fb.first_bet_date, us.{stats_agg_col}) <= 7 THEN 'beginner'
+                ELSE 'old'
+            END AS user_group,
 
-            gs.num_active_users,
+            CASE
+                WHEN DATEDIFF('day', fb.first_bet_date, us.{stats_agg_col}) < 1 THEN 'day0_user'
+                WHEN DATEDIFF('day', fb.first_bet_date, us.{stats_agg_col}) < 7 THEN 'day1-6_user'
+                ELSE 'day7+_user'
+            END AS user_group2,
 
-            gs.total_num_bets,
-            gs.total_num_bets_bg,
-            gs.total_num_bets_fg,
-            gs.total_num_bets * 1.0 / NULLIF(gs.num_active_users, 0) AS total_num_bets_per_user,
-
-            gs.total_bet,
-            gs.total_bet_bg,
-            gs.total_bet * 1.0 / NULLIF(gs.num_active_users, 0) AS total_bet_per_user,
-
-            gs.total_payout,
-            gs.total_payout_bg,
-            gs.total_payout_fg,
-
-            us.user_avg_delta_t_seconds,
-
-            -- Retention:
-            ur.day0_num_users,
-            ur.day1_num_users,
-            ur.day3_num_users,
-            ur.day1_num_users * 1.0 / NULLIF(ur.day0_num_users, 0) AS retention_rate_day1,
-            ur.day3_num_users * 1.0 / NULLIF(ur.day0_num_users, 0) AS retention_rate_day3,
-
-            -- Number of bets and total bet per user:
+            -- DataMetrics input columns (user-level raw stats):
             us.user_num_bets,
             us.user_num_bets_bg,
             us.user_num_bets_fg,
-
             us.user_total_bet,
+            us.user_total_bet_bg,
+            us.user_total_payout,
+            us.user_total_payout_bg,
+            us.user_total_payout_fg,
+            us.user_total_bet_fg,
+            us.user_num_bets_with_payout,
+            us.user_num_bets_bg_with_payout,
+            us.user_num_bets_fg_with_payout,
+            us.user_total_payout * 1.0 / NULLIF(us.user_total_bet, 0) AS user_rtp,
 
-            -- free game ratio
+            -- User-level derived (not computed by DataMetrics):
+            us.user_avg_delta_t_seconds,
             us.user_num_bets_fg * 1.0 / NULLIF(us.user_num_bets, 0) AS user_fg_ratio,
-            gs.total_num_bets_fg * 1.0 / NULLIF(gs.total_num_bets, 0) AS fg_ratio,
-
-            -- Profit Calculations
-            (gs.total_payout - gs.total_bet) AS total_profit,
-            (gs.total_payout - gs.total_bet) * 1.0 / gs.num_active_users AS total_profit_per_user,
             (us.user_total_payout - us.user_total_bet) AS user_total_profit,
-
-            -- RTP (Return to Player) Calculations (Fix: NULLIF for bet amounts AND RTP numerator error)
-            gs.total_payout / NULLIF(gs.total_bet, 0) AS rtp,
-            -- total bet for base game is same to total bet and free game has 0 bet amount:
-            gs.total_payout_bg / NULLIF(gs.total_bet, 0) AS rtp_bg,
-            us.user_total_payout / NULLIF(us.user_total_bet, 0) AS user_rtp,
-            us.user_total_payout_bg / NULLIF(us.user_total_bet, 0) AS user_rtp_bg
+            us.user_total_payout_bg * 1.0 / NULLIF(us.user_total_bet, 0) AS user_rtp_bg,
+            us.user_total_payout_fg * 1.0 / NULLIF(us.user_total_bet_fg, 0) AS user_rtp_fg,
+            us.user_num_bets_with_payout * 1.0 / NULLIF(us.user_num_bets, 0) AS user_hit_rate,
+            us.user_num_bets_bg_with_payout * 1.0 / NULLIF(us.user_num_bets_bg, 0) AS user_hit_rate_bg,
+            us.user_num_bets_fg_with_payout * 1.0 / NULLIF(us.user_num_bets_fg, 0) AS user_hit_rate_fg
 
         FROM user_stats AS us
-        INNER JOIN group_stats AS gs
-            ON us.{stats_agg_col} = gs.{stats_agg_col} AND us.ai_group = gs.ai_group
-        INNER JOIN user_retention AS ur
-            ON us.{stats_agg_col} = ur.{stats_agg_col} AND us.ai_group = ur.ai_group
+        LEFT JOIN user_first_bet AS fb ON us.user_id = fb.user_id
+        WHERE us.{stats_agg_col} >= '{effective_start}'
         ORDER BY us.{stats_agg_col} DESC, us.ai_group DESC, us.user_id DESC;
 
         """
@@ -235,47 +221,69 @@ def generate_query(stats_agg_col: str):
     return query
 
 
-def execute_query(redshift_loader, output_file, stats_agg_col):
-
-    file_path = f"{LOCAL_ROOT}/jobs/output_ss01_wucaishen/{output_file}.parquet"
-    query = generate_query(stats_agg_col)
-    df_rs = redshift_loader.query_to_df(query=query, local_cache=file_path, reload=True)
-    print(
-        df_rs[
-            [
-                "activity_date",
-                "user_id",
-                "ai_group",
-                "user_mathtable_change",
-                "num_active_users",
-                "user_num_bets",
-                "user_total_bet",
-                "rtp",
-                "rtp_bg",
-                "day0_num_users",
-                "day1_num_users",
-                "day3_num_users",
-            ]
-        ]
-    )
-
-
 if __name__ == "__main__":
 
     setup_logging(f"{LOCAL_ROOT}/jobs/log", log_filename=os.path.splitext(os.path.basename(__file__))[0] + ".log")
 
+    parser = argparse.ArgumentParser(description="ETL Game Stats Daily by User Group")
+    parser.add_argument(
+        "--bastion-ip",
+        type=str,
+        default=DEFAULT_BASTION_IP,
+        help=f"Bastion IP address for Redshift tunnel (default: {DEFAULT_BASTION_IP})",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing S3/local output (full reload from default start date)",
+    )
+    args = parser.parse_args()
+
     redshift_loader = DataLoader(
         backend=RedshiftBackend(
-            host="production-redshift-cluster.cwiqzcm13zcn.ap-southeast-1.redshift.amazonaws.com",
+            host=REDSHIFT_HOST,
             database="slot-machine",
-            user="anaylsis_user",
-            password="oZ4ztMx0yEXPLbJL733L",
-            port=5439,
+            user=get_redshift_user(),
+            password=get_redshift_password(),
+            port=REDSHIFT_PORT,
+            bastion_ip=args.bastion_ip,
         )
     )
 
-    execute_query(redshift_loader, "stats_by_date_user", "activity_date")
-    execute_query(redshift_loader, "stats_by_week_user", "activity_week")
-    execute_query(redshift_loader, "stats_by_month_user", "activity_month")
+    # Initialize Scheduler with a default 3-day lookback
+    scheduler = ETLScheduler(
+        redshift_loader,
+        f"{DEFAULT_ETL_OUTPUT}/jobs/output_ss01_wucaishen_old",
+        lookback_days=3,
+        overwrite=args.overwrite,
+    )
+
+    scheduler.run_incremental_job(
+        job_name="daily_stats",
+        query_func=lambda start_date: generate_query("activity_date", start_date),
+        key_cols=["activity_date", "user_id", "ai_group"],
+        date_col="activity_date",
+        partition_level="none",
+    )
+
+    # Overrides to 7 days because weekly data takes longer to settle
+    scheduler.run_incremental_job(
+        job_name="weekly_stats",
+        query_func=lambda start_date: generate_query("activity_week", start_date),
+        key_cols=["activity_date", "user_id", "ai_group"],
+        date_col="activity_date",  # Always check max activity_date
+        partition_level="none",
+        lookback=7,
+    )
+
+    # Overrides to 31 days because weekly data takes longer to settle
+    scheduler.run_incremental_job(
+        job_name="monthly_stats",
+        query_func=lambda start_date: generate_query("activity_month", start_date),
+        key_cols=["activity_date", "user_id", "ai_group"],
+        date_col="activity_date",  # Always check max activity_date
+        partition_level="none",
+        lookback=31,
+    )
 
     redshift_loader.close()

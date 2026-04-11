@@ -1,0 +1,57 @@
+# --- Stage 1: Builder ---
+# We use a full python image to install build tools
+FROM python:3.11-slim AS builder
+
+# Set environment variables for Poetry
+ENV POETRY_NO_INTERACTION=1 \
+    POETRY_VIRTUALENVS_IN_PROJECT=1 \
+    POETRY_VIRTUALENVS_CREATE=1 \
+    POETRY_CACHE_DIR=/tmp/poetry_cache
+
+WORKDIR /app
+
+# Install system dependencies needed for some python packages (like paramiko/gcc)
+RUN apt-get update && apt-get install -y \
+    gcc \
+    libpq-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Poetry
+RUN curl -sSL https://install.python-poetry.org | python3 -
+ENV PATH="/root/.local/bin:$PATH"
+
+# Copy only the files needed for dependency installation
+COPY pyproject.toml poetry.lock ./
+
+# Install ONLY the main and etl groups (skips ml, ds, dl, spark, dev)
+# This keeps the environment lean.
+RUN poetry install --only main,etl --no-root --no-cache && rm -rf $POETRY_CACHE_DIR
+
+# --- Stage 2: Runtime ---
+# We use the same slim image for the final runtime
+FROM python:3.11-slim AS runtime
+
+ENV VIRTUAL_ENV=/app/.venv \
+    PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH="/app" \
+    LOCAL_ROOT=/app
+WORKDIR /app
+
+# Install lightweight runtime system dependencies
+RUN apt-get update && apt-get install -y \
+    libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the virtual environment from the builder
+COPY --from=builder /app/.venv /app/.venv
+
+# Copy your source code and ETL entry point
+COPY entry_points/ ./entry_points/
+COPY src/bituslabs_ds ./bituslabs_ds
+COPY jobs/ ./jobs/
+
+ENTRYPOINT ["python", "entry_points/etl_dispatcher.py"]
+# Override CMD to run a different job; pass args after the job path (e.g. --bastion-ip "")
+# Default: use bastion (ECS task def overrides this). For direct connect, override with --bastion-ip ""
+CMD ["fish_hunter/etl_game_stats_daily_by_user.py", "--bastion-ip", "13.215.212.244"]

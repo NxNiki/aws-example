@@ -6,7 +6,8 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from itertools import zip_longest
-from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple, Union
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Set, Tuple, Union
 
 import matplotlib.cm as cm
 import matplotlib.legend_handler as lh
@@ -25,7 +26,7 @@ from matplotlib.ticker import MaxNLocator
 from matplotlib.typing import ColorType
 from pandas import DataFrame, Series
 from scipy.cluster.hierarchy import leaves_list, linkage
-from scipy.stats import energy_distance, skew
+from scipy.stats import energy_distance, kurtosis as scipy_kurtosis, pearsonr, skew, spearmanr
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler, power_transform
 from statannotations.Annotator import Annotator
@@ -183,6 +184,101 @@ def split_column_by_threshold(
         data.loc[data[col] <= thresh, f"{col}_above_{thresh}"] = pd.NA
 
     return data
+
+
+def remove_rows_with_zeros(data: pd.DataFrame, columns: List[str], eps: float = 1e-10) -> pd.DataFrame:
+    """
+    Drop rows where any of the specified columns is zero (or below eps).
+    Useful before power transform for zero-inflated data.
+
+    Args:
+        data: Input DataFrame.
+        columns: Column names to check for zeros.
+        eps: Values below this are treated as zero. Default 1e-10.
+
+    Returns:
+        Filtered DataFrame.
+    """
+    mask = (data[columns] > eps).all(axis=1)
+    return data.loc[mask].copy()
+
+
+def correlation_matrix_with_pvalues(
+    df: pd.DataFrame,
+    method: str = "pearson",
+    remove_pairwise_zeros: bool = False,
+    zeros_eps: float = 1e-10,
+    zeros_removal_threshold: float = 0.3,
+    df_for_zero_check: Optional[pd.DataFrame] = None,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Compute correlation matrix and p-values.
+
+    Args:
+        df: DataFrame with numeric columns (used for correlation).
+        method: 'pearson' or 'spearman'.
+        remove_pairwise_zeros: If True, for each pair independently: if col A has >threshold zeros,
+            drop those rows (and corresponding col B values); same for col B. Applied per pair.
+        zeros_eps: Values below this are treated as zero.
+        zeros_removal_threshold: Remove pairwise zeros only when zero proportion > this (0–1). Default 0.3.
+        df_for_zero_check: If provided and remove_pairwise_zeros is True, use this (e.g. raw pre-transform
+            data) to detect zeros. Required when df is power-transformed, since transform maps 0 to non-zero.
+
+    Returns:
+        Tuple of (correlation_matrix, pvalue_matrix).
+    """
+    cols = df.columns.tolist()
+    corr = np.zeros((len(cols), len(cols)))
+    pval = np.zeros((len(cols), len(cols)))
+    corr_func = spearmanr if method == "spearman" else pearsonr
+    df_zero = df_for_zero_check if df_for_zero_check is not None else df
+    for i, c1 in enumerate(cols):
+        for j, c2 in enumerate(cols):
+            if i == j:
+                corr[i, j] = 1.0
+                pval[i, j] = 0.0
+            else:
+                valid = df[[c1, c2]].dropna()
+                valid_zero = df_zero[[c1, c2]].reindex(valid.index).dropna()
+                if remove_pairwise_zeros and len(valid) >= 3 and len(valid_zero) >= 3:
+                    zero_frac_c1 = (valid_zero[c1] <= zeros_eps).mean()
+                    zero_frac_c2 = (valid_zero[c2] <= zeros_eps).mean()
+                    keep = ((valid_zero[c1] > zeros_eps) | (zero_frac_c1 <= zeros_removal_threshold)) & (
+                        (valid_zero[c2] > zeros_eps) | (zero_frac_c2 <= zeros_removal_threshold)
+                    )
+                    valid = valid[keep]
+                if len(valid) >= 3:
+                    r, p = corr_func(valid[c1], valid[c2])
+                    corr[i, j] = r
+                    pval[i, j] = p
+                else:
+                    corr[i, j] = np.nan
+                    pval[i, j] = np.nan
+    return pd.DataFrame(corr, index=cols, columns=cols), pd.DataFrame(pval, index=cols, columns=cols)
+
+
+def get_significant_correlation_pairs(
+    corr_df: pd.DataFrame,
+    pval_df: pd.DataFrame,
+    significance_level: float = 0.05,
+    min_abs_corr: float = 0.2,
+) -> List[Tuple[str, str, float, float]]:
+    """
+    Return pairs with significant correlation.
+
+    Returns:
+        List of (var1, var2, r, p).
+    """
+    pairs: List[Tuple[str, str, float, float]] = []
+    for i, c1 in enumerate(corr_df.index):
+        for j, c2 in enumerate(corr_df.columns):
+            if i >= j:
+                continue
+            r = corr_df.loc[c1, c2]
+            p = pval_df.loc[c1, c2]
+            if np.isfinite(r) and np.isfinite(p) and p < significance_level and abs(r) >= min_abs_corr:
+                pairs.append((c1, c2, float(r), float(p)))
+    return pairs
 
 
 def split_column_by_multiple_separators(data: pd.DataFrame, column: str, sep: str = ";") -> pd.DataFrame:
@@ -506,34 +602,58 @@ def plot_dual_axis_sorted_swarm(
 def plot_scatter_pairs(
     data: pd.DataFrame,
     pairs: Optional[List[Tuple[str, str, bool, bool]]] = None,
+    correlation_pairs: Optional[List[Tuple[str, str, float, float]]] = None,
     max_per_row: int = 5,
     fig_size_per_plot: Tuple[int, int] = (4, 4),
     alpha: float = 0.7,
+    add_regression_line: bool = False,
+    add_correlation_annotation: bool = False,
+    significance_level: float = 0.05,
+    save_path: Optional[Union[str, Path]] = None,
+    s: int = 2,
+    remove_pairwise_zeros: bool = False,
+    zeros_eps: float = 1e-10,
+    zeros_removal_threshold: float = 0.3,
+    df_for_zero_check: Optional[pd.DataFrame] = None,
 ) -> None:
     """
     Plots scatter plots for every unique pair of numeric columns in the DataFrame.
 
     Parameters:
-    - data (pd.DataFrame): DataFrame containing numeric columns.
-    - pairs (List[Tuple[str, str]]): List of pairs of numeric column names.
-    - max_per_row (int): Maximum number of plots per row.
-    - fig_size_per_plot (Tuple[int, int]): Size of each subplot (width, height).
-    - alpha (float): Marker transparency.
-
-    Returns:
-    - None: Shows matplotlib scatter plots.
+    - data: DataFrame containing numeric columns (used for x/y values; may be power-transformed).
+    - pairs: List of (col_x, col_y, logx, logy). Ignored if correlation_pairs is provided.
+    - correlation_pairs: List of (c1, c2, r, p) for correlation scatter plots with optional
+        regression line and r/p annotation.
+    - max_per_row: Maximum number of plots per row.
+    - fig_size_per_plot: Size of each subplot (width, height).
+    - alpha: Marker transparency.
+    - add_regression_line: If True (and correlation_pairs provided), add linear regression line.
+    - add_correlation_annotation: If True (and correlation_pairs provided), add r and p text.
+    - significance_level: p-value threshold for significance marker (*) in annotation.
+    - save_path: If provided, save figure to path instead of plt.show().
+    - s: Marker size for scatter points.
+    - remove_pairwise_zeros: If True, drop rows where col has zeros when zero frac > threshold
+        (same logic as correlation_matrix_with_pvalues). Ensures scatter/regression match r/p.
+    - zeros_eps: Values <= this treated as zero.
+    - zeros_removal_threshold: Remove pairwise zeros only when zero proportion > this (0–1).
+    - df_for_zero_check: Use for zero detection when data is power-transformed (required; raw data).
     """
-    # Select only numeric columns
     numeric_cols = data.select_dtypes(include="number").columns.tolist()
 
-    if pairs is None or len(pairs) == 0:
-        # Generate all unique pairs (combinations)
-        pairs = []
-        for i in range(len(numeric_cols)):
-            for j in range(i + 1, len(numeric_cols)):
-                pairs.append((numeric_cols[i], numeric_cols[j], False, False))
+    use_correlation_mode = correlation_pairs is not None and len(correlation_pairs) > 0
+    if use_correlation_mode and correlation_pairs is not None:
+        plot_items: List[Tuple[str, str, Optional[float], Optional[float]]] = [
+            (c1, c2, r, p) for c1, c2, r, p in correlation_pairs
+        ]
+    else:
+        if pairs is None or len(pairs) == 0:
+            pairs = []
+            for i in range(len(numeric_cols)):
+                for j in range(i + 1, len(numeric_cols)):
+                    pairs.append((numeric_cols[i], numeric_cols[j], False, False))
+        plot_items = [(col_x, col_y, None, None) for col_x, col_y, _logx, _logy in pairs]
 
-    num_plots = len(pairs)
+    num_plots = len(plot_items)
     if num_plots == 0:
         print("No numeric column pairs to plot.")
         return
@@ -542,28 +662,67 @@ def plot_scatter_pairs(
     ncols = min(num_plots, max_per_row)
 
     fig, axes = plt.subplots(
-        nrows=nrows, ncols=ncols, figsize=(fig_size_per_plot[0] * ncols, fig_size_per_plot[1] * nrows)
+        nrows=nrows,
+        ncols=ncols,
+        figsize=(fig_size_per_plot[0] * ncols, fig_size_per_plot[1] * nrows),
+        squeeze=False,
     )
-    axes = axes.flatten() if num_plots > 1 else [axes]
+    axes_flat = axes.flatten()
 
-    for ax_idx, (col_x, col_y, logx, logy) in enumerate(pairs):
-        ax = axes[ax_idx]
-        ax.scatter(data[col_x], data[col_y], alpha=alpha, s=2)
+    df_zero = df_for_zero_check if df_for_zero_check is not None else data
+    for ax_idx, item in enumerate(plot_items):
+        col_x, col_y = item[0], item[1]
+        r, p = item[2], item[3]
+        ax = axes_flat[ax_idx]
+        valid = data[[col_x, col_y]].dropna()
+        valid_zero = df_zero[[col_x, col_y]].reindex(valid.index).dropna()
+        if remove_pairwise_zeros and len(valid) >= 3 and len(valid_zero) >= 3:
+            zero_frac_c1 = (valid_zero[col_x] <= zeros_eps).mean()
+            zero_frac_c2 = (valid_zero[col_y] <= zeros_eps).mean()
+            keep = ((valid_zero[col_x] > zeros_eps) | (zero_frac_c1 <= zeros_removal_threshold)) & (
+                (valid_zero[col_y] > zeros_eps) | (zero_frac_c2 <= zeros_removal_threshold)
+            )
+            valid = valid[keep]
+        if len(valid) < 3:
+            ax.text(0.5, 0.5, "Insufficient data", ha="center", va="center", transform=ax.transAxes)
+        else:
+            x_vals = valid[col_x].values
+            y_vals = valid[col_y].values
+            ax.scatter(x_vals, y_vals, alpha=alpha, s=s)
+            if use_correlation_mode and add_regression_line and r is not None and p is not None:
+                slope, intercept = np.polyfit(x_vals, y_vals, 1)
+                x_line = np.linspace(x_vals.min(), x_vals.max(), 100)
+                ax.plot(x_line, slope * x_line + intercept, "r-", lw=2)
+            if use_correlation_mode and add_correlation_annotation and r is not None and p is not None:
+                sig = "*" if p < significance_level else ""
+                ax.text(
+                    0.05,
+                    0.95,
+                    f"r = {r:.3f}{sig}\np = {p:.2e}",
+                    transform=ax.transAxes,
+                    fontsize=9,
+                    va="top",
+                    bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.8),
+                )
         ax.set_xlabel(col_x)
         ax.set_ylabel(col_y)
         ax.set_title(f"{col_x} vs {col_y}")
+        if not use_correlation_mode and pairs is not None and ax_idx < len(pairs):
+            _, _, logx, logy = pairs[ax_idx]
+            if logx:
+                ax.set_xscale("symlog")
+            if logy:
+                ax.set_yscale("symlog")
 
-        if logx:
-            ax.set_xscale("symlog")
-        if logy:
-            ax.set_yscale("symlog")
-
-    # Hide unused subplots if any
-    for i in range(num_plots, len(axes)):
-        axes[i].set_visible(False)
+    for i in range(num_plots, len(axes_flat)):
+        axes_flat[i].set_visible(False)
 
     plt.tight_layout()
-    plt.show()
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    else:
+        plt.show()
 
 
 def _prepare_dataframe(time: Series, data: Union[Series, DataFrame], freq: str) -> DataFrame:
@@ -1178,6 +1337,268 @@ class DataVisualizer:
 
         return axis
 
+    def _add_histogram_original_and_transformed_to_axis(
+        self,
+        axis: Axes,
+        col: str,
+        bins: int = 50,
+        log_scale_cols: Optional[Set[str]] = None,
+        pt_log_scale_cols: Optional[Set[str]] = None,
+        max_points: int = 100_000,
+        random_state: int = 42,
+    ) -> Tuple[List[Any], List[str], float, float]:
+        """
+        Draw original and power-transformed (Yeo-Johnson) distributions on the same axes.
+
+        - Original: bottom x-axis, left y-axis, counts; symlog y when col in log_scale_cols.
+        - Power-transformed: top x-axis, right y-axis, counts; symlog y when col in pt_log_scale_cols.
+        (Both sets use the same rule: |skewness| >= threshold, computed in plot_numeric_distribution_pages.)
+
+        Returns:
+            (handles, labels, pt_skewness, pt_kurtosis) for figure-level legend and stats box.
+        """
+        df = self.data_profiler.df
+        empty_return: Tuple[List[Any], List[str], float, float] = ([], [], np.nan, np.nan)
+        if col not in df.columns:
+            return empty_return
+        log_scale_cols = log_scale_cols or set()
+        raw = df[col].replace([np.inf, -np.inf], np.nan).dropna()
+        if len(raw) > max_points:
+            raw = raw.sample(n=max_points, random_state=random_state)
+        values_orig = np.asarray(raw, dtype=float)
+        values_orig = values_orig[np.isfinite(values_orig)]
+        if len(values_orig) < 2:
+            axis.text(0.5, 0.5, "No data", ha="center", va="center", transform=axis.transAxes, fontsize=8)
+            return empty_return
+
+        # Power-transform (Yeo-Johnson); handle constant or near-constant columns
+        try:
+            pt = power_transform(values_orig.reshape(-1, 1), method="yeo-johnson")
+            values_pt = pt.ravel()
+        except Exception:
+            values_pt = values_orig.copy()
+        # Skew and kurtosis of power-transformed values (bias=False for consistency)
+        pt_skew = skew(values_pt, bias=False) if len(values_pt) >= 2 else np.nan
+        pt_kurt = scipy_kurtosis(values_pt, bias=False) if len(values_pt) >= 2 else np.nan
+
+        # Original: bottom x, left y, counts; symlog y if highly skewed
+        sns.histplot(
+            values_orig,
+            ax=axis,
+            bins=bins,
+            kde=True,
+            stat="count",
+            color="steelblue",
+            alpha=0.45,
+            label="original",
+            edgecolor="white",
+            linewidth=0.3,
+        )
+        if col in log_scale_cols:
+            axis.set_yscale("symlog", linthresh=1)
+        axis.set_xlabel("")
+        axis.set_ylabel("")
+        axis.xaxis.tick_bottom()
+        axis.yaxis.tick_left()
+        axis.yaxis.set_label_position("left")
+
+        # Transformed: top x, right y (twin axes). Use density, no log scale.
+        ax_right = axis.twinx()
+        ax_top_right = ax_right.twiny()
+        n_bins_pt = min(bins, max(20, len(np.unique(values_pt)) // 2))
+        sns.histplot(
+            values_pt,
+            ax=ax_top_right,
+            bins=n_bins_pt,
+            kde=True,
+            stat="count",
+            color="coral",
+            alpha=0.45,
+            label="power-transformed",
+            edgecolor="white",
+            linewidth=0.3,
+        )
+        ax_top_right.set_xlabel("")
+        ax_right.set_ylabel("")
+        pt_log = pt_log_scale_cols or set()
+        if col in pt_log:
+            ax_right.set_yscale("symlog", linthresh=1)
+        ax_top_right.xaxis.tick_top()
+        ax_right.yaxis.tick_right()
+        ax_right.yaxis.set_label_position("right")
+        axis.tick_params(axis="both", labelsize=7)
+        ax_right.tick_params(axis="y", labelsize=7)
+        ax_top_right.tick_params(axis="x", labelsize=7)
+        # Return combined handles/labels for a single figure-level legend
+        lines_orig, labels_orig = axis.get_legend_handles_labels()
+        lines_pt, labels_pt = ax_top_right.get_legend_handles_labels()
+        leg_pt = ax_top_right.get_legend()
+        if leg_pt is not None:
+            leg_pt.remove()
+        axis.grid(True, alpha=0.3)
+        axis.set_title(col, fontsize=8, pad=4)
+        return (lines_orig + lines_pt, labels_orig + labels_pt, float(pt_skew), float(pt_kurt))
+
+    def plot_numeric_distribution_pages(
+        self,
+        output_dir: Union[str, Path],
+        layout_cols: Optional[List[str]] = None,
+        cols_per_page: int = 4,
+        rows_per_page: int = 5,
+        bins: int = 50,
+        skewness_log_scale_threshold: float = 2.0,
+        dpi: int = 120,
+        fig_title_prefix: str = "",
+        show_distribution_stats_legend: bool = False,
+        overlay_power_transform: bool = False,
+    ) -> List[Path]:
+        """
+        Create paginated distribution plots (histograms) for numeric columns.
+
+        One figure per page; each subplot shows a histogram with optional KDE.
+        Subplot titles include skewness and kurtosis; log y-scale is applied
+        for columns whose absolute skewness exceeds the given threshold.
+
+        If overlay_power_transform is True, each subplot shows both the original
+        and the power-transformed (Yeo-Johnson) distribution: original uses
+        counts on the left y-axis and bottom x-axis (symlog y when highly skewed);
+        power-transformed uses counts on the right y-axis and top x-axis (no log).
+
+        Parameters:
+            output_dir: Directory to save PNG files (created if missing).
+            layout_cols: Columns to plot; default is profiler's numeric columns.
+            cols_per_page: Subplot columns per page.
+            rows_per_page: Subplot rows per page.
+            bins: Histogram bins per subplot.
+            skewness_log_scale_threshold: Use log y-scale when |skewness| >= this.
+            dpi: Figure save DPI.
+            fig_title_prefix: Prefix for each page suptitle (e.g. dataset name).
+            show_distribution_stats_legend: If True, add legend with skew/dip per group.
+            overlay_power_transform: If True, overlay power-transformed distribution
+                on each subplot and use top x-ticks and right y-ticks.
+
+        Returns:
+            List of saved file paths.
+        """
+        out_path = Path(output_dir) if not isinstance(output_dir, Path) else output_dir
+        out_path.mkdir(parents=True, exist_ok=True)
+
+        numeric_cols = layout_cols or self.data_profiler.check_numeric_columns(include_boolean=False)
+        if not numeric_cols:
+            logger.warning("No numeric columns to plot.")
+            return []
+
+        stats_by_col = self.data_profiler.get_distribution_stats_dict()
+        # Same rule for both: log y-scale when |skewness| >= threshold (raw from profiler, PT computed below)
+        log_scale_cols = self.data_profiler.get_columns_for_log_scale(threshold=skewness_log_scale_threshold)
+        pt_log_scale_cols: Set[str] = set()
+        if overlay_power_transform:
+            for col in numeric_cols:
+                if col not in self.data_profiler.df.columns:
+                    continue
+                vals = self.data_profiler.df[col].replace([np.inf, -np.inf], np.nan).dropna()
+                vals = np.asarray(vals, dtype=float)
+                vals = vals[np.isfinite(vals)]
+                if len(vals) < 2:
+                    continue
+                try:
+                    pt = power_transform(vals.reshape(-1, 1), method="yeo-johnson")
+                    pt_skew = skew(pt.ravel(), bias=False)
+                    if not pd.isna(pt_skew) and abs(pt_skew) >= skewness_log_scale_threshold:
+                        pt_log_scale_cols.add(col)
+                except Exception:
+                    pass
+        subplots_per_page = cols_per_page * rows_per_page
+        saved_paths: List[Path] = []
+        page = 0
+        use_overlay = overlay_power_transform
+
+        for start in range(0, len(numeric_cols), subplots_per_page):
+            page += 1
+            cols_this_page = numeric_cols[start : start + subplots_per_page]
+
+            fig, axes = self.create_figure(
+                layout_cols=cols_this_page,
+                group_col="",
+                n_cols=cols_per_page,
+                fig_size=(4, 3),
+                palette="pastel",
+            )
+            legend_handles, legend_labels = None, None
+            pt_stats_list: List[Tuple[float, float]] = []
+            if use_overlay:
+                for i, col in enumerate(cols_this_page):
+                    handles, labels, pt_skew, pt_kurt = self._add_histogram_original_and_transformed_to_axis(
+                        self.axes[i],
+                        col,
+                        bins=bins,
+                        log_scale_cols=log_scale_cols,
+                        pt_log_scale_cols=pt_log_scale_cols,
+                    )
+                    if legend_handles is None and handles:
+                        legend_handles, legend_labels = handles, labels
+                    pt_stats_list.append((pt_skew, pt_kurt))
+            else:
+                self.add_histogram(
+                    show_distribution_stats=show_distribution_stats_legend,
+                    bins=bins,
+                    kde=True,
+                    stat="density",
+                )
+
+            for i, col in enumerate(cols_this_page):
+                ax = self.axes[i]
+                stat = stats_by_col.get(col, {})
+                skew_val = stat.get("skewness", np.nan)
+                kurt_val = stat.get("kurtosis", np.nan)
+                skew_str = f"{skew_val:.3f}" if not pd.isna(skew_val) else "n/a"
+                kurt_str = f"{kurt_val:.3f}" if not pd.isna(kurt_val) else "n/a"
+                title_line = f"Skew: {skew_str}  Kurtosis: {kurt_str}"
+                if col in log_scale_cols and not use_overlay:
+                    ax.set_yscale("symlog")
+                    title_line += "  (log y)"
+                # Place stats in upper-right (original + power-transformed skew/kurtosis)
+                if use_overlay:
+                    if i < len(pt_stats_list):
+                        pt_skew, pt_kurt = pt_stats_list[i]
+                        pt_skew_str = f"{pt_skew:.3f}" if not pd.isna(pt_skew) else "n/a"
+                        pt_kurt_str = f"{pt_kurt:.3f}" if not pd.isna(pt_kurt) else "n/a"
+                        title_line += f"\nPT Skew: {pt_skew_str}  PT Kurt: {pt_kurt_str}"
+                    ax.text(
+                        0.98,
+                        0.98,
+                        title_line,
+                        transform=ax.transAxes,
+                        fontsize=6,
+                        verticalalignment="top",
+                        horizontalalignment="right",
+                        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8, edgecolor="none"),
+                    )
+                else:
+                    ax.set_title(title_line, fontsize=8)
+                ax.tick_params(axis="both", labelsize=7)
+
+            # One legend per figure, just right of the plot area
+            if use_overlay and legend_handles and legend_labels:
+                fig.legend(
+                    legend_handles,
+                    legend_labels,
+                    loc="upper left",
+                    bbox_to_anchor=(0.98, 1.0),
+                    fontsize=8,
+                    frameon=True,
+                )
+            prefix = f"{fig_title_prefix} — " if fig_title_prefix else ""
+            fig.suptitle(f"{prefix}numeric distributions (page {page})", fontsize=12, y=1.02)
+            fig.tight_layout(rect=(0, 0, 0.90, 0.98))
+            path = out_path / f"overview_page_{page}.png"
+            fig.savefig(path, dpi=dpi, bbox_inches="tight")
+            plt.close(fig)
+            saved_paths.append(path)
+            logger.info("Saved %s", path)
+
+        return saved_paths
+
     def add_correlation_heatmap(
         self,
         method: str = "pearson",
@@ -1247,8 +1668,9 @@ class DataVisualizer:
 
         # Add more space at the bottom so x tick labels are fully displayed
         fig = axis.get_figure()
-        bottom_pad = 0.25  # adjust as needed
-        fig.subplots_adjust(bottom=bottom_pad)
+        if fig is not None:
+            bottom_pad = 0.25  # adjust as needed
+            fig.subplots_adjust(bottom=bottom_pad)
 
         return axis
 
@@ -1410,8 +1832,14 @@ class DataVisualizer:
 
 class DataProfiler:
     """
-    A comprehensive data profiling class that analyzes data distributions,
-    correlations, and provides analytical insights.
+    Data profiling for distributions, correlations, and numeric preparation.
+
+    - Numeric preparation: use prepare_numeric_df() to get a numeric-only DataFrame
+      from sources like Parquet where some columns are stored as fixed_len_byte_array.
+    - Distribution stats: check_distribution_stats() / check_df_distribution_stats()
+      return skewness, kurtosis, and dip test per column; get_distribution_stats_dict()
+      for lookup by column name; get_columns_for_log_scale() for plot log-scale decisions.
+    - Skewed columns: get_skewed_columns(), transform_skewed_columns() for transforms.
     """
 
     def __init__(
@@ -1482,6 +1910,80 @@ class DataProfiler:
 
         return numeric_cols
 
+    @staticmethod
+    def try_convert_series_to_numeric(series: pd.Series) -> Optional[pd.Series]:
+        """
+        Convert a series to numeric when possible.
+
+        Handles Parquet fixed_len_byte_array (e.g. object/bytes), decimal.Decimal,
+        and other types that support float conversion.
+
+        Returns:
+            A numeric series, or None if conversion fails entirely.
+        """
+        try:
+            out = pd.to_numeric(series, errors="coerce")
+            if out.notna().any():
+                return out
+            return None
+        except (TypeError, ValueError):
+            pass
+
+        def _to_float(x: Any) -> float:
+            if pd.isna(x):
+                return np.nan
+            if hasattr(x, "__float__"):
+                try:
+                    return float(x)
+                except (TypeError, ValueError):
+                    return np.nan
+            if isinstance(x, bytes):
+                try:
+                    return float(x.decode("utf-8").strip())
+                except (ValueError, UnicodeDecodeError):
+                    return np.nan
+            return np.nan
+
+        try:
+            out = series.apply(_to_float)
+            return out if out.notna().any() else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def prepare_numeric_df(
+        df: pd.DataFrame,
+        exclude_columns: Optional[Iterable[str]] = None,
+    ) -> Tuple[List[str], pd.DataFrame]:
+        """
+        Build a numeric-only DataFrame suitable for profiling and distribution plots.
+
+        Includes columns that are already numeric and columns that can be converted
+        to numeric (e.g. from Parquet fixed_len_byte_array / object dtypes).
+        Excluded columns are omitted from the result.
+
+        Parameters:
+            df: Input DataFrame (e.g. from read_parquet).
+            exclude_columns: Column names to exclude (e.g. IDs: user_id, session_group).
+
+        Returns:
+            (numeric_column_names, dataframe_with_only_numeric_columns).
+            Column order is preserved; converted columns are float.
+        """
+        exclude = set(exclude_columns or [])
+        native_numeric = [c for c in df.select_dtypes(include=["number"]).columns if c not in exclude]
+        other = [c for c in df.columns if c not in exclude and c not in native_numeric]
+        converted: Dict[str, pd.Series] = {}
+        for c in other:
+            s = DataProfiler.try_convert_series_to_numeric(df[c])
+            if s is not None:
+                converted[c] = s
+        numeric_cols = native_numeric + list(converted.keys())
+        plot_df = df[native_numeric].copy()
+        for c, s in converted.items():
+            plot_df[c] = s
+        return numeric_cols, plot_df
+
     def check_distribution_stats(self, refresh: bool = False) -> List[Dict]:
         """Check distribution statistics for numerical columns."""
         if not hasattr(self, "_distribution_stats") or refresh:
@@ -1491,27 +1993,45 @@ class DataProfiler:
         return self._distribution_stats
 
     @staticmethod
-    def check_df_distribution_stats(data: pd.DataFrame, numeric_columns: Optional[List[str]] = None) -> List[Dict]:
-        """Check distribution statistics for numerical columns for a given dataframe."""
+    def check_df_distribution_stats(
+        data: pd.DataFrame,
+        numeric_columns: Optional[List[str]] = None,
+        include_kurtosis: bool = True,
+    ) -> List[Dict]:
+        """
+        Compute distribution statistics for numerical columns.
+
+        Parameters:
+            data: DataFrame containing the columns.
+            numeric_columns: Columns to analyze; default is all numeric columns.
+            include_kurtosis: If True, add kurtosis (bias=False) to each stat dict.
+
+        Returns:
+            List of dicts with keys: column, skewness, dip_stat, dip_p_values,
+            and optionally kurtosis. Inf values are dropped before computation.
+        """
         distribution_stats: List[Dict] = []
         if numeric_columns is None:
             numeric_columns = data.select_dtypes(include=["number"]).columns.tolist()
 
         for col in numeric_columns:
-            values = data[col].dropna()
-            if len(values) == 0:
+            if col not in data.columns:
+                continue
+            values = data[col].replace([np.inf, -np.inf], np.nan).dropna()
+            if len(values) < 2:
                 continue
 
             skewness = skew(values, bias=False)
             dip_statistic_unimodal, p_value_unimodal = diptest(values)
-            distribution_stats.append(
-                {
-                    "column": col,
-                    "skewness": skewness,
-                    "dip_stat": dip_statistic_unimodal,
-                    "dip_p_values": p_value_unimodal,
-                }
-            )
+            stat: Dict[str, Any] = {
+                "column": col,
+                "skewness": skewness,
+                "dip_stat": dip_statistic_unimodal,
+                "dip_p_values": p_value_unimodal,
+            }
+            if include_kurtosis:
+                stat["kurtosis"] = scipy_kurtosis(values, bias=False)
+            distribution_stats.append(stat)
 
         return distribution_stats
 
@@ -1523,6 +2043,29 @@ class DataProfiler:
         neg_skewed = [stat["column"] for stat in stats if stat["skewness"] < -self.skewness_threshold]
 
         return pos_skewed, neg_skewed
+
+    def get_distribution_stats_dict(self, refresh: bool = False) -> Dict[str, Dict[str, Any]]:
+        """
+        Return distribution statistics keyed by column name.
+
+        Convenient for lookup when annotating plots (e.g. skewness, kurtosis per column).
+        Keys include: column, skewness, kurtosis, dip_stat, dip_p_values.
+        """
+        stats_list = self.check_distribution_stats(refresh=refresh)
+        return {s["column"]: s for s in stats_list}
+
+    def get_columns_for_log_scale(
+        self,
+        threshold: float = 2.0,
+        refresh: bool = False,
+    ) -> Set[str]:
+        """
+        Return column names whose absolute skewness is at least threshold.
+
+        Useful for deciding which distribution plots should use log y-scale.
+        """
+        stats = self.get_distribution_stats_dict(refresh=refresh)
+        return {col for col, s in stats.items() if not pd.isna(s.get("skewness")) and abs(s["skewness"]) >= threshold}
 
     def transform_skewed_columns(self, pos_suffix: Optional[str] = None, neg_suffix: Optional[str] = None) -> None:
         """Transform skewed columns using log or exponential transformations."""

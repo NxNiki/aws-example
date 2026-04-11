@@ -3,50 +3,73 @@ title: "SS01 (wucaishen) Analytics"
 stats_by_date: 
   files: 
     day: [
-      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_date_user.parquet",
-      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_date_user_pa.parquet",
-      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_date_user_hg.parquet",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_wucaishen_old/daily_stats",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_wucaishen_old/daily_stats_pa",
     ]
     week: [
-      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_week_user.parquet",
-      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_week_user_pa.parquet",
-      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_week_user_hg.parquet",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_wucaishen_old/weekly_stats",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_wucaishen_old/weekly_stats_pa",
     ]
     month: [
-      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_month_user.parquet",
-      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_month_user_pa.parquet",
-      "/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/stats_by_month_user_hg.parquet",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_wucaishen_old/monthly_stats",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_wucaishen_old/monthly_stats_pa",
     ]
 
   group_col: "ai_group"
   date_col: "activity_date"
+  user_group_cols: [ai_group, user_group, user_group2]
+  aggregate_stats_from_user_rows: true
+  # Parquet columns required before enrich: ENRICH_USER_ROW_INPUT_COLUMNS ∪ (columns below − enrich outputs)
+  # — see dashboards/user_stats_aggregates.py.
 
   group1_label: "DAU and Retention"
   group1_columns: [
     "num_active_users",
+    "num_new_users",
     "day0_num_users",
     "day1_num_users",
     "day2_num_users",
-    retention_rate_day1,
-    retention_rate_day3,
+    "active_user_no_fg_ratio",
+    "num_active_user_0_rtp",
+    "active_user_0_rtp_ratio",
+    "active_user_rtp_less_0_1_ratio",
+    "active_user_rtp_less_0_2_ratio",
+    "active_user_rtp_less_0_3_ratio",
+    "active_user_rtp_less_0_4_ratio",
+    "active_user_rtp_less_0_5_ratio",
+    "retention_rate_day1",
+    "retention_rate_day3",
   ]
 
   group2_label: "User RTP and Profit"
   group2_columns: [
-    "user_mathtable_change",
     "user_num_bets",
     "user_total_bet",
     "user_total_profit",
     "user_rtp",
+    "user_rtp_bg",
+    "user_rtp_fg",
+    "user_hit_rate",
+    "user_hit_rate_bg",
+    "user_hit_rate_fg",
     "user_fg_ratio",
+    "user_avg_delta_t_seconds",
+    "user_mathtable_change",
   ]
 
-  group3_label: "Group RTP and Profit"
+  group3_label: "Total RTP and Profit"
   group3_columns: [
     "total_num_bets",
     "total_bet",
     "total_profit",
     "rtp",
+    "rtp_bg",
+    "rtp_fg",
+    "user_rtp_median",
+    "user_rtp_ultilization_ratio",
+    "hit_rate",
+    "hit_rate_bg",
+    "hit_rate_fg",
     "fg_ratio",
   ]
 
@@ -57,4 +80,10 @@ stats_by_bet:
   ]
 
   group_col: ""
+
+weekly_report:
+  game_id: "SS01"
+  currency_type: "CNY"
+  files:
+    - "s3://bituslabs-team-ai/etl-results/jobs/output_weekly_report_all_games/ops_daily_report"
 

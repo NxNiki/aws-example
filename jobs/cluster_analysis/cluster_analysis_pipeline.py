@@ -65,7 +65,8 @@ def main(config_path: str):
 
     # Data profiling and cleaning
     DataProfiler.count_df_missing_columns(data)
-    data.dropna(how="any", inplace=True)
+    numeric_cols = data.select_dtypes(include=["number"]).columns
+    data[numeric_cols] = data[numeric_cols].fillna(0)
 
     important_features = feature_selection(data, cluster_pipeline)
 
@@ -82,11 +83,15 @@ def main(config_path: str):
             features_ordered_by_importance=important_features,
         )
 
+    if cluster_pipeline.run_test_model:
+        cluster_pipeline.model_inference(
+            data=data,
+            features_ordered_by_importance=important_features,
+            # model_path="/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/ss01_analysis_kmeans_2026-01-21_15-22-05/models/kmeans_model_top40_features_k_3.pkl",
+        )
+
     del data
     gc.collect()
-
-    if cluster_pipeline.run_fit_cluster_model:
-        pass
 
     if cluster_pipeline.run_attach_cluster_label:
         cluster_pipeline.attach_cluster_label(reload=RELOAD_ATTACH_DATA)

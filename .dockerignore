@@ -7,5 +7,12 @@
 # Recommended additions to keep the build context clean and fast
 .venv
 .git
+.env
 .mypy_cache
 .pytest_cache
+
+**/*.csv
+**/*.parquet
+**/*.log
+**/*.tmp
+**/output_*/

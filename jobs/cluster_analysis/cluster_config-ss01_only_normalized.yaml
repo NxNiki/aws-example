@@ -13,7 +13,7 @@ data_loader:
     row_filters:  # General row filtering (null to disable filtering)
       currency: ""  # Filter to specific currency
     outlier_threshold: 0  # z score to filter outliers
-    clip_threshold: [.25, .75]
+    clip_threshold: [.025, .975]
     local_cache: "ss01_features_grouped.parquet"
 
     data_types:
@@ -180,16 +180,16 @@ features:
     - "agg_group"
   
   skewed_features:  # Features that need power transformation
-    - "rtp_mean"
-    - "rtp_min"
-    - "rtp_max"
-    - "rtp_p25"
-    - "rtp_median"
-    - "rtp_p75"
+    # - "rtp_mean"
+    # - "rtp_min"
+    # - "rtp_max"
+    # - "rtp_p25"
+    # - "rtp_median"
+    # - "rtp_p75"
     # - "bet_amount_min"
     # - "bet_amount_max"
     # - "bet_amount_std"
-    - "bet_amount_cv"
+    # - "bet_amount_cv"
     # - "bet_amount_avg"
     # - "bet_amount_p25"
     # - "bet_amount_median"
@@ -199,7 +199,7 @@ features:
     # - "delta_bet_amount_min"
     # - "delta_bet_amount_max"
     # - "delta_bet_amount_std"
-    - "delta_bet_amount_cv"
+    # - "delta_bet_amount_cv"
     # - "delta_bet_amount_avg"
     # - "delta_bet_amount_p25"
     # - "delta_bet_amount_median"
@@ -208,8 +208,8 @@ features:
     - "delta_bet_amount_spike_ratio"
     # - "accum_pos_delta_bet_amount"
     # - "accum_neg_delta_bet_amount"
-    - "accum_pos_delta_bet_amount_ratio"
-    - "accum_neg_delta_bet_amount_ratio"
+    # - "accum_pos_delta_bet_amount_ratio"
+    # - "accum_neg_delta_bet_amount_ratio"
     # - "balance_after_bet_min"
     # - "balance_after_bet_max"
     # - "balance_after_bet_avg"
@@ -217,9 +217,9 @@ features:
     # - "balance_after_bet_median"
     # - "balance_after_bet_p75"
     # - "balance_after_bet_std"
-    - "balance_after_bet_cv"
-    - "balance_after_bet_drawdown_ratio"
-    - "balance_after_bet_spike_ratio"
+    # - "balance_after_bet_cv"
+    # - "balance_after_bet_drawdown_ratio"
+    # - "balance_after_bet_spike_ratio"
     # - "payout_min"
     # - "payout_max"
     # - "payout_avg"
@@ -227,9 +227,9 @@ features:
     # - "payout_median"
     # - "payout_p75"
     # - "payout_std"
-    - "payout_cv"
-    - "payout_drawdown_ratio"
-    - "payout_spike_ratio"
+    # - "payout_cv"
+    # - "payout_drawdown_ratio"
+    # - "payout_spike_ratio"
     # - "delta_payout_min"
     # - "delta_payout_max"
     # - "delta_payout_avg"
@@ -237,9 +237,9 @@ features:
     # - "delta_payout_median"
     # - "delta_payout_p75"
     # - "delta_payout_std"
-    - "delta_payout_cv"
-    - "delta_payout_drawdown_ratio"
-    - "delta_payout_spike_ratio"
+    # - "delta_payout_cv"
+    # - "delta_payout_drawdown_ratio"
+    # - "delta_payout_spike_ratio"
     # - "profit_min"
     # - "profit_max"
     # - "profit_avg"
@@ -247,13 +247,13 @@ features:
     # - "profit_median"
     # - "profit_p75"
     # - "profit_std"
-    - "profit_cv"
-    - "min_profit_ratio"
-    - "max_profit_ratio"
+    # - "profit_cv"
+    # - "min_profit_ratio"
+    # - "max_profit_ratio"
     # - "accum_pos_profit"
-    - "accum_pos_profit_ratio"
+    # - "accum_pos_profit_ratio"
     # - "accum_neg_profit"
-    - "accum_neg_profit_ratio"
+    # - "accum_neg_profit_ratio"
     # - "delta_t_seconds_avg"
     # - "delta_t_seconds_std"
     # - "delta_t_seconds_min"
@@ -264,35 +264,33 @@ features:
     - "delta_t_seconds_nogap_avg"
     - "delta_t_seconds_nogap_std"
     - "delta_t_seconds_nogap_min"
-    - "delta_t_seconds_nogap_max"
+    # - "delta_t_seconds_nogap_max"
     - "delta_t_seconds_nogap_p25"
     - "delta_t_seconds_nogap_median"
     - "delta_t_seconds_nogap_p75"
-    - "streak_min"
+    # - "streak_min"
     - "streak_max"
-    - "streak_avg"
-    - "streak_p25"
-    - "streak_median"
-    - "streak_p75"
+    # - "streak_avg"
+    # - "streak_p25"
+    # - "streak_median"
+    # - "streak_p75"
     - "streak_std"
-    - "win_streak_min"
-    - "win_streak_max"
-    - "win_streak_avg"
-    - "win_streak_p25"
-    - "win_streak_median"
-    - "win_streak_p75"
-    - "win_streak_std"
-    - "lose_streak_min"
-    - "lose_streak_max"
-    - "lose_streak_avg"
-    - "lose_streak_p25"
-    - "lose_streak_median"
-    - "lose_streak_p75"
-    - "lose_streak_std"
-    - "num_deposit"
+    # - "win_streak_min"
+    # - "win_streak_max"
+    # - "win_streak_avg"
+    # - "win_streak_p25"
+    # - "win_streak_median"
+    # - "win_streak_p75"
+    # - "win_streak_std"
+    # - "lose_streak_min"
+    # - "lose_streak_max"
+    # - "lose_streak_avg"
+    # - "lose_streak_p25"
+    # - "lose_streak_median"
+    # - "lose_streak_p75"
+    # - "lose_streak_std"
     # - "accum_deposit"
     - "accum_deposit_ratio"
-    - "num_withdraw"
     # - "accum_withdraw"
     - "accum_withdraw_ratio"
   
@@ -300,6 +298,8 @@ features:
     - "fg_rounds"
     - "payout_rate"
     - "profit_rate"
+    - "num_withdraw"
+    - "num_deposit"
 
 feature_selection:
   correlation_threshold: 0.9  # Threshold for removing highly correlated features
@@ -310,18 +310,20 @@ elbow_method:
   k_range: [2, 3, 4, 5, 6, 7]  # Range of k values to test
 
 cluster_analysis:
+  model: 'kmeans' 
   random_state: 42  # Random state for reproducible results
   n_init: 10  # Number of initializations for K-means algorithm
+  linkage: "ward"  # Linkage for hierarchical clustering algorithm
   n_clusters: 3  # Default number of clusters for K-means
-  top_features: 48  # Default number of top features to use
+  top_features: 20  # Default number of top features to use
 
 pipeline:
-  elbow_method: false  # Run elbow method analysis
+  elbow_method: true  # Run elbow method analysis
   cluster_analysis: true  # Run cluster analysis with selected features and n_clusters  
-  fit_cluster_model: false  # Apply trained model to new data
-  attach_cluster_label: true  # Attach cluster indices to original data
-  get_cluster_stats: true 
-  upload_result_to_s3: true 
+  test_model: false  # Apply trained model to new data
+  attach_cluster_label: false  # Attach cluster indices to original data
+  get_cluster_stats: false 
+  upload_result_to_s3: false 
 
 
 

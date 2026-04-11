@@ -8,13 +8,64 @@ from multiprocessing import Process, Queue
 from pathlib import Path
 from typing import Optional, Union
 
+from dotenv import load_dotenv
+
+
+def _maybe_load_dotenv() -> None:
+    """
+    Load local `.env` automatically for local dev.
+
+    - Loads only when *not* running on ECS (ECS should use Secrets Manager env vars).
+    - Never overrides existing environment variables (`override=False`).
+    - Attempts to load the first existing `.env` from:
+        1) current working directory
+        2) repository root (inferred from this file location)
+    """
+    if os.environ.get("ECS_CONTAINER_METADATA_URI_V4") or os.environ.get("ECS_TASK_ARN"):
+        return
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    candidates = [Path.cwd() / ".env", repo_root / ".env"]
+    for p in candidates:
+        if p.exists():
+            load_dotenv(dotenv_path=str(p), override=False)
+            return
+
+
+_maybe_load_dotenv()
+
 REGION = "us-west-2"
 S3_BUCKET = "bituslabs-team-ai"
 SAGEMAKER_ROLE = "arn:aws:iam::338568447110:role/SageMakerExecutionRole"
 IMAGE_URI = "338568447110.dkr.ecr.us-west-2.amazonaws.com/bituslabs-ds-sagemaker:latest"
+IMAGE_URI_ETL = "338568447110.dkr.ecr.us-west-2.amazonaws.com/bituslabs-ds-etl:latest"
 DEFAULT_MAX_JOBS = 4
 DEFAULT_ATHENA_OUTPUT = f"s3://{S3_BUCKET}/athena-results"
-LOCAL_ROOT = Path(__file__).resolve().parent.parent.parent
+DEFAULT_ETL_OUTPUT = f"s3://{S3_BUCKET}/etl-results"
+DASHBOARD_CONFIG_S3_PATH = f"s3://{S3_BUCKET}/dashboard-configs"
+DEFAULT_BASTION_IP = "13.215.212.244"  # for ssh tunnel connection to redshift
+LOCAL_ROOT = Path(os.environ.get("LOCAL_ROOT", str(Path(__file__).resolve().parent.parent.parent)))
+
+# Redshift: host is safe to commit; user/password come from env (never commit)
+REDSHIFT_HOST = "production-redshift-cluster.cwiqzcm13zcn.ap-southeast-1.redshift.amazonaws.com"
+REDSHIFT_PORT = 5439
+
+
+def get_redshift_user() -> str:
+    """Redshift user from REDSHIFT_USER env. For local: .env or export. For ECS: task secrets."""
+    v = os.environ.get("REDSHIFT_USER")
+    if not v:
+        raise RuntimeError("REDSHIFT_USER env var required. Local: add to .env or export. ECS: add to task secrets.")
+    return v
+
+
+def get_redshift_password() -> str:
+    """Redshift password from REDSHIFT_PASSWORD env. For local: .env or export. For ECS: task secrets."""
+    v = os.environ.get("REDSHIFT_PASSWORD")
+    if not v:
+        raise RuntimeError(
+            "REDSHIFT_PASSWORD env var required. Local: add to .env or export. ECS: add to task secrets."
+        )
+    return v
 
 
 def get_cpu_cores(logical=True, default=1):
@@ -29,8 +80,6 @@ def get_cpu_cores(logical=True, default=1):
     Returns:
         int: Number of CPU cores.
     """
-    import os
-
     try:
         num_cores = os.cpu_count()
         if num_cores is not None:

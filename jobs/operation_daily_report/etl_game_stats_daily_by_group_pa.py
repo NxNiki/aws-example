@@ -1,3 +1,8 @@
+"""
+ETL game stats daily by group PA (Athena).
+"""
+
+from pathlib import Path
 from textwrap import dedent
 
 from bituslabs_ds.config import LOCAL_ROOT, S3_BUCKET, setup_logging
@@ -55,31 +60,19 @@ query = dedent(
         GROUP BY t1.{stats_agg_col}
     ),
 
-
     daily_stats AS (
         SELECT
             t.{stats_agg_col},
-
-            -- number of users:
             COUNT(DISTINCT t.user_id) AS total_daily_users,
-
-            -- total number of bets:
             COUNT(t.user_id) AS num_bets,
             COUNT(CASE WHEN t.bet_type = 1 THEN t.user_id END) AS num_bets_bg,
             COUNT(CASE WHEN t.bet_type = 2 THEN t.user_id END) AS num_bets_fg,
-
-            -- total bet amount:
             SUM(t.bet_amount) AS total_bet,
             SUM(CASE WHEN t.bet_type = 1 THEN t.bet_amount END) AS total_bet_bg,
-
-            -- total payout amount:
             SUM(t.payout) AS total_payout,
             SUM(CASE WHEN t.bet_type = 1 THEN t.payout END) AS total_payout_bg,
             SUM(CASE WHEN t.bet_type = 2 THEN t.payout END) AS total_payout_fg,
-            
-            AVG(CASE WHEN t.delta_t BETWEEN 0 AND 86400 THEN t.delta_t END)
-                AS avg_delta_t_seconds
-            
+            AVG(CASE WHEN t.delta_t BETWEEN 0 AND 86400 THEN t.delta_t END) AS avg_delta_t_seconds
         FROM user_bets AS t
         WHERE t.user_bet_count >= 40
         GROUP BY t.{stats_agg_col}
@@ -89,37 +82,22 @@ query = dedent(
         CAST(ds.{stats_agg_col} AS DATE) AS {stats_agg_col},
         'PA' AS ai_group,
         ds.total_daily_users AS num_active_users,
-        
         ds.total_bet,
         ds.total_bet_bg,
-
         ds.total_payout,
         ds.total_payout_bg,
         ds.total_payout_fg,
-
         ds.avg_delta_t_seconds,
-        
-        -- Retention:
         ur.day0_num_users,
         ur.day1_num_users,
         ur.day3_num_users,
-
-        -- free game ratio
         ds.num_bets_fg * 1.0 / NULLIF(ds.num_bets, 0) AS fg_ratio,
-        
-        -- Per-User Bet
         ds.num_bets / NULLIF(ds.total_daily_users, 0) AS num_bets_per_user,
         ds.total_bet / NULLIF(ds.total_daily_users, 0) AS total_bet_per_user,
-        
-        -- Profit Calculations
         (ds.total_payout - ds.total_bet) AS total_profit,
         (ds.total_payout - ds.total_bet) / NULLIF(ds.total_daily_users, 0) AS profit_per_user,
-
-        -- RTP (Return to Player) Calculations (Fix: NULLIF for bet amounts AND RTP numerator error)
         ds.total_payout / NULLIF(ds.total_bet, 0) AS rtp,
-        -- total bet for base game is same to total bet and free game has 0 bet amount:
         ds.total_payout_bg / NULLIF(ds.total_bet, 0) AS rtp_bg
-
     FROM daily_stats AS ds
     INNER JOIN user_retention AS ur
         ON ds.{stats_agg_col} = ur.{stats_agg_col}
@@ -129,6 +107,11 @@ query = dedent(
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--reload", action="store_true", help="Force re-run query (ignore local cache)")
+    args = parser.parse_args()
 
     setup_logging(f"{LOCAL_ROOT}/jobs/log", log_filename=f"ss01_etl_{output_file}.log")
 
@@ -139,7 +122,9 @@ if __name__ == "__main__":
         )
     )
 
-    file_path = f"{LOCAL_ROOT}/jobs/output_ss01_wucaishen/{output_file}.parquet"
-    df_rs = data_loader.query_to_df(query=query, local_cache=file_path, reload=True)
+    output_dir = Path(__file__).resolve().parent / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    file_path = output_dir / f"{output_file}.parquet"
+    df_rs = data_loader.query_to_df(query=query, local_cache=str(file_path), reload=args.reload)
     print(df_rs)
     data_loader.close()
