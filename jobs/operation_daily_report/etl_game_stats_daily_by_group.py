@@ -59,8 +59,8 @@ query = dedent(
             t.delta_t,
             t.user_bet_count,
             CASE
-                WHEN t.ab_group_id != 'jojpin-9mokha-rexQug' THEN 'Default'
-                ELSE 'AI'
+                WHEN t.ab_group_id = 'jojpin-9mokha-rexQug' THEN 'AI'
+                ELSE 'Default'
             END AS ai_group
         FROM
             user_bets AS t

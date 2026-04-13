@@ -26,8 +26,8 @@ def generate_daily_report(df: pd.DataFrame, df_pa: pd.DataFrame, lookback_days: 
         ("玩家数量（All）", "day0_num_users"),
         ("前一日留存玩家数量 (Day -1 Retention)", "day1_num_users"),
         ("前三日留存玩家数量 (Day -3 Retention)", "day3_num_users"),
-        ("玩家平均投注次数 (Avg. Bets/User)", "num_bets_per_user"),
-        ("玩家平均投注总额度 (Avg. Total Bet/User)", "total_bet_per_user"),
+        ("活跃玩家平均投注次数 (Avg. Bets/User)", "num_bets_per_user"),
+        ("活跃玩家平均投注总额度 (Avg. Total Bet/User)", "total_bet_per_user"),
         ("RTP (Return to Player)", "rtp"),
     ]
 
