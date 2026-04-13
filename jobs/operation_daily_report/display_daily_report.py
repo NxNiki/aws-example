@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from bituslabs_ds.config import DATE_START_HOUR
+
 
 def generate_daily_report(df: pd.DataFrame, df_pa: pd.DataFrame, lookback_days: int = 7) -> str:
     df["activity_date"] = pd.to_datetime(df["activity_date"])
@@ -51,8 +53,8 @@ def generate_daily_report(df: pd.DataFrame, df_pa: pd.DataFrame, lookback_days: 
             else:
                 rows.append(f"| {metric_cn} | {default_val} | {ai_val} | {pa_val} |")
 
-        date = date + pd.Timedelta(hours=6)
-        pa_date = pa_date + pd.Timedelta(hours=6)
+        date = date + pd.Timedelta(hours=DATE_START_HOUR)
+        pa_date = pa_date + pd.Timedelta(hours=DATE_START_HOUR)
         lines = [
             f"SS01 AI调控上线后数据跟进 [{date}]",
             "统计时间：（北京时间）",

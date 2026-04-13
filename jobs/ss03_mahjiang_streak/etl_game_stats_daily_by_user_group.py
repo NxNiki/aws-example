@@ -77,8 +77,8 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
         WHERE
             t.game_id = '{GAME_ID}'
             AND CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at) >= '{effective_start}'
-            AND t.currency_type IN {ETL_CURRENCY_CODES}
             AND t.status = 'COMPLETED'
+            AND t.currency_type IN {ETL_CURRENCY_CODES}
             AND t.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
         ),
 
@@ -97,8 +97,8 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             SELECT
                 {_USER_BETS_GROUP_COLS}
                 CASE
-                    WHEN t.ab_group_id != '{AI_GROUP_ID}' THEN CONCAT('Default_', t.math_table_id)
-                    WHEN t.ab_group_id = '{AI_GROUP_ID}' THEN ai_group
+                    WHEN t.ab_group_id != '{AI_GROUP_ID}' THEN CONCAT('Default_', t.mathtable)
+                    WHEN t.ab_group_id = '{AI_GROUP_ID}' THEN t.mathtable
                 END AS ai_group
             FROM
                 user_bets AS t
