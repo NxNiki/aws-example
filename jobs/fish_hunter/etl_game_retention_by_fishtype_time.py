@@ -3,6 +3,8 @@ from textwrap import dedent
 
 from bituslabs_ds.config import (
     DATE_START_HOUR,
+    ETL_CURRENCY_CODES,
+    ETL_EXCLUDED_OP_CODES,
     LOCAL_ROOT,
     REDSHIFT_HOST,
     REDSHIFT_PORT,
@@ -41,8 +43,8 @@ def generate_query():
                 DATE_TRUNC('month', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', b.event_timestamp))) AS activity_month
             FROM public.bullet b
             WHERE
-                b.currency_type = 'CNY'
-            AND b.op_code not in ('B26', 'TST','TSB','TSO')
+                b.currency_type IN {ETL_CURRENCY_CODES}
+            AND b.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
             -- ---------------------------------------------------------
             -- FAST FILTERING: Transform the INPUTS, not the COLUMN
             -- ---------------------------------------------------------

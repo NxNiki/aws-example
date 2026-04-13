@@ -4,6 +4,7 @@ from textwrap import dedent
 
 from bituslabs_ds.config import (
     DEFAULT_ETL_OUTPUT,
+    ETL_CURRENCY_CODES,
     LOCAL_ROOT,
     S3_BUCKET,
     TIMEZONE_SHANGHAI,
@@ -36,7 +37,7 @@ def generate_query(stats_agg_col: str, start_date: str, end_date: str = DATE_END
                 CAST(DATE_TRUNC('month', b.billtime AT TIME ZONE 'UTC' AT TIME ZONE '{TIMEZONE_SHANGHAI}' - INTERVAL '6' HOUR) AS DATE) AS activity_month
             FROM agfish.hunterorders b
             WHERE
-                b.currency = 'CNY'
+                b.currency IN {ETL_CURRENCY_CODES}
                 -- avoid converting billtime to increase speed
                 AND b.billtime >= (TIMESTAMP '{start_date} 06:00:00' AT TIME ZONE '{TIMEZONE_SHANGHAI}' AT TIME ZONE 'UTC') - INTERVAL '{return_user_days}' DAY
                 AND b.billtime < (TIMESTAMP '{end_date} 06:00:00' AT TIME ZONE '{TIMEZONE_SHANGHAI}' AT TIME ZONE 'UTC') + INTERVAL '{retention_days}' DAY

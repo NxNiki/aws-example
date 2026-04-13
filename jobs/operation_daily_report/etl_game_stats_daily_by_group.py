@@ -12,6 +12,8 @@ import pandas as pd
 from bituslabs_ds.config import (
     DATE_START_HOUR,
     DEFAULT_BASTION_IP,
+    ETL_CURRENCY_CODES,
+    ETL_EXCLUDED_OP_CODES,
     LOCAL_ROOT,
     REDSHIFT_HOST,
     REDSHIFT_PORT,
@@ -40,10 +42,10 @@ query = dedent(
         public.fct_bet_orders AS t
     WHERE
         CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at) >= DATEADD(day, -7, DATE_TRUNC('day', GETDATE()))
-        AND t.currency_type = 'CNY'
+        AND t.currency_type IN {ETL_CURRENCY_CODES}
         AND t.status = 'COMPLETED'
         AND t.game_id = 'SS01'
-        AND t.op_code != 'B26'
+        AND t.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
     ),
 
     user_bets_group AS (

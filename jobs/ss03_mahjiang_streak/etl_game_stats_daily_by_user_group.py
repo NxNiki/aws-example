@@ -8,6 +8,8 @@ from bituslabs_ds.config import (
     DATE_START_HOUR,
     DEFAULT_BASTION_IP,
     DEFAULT_ETL_OUTPUT,
+    ETL_CURRENCY_CODES,
+    ETL_EXCLUDED_OP_CODES,
     LOCAL_ROOT,
     REDSHIFT_HOST,
     REDSHIFT_PORT,
@@ -75,9 +77,9 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
         WHERE
             t.game_id = '{GAME_ID}'
             AND CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at) >= '{effective_start}'
-            AND t.currency_type = 'CNY'
+            AND t.currency_type IN {ETL_CURRENCY_CODES}
             AND t.status = 'COMPLETED'
-            AND t.op_code not in ('B26','TST','TSB','TSO') 
+            AND t.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
         ),
 
         user_bets_group AS (
@@ -132,9 +134,9 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 MIN(CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', created_at))) AS DATE)) AS first_bet_date
             FROM public.fct_bet_orders
             WHERE game_id = '{GAME_ID}'
-              AND currency_type = 'CNY'
+              AND currency_type IN {ETL_CURRENCY_CODES}
               AND status = 'COMPLETED'
-              AND op_code NOT IN ('B26','TST','TSB','TSO')
+              AND op_code NOT IN {ETL_EXCLUDED_OP_CODES}
             GROUP BY user_id
         )
 

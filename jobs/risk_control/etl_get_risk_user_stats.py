@@ -10,7 +10,7 @@ from ``dim_user_latest`` and write Parquet to S3.
 ``multiplier``, ``device_type``, then ``_processed_at`` (added in Python before
 upload).
 
-Filters: ``op_code`` not in B26/TST/TSB/TSO, ``currency_type = 'CNY'``,
+Filters: ``op_code`` / ``currency_type`` use ``ETL_EXCLUDED_OP_CODES`` and ``ETL_CURRENCY_CODES`` (SQL IN-list strings from config),
 ``event_timestamp > '2025-01-01'``.
 """
 
@@ -27,6 +27,8 @@ import pandas as pd
 from bituslabs_ds.config import (
     DEFAULT_BASTION_IP,
     DEFAULT_ETL_OUTPUT,
+    ETL_CURRENCY_CODES,
+    ETL_EXCLUDED_OP_CODES,
     LOCAL_ROOT,
     REDSHIFT_HOST,
     REDSHIFT_PORT,
@@ -116,8 +118,8 @@ def build_query() -> str:
         FROM public.bullet AS t
         INNER JOIN user_id AS t2 ON t.user_id = t2.user_id
         WHERE
-            t.op_code NOT IN ('B26', 'TST', 'TSB', 'TSO')
-            AND t.currency_type = 'CNY'
+            t.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
+            AND t.currency_type IN {ETL_CURRENCY_CODES}
             AND t.event_timestamp > '2025-01-01'
         ORDER BY t2.user_name, t.event_timestamp
         """

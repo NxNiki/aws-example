@@ -1,6 +1,6 @@
 from textwrap import dedent
 
-from bituslabs_ds.config import LOCAL_ROOT, S3_BUCKET, setup_logging
+from bituslabs_ds.config import ETL_CURRENCY_CODES, LOCAL_ROOT, S3_BUCKET, setup_logging
 from bituslabs_ds.etl import AthenaBackend, DataLoader
 
 query = dedent(
@@ -32,7 +32,7 @@ query = dedent(
         -- Filter events for the specified date range (adjusting for the +8 hour offset)
         t.billtime + INTERVAL '8' HOUR >= TIMESTAMP '2025-11-01 00:00:00'
         -- Standard game-specific filters
-        AND t.currency = 'CNY'
+        AND t.currency IN {ETL_CURRENCY_CODES}
         AND t.gametype = 'HM3D'
         AND t.account != 0      -- Must have a bet amount
         AND t.fishcost != 0     -- Must have a fish cost

@@ -5,7 +5,13 @@ ETL game stats daily by group PA (Athena).
 from pathlib import Path
 from textwrap import dedent
 
-from bituslabs_ds.config import LOCAL_ROOT, S3_BUCKET, TIMEZONE_SHANGHAI, setup_logging
+from bituslabs_ds.config import (
+    ETL_CURRENCY_CODES,
+    LOCAL_ROOT,
+    S3_BUCKET,
+    TIMEZONE_SHANGHAI,
+    setup_logging,
+)
 from bituslabs_ds.etl import AthenaBackend, DataLoader
 
 stats_agg_col = "activity_date"
@@ -31,7 +37,7 @@ query = dedent(
     FROM
         ag_share_data.slotorders AS t
     WHERE
-        t.currency = 'CNY'
+        t.currency IN {ETL_CURRENCY_CODES}
         AND gametype = 'SB28' 
         AND flag != -8.0
     ),

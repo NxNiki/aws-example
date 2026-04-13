@@ -60,6 +60,8 @@ import pandas as pd
 
 from bituslabs_ds.config import (
     DEFAULT_BASTION_IP,
+    ETL_CURRENCY_CODES,
+    ETL_EXCLUDED_OP_CODES,
     LOCAL_ROOT,
     REDSHIFT_HOST,
     REDSHIFT_PORT,
@@ -102,10 +104,10 @@ def generate_query():
             WHERE
                 t.created_at >= '{DATE_START}'
                 AND t.created_at < '{DATE_END}'
-                AND t.currency_type = 'CNY'
+                AND t.currency_type IN {ETL_CURRENCY_CODES}
                 AND t.status = 'COMPLETED'
                 AND t.game_id = 'SS01'
-                AND t.op_code NOT IN ('B26', 'TST', 'TSB', 'TSO')
+                AND t.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
                 AND t.partition_ab[0] != 'jojpin-9mokha-rexQug' -- select default group
                 AND t.script_id = 'giftShop'
         ),

@@ -6,6 +6,8 @@ from bituslabs_ds.config import (
     DATE_START_HOUR,
     DEFAULT_BASTION_IP,
     DEFAULT_ETL_OUTPUT,
+    ETL_CURRENCY_CODES,
+    ETL_EXCLUDED_OP_CODES,
     LOCAL_ROOT,
     REDSHIFT_HOST,
     REDSHIFT_PORT,
@@ -51,8 +53,8 @@ def generate_query(start_date: str):
                 DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', b.created_at))) AS activity_date
             FROM public.bullet b
             WHERE
-                b.currency_type = 'CNY'
-                AND b.op_code not in ('B26', 'TST','TSB','TSO')
+                b.currency_type IN {ETL_CURRENCY_CODES}
+                AND b.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
                 -- ---------------------------------------------------------
                 -- FAST FILTERING: Transform the INPUTS, not the COLUMN
                 -- ---------------------------------------------------------

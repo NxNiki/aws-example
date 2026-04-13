@@ -12,6 +12,8 @@ from bituslabs_ds.config import (
     DATE_START_HOUR,
     DEFAULT_BASTION_IP,
     DEFAULT_ETL_OUTPUT,
+    ETL_CURRENCY_CODES,
+    ETL_EXCLUDED_OP_CODES,
     LOCAL_ROOT,
     REDSHIFT_HOST,
     REDSHIFT_PORT,
@@ -48,9 +50,9 @@ def generate_query(start_date: str):
             t.credit 
         FROM public.fct_bet_orders t
         WHERE t.game_id = '{GAME_ID}'
-            AND t.currency_type = 'CNY'
+            AND t.currency_type IN {ETL_CURRENCY_CODES}
             AND t.status = 'COMPLETED'
-            AND t.op_code not in ('B26','TST','TSB','TSO')
+            AND t.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
             AND t.created_at >= '{start_date}'
         """
     )

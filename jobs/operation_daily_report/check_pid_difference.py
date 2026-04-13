@@ -12,6 +12,8 @@ from typing import Any
 
 from bituslabs_ds.config import (
     DEFAULT_BASTION_IP,
+    ETL_CURRENCY_CODES,
+    ETL_EXCLUDED_OP_CODES,
     LOCAL_ROOT,
     REDSHIFT_HOST,
     REDSHIFT_PORT,
@@ -108,25 +110,25 @@ pids_to_ignore = {
 
 # Shared Athena query for ss01 and ss03 (same slotorders table)
 SLOT_ATHENA_QUERY = dedent(
-    """
+    f"""
     SELECT distinct t.productid AS product_id FROM ag_share_data.slotorders AS t
-    WHERE t.currency = 'CNY' AND gametype = 'SB28' AND flag != -8.0
+    WHERE t.currency IN {ETL_CURRENCY_CODES} AND gametype = 'SB28' AND flag != -8.0
 """
 )
 
 QUERIES: dict[str, dict[str, Any]] = {
     "fish_hunter": {
         "redshift_query": dedent(
-            """
+            f"""
             SELECT distinct t.op_code AS product_id FROM public.bullet AS t
-            WHERE t.currency_type = 'CNY' AND t.game_id = 'FM01'
-            AND t.op_code not in ('B26','TST','TSB','TSO')
+            WHERE t.currency_type IN {ETL_CURRENCY_CODES} AND t.game_id = 'FM01'
+            AND t.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
         """
         ),
         "athena_query": dedent(
-            """
+            f"""
             SELECT distinct t.productid AS product_id FROM agfish.hunterorders AS t
-            WHERE t.currency = 'CNY' AND t.gametype = 'HM3D' AND t.account != 0 AND t.fishcost != 0
+            WHERE t.currency IN {ETL_CURRENCY_CODES} AND t.gametype = 'HM3D' AND t.account != 0 AND t.fishcost != 0
             AND t.ordertype = 1 AND t.remark = t.gametype AND t.weaponid IS NULL
             AND t.billtime > TIMESTAMP '2024-01-01 00:00:00'
         """
@@ -139,10 +141,10 @@ QUERIES: dict[str, dict[str, Any]] = {
     },
     "ss01": {
         "redshift_query": dedent(
-            """
+            f"""
             SELECT distinct t.op_code AS product_id FROM public.fct_bet_orders AS t
-            WHERE t.currency_type = 'CNY' AND t.status = 'COMPLETED' AND t.game_id = 'SS01'
-            AND t.op_code not in ('B26','TST','TSB','TSO')
+            WHERE t.currency_type IN {ETL_CURRENCY_CODES} AND t.status = 'COMPLETED' AND t.game_id = 'SS01'
+            AND t.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
         """
         ),
         "redshift_database": "slot-machine",
@@ -150,10 +152,10 @@ QUERIES: dict[str, dict[str, Any]] = {
     },
     "ss03": {
         "redshift_query": dedent(
-            """
+            f"""
             SELECT distinct t.op_code AS product_id FROM public.fct_bet_orders AS t
-            WHERE t.currency_type = 'CNY' AND t.status = 'COMPLETED' AND t.game_id = 'SS03'
-            AND t.op_code not in ('B26','TST','TSB','TSO')
+            WHERE t.currency_type IN {ETL_CURRENCY_CODES} AND t.status = 'COMPLETED' AND t.game_id = 'SS03'
+            AND t.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
         """
         ),
         "redshift_database": "slot-machine",

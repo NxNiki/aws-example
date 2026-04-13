@@ -19,6 +19,7 @@ from textwrap import dedent
 from bituslabs_ds.config import (
     DEFAULT_BASTION_IP,
     DEFAULT_ETL_OUTPUT,
+    ETL_CURRENCY_CODES,
     LOCAL_ROOT,
     REDSHIFT_HOST,
     REDSHIFT_PORT,
@@ -28,7 +29,6 @@ from bituslabs_ds.config import (
 )
 from bituslabs_ds.etl import DataLoader, ETLScheduler, RedshiftBackend
 
-CURRENCY_TYPE = "CNY"
 GAME_IDS = ("FM01", "SS01", "SS03")
 
 
@@ -39,7 +39,7 @@ def generate_query(start_date: str) -> str:
         SELECT *
         FROM platform.public.fct_platform_ops_daily_report
         WHERE bj_date_key >= DATE '{start_date}'
-          AND currency_type = '{CURRENCY_TYPE}'
+          AND currency_type IN {ETL_CURRENCY_CODES}
           AND game_id IN ({games_sql})
         ORDER BY bj_date_key, game_id
         """

@@ -1,6 +1,7 @@
 from textwrap import dedent
 
 from bituslabs_ds.config import (
+    ETL_CURRENCY_CODES,
     LOCAL_ROOT,
     REDSHIFT_HOST,
     REDSHIFT_PORT,
@@ -32,7 +33,7 @@ query = dedent(
             ) AS prev_event_time
         FROM public.bullet
         WHERE
-            currency_type = 'CNY'
+            currency_type IN {ETL_CURRENCY_CODES}
             AND event_timestamp + INTERVAL '8 hours' >= '2025-11-01'
             AND event_timestamp + INTERVAL '8 hours' < '2025-12-01'
     ),

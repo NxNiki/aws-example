@@ -83,6 +83,7 @@ import pandas as pd
 from bituslabs_ds.config import (
     DEFAULT_BASTION_IP,
     DEFAULT_ETL_OUTPUT,
+    ETL_EXCLUDED_OP_CODES,
     LOCAL_ROOT,
     REDSHIFT_HOST,
     REDSHIFT_PORT,
@@ -114,7 +115,7 @@ def build_query() -> str:
                 EXTRACT(EPOCH FROM (MAX(created_at) - MIN(created_at))) / 3600.0
                     AS individual_duration_hours
             FROM public.bullet
-            WHERE op_code NOT IN ('B26', 'TST', 'TSB', 'TSO')
+            WHERE op_code NOT IN {ETL_EXCLUDED_OP_CODES}
               AND ip IS NOT NULL
               AND TRIM(ip) <> ''
             GROUP BY
@@ -166,7 +167,7 @@ def build_query() -> str:
                     ORDER BY b.created_at
                 ) AS prev_created_at
             FROM public.bullet AS b
-            WHERE b.op_code NOT IN ('B26', 'TST', 'TSB', 'TSO')
+            WHERE b.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
               AND b.ip IS NOT NULL
               AND TRIM(b.ip) <> ''
         ),
@@ -241,7 +242,7 @@ def build_query() -> str:
         LEFT JOIN ip_bet_interval_stats AS intervals
             ON t.ip = intervals.ip
             AND t.currency_type = intervals.currency_type
-        WHERE t.op_code NOT IN ('B26', 'TST', 'TSB', 'TSO')
+        WHERE t.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
           AND t.ip IS NOT NULL
           AND TRIM(t.ip) <> ''
         GROUP BY

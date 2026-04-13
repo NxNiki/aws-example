@@ -2,7 +2,13 @@ import argparse
 import os
 from textwrap import dedent
 
-from bituslabs_ds.config import LOCAL_ROOT, S3_BUCKET, TIMEZONE_SHANGHAI, setup_logging
+from bituslabs_ds.config import (
+    ETL_CURRENCY_CODES,
+    LOCAL_ROOT,
+    S3_BUCKET,
+    TIMEZONE_SHANGHAI,
+    setup_logging,
+)
 from bituslabs_ds.etl import AthenaBackend, DataLoader, ETLScheduler
 
 
@@ -30,7 +36,7 @@ def generate_query(stats_agg_col: str, start_date: str) -> str:
         FROM
             ag_share_data.slotorders AS t
         WHERE
-            t.currency = 'CNY'
+            t.currency IN {ETL_CURRENCY_CODES}
             AND gametype = 'SB28' 
             AND flag != -8.0
             AND date_trunc('day', from_unixtime(t.billtime / 1.0E9)
