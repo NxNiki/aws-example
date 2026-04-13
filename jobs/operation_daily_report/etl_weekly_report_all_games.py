@@ -1,5 +1,7 @@
 """
 Incremental ETL: platform ops daily report for FM01 (fish hunter), SS01, SS03.
+This script is used to generate the weekly report for all games, adpated from stehpanie's code.
+Incorporated into the dashboard by Xin.
 
 Reads from Redshift `platform.public.fct_platform_ops_daily_report`, writes Parquet to S3
 under ``{DEFAULT_ETL_OUTPUT}/jobs/output_weekly_report_all_games/ops_daily_report``.
