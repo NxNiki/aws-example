@@ -5,7 +5,7 @@ ETL game stats daily by group PA (Athena).
 from pathlib import Path
 from textwrap import dedent
 
-from bituslabs_ds.config import LOCAL_ROOT, S3_BUCKET, setup_logging
+from bituslabs_ds.config import LOCAL_ROOT, S3_BUCKET, TIMEZONE_SHANGHAI, setup_logging
 from bituslabs_ds.etl import AthenaBackend, DataLoader
 
 stats_agg_col = "activity_date"
@@ -22,10 +22,10 @@ query = dedent(
         t.cus_account AS profit,
         date_trunc('day', from_unixtime(t.billtime / 1.0E9) 
             AT TIME ZONE 'UTC' 
-            AT TIME ZONE 'Asia/Shanghai' - INTERVAL '6' HOUR) AS activity_date,
+            AT TIME ZONE '{TIMEZONE_SHANGHAI}' - INTERVAL '6' HOUR) AS activity_date,
         date_trunc('month', from_unixtime(t.billtime / 1.0E9) 
             AT TIME ZONE 'UTC' 
-            AT TIME ZONE 'Asia/Shanghai' - INTERVAL '6' HOUR) AS activity_month,
+            AT TIME ZONE '{TIMEZONE_SHANGHAI}' - INTERVAL '6' HOUR) AS activity_month,
         t.billtime / 1.0E9 - LAG(t.billtime / 1.0E9) OVER (PARTITION BY t.loginname ORDER BY t.billtime) AS delta_t,
         COUNT(t.loginname) OVER (PARTITION BY t.loginname) AS user_bet_count
     FROM

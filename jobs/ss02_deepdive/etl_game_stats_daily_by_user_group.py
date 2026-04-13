@@ -5,19 +5,18 @@ from textwrap import dedent
 import pandas as pd
 
 from bituslabs_ds.config import (
+    DATE_START_HOUR,
     DEFAULT_BASTION_IP,
     DEFAULT_ETL_OUTPUT,
     LOCAL_ROOT,
     REDSHIFT_HOST,
     REDSHIFT_PORT,
+    TIMEZONE_SHANGHAI,
     get_redshift_password,
     get_redshift_user,
     setup_logging,
 )
 from bituslabs_ds.etl import AggCol, DataLoader, ETLScheduler, RedshiftBackend, effective_start_date
-
-# Day boundary: 6 AM Shanghai time (same as fish_hunter)
-DATE_START_HOUR = 0
 
 GAME_ID = "SS02"
 AI_GROUP_ID = "jojpin-9mokha-rexQug"
@@ -58,9 +57,9 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             t.actual_payout AS payout,
             t.bet_type,
             t.actual_payout - t.bet_amount AS profit,
-            CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_date,
-            CAST(DATE_TRUNC('week', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_week,
-            CAST(DATE_TRUNC('month', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_month,
+            CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at))) AS DATE) AS activity_date,
+            CAST(DATE_TRUNC('week', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at))) AS DATE) AS activity_week,
+            CAST(DATE_TRUNC('month', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at))) AS DATE) AS activity_month,
             t.partition_ab[0] AS ab_group_id,
             t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.created_at) AS delta_t,
             LAG(t.bet_type) OVER (PARTITION BY t.user_id ORDER BY t.created_at) AS prev_bet_type,
@@ -75,7 +74,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             public.fct_bet_orders AS t
         WHERE
             t.game_id = '{GAME_ID}'
-            AND CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at) >= '{effective_start}'
+            AND CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at) >= '{effective_start}'
             AND t.currency_type = 'CNY'
             AND t.status = 'COMPLETED'
             AND t.op_code not in ('B26','TST','TSB','TSO') 
@@ -151,7 +150,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
         user_first_bet AS (
             SELECT
                 user_id,
-                MIN(CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', created_at))) AS DATE)) AS first_bet_date
+                MIN(CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', created_at))) AS DATE)) AS first_bet_date
             FROM public.fct_bet_orders
             WHERE game_id = '{GAME_ID}'
               AND currency_type = 'CNY'

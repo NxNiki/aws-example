@@ -5,17 +5,17 @@ from textwrap import dedent
 import pandas as pd
 
 from bituslabs_ds.config import (
+    DATE_START_HOUR,
     DEFAULT_BASTION_IP,
     LOCAL_ROOT,
     REDSHIFT_HOST,
     REDSHIFT_PORT,
+    TIMEZONE_SHANGHAI,
     get_redshift_password,
     get_redshift_user,
     setup_logging,
 )
 from bituslabs_ds.etl import DataLoader, RedshiftBackend
-
-DATE_START_HOUR = 6
 
 
 def generate_query():
@@ -26,7 +26,7 @@ def generate_query():
             SELECT
                 t.user_id,
                 t.created_at,
-                TRUNC(DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS activity_date,
+                TRUNC(DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at))) AS activity_date,
                 t.script_id AS mathtable,
                 t.bet_amount,
                 t.actual_payout AS payout,

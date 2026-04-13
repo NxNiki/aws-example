@@ -2,7 +2,13 @@ import argparse
 import os
 from textwrap import dedent
 
-from bituslabs_ds.config import DEFAULT_ETL_OUTPUT, LOCAL_ROOT, S3_BUCKET, setup_logging
+from bituslabs_ds.config import (
+    DEFAULT_ETL_OUTPUT,
+    LOCAL_ROOT,
+    S3_BUCKET,
+    TIMEZONE_SHANGHAI,
+    setup_logging,
+)
 from bituslabs_ds.etl import AthenaBackend, DataLoader, ETLScheduler
 
 DATE_END = "2027-12-1"
@@ -25,15 +31,15 @@ def generate_query(stats_agg_col: str, start_date: str, end_date: str = DATE_END
                 b.hunted AS killed,
                 b.cus_account AS profit,
                 -- Convert to Beijing time and truncate to date object 
-                CAST(DATE_TRUNC('day', b.billtime AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Shanghai' - INTERVAL '6' HOUR) AS DATE) AS activity_date,
-                CAST(DATE_TRUNC('week', b.billtime AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Shanghai' - INTERVAL '6' HOUR) AS DATE) AS activity_week,
-                CAST(DATE_TRUNC('month', b.billtime AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Shanghai' - INTERVAL '6' HOUR) AS DATE) AS activity_month
+                CAST(DATE_TRUNC('day', b.billtime AT TIME ZONE 'UTC' AT TIME ZONE '{TIMEZONE_SHANGHAI}' - INTERVAL '6' HOUR) AS DATE) AS activity_date,
+                CAST(DATE_TRUNC('week', b.billtime AT TIME ZONE 'UTC' AT TIME ZONE '{TIMEZONE_SHANGHAI}' - INTERVAL '6' HOUR) AS DATE) AS activity_week,
+                CAST(DATE_TRUNC('month', b.billtime AT TIME ZONE 'UTC' AT TIME ZONE '{TIMEZONE_SHANGHAI}' - INTERVAL '6' HOUR) AS DATE) AS activity_month
             FROM agfish.hunterorders b
             WHERE
                 b.currency = 'CNY'
                 -- avoid converting billtime to increase speed
-                AND b.billtime >= (TIMESTAMP '{start_date} 06:00:00' AT TIME ZONE 'Asia/Shanghai' AT TIME ZONE 'UTC') - INTERVAL '{return_user_days}' DAY
-                AND b.billtime < (TIMESTAMP '{end_date} 06:00:00' AT TIME ZONE 'Asia/Shanghai' AT TIME ZONE 'UTC') + INTERVAL '{retention_days}' DAY
+                AND b.billtime >= (TIMESTAMP '{start_date} 06:00:00' AT TIME ZONE '{TIMEZONE_SHANGHAI}' AT TIME ZONE 'UTC') - INTERVAL '{return_user_days}' DAY
+                AND b.billtime < (TIMESTAMP '{end_date} 06:00:00' AT TIME ZONE '{TIMEZONE_SHANGHAI}' AT TIME ZONE 'UTC') + INTERVAL '{retention_days}' DAY
                 AND b.gametype = 'HM3D'
                 AND b.account != 0
                 AND b.fishcost != 0

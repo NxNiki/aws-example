@@ -2,7 +2,7 @@ import argparse
 import os
 from textwrap import dedent
 
-from bituslabs_ds.config import LOCAL_ROOT, S3_BUCKET, setup_logging
+from bituslabs_ds.config import LOCAL_ROOT, S3_BUCKET, TIMEZONE_SHANGHAI, setup_logging
 from bituslabs_ds.etl import AthenaBackend, DataLoader, ETLScheduler
 
 
@@ -18,13 +18,13 @@ def generate_query(stats_agg_col: str, start_date: str) -> str:
             t.cus_account AS profit,
             date_trunc('day', from_unixtime(t.billtime / 1.0E9)
                 AT TIME ZONE 'UTC' 
-                AT TIME ZONE 'Asia/Shanghai' - INTERVAL '6' HOUR) AS activity_date,
+                AT TIME ZONE '{TIMEZONE_SHANGHAI}' - INTERVAL '6' HOUR) AS activity_date,
             date_trunc('week', from_unixtime(t.billtime / 1.0E9)
                 AT TIME ZONE 'UTC' 
-                AT TIME ZONE 'Asia/Shanghai' - INTERVAL '6' HOUR) AS activity_week,
+                AT TIME ZONE '{TIMEZONE_SHANGHAI}' - INTERVAL '6' HOUR) AS activity_week,
             date_trunc('month', from_unixtime(t.billtime / 1.0E9)
                 AT TIME ZONE 'UTC' 
-                AT TIME ZONE 'Asia/Shanghai' - INTERVAL '6' HOUR) AS activity_month,
+                AT TIME ZONE '{TIMEZONE_SHANGHAI}' - INTERVAL '6' HOUR) AS activity_month,
             t.billtime / 1.0E9 - LAG(t.billtime / 1.0E9) OVER (PARTITION BY t.loginname ORDER BY t.billtime) AS delta_t,
             COUNT(t.loginname) OVER (PARTITION BY t.loginname) AS user_bet_count
         FROM
@@ -35,7 +35,7 @@ def generate_query(stats_agg_col: str, start_date: str) -> str:
             AND flag != -8.0
             AND date_trunc('day', from_unixtime(t.billtime / 1.0E9)
                 AT TIME ZONE 'UTC' 
-                AT TIME ZONE 'Asia/Shanghai' - INTERVAL '6' HOUR) > CAST('{start_date}' AS timestamp)
+                AT TIME ZONE '{TIMEZONE_SHANGHAI}' - INTERVAL '6' HOUR) > CAST('{start_date}' AS timestamp)
         ),
 
         daily_login AS (

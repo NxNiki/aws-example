@@ -30,6 +30,7 @@ from bituslabs_ds.config import (
     LOCAL_ROOT,
     REDSHIFT_HOST,
     REDSHIFT_PORT,
+    TIMEZONE_SHANGHAI,
     get_redshift_password,
     get_redshift_user,
     setup_logging,
@@ -93,7 +94,7 @@ def build_query() -> str:
 
         SELECT
             t.event_timestamp,
-            TRUNC(CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.event_timestamp)) AS data_date,
+            TRUNC(CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.event_timestamp)) AS data_date,
             t.user_id,
             t2.user_name,
             t2.risk_user_group,

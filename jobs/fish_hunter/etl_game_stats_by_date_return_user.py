@@ -3,11 +3,13 @@ import os
 from textwrap import dedent
 
 from bituslabs_ds.config import (
+    DATE_START_HOUR,
     DEFAULT_BASTION_IP,
     DEFAULT_ETL_OUTPUT,
     LOCAL_ROOT,
     REDSHIFT_HOST,
     REDSHIFT_PORT,
+    TIMEZONE_SHANGHAI,
     get_redshift_password,
     get_redshift_user,
     setup_logging,
@@ -46,7 +48,7 @@ def generate_query(start_date: str):
                 b.killed,
                 b.profit,
                 LAG(b.event_timestamp) OVER (PARTITION BY b.user_id ORDER BY b.event_timestamp) AS prev_bet_time,
-                DATE_TRUNC('day', DATEADD(hour, -6, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at))) AS activity_date
+                DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', b.created_at))) AS activity_date
             FROM public.bullet b
             WHERE
                 b.currency_type = 'CNY'
@@ -56,7 +58,7 @@ def generate_query(start_date: str):
                 -- ---------------------------------------------------------
                 -- Logic: We want events where (EventTime + UserDays) >= Start
                 -- So: EventTime >= Start - UserDays
-                AND b.created_at >= CONVERT_TIMEZONE('Asia/Shanghai', 'UTC', CAST('{start_date}' AS TIMESTAMP))
+                AND b.created_at >= CONVERT_TIMEZONE('{TIMEZONE_SHANGHAI}', 'UTC', CAST('{start_date}' AS TIMESTAMP))
                 AND b.strategy_name = 'DEFAULT_FALLBACK'
         ),
 

@@ -3,11 +3,13 @@ import os
 from textwrap import dedent
 
 from bituslabs_ds.config import (
+    DATE_START_HOUR,
     DEFAULT_BASTION_IP,
     DEFAULT_ETL_OUTPUT,
     LOCAL_ROOT,
     REDSHIFT_HOST,
     REDSHIFT_PORT,
+    TIMEZONE_SHANGHAI,
     get_redshift_password,
     get_redshift_user,
     setup_logging,
@@ -17,7 +19,6 @@ from bituslabs_ds.etl import AggCol, DataLoader, ETLScheduler, RedshiftBackend, 
 DEFAULT_DATE_START = "2025-10-20"
 RETURN_USER_DAYS = 30
 RETENTION_DAYS = 3
-DATE_START_HOUR = 6
 STREAK_SESSION_THRESH = 600
 STREAK_KILL_THRESH = 3  # nearly 10% of all killing intervals.
 
@@ -48,9 +49,9 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
                 b.killed,
                 b.profit,
                 LAG(b.event_timestamp) OVER (PARTITION BY b.user_id ORDER BY b.event_timestamp) AS prev_bet_time,
-                CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at))) AS DATE) AS activity_date,
-                CAST(DATE_TRUNC('week', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at))) AS DATE) AS activity_week,
-                CAST(DATE_TRUNC('month', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at))) AS DATE) AS activity_month
+                CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', b.created_at))) AS DATE) AS activity_date,
+                CAST(DATE_TRUNC('week', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', b.created_at))) AS DATE) AS activity_week,
+                CAST(DATE_TRUNC('month', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', b.created_at))) AS DATE) AS activity_month
             FROM public.bullet b
             WHERE
                 b.currency_type = 'CNY'
@@ -63,7 +64,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
                 -- 1. Reverse the date math for START (use effective_start so monthly/weekly get full period)
                 -- Logic: We want events where (EventTime + UserDays) >= Start
                 -- So: EventTime >= Start - UserDays
-                AND b.created_at >= CONVERT_TIMEZONE('Asia/Shanghai', 'UTC',
+                AND b.created_at >= CONVERT_TIMEZONE('{TIMEZONE_SHANGHAI}', 'UTC',
                        DATEADD(day, -{RETURN_USER_DAYS}, CAST('{effective_start}' AS TIMESTAMP)))
 
         ),
@@ -326,7 +327,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
         user_first_bet AS (
             SELECT
                 user_id,
-                MIN(CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', created_at))) AS DATE)) AS first_bet_date
+                MIN(CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', created_at))) AS DATE)) AS first_bet_date
             FROM public.bullet
             WHERE currency_type = 'CNY'
               AND op_code NOT IN ('B26','TST','TSB','TSO')
