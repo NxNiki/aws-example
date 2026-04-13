@@ -54,7 +54,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
         SELECT
             t.user_id,
             t.created_at,
-            t.script_id AS mathtable,
+            t.math_table_id AS mathtable,
             t.bet_amount,
             t.actual_payout AS payout,
             t.bet_type,
@@ -68,8 +68,8 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             LAG(t.bet_amount) OVER (PARTITION BY t.user_id ORDER BY t.created_at) AS prev_bet_amount,
             COUNT(t.user_id) OVER (PARTITION BY t.user_id) AS user_bet_count,
             CASE
-                WHEN LAG(t.script_id) OVER (PARTITION BY t.user_id ORDER BY t.created_at) IS NULL THEN 0
-                WHEN LAG(t.script_id) OVER (PARTITION BY t.user_id ORDER BY t.created_at) <> t.script_id THEN 1
+                WHEN LAG(t.math_table_id) OVER (PARTITION BY t.user_id ORDER BY t.created_at) IS NULL THEN 0
+                WHEN LAG(t.math_table_id) OVER (PARTITION BY t.user_id ORDER BY t.created_at) <> t.math_table_id THEN 1
                 ELSE 0
             END AS mathtable_change
         FROM
@@ -91,6 +91,18 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 END AS ai_group
             FROM
                 user_bets AS t
+
+            UNION ALL
+
+            SELECT
+                {_USER_BETS_GROUP_COLS}
+                CASE
+                    WHEN t.ab_group_id != '{AI_GROUP_ID}' THEN CONCAT('Default_', t.math_table_id)
+                    WHEN t.ab_group_id = '{AI_GROUP_ID}' THEN ai_group
+                END AS ai_group
+            FROM
+                user_bets AS t
+            WHERE t.ab_group_id IS NOT NULL
         ),
 
         user_stats AS (
