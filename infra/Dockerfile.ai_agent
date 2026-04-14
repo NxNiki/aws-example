@@ -1,0 +1,66 @@
+# --- Stage 1: Builder ---
+FROM python:3.11-slim AS builder
+
+ENV POETRY_NO_INTERACTION=1 \
+    POETRY_VIRTUALENVS_IN_PROJECT=1 \
+    POETRY_VIRTUALENVS_CREATE=1 \
+    POETRY_CACHE_DIR=/tmp/poetry_cache
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    gcc \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -sSL https://install.python-poetry.org | python3 -
+ENV PATH="/root/.local/bin:$PATH"
+
+COPY pyproject.toml poetry.lock ./
+
+# Install main + ai_agent group only (no dash, plotly, polars, gunicorn)
+RUN poetry install --only main,ai_agent --no-root --no-cache && rm -rf $POETRY_CACHE_DIR
+
+# --- Stage 2: Runtime ---
+FROM python:3.11-slim AS runtime
+
+ENV VIRTUAL_ENV=/app/.venv \
+    PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH="/app/src" \
+    LOCAL_ROOT=/app
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/.venv /app/.venv
+
+# Application code — only the modules the chat agent needs
+COPY src/bituslabs_ds ./src/bituslabs_ds
+COPY src/dashboards/chat_agent.py       ./src/dashboards/chat_agent.py
+COPY src/dashboards/chat_api.py         ./src/dashboards/chat_api.py
+COPY src/dashboards/metadata_builder.py ./src/dashboards/metadata_builder.py
+COPY src/dashboards/column_metadata.yaml ./src/dashboards/column_metadata.yaml
+COPY src/dashboards/__init__.py         ./src/dashboards/__init__.py
+# Dashboard config YAMLs — the agent reads these to contextualize answers
+COPY src/dashboards/dashboard_config*.yaml ./src/dashboards/
+# ETL source files — the metadata builder scans SQL from these
+COPY jobs ./jobs
+
+EXPOSE 8051
+
+# Uvicorn ASGI server — async-friendly for LLM API calls.
+#
+# --workers 1          Single process; metadata cache shared across requests.
+# --timeout-keep-alive 65  Match ALB idle timeout (60s) + buffer.
+# --host 0.0.0.0       Reachable from outside the container.
+# --port 8051          Separate from dashboard (8050).
+CMD ["uvicorn", \
+     "dashboards.chat_api:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8051", \
+     "--workers", "1", \
+     "--timeout-keep-alive", "65", \
+     "--access-log"]

@@ -6,8 +6,7 @@
     "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "ba5633e45e2928e0c0a864c36fa22a7d2c076196c0f0d797b4dbf8fbd660b2a0",
     "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "80530f44e4de3f28016d6e7a3782986dc9a4861c8020d2ead06ff66faf09589c",
     "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "91ce767bafafb9693e608ed057dfa1822cb580165929099a59e7ad76110d24c5",
-    "jobs/operation_daily_report/etl_weekly_report_all_games.py": "47b14879e1ab04e4e5300b01503d6124b37385ede2670da0fb485738c062a33e",
-    "dashboard_config": "c2f3007443d36851bc5986156ebad495abe8566bd0e8b3611459070695851826"
+    "jobs/operation_daily_report/etl_weekly_report_all_games.py": "47b14879e1ab04e4e5300b01503d6124b37385ede2670da0fb485738c062a33e"
   },
   "metadata": {
     "columns": {
@@ -1677,109 +1676,6 @@
         "sql_snippets_count": 1
       }
     ],
-    "dashboard_config": {
-      "title": "Fish Hunter Analytics",
-      "stats_by_date": {
-        "files": {
-          "day": [
-            "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/daily_stats",
-            "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/daily_stats_pa"
-          ],
-          "week": [
-            "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/weekly_stats",
-            "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/weekly_stats_pa"
-          ],
-          "month": [
-            "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/monthly_stats",
-            "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/monthly_stats_pa"
-          ]
-        },
-        "group_col": "daily_group",
-        "date_col": "activity_date",
-        "user_group_cols": [
-          "user_group",
-          "daily_group"
-        ],
-        "group1_label": "DAU and Retention",
-        "group1_columns": [
-          "num_active_users",
-          "day0_num_users",
-          "day1_num_users",
-          "day3_num_users",
-          "retention_rate_day1",
-          "retention_rate_day3",
-          "user_killed_fish"
-        ],
-        "group2_label": "Bet and RTP",
-        "group2_columns": [
-          "user_total_bet",
-          "user_total_payout",
-          "user_rtp",
-          "rtp",
-          "user_total_profit",
-          "user_max_profit",
-          "user_bullet_avg_profit",
-          "user_bullet_kill_avg_profit",
-          "user_num_streak_sessions",
-          "user_avg_streak_length",
-          "user_max_streak_length",
-          "user_min_streak_length",
-          "user_seconds_to_kill_fish",
-          "user_seconds_to_kill_fish_low",
-          "user_seconds_to_kill_fish_medium",
-          "user_seconds_to_kill_fish_high",
-          "user_seconds_to_kill_fish_ultra",
-          "user_bets_to_kill_fish",
-          "user_bets_to_kill_fish_low",
-          "user_bets_to_kill_fish_medium",
-          "user_bets_to_kill_fish_high",
-          "user_bets_to_kill_fish_ultra"
-        ],
-        "group3_label": "Fish Value and Bullets",
-        "group3_columns": [
-          "user_avg_fish_value",
-          "user_avg_fish_value_20_200",
-          "user_avg_killed_fish_value",
-          "user_avg_killed_fish_value_20_200",
-          "user_num_bets",
-          "user_num_killed_bullets",
-          "user_bullet_kill_ratio",
-          "user_num_rooms",
-          "user_profit_coef_var",
-          "user_killed_fish_low_ratio",
-          "user_killed_fish_medium_ratio",
-          "user_killed_fish_high_ratio",
-          "user_killed_fish_ultra_ratio",
-          "user_hits_fish_low_ratio",
-          "user_hits_fish_medium_ratio",
-          "user_hits_fish_high_ratio",
-          "user_hits_fish_ultra_ratio",
-          "user_max_kill_streak",
-          "user_max_kill_streak_low",
-          "user_max_kill_streak_medium",
-          "user_max_kill_streak_high",
-          "user_max_kill_streak_ultra",
-          "user_avg_kill_streak",
-          "user_avg_kill_streak_low",
-          "user_avg_kill_streak_medium",
-          "user_avg_kill_streak_high",
-          "user_avg_kill_streak_ultra"
-        ]
-      },
-      "stats_by_bet": {
-        "files": [
-          "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/bullet_stats_by_index.parquet",
-          "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/bullet_stats_by_index_pa.parquet"
-        ],
-        "group_col": "session_group"
-      },
-      "weekly_report": {
-        "game_id": "FM01",
-        "currency_type": "CNY",
-        "files": [
-          "s3://bituslabs-team-ai/etl-results/jobs/output_weekly_report_all_games/ops_daily_report"
-        ]
-      }
-    }
+    "dashboard_config": null
   }
 }

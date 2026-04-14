@@ -42,23 +42,9 @@ from dashboards.weekly_report import (
     weekly_report_end_date_bounds,
 )
 
-_CHAT_AVAILABLE = False
-_chat_agent_chat: Optional[Callable] = None
-_chat_init_metadata: Optional[Callable] = None
-try:
-    from dashboards.chat_agent import (  # type: ignore[assignment]
-        chat as _chat_agent_chat,
-        init_metadata as _chat_init_metadata,
-    )
-
-    _CHAT_AVAILABLE = True
-except Exception as _chat_import_err:
-    # Log the real reason so "button is grey" is diagnosable.
-    # Common causes: langchain/langgraph not installed, or a syntax error in chat_agent.py.
-    import traceback as _tb
-
-    print(f"[AI Assistant] disabled — import failed: {_chat_import_err}")
-    _tb.print_exc()
+# The AI chat agent runs as a separate service (FastAPI + Uvicorn).
+# The dashboard calls it over HTTP — no langchain/langgraph deps needed here.
+_CHAT_API_URL = os.environ.get("CHAT_API_URL", "http://localhost:8051")
 
 # ==========================================
 # Styling & Constants
@@ -863,15 +849,14 @@ class GameStatsDashboard:
                                     ],
                                 ),
                                 html.Button(
-                                    "AI Assistant" if _CHAT_AVAILABLE else "AI (N/A)",
+                                    "AI Assistant",
                                     id="chat-toggle-btn",
                                     n_clicks=0,
-                                    disabled=not _CHAT_AVAILABLE,
                                     style={
                                         "marginLeft": "12px",
                                         "padding": "6px 14px",
-                                        "cursor": "pointer" if _CHAT_AVAILABLE else "default",
-                                        "backgroundColor": "#FF7F00" if _CHAT_AVAILABLE else "#ccc",
+                                        "cursor": "pointer",
+                                        "backgroundColor": "#FF7F00",
                                         "color": "white",
                                         "border": "none",
                                         "borderRadius": "4px",
@@ -3842,9 +3827,6 @@ class GameStatsDashboard:
             Input("chat-dialog", "style"),
         )
 
-        if not _CHAT_AVAILABLE:
-            return
-
         @self.app.callback(
             Output("chat-messages-container", "children"),
             Output("chat-history", "data"),
@@ -3868,6 +3850,10 @@ class GameStatsDashboard:
             config_path: str,
             provider: str,
         ) -> Any:
+            import json as _json
+            import urllib.error
+            import urllib.request
+
             ctx = callback_context
             if not ctx.triggered:
                 return no_update, no_update, no_update, no_update
@@ -3883,26 +3869,35 @@ class GameStatsDashboard:
             history = list(history or [])
             history.append({"role": "user", "content": user_input.strip()})
 
-            # Set provider env var so _build_llm() picks it up
-            if provider:
-                os.environ["CHAT_PROVIDER"] = provider
-
             try:
-                assert _chat_agent_chat is not None
-                config_p = Path(config_path) if config_path else None
-                response = _chat_agent_chat(
-                    user_message=user_input.strip(),
-                    history=history[:-1],
-                    dashboard_config_path=config_p,
+                payload = _json.dumps(
+                    {
+                        "message": user_input.strip(),
+                        "history": [{"role": m["role"], "content": m["content"]} for m in history[:-1]],
+                        "dashboard_config": config_path or "",
+                        "provider": provider,
+                    }
+                ).encode()
+                req = urllib.request.Request(
+                    f"{_CHAT_API_URL}/api/chat",
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
                 )
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    body = _json.loads(resp.read().decode())
+                response = body.get("response", "No response received.")
+                elapsed = body.get("elapsed_ms", "")
                 history.append({"role": "assistant", "content": response})
-                status = f"({provider})"
+                status = f"({provider}) {elapsed}ms" if elapsed else f"({provider})"
+            except urllib.error.URLError as exc:
+                logger.exception("Chat agent unreachable")
+                history.append({"role": "assistant", "content": "AI Agent is not reachable. Is the service running?"})
+                status = f"Connection error: {exc.reason}"
             except Exception as exc:
                 logger.exception("Chat agent error")
-                error_msg = f"Error: {exc}"
-                history.append({"role": "assistant", "content": error_msg})
-                key_hint = "GOOGLE_API_KEY" if provider == "gemini" else "OPENAI_API_KEY"
-                status = f"An error occurred. Check {key_hint} is set."
+                history.append({"role": "assistant", "content": f"Error: {exc}"})
+                status = "An error occurred."
 
             messages_ui = self._render_chat_messages(history)
             return messages_ui, history, "", status
@@ -3980,73 +3975,9 @@ _dashboard = GameStatsDashboard(_config_dir)
 #            --bind 0.0.0.0:8050 dashboards.game_stats_monitor:server
 server = _dashboard.app.server
 
-# Mount REST API routes on the same Flask/Gunicorn server so a future React
-# frontend (or external scripts) can call /api/chat, /api/metadata/columns, etc.
-# without a second container or task.
-#
-# The Dash callbacks already call chat_agent.chat() directly (no HTTP),
-# so these routes are purely for external consumers.
-try:
-    import json as _json
-
-    from flask import Blueprint, jsonify, request as flask_request
-
-    from dashboards.chat_agent import chat as _api_chat
-    from dashboards.metadata_builder import build_metadata as _api_build_metadata
-
-    _chat_bp = Blueprint("chat_api", __name__)
-
-    @_chat_bp.route("/api/chat", methods=["POST"])
-    def _api_chat_endpoint():
-        body = flask_request.get_json(force=True)
-        message = body.get("message", "")
-        history = body.get("history", [])
-        config_name = body.get("dashboard_config")
-        config_path = Path(_config_dir) / config_name if config_name else None
-        import time
-
-        t0 = time.monotonic()
-        try:
-            resp = _api_chat(
-                user_message=message,
-                history=history,
-                dashboard_config_path=config_path,
-            )
-        except Exception as exc:
-            return jsonify({"error": str(exc)}), 500
-        elapsed = int((time.monotonic() - t0) * 1000)
-        return jsonify({"response": resp, "elapsed_ms": elapsed})
-
-    @_chat_bp.route("/api/metadata/columns", methods=["GET"])
-    def _api_list_columns():
-        meta = _api_build_metadata()
-        category = flask_request.args.get("category")
-        cols = []
-        for name, info in sorted(meta.get("columns", {}).items()):
-            if category and info.get("category") != category:
-                continue
-            cols.append(
-                {"name": name, "category": info.get("category", "other"), "description": info.get("description", "")}
-            )
-        return jsonify({"columns": cols, "total": len(cols)})
-
-    @_chat_bp.route("/api/metadata/columns/<name>", methods=["GET"])
-    def _api_get_column(name):
-        meta = _api_build_metadata()
-        info = meta.get("columns", {}).get(name)
-        if not info:
-            return jsonify({"error": f"Column '{name}' not found"}), 404
-        return jsonify({"name": name, **info})
-
-    @_chat_bp.route("/api/metadata/groups", methods=["GET"])
-    def _api_list_groups():
-        meta = _api_build_metadata()
-        return jsonify({"groups": meta.get("groups", {})})
-
-    server.register_blueprint(_chat_bp)
-    logger.info("Chat API routes registered at /api/*")
-except Exception as _api_err:
-    logger.info("Chat API routes not registered — %s: %s", type(_api_err).__name__, _api_err)
+# REST API (/api/chat, /api/metadata/*) is served by the standalone
+# AI Chat Agent service (FastAPI + Uvicorn) at CHAT_API_URL.
+# No Flask blueprint needed here — the dashboard calls the agent over HTTP.
 
 if __name__ == "__main__":
     debug = os.environ.get("DASHBOARD_DEBUG", "true").lower() in ("1", "true", "yes")

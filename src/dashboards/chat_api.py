@@ -1,16 +1,10 @@
 """
 FastAPI REST API for the dashboard AI chatbot.
 
-Deployment modes
-----------------
-1. **Embedded (current)**: The Dash/Gunicorn server in game_stats_monitor.py
-   registers equivalent Flask blueprint routes at ``/api/*``.  No separate
-   process needed — everything runs in one ECS task.
+Runs as a standalone service on Uvicorn, separate from the dashboard.
+The dashboard calls this API over HTTP (``CHAT_API_URL`` env var).
 
-2. **Standalone (future React frontend)**: Run this module directly with
-   Uvicorn (``python -m dashboards.chat_api`` or
-   ``uvicorn dashboards.chat_api:app``).  Ideal when the frontend is a
-   separate React/Next.js app that talks to this API over HTTP.
+    uvicorn dashboards.chat_api:app --host 0.0.0.0 --port 8051
 
 Endpoints
 ---------
@@ -25,15 +19,17 @@ POST /api/metadata/rebuild          — Force-rebuild the metadata cache
 from __future__ import annotations
 
 import logging
+import os
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from dashboards.chat_agent import chat, init_metadata
+from dashboards.chat_agent import achat, chat, init_metadata
 from dashboards.metadata_builder import build_metadata
 
 logger = logging.getLogger(__name__)
@@ -57,6 +53,11 @@ class ChatRequest(BaseModel):
     dashboard_config: Optional[str] = Field(
         None,
         description="Filename of the active dashboard config (e.g. 'dashboard_config-ss01.yaml')",
+    )
+    provider: Optional[str] = Field(
+        None,
+        description="LLM provider override for this request (openai | gemini). "
+        "Falls back to CHAT_PROVIDER env var if not set.",
     )
 
 
@@ -121,10 +122,21 @@ def create_chat_app(*, prefix: str = "") -> FastAPI:
     prefix : str
         URL prefix (e.g. "/chat-api") when mounting under another ASGI app.
     """
+
+    @asynccontextmanager
+    async def _lifespan(application: FastAPI) -> AsyncIterator[None]:
+        try:
+            init_metadata()
+            logger.info("Chat API: metadata pre-warmed at startup")
+        except Exception:
+            logger.warning("Chat API: metadata pre-warm failed (will retry on first request)", exc_info=True)
+        yield
+
     app = FastAPI(
         title="Dashboard AI Chat API",
         description="AI-powered Q&A for game analytics dashboard columns and metrics",
         version="1.0.0",
+        lifespan=_lifespan,
         docs_url=f"{prefix}/docs" if prefix else "/docs",
         openapi_url=f"{prefix}/openapi.json" if prefix else "/openapi.json",
     )
@@ -137,18 +149,13 @@ def create_chat_app(*, prefix: str = "") -> FastAPI:
         allow_headers=["*"],
     )
 
-    @app.on_event("startup")
-    async def _startup() -> None:
-        try:
-            init_metadata()
-            logger.info("Chat API: metadata pre-warmed at startup")
-        except Exception:
-            logger.warning("Chat API: metadata pre-warm failed (will retry on first request)", exc_info=True)
-
     # --- Chat endpoint ---
     @app.post("/api/chat", response_model=ChatResponse)
     async def post_chat(req: ChatRequest) -> ChatResponse:
         t0 = time.monotonic()
+
+        if req.provider:
+            os.environ["CHAT_PROVIDER"] = req.provider
 
         config_path: Optional[Path] = None
         if req.dashboard_config:
@@ -162,7 +169,7 @@ def create_chat_app(*, prefix: str = "") -> FastAPI:
         history = [{"role": m.role, "content": m.content} for m in req.history]
 
         try:
-            response_text = chat(
+            response_text = await achat(
                 user_message=req.message,
                 history=history,
                 dashboard_config_path=config_path,
@@ -238,6 +245,7 @@ def create_chat_app(*, prefix: str = "") -> FastAPI:
             )
         return GroupListResponse(groups=groups)
 
+    @app.get("/health", response_model=HealthResponse)
     @app.get("/api/health", response_model=HealthResponse)
     async def health_check() -> HealthResponse:
         from dashboards.chat_agent import _METADATA
@@ -258,14 +266,15 @@ def create_chat_app(*, prefix: str = "") -> FastAPI:
 
 
 # ---------------------------------------------------------------------------
-# Standalone entry point: ``python -m dashboards.chat_api``
+# Module-level app instance (used by Uvicorn in production and local dev)
+#   uvicorn dashboards.chat_api:app --host 0.0.0.0 --port 8051
 # ---------------------------------------------------------------------------
+app = create_chat_app()
 
 
 def main() -> None:
     import uvicorn
 
-    app = create_chat_app()
     uvicorn.run(app, host="0.0.0.0", port=8051, log_level="info")
 
 

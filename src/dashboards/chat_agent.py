@@ -323,34 +323,11 @@ def init_metadata(
     )
 
 
-def chat(
+def _build_messages(
     user_message: str,
     history: Optional[List[Dict[str, str]]] = None,
-    dashboard_config_path: Optional[Path] = None,
-) -> str:
-    """
-    Send a message to the chat agent and return the response text.
-
-    Parameters
-    ----------
-    user_message : str
-        The user's question.
-    history : list of dict, optional
-        Previous messages as ``[{"role": "user"|"assistant", "content": "..."}, ...]``.
-    dashboard_config_path : Path, optional
-        Path to the active dashboard config YAML. Used to contextualize
-        answers with the currently displayed game.
-
-    Returns
-    -------
-    str
-        The assistant's response.
-    """
-    _ensure_metadata(dashboard_config_path=dashboard_config_path)
-    agent = create_agent()
-
+) -> List[BaseMessage]:
     messages: List[BaseMessage] = [SystemMessage(content=_SYSTEM_PROMPT)]
-
     for msg in history or []:
         role = msg.get("role", "user")
         content = msg.get("content", "")
@@ -358,14 +335,46 @@ def chat(
             messages.append(HumanMessage(content=content))
         else:
             messages.append(AIMessage(content=content))
-
     messages.append(HumanMessage(content=user_message))
+    return messages
 
-    result = agent.invoke({"messages": messages})
 
-    response_messages = result.get("messages", [])
-    for m in reversed(response_messages):
+def _extract_response(result: dict) -> str:
+    for m in reversed(result.get("messages", [])):
         if isinstance(m, AIMessage) and m.content and isinstance(m.content, str):
             return m.content
-
     return "I'm sorry, I couldn't generate a response. Please try rephrasing your question."
+
+
+def chat(
+    user_message: str,
+    history: Optional[List[Dict[str, str]]] = None,
+    dashboard_config_path: Optional[Path] = None,
+) -> str:
+    """
+    Synchronous chat — used by the Dash embedded panel (Gunicorn / threaded).
+    """
+    _ensure_metadata(dashboard_config_path=dashboard_config_path)
+    agent = create_agent()
+    messages = _build_messages(user_message, history)
+    result = agent.invoke({"messages": messages})
+    return _extract_response(result)
+
+
+async def achat(
+    user_message: str,
+    history: Optional[List[Dict[str, str]]] = None,
+    dashboard_config_path: Optional[Path] = None,
+) -> str:
+    """
+    Async chat — used by the FastAPI standalone service (Uvicorn / ASGI).
+
+    Uses ``ainvoke`` so the event loop is never blocked while waiting for
+    the LLM API response, allowing Uvicorn to handle many concurrent
+    requests on a single worker.
+    """
+    _ensure_metadata(dashboard_config_path=dashboard_config_path)
+    agent = create_agent()
+    messages = _build_messages(user_message, history)
+    result = await agent.ainvoke({"messages": messages})
+    return _extract_response(result)
