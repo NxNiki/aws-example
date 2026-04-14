@@ -22,6 +22,8 @@ from bituslabs_ds.etl import AggCol, DataLoader, ETLScheduler, RedshiftBackend, 
 
 GAME_ID = "SS03"
 AI_GROUP_ID = "jojpin-9mokha-rexQug"
+AB_TEST_GROUP_A = "4a04df21-c749-4808-8e55-3a0b74c084d2"
+AB_TEST_GROUP_B = "4f1a46ca-7baa-4452-9a40-ef21d9b33b57"
 
 # Shared column list for user_bets_group UNION (reused across group variants)
 _USER_BETS_GROUP_COLS = """
@@ -87,6 +89,8 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 {_USER_BETS_GROUP_COLS}
                 CASE
                     WHEN t.ab_group_id = '{AI_GROUP_ID}' THEN 'AI'
+                    WHEN t.ab_group_id = '{AB_TEST_GROUP_A}' THEN 'AB_TEST_A'
+                    WHEN t.ab_group_id = '{AB_TEST_GROUP_B}' THEN 'AB_TEST_B'
                     ELSE 'Default'
                 END AS ai_group
             FROM
