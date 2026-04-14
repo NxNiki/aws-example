@@ -25,6 +25,7 @@ Options:
   --desired-count       Number of tasks (default: 0 with scale-to-zero, else 1)
   --no-scale-to-zero    Disable scale-to-zero; keep 1 task always running
   --public-url          DASHBOARD_PUBLIC_URL env (default: ALB URL)
+  --chat-api-url        CHAT_API_URL for the AI agent (auto-detected from ai-chat-agent ALB)
   --build-first         Run docker_build_dashboard.sh before deploying
   --dry-run             Print planned actions without executing
 """
@@ -223,6 +224,12 @@ def main() -> None:
         "--public-url",
         default=None,
         help="DASHBOARD_PUBLIC_URL env (default: ALB URL)",
+    )
+    parser.add_argument(
+        "--chat-api-url",
+        default=None,
+        help="CHAT_API_URL for the AI agent service (e.g. http://ai-chat-agent-alb-123.us-west-2.elb.amazonaws.com). "
+        "Auto-detected from the ai-chat-agent ALB if not provided.",
     )
     parser.add_argument(
         "--dry-run",
@@ -526,6 +533,24 @@ def main() -> None:
     public_url = args.public_url or f"http://{alb_dns}"
     if public_url:
         env_vars.append({"name": "DASHBOARD_PUBLIC_URL", "value": public_url})
+
+    # Resolve AI chat agent URL so the dashboard can call it over HTTP
+    chat_api_url = args.chat_api_url
+    if not chat_api_url:
+        try:
+            agent_albs = elbv2.describe_load_balancers(Names=["ai-chat-agent-alb"])["LoadBalancers"]
+            if agent_albs:
+                chat_api_url = f"http://{agent_albs[0]['DNSName']}"
+                print(f"  Auto-detected AI agent ALB: {chat_api_url}")
+        except ClientError:
+            pass
+    if chat_api_url:
+        env_vars.append({"name": "CHAT_API_URL", "value": chat_api_url})
+    else:
+        print(
+            "  Warning: CHAT_API_URL not set. AI chat will not work until you "
+            "deploy the ai-chat-agent service and redeploy the dashboard with --chat-api-url."
+        )
 
     task_def = {
         "family": args.service_name,
