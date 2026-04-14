@@ -42,9 +42,44 @@ from dashboards.weekly_report import (
     weekly_report_end_date_bounds,
 )
 
+_CHAT_AVAILABLE = False
+_chat_agent_chat: Optional[Callable] = None
+_chat_init_metadata: Optional[Callable] = None
+try:
+    from dashboards.chat_agent import (  # type: ignore[assignment]
+        chat as _chat_agent_chat,
+        init_metadata as _chat_init_metadata,
+    )
+
+    _CHAT_AVAILABLE = True
+except Exception as _chat_import_err:
+    # Log the real reason so "button is grey" is diagnosable.
+    # Common causes: langchain/langgraph not installed, or a syntax error in chat_agent.py.
+    import traceback as _tb
+
+    print(f"[AI Assistant] disabled — import failed: {_chat_import_err}")
+    _tb.print_exc()
+
 # ==========================================
 # Styling & Constants
 # ==========================================
+
+# Dash exposes `Dropdown.Options` as a TypedDict for this prop.
+_CHAT_PROVIDER_DROPDOWN_OPTIONS: list[dcc.Dropdown.Options] = [
+    {"label": "OpenAI (gpt-4o-mini)", "value": "openai"},
+    {"label": "Gemini (gemini-2.5-flash)", "value": "gemini"},
+]
+
+
+def _dropdown_options_from_strings(items: Sequence[str]) -> list[dcc.Dropdown.Options]:
+    """Same string for label and value; matches Dash ``Dropdown.Options``."""
+    return [{"label": n, "value": n} for n in items]
+
+
+def _dropdown_option_rows(rows: Sequence[tuple[str, str]]) -> list[dcc.Dropdown.Options]:
+    """Arbitrary label/value pairs; valid for ``dcc.Dropdown``, ``Checklist``, and ``RadioItems`` ``options``."""
+    return [{"label": a, "value": b} for a, b in rows]
+
 
 logger: logging.Logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())  # Safe for import
@@ -260,7 +295,7 @@ class GameStatsDashboard:
 
     DEFAULT_VISIBLE_GROUPS: int = 2
 
-    config_files: List[Dict[str, str]]
+    config_files: list[dcc.Dropdown.Options]
     config: dict
     lfs_by_date: Dict[str, pl.LazyFrame]
     lf_bet: pl.LazyFrame
@@ -268,7 +303,7 @@ class GameStatsDashboard:
     df_date_group_col: str
     df_bet_group_col: str
     df_user_group_col: str
-    df_user_group_dropdown_options: List[Dict[str, str]]
+    df_user_group_dropdown_options: list[dcc.Dropdown.Options]
     sessions: List[str]
     bet_metrics: List[str]
     plot_metrics: Dict[str, List[str]]
@@ -280,7 +315,7 @@ class GameStatsDashboard:
 
         self.config_files = self._find_config_files()
         self._reset_state()
-        self.config = load_config(self.config_files[0]["value"])
+        self.config = load_config(str(self.config_files[0]["value"]))
 
         self.app: Dash = Dash(__name__, suppress_callback_exceptions=True)
 
@@ -318,6 +353,7 @@ class GameStatsDashboard:
         self._ensure_bet_groups()
         self._build_main_layout()
         self._register_callbacks()
+        self._register_chat_callbacks()
 
     @property
     def date_col(self) -> str:
@@ -332,8 +368,8 @@ class GameStatsDashboard:
         self.df_bet_group_col = ""
         self.df_user_group_col = ""
         self.df_user_group_cols: List[str] = []
-        self.df_user_group_col_options: List[Dict[str, str]] = []
-        self.df_user_group_dropdown_options = [{"label": "all", "value": "all"}]
+        self.df_user_group_col_options: list[dcc.Dropdown.Options] = []
+        self.df_user_group_dropdown_options = _dropdown_options_from_strings(["all"])
         self.bet_metrics = []
         self.plot_metrics = {}
         # When loading a saved config, we may want to reuse its group date ranges
@@ -352,8 +388,8 @@ class GameStatsDashboard:
         ] = None
         self._weekly_report_df = None
 
-    def _find_config_files(self) -> List[Dict[str, str]]:
-        config_files: List[Dict[str, str]] = []
+    def _find_config_files(self) -> list[dcc.Dropdown.Options]:
+        config_files: list[dcc.Dropdown.Options] = []
         config_dir_path = Path(self.config_dir)
         if not config_dir_path.exists() or not config_dir_path.is_dir():
             config_dir_path = Path(__file__).parent
@@ -367,7 +403,7 @@ class GameStatsDashboard:
                 except Exception as e:
                     logger.warning(f"Could not load config {file_path}: {e}")
                     config_files.append({"label": file_path.stem, "value": str(file_path.absolute())})
-        return sorted(config_files, key=lambda x: x["label"])
+        return sorted(config_files, key=lambda x: str(x["label"]))
 
     def _load_date_data(self) -> None:
         for gran, file_paths in self.date_files_config.items():
@@ -658,7 +694,7 @@ class GameStatsDashboard:
                     [
                         dcc.Dropdown(
                             id="config-dropdown",
-                            options=cast(Any, self.config_files),
+                            options=self.config_files,
                             value=self.config_files[0]["value"],
                             clearable=False,
                             style=dict(
@@ -826,6 +862,23 @@ class GameStatsDashboard:
                                         ),
                                     ],
                                 ),
+                                html.Button(
+                                    "AI Assistant" if _CHAT_AVAILABLE else "AI (N/A)",
+                                    id="chat-toggle-btn",
+                                    n_clicks=0,
+                                    disabled=not _CHAT_AVAILABLE,
+                                    style={
+                                        "marginLeft": "12px",
+                                        "padding": "6px 14px",
+                                        "cursor": "pointer" if _CHAT_AVAILABLE else "default",
+                                        "backgroundColor": "#FF7F00" if _CHAT_AVAILABLE else "#ccc",
+                                        "color": "white",
+                                        "border": "none",
+                                        "borderRadius": "4px",
+                                        "fontSize": "13px",
+                                        "fontWeight": "bold",
+                                    },
+                                ),
                             ],
                             style={"display": "flex", "alignItems": "center", "marginLeft": "auto"},
                         ),
@@ -840,6 +893,7 @@ class GameStatsDashboard:
                 dcc.Store(id="tab-group-g3-state", data=None),
                 dcc.Store(id="tab-bet-state", data=None),
                 dcc.Store(id="dashboard-load-trigger", data=None),
+                dcc.Store(id="chat-history", data=[]),
                 html.Div(
                     self._layout_stats_by_date(),
                     id="tab-date-content",
@@ -860,6 +914,7 @@ class GameStatsDashboard:
                     id="tab-bet-content",
                     style={**Styles.PAGE_CONTENT, "display": "none"},
                 ),
+                self._layout_chat_dialog(),
             ]
         )
 
@@ -867,8 +922,8 @@ class GameStatsDashboard:
         self,
         label: str,
         elem_id: str,
-        options: Any,
-        value: Any,
+        options: list[dcc.Dropdown.Options],
+        value: Optional[str],
         *,
         clearable: bool,
         margin_left: str = "8px",
@@ -889,7 +944,7 @@ class GameStatsDashboard:
                 html.Label(label, style={**Styles.CONTROL_LABEL, "marginRight": "6px", "whiteSpace": "nowrap"}),
                 dcc.Dropdown(
                     id=elem_id,
-                    options=cast(Any, options),
+                    options=options,
                     value=value,
                     clearable=clearable,
                     style=Styles.DROPDOWN_NARROW,
@@ -901,10 +956,10 @@ class GameStatsDashboard:
     def _layout_show_group_checklist_sections(
         self,
         checklist_id_prefix: str,
-        ug1_opts: list,
-        ug1_defaults: list,
-        ug2_opts: list,
-        ug2_defaults: list,
+        ug1_opts: list[dcc.Dropdown.Options],
+        ug1_defaults: list[str],
+        ug2_opts: list[dcc.Dropdown.Options],
+        ug2_defaults: list[str],
         col2_hide_style: Dict[str, str],
     ) -> List[Component]:
         """Show Group 1 / Show Group 2 blocks (same structure in tab_date and tab_group plot panels)."""
@@ -914,8 +969,8 @@ class GameStatsDashboard:
                     html.Label("Show Group 1:", style=Styles.CONTROL_LABEL),
                     dcc.Checklist(
                         id=f"{checklist_id_prefix}-show-ug-1",
-                        options=cast(Any, ug1_opts),
-                        value=cast(Any, ug1_defaults),
+                        options=ug1_opts,
+                        value=ug1_defaults,
                         labelStyle=Styles.CHECKLIST_BLOCK,
                         style={"columnCount": 3, "columnGap": "8px"},
                     ),
@@ -930,8 +985,8 @@ class GameStatsDashboard:
                             html.Label("Show Group 2:", style=Styles.CONTROL_LABEL),
                             dcc.Checklist(
                                 id=f"{checklist_id_prefix}-show-ug-2",
-                                options=cast(Any, ug2_opts),
-                                value=cast(Any, ug2_defaults),
+                                options=ug2_opts,
+                                value=ug2_defaults,
                                 labelStyle=Styles.CHECKLIST_BLOCK,
                                 style={"columnCount": 3, "columnGap": "8px"},
                             ),
@@ -947,10 +1002,10 @@ class GameStatsDashboard:
         self,
         checklist_id_prefix: str,
         panel_id: str,
-        ug1_opts: list,
-        ug1_defaults: list,
-        ug2_opts: list,
-        ug2_defaults: list,
+        ug1_opts: list[dcc.Dropdown.Options],
+        ug1_defaults: list[str],
+        ug2_opts: list[dcc.Dropdown.Options],
+        ug2_defaults: list[str],
         col2_hide_style: Dict[str, str],
     ) -> List[Component]:
         """Tail of tab_date sidebar: same rhythm as tab_group (HR → Show Group 1/2 → HR → bottom controls)."""
@@ -972,7 +1027,7 @@ class GameStatsDashboard:
                         [
                             dcc.Checklist(
                                 id=f"date-{panel_id}-log",
-                                options=cast(Any, [{"label": " Hybrid Log", "value": "ON"}]),
+                                options=_dropdown_option_rows([(" Hybrid Log", "ON")]),
                                 value=[],
                                 style=Styles.CHECKLIST_INLINE,
                             ),
@@ -1032,9 +1087,7 @@ class GameStatsDashboard:
                         ),
                         dcc.Dropdown(
                             id="date-granularity",
-                            options=cast(
-                                Any, [{"label": gran, "value": gran} for gran in list(self.date_files_config.keys())]
-                            ),
+                            options=_dropdown_options_from_strings(list(self.date_files_config.keys())),
                             value=list(self.date_files_config.keys())[0],
                             clearable=False,
                             style=Styles.DROPDOWN_NARROW,
@@ -1081,7 +1134,7 @@ class GameStatsDashboard:
                                             html.Label("Left Axis Metrics:", style=Styles.CONTROL_LABEL),
                                             dcc.Dropdown(
                                                 id=f"date-{group_id}-left-metrics",
-                                                options=cast(Any, self.plot_metrics[group_id]),
+                                                options=_dropdown_options_from_strings(self.plot_metrics[group_id]),
                                                 value=(
                                                     [self.plot_metrics[group_id][0]]
                                                     if self.plot_metrics[group_id] and group_id == "g1"
@@ -1098,7 +1151,7 @@ class GameStatsDashboard:
                                             html.Label("Right Axis Metrics:", style=Styles.CONTROL_LABEL),
                                             dcc.Dropdown(
                                                 id=f"date-{group_id}-right-metrics",
-                                                options=cast(Any, self.plot_metrics[group_id]),
+                                                options=_dropdown_options_from_strings(self.plot_metrics[group_id]),
                                                 value=[],
                                                 multi=True,
                                                 style=Styles.DROPDOWN_WIDE,
@@ -1231,7 +1284,7 @@ class GameStatsDashboard:
                                             html.Label("Metric:", style=Styles.CONTROL_LABEL),
                                             dcc.Dropdown(
                                                 id=f"group-{group_id}-metrics",
-                                                options=cast(Any, self.plot_metrics[group_id]),
+                                                options=_dropdown_options_from_strings(self.plot_metrics[group_id]),
                                                 value=(
                                                     self.plot_metrics[group_id][0]
                                                     if self.plot_metrics[group_id] and group_id == "g1"
@@ -1248,12 +1301,8 @@ class GameStatsDashboard:
                                             html.Label("Display Mode:", style=Styles.CONTROL_LABEL),
                                             dcc.RadioItems(
                                                 id=f"group-{group_id}-display",
-                                                options=cast(
-                                                    Any,
-                                                    [
-                                                        {"label": "Box Plot", "value": "box"},
-                                                        {"label": "Bar (Mean)", "value": "bar"},
-                                                    ],
+                                                options=_dropdown_option_rows(
+                                                    [("Box Plot", "box"), ("Bar (Mean)", "bar")]
                                                 ),
                                                 value="box",
                                                 labelStyle={"display": "inline-block", "marginRight": "15px"},
@@ -1267,19 +1316,19 @@ class GameStatsDashboard:
                                             html.Label("Show Date Range(s):", style=Styles.CONTROL_LABEL),
                                             dcc.Checklist(
                                                 id=f"group-{group_id}-show-r1",
-                                                options=cast(Any, [{"label": "Range 1", "value": "ON"}]),
+                                                options=_dropdown_option_rows([("Range 1", "ON")]),
                                                 value=["ON"],
                                                 style=Styles.CHECKLIST_INLINE,
                                             ),
                                             dcc.Checklist(
                                                 id=f"group-{group_id}-show-r2",
-                                                options=cast(Any, [{"label": "Range 2", "value": "ON"}]),
+                                                options=_dropdown_option_rows([("Range 2", "ON")]),
                                                 value=["ON"],
                                                 style=Styles.CHECKLIST_INLINE,
                                             ),
                                             dcc.Checklist(
                                                 id=f"group-{group_id}-show-r3",
-                                                options=cast(Any, [{"label": "Range 3", "value": "ON"}]),
+                                                options=_dropdown_option_rows([("Range 3", "ON")]),
                                                 value=["ON"],
                                                 style=Styles.CHECKLIST_INLINE,
                                             ),
@@ -1302,7 +1351,7 @@ class GameStatsDashboard:
                                                 [
                                                     dcc.Checklist(
                                                         id=f"group-{group_id}-clip-enable",
-                                                        options=cast(Any, [{"label": "Enable", "value": "ON"}]),
+                                                        options=_dropdown_option_rows([("Enable", "ON")]),
                                                         value=[],
                                                         style=Styles.CHECKLIST_INLINE,
                                                     ),
@@ -1443,7 +1492,7 @@ class GameStatsDashboard:
                                         html.Label("Select Session:", style=Styles.CONTROL_LABEL),
                                         dcc.Dropdown(
                                             id="session-dropdown",
-                                            options=cast(Any, [{"label": s, "value": s} for s in self.sessions]),
+                                            options=_dropdown_options_from_strings(self.sessions),
                                             value=self.sessions[0] if self.sessions else None,
                                             clearable=False,
                                             style=Styles.DROPDOWN_WIDE,
@@ -1457,7 +1506,7 @@ class GameStatsDashboard:
                                         html.Label("Compare Strategies:", style=Styles.CONTROL_LABEL),
                                         dcc.Checklist(
                                             id="strategy-checklist",
-                                            options=cast(Any, [{"label": s, "value": s} for s in self.df_bet_groups]),
+                                            options=_dropdown_options_from_strings(self.df_bet_groups),
                                             value=self.df_bet_groups[: self.DEFAULT_VISIBLE_GROUPS],
                                             labelStyle=Styles.CHECKLIST_BLOCK,
                                         ),
@@ -1475,7 +1524,7 @@ class GameStatsDashboard:
                                         html.Label("Metrics (Left Axis):", style=Styles.CONTROL_LABEL),
                                         dcc.Dropdown(
                                             id="metric-checklist",
-                                            options=cast(Any, [{"label": m, "value": m} for m in self.bet_metrics]),
+                                            options=_dropdown_options_from_strings(self.bet_metrics),
                                             value=[self.bet_metrics[0]] if self.bet_metrics else [],
                                             multi=True,
                                             style=Styles.DROPDOWN_WIDE,
@@ -1488,7 +1537,7 @@ class GameStatsDashboard:
                                         html.Label("Metrics (Right Axis):", style=Styles.CONTROL_LABEL),
                                         dcc.Dropdown(
                                             id="right-axis-checklist",
-                                            options=cast(Any, [{"label": m, "value": m} for m in self.bet_metrics]),
+                                            options=_dropdown_options_from_strings(self.bet_metrics),
                                             value=[],
                                             multi=True,
                                             style=Styles.DROPDOWN_WIDE,
@@ -1506,13 +1555,13 @@ class GameStatsDashboard:
                                     [
                                         dcc.Checklist(
                                             id="share-left-yscale-check",
-                                            options=cast(Any, [{"label": " Share Left Scale", "value": "ON"}]),
+                                            options=_dropdown_option_rows([(" Share Left Scale", "ON")]),
                                             value=[],
                                             style=Styles.CHECKLIST_BLOCK,
                                         ),
                                         dcc.Checklist(
                                             id="share-right-yscale-check",
-                                            options=cast(Any, [{"label": " Share Right Scale", "value": "ON"}]),
+                                            options=_dropdown_option_rows([(" Share Right Scale", "ON")]),
                                             value=[],
                                             style=Styles.CHECKLIST_BLOCK,
                                         ),
@@ -1524,7 +1573,7 @@ class GameStatsDashboard:
                                     [
                                         dcc.Checklist(
                                             id="log-check",
-                                            options=cast(Any, [{"label": " Hybrid Log Scale", "value": "ON"}]),
+                                            options=_dropdown_option_rows([(" Hybrid Log Scale", "ON")]),
                                             value=[],
                                             style=Styles.CHECKLIST_BLOCK,
                                         ),
@@ -1542,7 +1591,7 @@ class GameStatsDashboard:
                                     [
                                         dcc.Checklist(
                                             id="filter-check",
-                                            options=cast(Any, [{"label": "Max Number of Bets", "value": "ON"}]),
+                                            options=_dropdown_option_rows([("Max Number of Bets", "ON")]),
                                             value=["ON"],
                                             style=Styles.CHECKLIST_BLOCK,
                                         ),
@@ -2318,9 +2367,10 @@ class GameStatsDashboard:
                     )
                 # Ensure config_file matches an option (path may differ by machine)
                 saved_basename = Path(config_file).name
-                if not any(opt["value"] == config_file for opt in self.config_files):
+                if not any(str(opt["value"]) == config_file for opt in self.config_files):
                     match = next(
-                        (opt["value"] for opt in self.config_files if Path(opt["value"]).name == saved_basename), None
+                        (opt["value"] for opt in self.config_files if Path(str(opt["value"])).name == saved_basename),
+                        None,
                     )
                     if match:
                         config_file = match
@@ -2638,18 +2688,18 @@ class GameStatsDashboard:
         self.df_user_group_col_options = [{"label": c, "value": c} for c in cols]
 
         if not self.df_user_group_col:
-            self.df_user_group_dropdown_options = [{"label": "all", "value": "all"}]
+            self.df_user_group_dropdown_options = _dropdown_options_from_strings(["all"])
             return
         default_gran = list(self.date_files_config.keys())[0]
         lf = self.lfs_by_date.get(default_gran, pl.DataFrame().lazy())
         col = self.df_user_group_col
         if lf.collect_schema().len() == 0 or col not in lf.collect_schema().names():
-            self.df_user_group_dropdown_options = [{"label": "all", "value": "all"}]
+            self.df_user_group_dropdown_options = _dropdown_options_from_strings(["all"])
             return
         uniq = self._get_plot_groups(lf, col)
-        self.df_user_group_dropdown_options = [{"label": "all", "value": "all"}] + [
-            {"label": str(u), "value": str(u)} for u in uniq
-        ]
+        self.df_user_group_dropdown_options = _dropdown_options_from_strings(["all"]) + _dropdown_options_from_strings(
+            [str(u) for u in uniq]
+        )
 
     def _apply_user_group_filter(
         self, df: pl.DataFrame, user_group_val: Any, col: Optional[str] = None
@@ -2704,7 +2754,7 @@ class GameStatsDashboard:
             out = self._apply_ug_filter_list(out, clean_2, col=effective_col2)
         return out, effective_col2, clean_1, clean_2
 
-    def _make_ug_opts(self, col: Any) -> list:
+    def _make_ug_opts(self, col: Any) -> list[dcc.Dropdown.Options]:
         """Return dropdown/checklist options for a user-group column (includes 'all' first)."""
         if not col:
             return []
@@ -2712,18 +2762,18 @@ class GameStatsDashboard:
         lf = self.lfs_by_date.get(gran, pl.DataFrame().lazy())
         schema = lf.collect_schema()
         if schema.len() == 0 or col not in schema.names():
-            return [{"label": "all", "value": "all"}]
+            return _dropdown_options_from_strings(["all"])
         uniq = self._get_plot_groups(lf, col)
-        return [{"label": "all", "value": "all"}] + [{"label": str(u), "value": str(u)} for u in uniq]
+        return _dropdown_options_from_strings(["all"]) + _dropdown_options_from_strings([str(u) for u in uniq])
 
-    def _col_opts_and_default(self, col: Optional[str]):
+    def _col_opts_and_default(self, col: Optional[str]) -> tuple[list[dcc.Dropdown.Options], list[str]]:
         """Return (options, [first_value]) for a user-group column checklist/dropdown."""
         if not col:
             return [], []
         opts = self._make_ug_opts(col)
         if not opts:
             return [], []
-        return opts, [opts[0]["value"]]
+        return opts, [str(opts[0]["value"])]
 
     def _next_col(self, chosen: Any) -> Optional[str]:
         """Return the first configured user-group column that is not ``chosen``."""
@@ -3492,6 +3542,407 @@ class GameStatsDashboard:
 
         return callback
 
+    # ------------------------------------------------------------------
+    # AI Chat — floating dialog
+    # ------------------------------------------------------------------
+
+    def _layout_chat_dialog(self) -> html.Div:
+        """Build the floating, draggable, resizable AI chat dialog."""
+        return html.Div(
+            id="chat-dialog",
+            children=[
+                # ── Title bar (drag handle) ──
+                html.Div(
+                    [
+                        html.Span(
+                            "AI Assistant",
+                            style={"fontWeight": "bold", "fontSize": "14px", "color": "white"},
+                        ),
+                        html.Div(
+                            [
+                                html.Button(
+                                    "\u2014",
+                                    id="chat-minimize-btn",
+                                    n_clicks=0,
+                                    title="Minimize",
+                                    style={
+                                        "background": "none",
+                                        "border": "none",
+                                        "color": "white",
+                                        "fontSize": "16px",
+                                        "cursor": "pointer",
+                                        "padding": "0 6px",
+                                        "lineHeight": "1",
+                                    },
+                                ),
+                                html.Button(
+                                    "\u2716",
+                                    id="chat-close-btn",
+                                    n_clicks=0,
+                                    title="Close",
+                                    style={
+                                        "background": "none",
+                                        "border": "none",
+                                        "color": "white",
+                                        "fontSize": "14px",
+                                        "cursor": "pointer",
+                                        "padding": "0 6px",
+                                        "lineHeight": "1",
+                                    },
+                                ),
+                            ],
+                            style={"display": "flex", "alignItems": "center"},
+                        ),
+                    ],
+                    id="chat-titlebar",
+                    style={
+                        "display": "flex",
+                        "justifyContent": "space-between",
+                        "alignItems": "center",
+                        "padding": "8px 14px",
+                        "backgroundColor": "#FF7F00",
+                        "borderRadius": "10px 10px 0 0",
+                        "cursor": "move",
+                        "userSelect": "none",
+                    },
+                ),
+                # ── Body (collapsible) ──
+                html.Div(
+                    id="chat-body",
+                    children=[
+                        # Provider selector + hints
+                        html.Div(
+                            [
+                                html.Div(
+                                    [
+                                        html.Span(
+                                            "Model: ",
+                                            style={"fontWeight": "bold", "fontSize": "12px", "marginRight": "4px"},
+                                        ),
+                                        dcc.Dropdown(
+                                            id="chat-provider-select",
+                                            options=_CHAT_PROVIDER_DROPDOWN_OPTIONS,
+                                            value=os.environ.get("CHAT_PROVIDER", "openai").lower(),
+                                            clearable=False,
+                                            style={"width": "200px", "fontSize": "12px"},
+                                        ),
+                                    ],
+                                    style={"display": "flex", "alignItems": "center"},
+                                ),
+                                html.Span(
+                                    "Try: column meaning \u2022 group definitions \u2022 rtp vs user_rtp",
+                                    style={"fontSize": "11px", "color": "#888", "marginLeft": "12px"},
+                                ),
+                            ],
+                            style={
+                                "padding": "6px 14px",
+                                "backgroundColor": "#fdf6ec",
+                                "borderBottom": "1px solid #eee",
+                                "display": "flex",
+                                "alignItems": "center",
+                                "flexWrap": "wrap",
+                                "gap": "4px",
+                            },
+                        ),
+                        # Messages area
+                        html.Div(
+                            id="chat-messages-container",
+                            children=[],
+                            style={
+                                "flex": "1",
+                                "overflowY": "auto",
+                                "padding": "12px 14px",
+                                "backgroundColor": "#ffffff",
+                            },
+                        ),
+                        # Status line
+                        html.Div(
+                            id="chat-status",
+                            style={"fontSize": "11px", "color": "#999", "padding": "0 14px 4px 14px"},
+                        ),
+                        # Input row
+                        html.Div(
+                            [
+                                dcc.Input(
+                                    id="chat-input",
+                                    type="text",
+                                    placeholder="Ask about a column, metric, or group...",
+                                    style={
+                                        "flex": "1",
+                                        "padding": "8px 12px",
+                                        "fontSize": "13px",
+                                        "border": "1px solid #d0d0d0",
+                                        "borderRadius": "6px",
+                                        "marginRight": "6px",
+                                        "outline": "none",
+                                    },
+                                    debounce=True,
+                                    n_submit=0,
+                                ),
+                                html.Button(
+                                    "Send",
+                                    id="chat-send-btn",
+                                    n_clicks=0,
+                                    style={
+                                        "padding": "8px 16px",
+                                        "backgroundColor": "#FF7F00",
+                                        "color": "white",
+                                        "border": "none",
+                                        "borderRadius": "6px",
+                                        "cursor": "pointer",
+                                        "fontSize": "13px",
+                                        "fontWeight": "bold",
+                                    },
+                                ),
+                                html.Button(
+                                    "Clear",
+                                    id="chat-clear-btn",
+                                    n_clicks=0,
+                                    style={
+                                        "padding": "8px 10px",
+                                        "backgroundColor": "#bbb",
+                                        "color": "white",
+                                        "border": "none",
+                                        "borderRadius": "6px",
+                                        "cursor": "pointer",
+                                        "fontSize": "13px",
+                                        "marginLeft": "4px",
+                                    },
+                                ),
+                            ],
+                            style={
+                                "display": "flex",
+                                "alignItems": "center",
+                                "padding": "8px 14px 10px 14px",
+                                "borderTop": "1px solid #eee",
+                            },
+                        ),
+                    ],
+                    style={
+                        "display": "flex",
+                        "flexDirection": "column",
+                        "overflow": "hidden",
+                    },
+                ),
+            ],
+            style={
+                "display": "none",
+                "position": "fixed",
+                "bottom": "80px",
+                "right": "40px",
+                "width": "480px",
+                "height": "550px",
+                "minWidth": "340px",
+                "minHeight": "250px",
+                "backgroundColor": "#ffffff",
+                "border": "1px solid #d0d0d0",
+                "borderRadius": "10px",
+                "boxShadow": "0 8px 32px rgba(0,0,0,0.18)",
+                "zIndex": "9999",
+                "flexDirection": "column",
+                "resize": "both",
+                "overflow": "hidden",
+            },
+        )
+
+    def _register_chat_callbacks(self) -> None:
+        """Register AI chat callbacks (only if dependencies are installed)."""
+
+        # Toggle / close / minimize work regardless of chat agent availability
+        @self.app.callback(
+            Output("chat-dialog", "style"),
+            Output("chat-body", "style"),
+            Input("chat-toggle-btn", "n_clicks"),
+            Input("chat-close-btn", "n_clicks"),
+            Input("chat-minimize-btn", "n_clicks"),
+            State("chat-dialog", "style"),
+            State("chat-body", "style"),
+            prevent_initial_call=True,
+        )
+        def toggle_chat_dialog(
+            toggle_clicks: int,
+            close_clicks: int,
+            minimize_clicks: int,
+            dialog_style: dict,
+            body_style: dict,
+        ) -> Any:
+            ctx = callback_context
+            if not ctx.triggered:
+                return no_update, no_update
+
+            triggered_id = ctx.triggered[0]["prop_id"].split(".")[0]
+            dialog_style = dict(dialog_style or {})
+            body_style = dict(body_style or {})
+
+            if triggered_id == "chat-close-btn":
+                dialog_style["display"] = "none"
+                return dialog_style, no_update
+
+            if triggered_id == "chat-minimize-btn":
+                is_minimized = body_style.get("display") == "none"
+                if is_minimized:
+                    body_style["display"] = "flex"
+                    dialog_style["height"] = dialog_style.get("_prevHeight", "550px")
+                else:
+                    dialog_style["_prevHeight"] = dialog_style.get("height", "550px")
+                    body_style["display"] = "none"
+                    dialog_style["height"] = "auto"
+                return dialog_style, body_style
+
+            if triggered_id == "chat-toggle-btn":
+                is_visible = dialog_style.get("display") != "none"
+                dialog_style["display"] = "none" if is_visible else "flex"
+                if not is_visible:
+                    body_style["display"] = "flex"
+                return dialog_style, body_style
+
+            return no_update, no_update
+
+        # Drag support via clientside callback
+        self.app.clientside_callback(
+            """
+            function() {
+                var titlebar = document.getElementById('chat-titlebar');
+                var dialog = document.getElementById('chat-dialog');
+                if (!titlebar || !dialog || titlebar._dragInit) return;
+                titlebar._dragInit = true;
+
+                var offsetX = 0, offsetY = 0, isDragging = false;
+
+                titlebar.addEventListener('mousedown', function(e) {
+                    if (e.target.tagName === 'BUTTON') return;
+                    isDragging = true;
+                    var rect = dialog.getBoundingClientRect();
+                    offsetX = e.clientX - rect.left;
+                    offsetY = e.clientY - rect.top;
+                    document.body.style.userSelect = 'none';
+                });
+
+                document.addEventListener('mousemove', function(e) {
+                    if (!isDragging) return;
+                    var newLeft = e.clientX - offsetX;
+                    var newTop = e.clientY - offsetY;
+                    newLeft = Math.max(0, Math.min(newLeft, window.innerWidth - 100));
+                    newTop = Math.max(0, Math.min(newTop, window.innerHeight - 50));
+                    dialog.style.left = newLeft + 'px';
+                    dialog.style.top = newTop + 'px';
+                    dialog.style.right = 'auto';
+                    dialog.style.bottom = 'auto';
+                });
+
+                document.addEventListener('mouseup', function() {
+                    isDragging = false;
+                    document.body.style.userSelect = '';
+                });
+
+                return window.dash_clientside.no_update;
+            }
+            """,
+            Output("chat-titlebar", "data-drag"),
+            Input("chat-dialog", "style"),
+        )
+
+        if not _CHAT_AVAILABLE:
+            return
+
+        @self.app.callback(
+            Output("chat-messages-container", "children"),
+            Output("chat-history", "data"),
+            Output("chat-input", "value"),
+            Output("chat-status", "children"),
+            Input("chat-send-btn", "n_clicks"),
+            Input("chat-input", "n_submit"),
+            Input("chat-clear-btn", "n_clicks"),
+            State("chat-input", "value"),
+            State("chat-history", "data"),
+            State("config-dropdown", "value"),
+            State("chat-provider-select", "value"),
+            prevent_initial_call=True,
+        )
+        def handle_chat(
+            send_clicks: int,
+            n_submit: int,
+            clear_clicks: int,
+            user_input: Optional[str],
+            history: list,
+            config_path: str,
+            provider: str,
+        ) -> Any:
+            ctx = callback_context
+            if not ctx.triggered:
+                return no_update, no_update, no_update, no_update
+
+            triggered_id = ctx.triggered[0]["prop_id"].split(".")[0]
+
+            if triggered_id == "chat-clear-btn":
+                return [], [], "", "Chat cleared."
+
+            if not user_input or not user_input.strip():
+                return no_update, no_update, no_update, no_update
+
+            history = list(history or [])
+            history.append({"role": "user", "content": user_input.strip()})
+
+            # Set provider env var so _build_llm() picks it up
+            if provider:
+                os.environ["CHAT_PROVIDER"] = provider
+
+            try:
+                assert _chat_agent_chat is not None
+                config_p = Path(config_path) if config_path else None
+                response = _chat_agent_chat(
+                    user_message=user_input.strip(),
+                    history=history[:-1],
+                    dashboard_config_path=config_p,
+                )
+                history.append({"role": "assistant", "content": response})
+                status = f"({provider})"
+            except Exception as exc:
+                logger.exception("Chat agent error")
+                error_msg = f"Error: {exc}"
+                history.append({"role": "assistant", "content": error_msg})
+                key_hint = "GOOGLE_API_KEY" if provider == "gemini" else "OPENAI_API_KEY"
+                status = f"An error occurred. Check {key_hint} is set."
+
+            messages_ui = self._render_chat_messages(history)
+            return messages_ui, history, "", status
+
+    @staticmethod
+    def _render_chat_messages(history: list) -> List[Component]:
+        """Convert chat history to Dash HTML components."""
+        components: List[Component] = []
+        for msg in history:
+            is_user = msg.get("role") == "user"
+            components.append(
+                html.Div(
+                    [
+                        html.Div(
+                            "You" if is_user else "AI",
+                            style={
+                                "fontWeight": "bold",
+                                "fontSize": "12px",
+                                "color": "#377EB8" if is_user else "#4DAF4A",
+                                "marginBottom": "4px",
+                            },
+                        ),
+                        html.Div(
+                            dcc.Markdown(
+                                msg.get("content", ""),
+                                style={"fontSize": "13px", "lineHeight": "1.5"},
+                            ),
+                        ),
+                    ],
+                    style={
+                        "padding": "8px 12px",
+                        "marginBottom": "6px",
+                        "borderRadius": "8px",
+                        "backgroundColor": "#e8f4fd" if is_user else "#f0f9f0",
+                        "borderLeft": f"3px solid {'#377EB8' if is_user else '#4DAF4A'}",
+                    },
+                )
+            )
+        return components
+
     def run(self, debug: bool = True) -> None:
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -3528,6 +3979,74 @@ _dashboard = GameStatsDashboard(_config_dir)
 #   gunicorn --workers 1 --worker-class gthread --threads 8 --timeout 300 \
 #            --bind 0.0.0.0:8050 dashboards.game_stats_monitor:server
 server = _dashboard.app.server
+
+# Mount REST API routes on the same Flask/Gunicorn server so a future React
+# frontend (or external scripts) can call /api/chat, /api/metadata/columns, etc.
+# without a second container or task.
+#
+# The Dash callbacks already call chat_agent.chat() directly (no HTTP),
+# so these routes are purely for external consumers.
+try:
+    import json as _json
+
+    from flask import Blueprint, jsonify, request as flask_request
+
+    from dashboards.chat_agent import chat as _api_chat
+    from dashboards.metadata_builder import build_metadata as _api_build_metadata
+
+    _chat_bp = Blueprint("chat_api", __name__)
+
+    @_chat_bp.route("/api/chat", methods=["POST"])
+    def _api_chat_endpoint():
+        body = flask_request.get_json(force=True)
+        message = body.get("message", "")
+        history = body.get("history", [])
+        config_name = body.get("dashboard_config")
+        config_path = Path(_config_dir) / config_name if config_name else None
+        import time
+
+        t0 = time.monotonic()
+        try:
+            resp = _api_chat(
+                user_message=message,
+                history=history,
+                dashboard_config_path=config_path,
+            )
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+        elapsed = int((time.monotonic() - t0) * 1000)
+        return jsonify({"response": resp, "elapsed_ms": elapsed})
+
+    @_chat_bp.route("/api/metadata/columns", methods=["GET"])
+    def _api_list_columns():
+        meta = _api_build_metadata()
+        category = flask_request.args.get("category")
+        cols = []
+        for name, info in sorted(meta.get("columns", {}).items()):
+            if category and info.get("category") != category:
+                continue
+            cols.append(
+                {"name": name, "category": info.get("category", "other"), "description": info.get("description", "")}
+            )
+        return jsonify({"columns": cols, "total": len(cols)})
+
+    @_chat_bp.route("/api/metadata/columns/<name>", methods=["GET"])
+    def _api_get_column(name):
+        meta = _api_build_metadata()
+        info = meta.get("columns", {}).get(name)
+        if not info:
+            return jsonify({"error": f"Column '{name}' not found"}), 404
+        return jsonify({"name": name, **info})
+
+    @_chat_bp.route("/api/metadata/groups", methods=["GET"])
+    def _api_list_groups():
+        meta = _api_build_metadata()
+        return jsonify({"groups": meta.get("groups", {})})
+
+    server.register_blueprint(_chat_bp)
+    logger.info("Chat API routes registered at /api/*")
+except Exception as _api_err:
+    logger.info("Chat API routes not registered — %s: %s", type(_api_err).__name__, _api_err)
 
 if __name__ == "__main__":
     debug = os.environ.get("DASHBOARD_DEBUG", "true").lower() in ("1", "true", "yes")

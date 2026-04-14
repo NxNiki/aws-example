@@ -1,0 +1,1785 @@
+{
+  "source_hashes": {
+    "column_metadata.yaml": "caef943616155894bf002cf6f61687d10f0400f8951b39ecf911604b0478e015",
+    "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "246ca4a6e7be874aecbc4ded2921a858f4c43f36d28634659c9525e07adc2c16",
+    "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "68b827639209f8bb78abca83f2b61ba0ec770ed165317fedadc14e4f7ba9fb19",
+    "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "ba5633e45e2928e0c0a864c36fa22a7d2c076196c0f0d797b4dbf8fbd660b2a0",
+    "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "80530f44e4de3f28016d6e7a3782986dc9a4861c8020d2ead06ff66faf09589c",
+    "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "91ce767bafafb9693e608ed057dfa1822cb580165929099a59e7ad76110d24c5",
+    "jobs/operation_daily_report/etl_weekly_report_all_games.py": "47b14879e1ab04e4e5300b01503d6124b37385ede2670da0fb485738c062a33e",
+    "dashboard_config": "c2f3007443d36851bc5986156ebad495abe8566bd0e8b3611459070695851826"
+  },
+  "metadata": {
+    "columns": {
+      "activity_date": {
+        "category": "dimension",
+        "description": "Calendar date of the activity, truncated to day in Shanghai timezone (UTC+8).",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "us.{stats_agg_col}",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "us.{stats_agg_col}",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "us.{stats_agg_col}",
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "t1.{stats_agg_col}",
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "TRUNC(DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at)))"
+        }
+      },
+      "ai_group": {
+        "category": "dimension",
+        "description": "AB-test group assignment. See 'groups.ai_group' for value definitions.",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "(10))",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "t.mathtable",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "END",
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "t.mathtable"
+        }
+      },
+      "user_id": {
+        "category": "dimension",
+        "description": "Unique player identifier."
+      },
+      "user_group": {
+        "category": "dimension",
+        "description": "User lifecycle segment (new / beginner / old). See 'groups.user_group'.",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "END",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "END",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "END",
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "END"
+        }
+      },
+      "user_group2": {
+        "category": "dimension",
+        "description": "Alternative lifecycle segment (day0_user / day1-6_user / day7+_user). See 'groups.user_group2'.",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "END",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "END"
+        }
+      },
+      "user_num_bets": {
+        "category": "user_metric",
+        "description": "Total number of bet orders placed by a single user in the period.",
+        "formula": "COUNT(user_id) per user per activity_date",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "COUNT(t.user_id)",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "COUNT(t.user_id)",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "COUNT(t.user_id)",
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "COUNT(b.user_id)"
+        }
+      },
+      "user_num_bets_bg": {
+        "category": "user_metric",
+        "description": "Number of BASE (background / regular) bets by the user.",
+        "formula": "COUNT(CASE WHEN bet_type='BASE')",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "COUNT(CASE WHEN t.bet_type = 'BASE' THEN t.user_id END)",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "COUNT(CASE WHEN t.bet_type = 'BASE' THEN t.user_id END)",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "COUNT(CASE WHEN t.bet_type = 'BASE' THEN t.user_id END)"
+        }
+      },
+      "user_num_bets_fg": {
+        "category": "user_metric",
+        "description": "Number of FREE (foreground / free-game) bets by the user.",
+        "formula": "COUNT(CASE WHEN bet_type='FREE')",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "COUNT(CASE WHEN t.bet_type = 'FREE' THEN t.user_id END)",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "COUNT(CASE WHEN t.bet_type = 'FREE' THEN t.user_id END)",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "COUNT(CASE WHEN t.bet_type = 'FREE' THEN t.user_id END)"
+        }
+      },
+      "user_total_bet": {
+        "category": "user_metric",
+        "description": "Total wagered amount by the user in the period.",
+        "formula": "SUM(bet_amount)",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "SUM(t.bet_amount)",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "SUM(t.bet_amount)",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "SUM(t.bet_amount)",
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "SUM(b.bet)"
+        }
+      },
+      "user_total_bet_bg": {
+        "category": "user_metric",
+        "description": "Total wagered amount on BASE spins only.",
+        "formula": "SUM(CASE WHEN bet_type='BASE' THEN bet_amount)",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "SUM(CASE WHEN t.bet_type = 'BASE' THEN t.bet_amount END)",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "SUM(CASE WHEN t.bet_type = 'BASE' THEN t.bet_amount END)",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "SUM(CASE WHEN t.bet_type = 'BASE' THEN t.bet_amount END)"
+        }
+      },
+      "user_total_payout": {
+        "category": "user_metric",
+        "description": "Total payout received by the user.",
+        "formula": "SUM(actual_payout)",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "SUM(t.payout)",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "SUM(t.payout)",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "SUM(t.payout)",
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "SUM(b.payout)"
+        }
+      },
+      "user_total_payout_bg": {
+        "category": "user_metric",
+        "description": "Total payout from BASE spins only.",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "SUM(CASE WHEN t.bet_type = 'BASE' THEN t.payout END)",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "SUM(CASE WHEN t.bet_type = 'BASE' THEN t.payout END)",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "SUM(CASE WHEN t.bet_type = 'BASE' THEN t.payout END)"
+        }
+      },
+      "user_total_payout_fg": {
+        "category": "user_metric",
+        "description": "Total payout from FREE (bonus) spins only.",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "SUM(CASE WHEN t.bet_type = 'FREE' THEN t.payout END)",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "SUM(CASE WHEN t.bet_type = 'FREE' THEN t.payout END)",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "SUM(CASE WHEN t.bet_type = 'FREE' THEN t.payout END)"
+        }
+      },
+      "user_total_bet_fg": {
+        "category": "user_metric",
+        "description": "Total bet attributed to free-game sessions. Uses the triggering BASE bet amount (fg_session_trigger_bet) rather than the free-spin bet, because free spins reuse the base bet amount.\n",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "SUM(t.fg_session_trigger_bet)",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "SUM(t.fg_session_trigger_bet)",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "SUM(t.fg_session_trigger_bet)"
+        }
+      },
+      "user_num_bets_with_payout": {
+        "category": "user_metric",
+        "description": "Number of bets where the user received any payout (payout > 0).",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "COUNT(CASE WHEN t.payout > 0 THEN 1 END)",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "COUNT(CASE WHEN t.payout > 0 THEN 1 END)",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "COUNT(CASE WHEN t.payout > 0 THEN 1 END)"
+        }
+      },
+      "user_num_bets_bg_with_payout": {
+        "category": "user_metric",
+        "description": "Number of BASE bets with non-zero payout.",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "COUNT(CASE WHEN t.bet_type = 'BASE' AND t.payout > 0 THEN 1 END)",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "COUNT(CASE WHEN t.bet_type = 'BASE' AND t.payout > 0 THEN 1 END)",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "COUNT(CASE WHEN t.bet_type = 'BASE' AND t.payout > 0 THEN 1 END)"
+        }
+      },
+      "user_num_bets_fg_with_payout": {
+        "category": "user_metric",
+        "description": "Number of FREE bets with non-zero payout.",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "COUNT(CASE WHEN t.bet_type = 'FREE' AND t.payout > 0 THEN 1 END)",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "COUNT(CASE WHEN t.bet_type = 'FREE' AND t.payout > 0 THEN 1 END)",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "COUNT(CASE WHEN t.bet_type = 'FREE' AND t.payout > 0 THEN 1 END)"
+        }
+      },
+      "user_rtp": {
+        "category": "user_metric",
+        "description": "Return to Player for a single user: total payout / total bet. A value of 0.95 means the user got back 95% of what they wagered.\n",
+        "formula": "user_total_payout / NULLIF(user_total_bet, 0)",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "us.user_total_payout * 1.0 / NULLIF(us.user_total_bet, 0)",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "us.user_total_payout * 1.0 / NULLIF(us.user_total_bet, 0)",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "us.user_total_payout * 1.0 / NULLIF(us.user_total_bet, 0)",
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": ") / NULLIF(SUM(b.bet), 0), 3)"
+        }
+      },
+      "user_rtp_bg": {
+        "category": "user_metric",
+        "description": "User-level RTP from BASE spins only (payout_bg / total_bet).",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "us.user_total_payout_bg * 1.0 / NULLIF(us.user_total_bet, 0)",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "us.user_total_payout_bg * 1.0 / NULLIF(us.user_total_bet, 0)",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "us.user_total_payout_bg * 1.0 / NULLIF(us.user_total_bet, 0)"
+        }
+      },
+      "user_rtp_fg": {
+        "category": "user_metric",
+        "description": "User-level RTP from FREE spins (payout_fg / bet_fg).",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "us.user_total_payout_fg * 1.0 / NULLIF(us.user_total_bet_fg, 0)",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "us.user_total_payout_fg * 1.0 / NULLIF(us.user_total_bet_fg, 0)",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "us.user_total_payout_fg * 1.0 / NULLIF(us.user_total_bet_fg, 0)"
+        }
+      },
+      "user_hit_rate": {
+        "category": "user_metric",
+        "description": "Fraction of all bets that had a non-zero payout.",
+        "formula": "user_num_bets_with_payout / user_num_bets",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "us.user_num_bets_with_payout * 1.0 / NULLIF(us.user_num_bets, 0)",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "us.user_num_bets_with_payout * 1.0 / NULLIF(us.user_num_bets, 0)",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "us.user_num_bets_with_payout * 1.0 / NULLIF(us.user_num_bets, 0)"
+        }
+      },
+      "user_hit_rate_bg": {
+        "category": "user_metric",
+        "description": "Hit rate on BASE bets only.",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "us.user_num_bets_bg_with_payout * 1.0 / NULLIF(us.user_num_bets_bg, 0)",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "us.user_num_bets_bg_with_payout * 1.0 / NULLIF(us.user_num_bets_bg, 0)",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "us.user_num_bets_bg_with_payout * 1.0 / NULLIF(us.user_num_bets_bg, 0)"
+        }
+      },
+      "user_hit_rate_fg": {
+        "category": "user_metric",
+        "description": "Hit rate on FREE bets only.",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "us.user_num_bets_fg_with_payout * 1.0 / NULLIF(us.user_num_bets_fg, 0)",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "us.user_num_bets_fg_with_payout * 1.0 / NULLIF(us.user_num_bets_fg, 0)",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "us.user_num_bets_fg_with_payout * 1.0 / NULLIF(us.user_num_bets_fg, 0)"
+        }
+      },
+      "user_fg_ratio": {
+        "category": "user_metric",
+        "description": "Fraction of total bets that are FREE (bonus) spins.",
+        "formula": "user_num_bets_fg / user_num_bets",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "us.user_num_bets_fg * 1.0 / NULLIF(us.user_num_bets, 0)",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "us.user_num_bets_fg * 1.0 / NULLIF(us.user_num_bets, 0)",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "us.user_num_bets_fg * 1.0 / NULLIF(us.user_num_bets, 0)"
+        }
+      },
+      "user_total_profit": {
+        "category": "user_metric",
+        "description": "Net profit for the user (positive = player won money).",
+        "formula": "user_total_payout - user_total_bet",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "(us.user_total_payout - us.user_total_bet)",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "(us.user_total_payout - us.user_total_bet)",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "(us.user_total_payout - us.user_total_bet)",
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "SUM(b.profit)"
+        }
+      },
+      "user_avg_delta_t_seconds": {
+        "category": "user_metric",
+        "description": "Average time between consecutive bets by the user, in seconds. Only intervals between 0 and 86400 seconds are included (filters out session breaks longer than 24h).\n",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "AVG(CASE WHEN EXTRACT(EPOCH FROM t.delta_t) BETWEEN 0 AND 86400 THEN EXTRACT(EPOCH FROM t.delta_t) END)",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "AVG(CASE WHEN EXTRACT(EPOCH FROM t.delta_t) BETWEEN 0 AND 86400 THEN EXTRACT(EPOCH FROM t.delta_t) END)",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "AVG(CASE WHEN EXTRACT(EPOCH FROM t.delta_t) BETWEEN 0 AND 86400 THEN EXTRACT(EPOCH FROM t.delta_t) END)"
+        }
+      },
+      "user_mathtable_change": {
+        "category": "user_metric",
+        "description": "Number of times the math table (script_id) changed between consecutive bets for this user. Indicates strategy switches by the AI system.\n",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "SUM(t.mathtable_change)",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "SUM(t.mathtable_change)",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "SUM(t.mathtable_change)"
+        }
+      },
+      "num_active_users": {
+        "category": "aggregate_metric",
+        "description": "Number of distinct users with at least 40 bets in the period (ACTIVE_USER_MIN_BETS = 40). This is the 'active' DAU count.\n",
+        "formula": "COUNT(DISTINCT user_id) WHERE user_num_bets >= 40",
+        "etl_formula": {
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "COUNT(DISTINCT t.user_id)"
+        }
+      },
+      "num_new_users": {
+        "category": "aggregate_metric",
+        "description": "Number of distinct users in the 'new' user_group segment."
+      },
+      "total_num_bets": {
+        "category": "aggregate_metric",
+        "description": "Sum of user_num_bets across all users in the group."
+      },
+      "total_num_bets_bg": {
+        "category": "aggregate_metric",
+        "description": "Sum of BASE bet counts across all users."
+      },
+      "total_num_bets_fg": {
+        "category": "aggregate_metric",
+        "description": "Sum of FREE bet counts across all users."
+      },
+      "total_bet": {
+        "category": "aggregate_metric",
+        "description": "Sum of all wagers across all users in the group.",
+        "etl_formula": {
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "SUM(t.bet_amount)"
+        }
+      },
+      "total_bet_bg": {
+        "category": "aggregate_metric",
+        "description": "Sum of BASE-spin wagers.",
+        "etl_formula": {
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "SUM(CASE WHEN t.bet_type = 'BASE' THEN t.bet_amount END)"
+        }
+      },
+      "total_bet_fg": {
+        "category": "aggregate_metric",
+        "description": "Sum of attributed free-game wagers."
+      },
+      "total_payout": {
+        "category": "aggregate_metric",
+        "description": "Sum of all payouts across all users.",
+        "etl_formula": {
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "SUM(t.payout)"
+        }
+      },
+      "total_payout_bg": {
+        "category": "aggregate_metric",
+        "description": "Sum of BASE-spin payouts.",
+        "etl_formula": {
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "SUM(CASE WHEN t.bet_type = 'BASE' THEN t.payout END)"
+        }
+      },
+      "total_payout_fg": {
+        "category": "aggregate_metric",
+        "description": "Sum of FREE-spin payouts.",
+        "etl_formula": {
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "SUM(CASE WHEN t.bet_type = 'FREE' THEN t.payout END)"
+        }
+      },
+      "total_num_bets_with_payout": {
+        "category": "aggregate_metric",
+        "description": "Total number of bets with non-zero payout across all users."
+      },
+      "total_num_bets_bg_with_payout": {
+        "category": "aggregate_metric",
+        "description": "Total BASE bets with payout across all users."
+      },
+      "total_num_bets_fg_with_payout": {
+        "category": "aggregate_metric",
+        "description": "Total FREE bets with payout across all users."
+      },
+      "total_num_bets_per_user": {
+        "category": "aggregate_metric",
+        "description": "Average bets per user: total_num_bets / num_users."
+      },
+      "total_bet_per_user": {
+        "category": "aggregate_metric",
+        "description": "Average wager per user: total_bet / num_users.",
+        "etl_formula": {
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "ds.total_bet / NULLIF(ds.num_active_users, 0)"
+        }
+      },
+      "total_profit": {
+        "category": "aggregate_metric",
+        "description": "Net profit for the group: total_payout - total_bet.",
+        "etl_formula": {
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "(ds.total_payout - ds.total_bet)"
+        }
+      },
+      "total_profit_per_user": {
+        "category": "aggregate_metric",
+        "description": "Average net profit per user."
+      },
+      "rtp": {
+        "category": "aggregate_metric",
+        "description": "Group-level Return to Player: total_payout / total_bet. This is the house-level RTP, not the average of individual user RTPs.\n",
+        "formula": "SUM(user_total_payout) / SUM(user_total_bet)",
+        "etl_formula": {
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "ds.total_payout / NULLIF(ds.total_bet, 0)"
+        }
+      },
+      "rtp_bg": {
+        "category": "aggregate_metric",
+        "description": "Group-level RTP from BASE spins only.",
+        "etl_formula": {
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "ds.total_payout_bg / NULLIF(ds.total_bet, 0)"
+        }
+      },
+      "rtp_fg": {
+        "category": "aggregate_metric",
+        "description": "Group-level RTP from FREE spins only."
+      },
+      "fg_ratio": {
+        "category": "aggregate_metric",
+        "description": "Group-level fraction of bets that are FREE spins.",
+        "etl_formula": {
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "ds.num_bets_fg * 1.0 / NULLIF(ds.num_bets, 0)"
+        }
+      },
+      "hit_rate": {
+        "category": "aggregate_metric",
+        "description": "Group-level fraction of all bets with non-zero payout."
+      },
+      "hit_rate_bg": {
+        "category": "aggregate_metric",
+        "description": "Group-level hit rate on BASE bets."
+      },
+      "hit_rate_fg": {
+        "category": "aggregate_metric",
+        "description": "Group-level hit rate on FREE bets."
+      },
+      "active_user_no_fg_ratio": {
+        "category": "aggregate_metric",
+        "description": "Fraction of users who placed zero free-game bets (never triggered a bonus round in the period).\n"
+      },
+      "num_active_user_0_rtp": {
+        "category": "aggregate_metric",
+        "description": "Number of users with zero total payout (complete loss)."
+      },
+      "active_user_0_rtp_ratio": {
+        "category": "aggregate_metric",
+        "description": "Fraction of users who received zero payout."
+      },
+      "active_user_rtp_less_0_1_ratio": {
+        "category": "aggregate_metric",
+        "description": "Fraction of users whose personal RTP is below 0.1 (10%). These users lost more than 90% of their wagers.\n",
+        "formula": "COUNT(user_rtp < 0.1 AND user_total_bet > 0) / COUNT(DISTINCT user_id)"
+      },
+      "active_user_rtp_less_0_2_ratio": {
+        "category": "aggregate_metric",
+        "description": "Fraction of users with personal RTP below 0.2 (20%)."
+      },
+      "active_user_rtp_less_0_3_ratio": {
+        "category": "aggregate_metric",
+        "description": "Fraction of users with personal RTP below 0.3 (30%)."
+      },
+      "active_user_rtp_less_0_4_ratio": {
+        "category": "aggregate_metric",
+        "description": "Fraction of users with personal RTP below 0.4 (40%). Monitors the share of players experiencing heavy losses (lost >60% of wagers).\n"
+      },
+      "active_user_rtp_less_0_5_ratio": {
+        "category": "aggregate_metric",
+        "description": "Fraction of users with personal RTP below 0.5 (50%)."
+      },
+      "user_rtp_median": {
+        "category": "aggregate_metric",
+        "description": "Median of individual user RTPs (user_total_payout / user_total_bet) across all users with non-zero bets. Reflects the 'typical' player experience, unlike the group-level rtp which is bet-weighted.\n"
+      },
+      "user_rtp_ultilization_ratio": {
+        "category": "aggregate_metric",
+        "description": "Ratio of median user RTP to group-level RTP (user_rtp_median / rtp). Values near 1.0 mean payouts are evenly distributed across players. Values << 1.0 suggest a few high-rollers capture most of the payout.\n"
+      },
+      "day0_num_users": {
+        "category": "retention",
+        "description": "Total distinct users on the cohort date (day 0). This is the retention cohort size \u2014 all users who appeared, regardless of bet count (no ACTIVE_USER_MIN_BETS threshold).\n",
+        "etl_formula": {
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "COUNT(distinct t1.user_id)"
+        }
+      },
+      "day1_num_users": {
+        "category": "retention",
+        "description": "Number of day-0 cohort users who also appeared 1 day later.",
+        "etl_formula": {
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "COUNT(distinct t2.user_id)"
+        }
+      },
+      "day2_num_users": {
+        "category": "retention",
+        "description": "Number of day-0 cohort users who also appeared 2 days later."
+      },
+      "day3_num_users": {
+        "category": "retention",
+        "description": "Number of day-0 cohort users who also appeared 3 days later.",
+        "etl_formula": {
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "COUNT(distinct t3.user_id)"
+        }
+      },
+      "retention_rate_day1": {
+        "category": "retention",
+        "description": "Day-1 retention rate: day1_num_users / day0_num_users."
+      },
+      "retention_rate_day3": {
+        "category": "retention",
+        "description": "Day-3 retention rate: day3_num_users / day0_num_users."
+      },
+      "user_killed_fish": {
+        "category": "fish_hunter",
+        "description": "Binary flag (0/1) \u2014 whether the user killed at least one fish in the period.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "MAX(CASE WHEN b.killed >= 1 THEN 1 ELSE 0 END)"
+        }
+      },
+      "user_max_profit": {
+        "category": "fish_hunter",
+        "description": "Maximum single-bullet profit achieved by the user.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "MAX(b.profit)"
+        }
+      },
+      "user_bullet_avg_profit": {
+        "category": "fish_hunter",
+        "description": "Average profit per bullet fired.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(b.profit)"
+        }
+      },
+      "user_bullet_kill_avg_profit": {
+        "category": "fish_hunter",
+        "description": "Average profit per bullet that actually killed a fish.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(CASE WHEN b.killed = 1 THEN b.profit END)"
+        }
+      },
+      "user_num_streak_sessions": {
+        "category": "fish_hunter",
+        "description": "Number of 'streak sessions' \u2014 continuous sequences of kills with inter-kill time below STREAK_SESSION_THRESH (600 seconds).\n",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "SUM(t.num_streak_sessions)"
+        }
+      },
+      "user_avg_streak_length": {
+        "category": "fish_hunter",
+        "description": "Average number of consecutive kills in a streak session.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(t.avg_streak_length)"
+        }
+      },
+      "user_max_streak_length": {
+        "category": "fish_hunter",
+        "description": "Longest streak session (most consecutive kills).",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "MAX(t.max_streak_length)"
+        }
+      },
+      "user_min_streak_length": {
+        "category": "fish_hunter",
+        "description": "Shortest streak session.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "MIN(t.min_streak_length)"
+        }
+      },
+      "user_seconds_to_kill_fish": {
+        "category": "fish_hunter",
+        "description": "Average seconds between consecutive kills (all tiers).",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(t.seconds_to_kill_fish)"
+        }
+      },
+      "user_seconds_to_kill_fish_low": {
+        "category": "fish_hunter",
+        "description": "Average seconds to kill a low-tier fish (value <= 10).",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(t.seconds_to_kill_fish_low)"
+        }
+      },
+      "user_seconds_to_kill_fish_medium": {
+        "category": "fish_hunter",
+        "description": "Average seconds to kill a medium-tier fish (value 11\u2013130).",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(t.seconds_to_kill_fish_medium)"
+        }
+      },
+      "user_seconds_to_kill_fish_high": {
+        "category": "fish_hunter",
+        "description": "Average seconds to kill a high-tier fish (value 131\u2013200).",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(t.seconds_to_kill_fish_high)"
+        }
+      },
+      "user_seconds_to_kill_fish_ultra": {
+        "category": "fish_hunter",
+        "description": "Average seconds to kill an ultra-tier fish (value > 200).",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(t.seconds_to_kill_fish_ultra)"
+        }
+      },
+      "user_bets_to_kill_fish": {
+        "category": "fish_hunter",
+        "description": "Average number of bullets fired between kills (all tiers).",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(t.bets_to_kill_fish)"
+        }
+      },
+      "user_bets_to_kill_fish_low": {
+        "category": "fish_hunter",
+        "description": "Average bullets to kill a low-tier fish.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(t.bets_to_kill_fish_low)"
+        }
+      },
+      "user_bets_to_kill_fish_medium": {
+        "category": "fish_hunter",
+        "description": "Average bullets to kill a medium-tier fish.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(t.bets_to_kill_fish_medium)"
+        }
+      },
+      "user_bets_to_kill_fish_high": {
+        "category": "fish_hunter",
+        "description": "Average bullets to kill a high-tier fish.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(t.bets_to_kill_fish_high)"
+        }
+      },
+      "user_bets_to_kill_fish_ultra": {
+        "category": "fish_hunter",
+        "description": "Average bullets to kill an ultra-tier fish.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(t.bets_to_kill_fish_ultra)"
+        }
+      },
+      "user_avg_fish_value": {
+        "category": "fish_hunter",
+        "description": "Average fish_value of all fish encountered by the user.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(b.fish_value)"
+        }
+      },
+      "user_avg_fish_value_20_200": {
+        "category": "fish_hunter",
+        "description": "Average fish_value only for fish in the 20\u2013200 value range.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(CASE WHEN b.fish_value > 19 AND b.fish_value < 201 THEN b.fish_value END)"
+        }
+      },
+      "user_avg_killed_fish_value": {
+        "category": "fish_hunter",
+        "description": "Average fish_value of fish the user actually killed.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(CASE WHEN b.killed = 1 THEN b.fish_value END)"
+        }
+      },
+      "user_avg_killed_fish_value_20_200": {
+        "category": "fish_hunter",
+        "description": "Average killed fish_value in 20\u2013200 range.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(CASE WHEN b.fish_value > 19 AND b.fish_value < 201 AND b.killed = 1 THEN b.fish_value END)"
+        }
+      },
+      "user_num_killed_bullets": {
+        "category": "fish_hunter",
+        "description": "Number of bullets that successfully killed a fish.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "SUM(b.killed)"
+        }
+      },
+      "user_bullet_kill_ratio": {
+        "category": "fish_hunter",
+        "description": "Fraction of bullets that killed a fish: user_num_killed_bullets / user_num_bets.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": ") / NULLIF(t1.user_num_bets, 0), 3)"
+        }
+      },
+      "user_num_rooms": {
+        "category": "fish_hunter",
+        "description": "Number of distinct rooms the user played in.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "COUNT(DISTINCT b.user_id || '-' || b.room_id)"
+        }
+      },
+      "user_profit_coef_var": {
+        "category": "fish_hunter",
+        "description": "Coefficient of variation of per-bullet profit (std / mean). Higher = more volatile.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "STDDEV(b.profit) / NULLIF(ABS(AVG(b.profit)), 0)"
+        }
+      },
+      "user_killed_fish_low_ratio": {
+        "category": "fish_hunter",
+        "description": "Fraction of killed fish that were low-tier.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "t1.user_num_killed_fish_low    * 1.0 / NULLIF(t1.user_num_killed_bullets, 0)"
+        }
+      },
+      "user_killed_fish_medium_ratio": {
+        "category": "fish_hunter",
+        "description": "Fraction of killed fish that were medium-tier.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "t1.user_num_killed_fish_medium * 1.0 / NULLIF(t1.user_num_killed_bullets, 0)"
+        }
+      },
+      "user_killed_fish_high_ratio": {
+        "category": "fish_hunter",
+        "description": "Fraction of killed fish that were high-tier.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "t1.user_num_killed_fish_high   * 1.0 / NULLIF(t1.user_num_killed_bullets, 0)"
+        }
+      },
+      "user_killed_fish_ultra_ratio": {
+        "category": "fish_hunter",
+        "description": "Fraction of killed fish that were ultra-tier.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "t1.user_num_killed_fish_ultra  * 1.0 / NULLIF(t1.user_num_killed_bullets, 0)"
+        }
+      },
+      "user_hits_fish_low_ratio": {
+        "category": "fish_hunter",
+        "description": "Fraction of all hits (payout > 0) targeting low-tier fish.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "t1.user_num_hits_fish_low    * 1.0 / NULLIF(t1.user_num_bets, 0)"
+        }
+      },
+      "user_hits_fish_medium_ratio": {
+        "category": "fish_hunter",
+        "description": "Fraction of hits targeting medium-tier fish.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "t1.user_num_hits_fish_medium * 1.0 / NULLIF(t1.user_num_bets, 0)"
+        }
+      },
+      "user_hits_fish_high_ratio": {
+        "category": "fish_hunter",
+        "description": "Fraction of hits targeting high-tier fish.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "t1.user_num_hits_fish_high   * 1.0 / NULLIF(t1.user_num_bets, 0)"
+        }
+      },
+      "user_hits_fish_ultra_ratio": {
+        "category": "fish_hunter",
+        "description": "Fraction of hits targeting ultra-tier fish.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "t1.user_num_hits_fish_ultra  * 1.0 / NULLIF(t1.user_num_bets, 0)"
+        }
+      },
+      "user_max_kill_streak": {
+        "category": "fish_hunter",
+        "description": "Longest consecutive kill streak (all fish tiers).",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "MAX(t.max_kill_streak)"
+        }
+      },
+      "user_max_kill_streak_low": {
+        "category": "fish_hunter",
+        "description": "Longest kill streak on low-tier fish.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "MAX(t.max_kill_streak_low)"
+        }
+      },
+      "user_max_kill_streak_medium": {
+        "category": "fish_hunter",
+        "description": "Longest kill streak on medium-tier fish.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "MAX(t.max_kill_streak_medium)"
+        }
+      },
+      "user_max_kill_streak_high": {
+        "category": "fish_hunter",
+        "description": "Longest kill streak on high-tier fish.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "MAX(t.max_kill_streak_high)"
+        }
+      },
+      "user_max_kill_streak_ultra": {
+        "category": "fish_hunter",
+        "description": "Longest kill streak on ultra-tier fish.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "MAX(t.max_kill_streak_ultra)"
+        }
+      },
+      "user_avg_kill_streak": {
+        "category": "fish_hunter",
+        "description": "Average kill streak length (all tiers).",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(t.avg_kill_streak)"
+        }
+      },
+      "user_avg_kill_streak_low": {
+        "category": "fish_hunter",
+        "description": "Average kill streak length on low-tier fish.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(t.avg_kill_streak_low)"
+        }
+      },
+      "user_avg_kill_streak_medium": {
+        "category": "fish_hunter",
+        "description": "Average kill streak length on medium-tier fish.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(t.avg_kill_streak_medium)"
+        }
+      },
+      "user_avg_kill_streak_high": {
+        "category": "fish_hunter",
+        "description": "Average kill streak length on high-tier fish.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(t.avg_kill_streak_high)"
+        }
+      },
+      "user_avg_kill_streak_ultra": {
+        "category": "fish_hunter",
+        "description": "Average kill streak length on ultra-tier fish.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(t.avg_kill_streak_ultra)"
+        }
+      },
+      "mathtable": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "t.script_id",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "t.script_id",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "t.math_table_id",
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "t.script_id"
+        }
+      },
+      "payout": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "t.actual_payout",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "t.actual_payout",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "t.actual_payout",
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "t.actual_payout"
+        }
+      },
+      "profit": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "t.actual_payout - t.bet_amount",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "t.actual_payout - t.bet_amount",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "t.actual_payout - t.bet_amount",
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "t.actual_payout - t.bet_amount"
+        }
+      },
+      "ab_group_id": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "t.partition_ab[0]",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "t.partition_ab[0]",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "t.partition_ab[0]",
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "t.partition_ab[0]"
+        }
+      },
+      "delta_t": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.created_at)",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.created_at)",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.created_at)",
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.created_at)"
+        }
+      },
+      "prev_bet_type": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "LAG(t.bet_type) OVER (PARTITION BY t.user_id ORDER BY t.created_at)",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "LAG(t.bet_type) OVER (PARTITION BY t.user_id ORDER BY t.created_at)",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "LAG(t.bet_type) OVER (PARTITION BY t.user_id ORDER BY t.created_at)"
+        }
+      },
+      "prev_bet_amount": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "LAG(t.bet_amount) OVER (PARTITION BY t.user_id ORDER BY t.created_at)",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "LAG(t.bet_amount) OVER (PARTITION BY t.user_id ORDER BY t.created_at)",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "LAG(t.bet_amount) OVER (PARTITION BY t.user_id ORDER BY t.created_at)"
+        }
+      },
+      "user_bet_count": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "COUNT(t.user_id) OVER (PARTITION BY t.user_id)",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "COUNT(t.user_id) OVER (PARTITION BY t.user_id)",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "COUNT(t.user_id) OVER (PARTITION BY t.user_id)",
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "COUNT(t.user_id) OVER (PARTITION BY t.user_id)"
+        }
+      },
+      "mathtable_change": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "END",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "END",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "END"
+        }
+      },
+      "t": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "FROM user_bets_group",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "FROM user_bets_group",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "FROM user_bets_group",
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "FROM user_bets_group"
+        }
+      },
+      "us": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "FROM user_stats",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "FROM user_stats",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "FROM user_stats"
+        }
+      },
+      "fb": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py": "LEFT JOIN user_first_bet",
+          "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py": "LEFT JOIN user_first_bet",
+          "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py": "LEFT JOIN user_first_bet",
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "LEFT JOIN user_first_bet"
+        }
+      },
+      "partition_val": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "b.partition_ab[0]"
+        }
+      },
+      "bet_time": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "b.event_timestamp"
+        }
+      },
+      "fish_type": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "END"
+        }
+      },
+      "prev_bet_time": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "LAG(b.event_timestamp) OVER (PARTITION BY b.user_id ORDER BY b.event_timestamp)"
+        }
+      },
+      "TIMESTAMP": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "DATEADD(day, -{RETURN_USER_DAYS}, CAST('{effective_start}'"
+        }
+      },
+      "daily_group": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "END"
+        }
+      },
+      "bj_date_last_bet": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "LAG(activity_date) OVER (PARTITION BY user_id ORDER BY activity_date)"
+        }
+      },
+      "is_new_global_streak": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "END"
+        }
+      },
+      "is_new_type_streak": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "END"
+        }
+      },
+      "global_streak_id": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "SUM(is_new_global_streak) OVER(PARTITION BY user_id ORDER BY bet_time ROWS UNBOUNDED PRECEDING)"
+        }
+      },
+      "type_streak_id": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "SUM(is_new_type_streak) OVER(PARTITION BY user_id, fish_type ORDER BY bet_time ROWS UNBOUNDED PRECEDING)"
+        }
+      },
+      "global_streak_len": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "COUNT(*) OVER(PARTITION BY user_id, global_streak_id)"
+        }
+      },
+      "type_streak_len": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "COUNT(*) OVER(PARTITION BY user_id, fish_type, type_streak_id)"
+        }
+      },
+      "max_kill_streak": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "MAX(global_streak_len)"
+        }
+      },
+      "max_kill_streak_low": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "MAX(CASE WHEN fish_type = 'low' THEN type_streak_len END)"
+        }
+      },
+      "max_kill_streak_medium": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "MAX(CASE WHEN fish_type = 'medium' THEN type_streak_len END)"
+        }
+      },
+      "max_kill_streak_high": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "MAX(CASE WHEN fish_type = 'high' THEN type_streak_len END)"
+        }
+      },
+      "max_kill_streak_ultra": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "MAX(CASE WHEN fish_type = 'ultra' THEN type_streak_len END)"
+        }
+      },
+      "avg_kill_streak": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(global_streak_len)"
+        }
+      },
+      "avg_kill_streak_low": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(CASE WHEN fish_type = 'low' THEN type_streak_len END)"
+        }
+      },
+      "avg_kill_streak_medium": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(CASE WHEN fish_type = 'medium' THEN type_streak_len END)"
+        }
+      },
+      "avg_kill_streak_high": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(CASE WHEN fish_type = 'high' THEN type_streak_len END)"
+        }
+      },
+      "avg_kill_streak_ultra": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(CASE WHEN fish_type = 'ultra' THEN type_streak_len END)"
+        }
+      },
+      "session_id": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": ")"
+        }
+      },
+      "bet_index": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": ")"
+        }
+      },
+      "seconds_to_kill_fish": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(seconds_to_kill_fish)"
+        }
+      },
+      "seconds_to_kill_fish_low": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(seconds_to_kill_fish_low)"
+        }
+      },
+      "seconds_to_kill_fish_medium": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(seconds_to_kill_fish_medium)"
+        }
+      },
+      "seconds_to_kill_fish_high": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(seconds_to_kill_fish_high)"
+        }
+      },
+      "seconds_to_kill_fish_ultra": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(seconds_to_kill_fish_ultra)"
+        }
+      },
+      "bets_to_kill_fish": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(bets_to_kill_fish)"
+        }
+      },
+      "bets_to_kill_fish_low": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(bets_to_kill_fish_low)"
+        }
+      },
+      "bets_to_kill_fish_medium": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(bets_to_kill_fish_medium)"
+        }
+      },
+      "bets_to_kill_fish_high": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(bets_to_kill_fish_high)"
+        }
+      },
+      "bets_to_kill_fish_ultra": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "AVG(bets_to_kill_fish_ultra)"
+        }
+      },
+      "session_length": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "COUNT(t.user_id)"
+        }
+      },
+      "num_streak_sessions": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "COUNT(DISTINCT t.session_id)"
+        }
+      },
+      "max_streak_length": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "MAX(t.session_length)"
+        }
+      },
+      "min_streak_length": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "MIN(t.session_length)"
+        }
+      },
+      "user_num_hits_fish_low": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "SUM(CASE WHEN b.fish_type = 'low'    THEN 1 END)"
+        }
+      },
+      "user_num_hits_fish_medium": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "SUM(CASE WHEN b.fish_type = 'medium' THEN 1 END)"
+        }
+      },
+      "user_num_hits_fish_high": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "SUM(CASE WHEN b.fish_type = 'high'   THEN 1 END)"
+        }
+      },
+      "user_num_hits_fish_ultra": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "SUM(CASE WHEN b.fish_type = 'ultra'  THEN 1 END)"
+        }
+      },
+      "user_num_killed_fish_low": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "SUM(CASE WHEN b.fish_type = 'low'    THEN b.killed END)"
+        }
+      },
+      "user_num_killed_fish_medium": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "SUM(CASE WHEN b.fish_type = 'medium' THEN b.killed END)"
+        }
+      },
+      "user_num_killed_fish_high": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "SUM(CASE WHEN b.fish_type = 'high'   THEN b.killed END)"
+        }
+      },
+      "user_num_killed_fish_ultra": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/fish_hunter/etl_game_stats_daily_by_user.py": "SUM(CASE WHEN b.fish_type = 'ultra'  THEN b.killed END)"
+        }
+      },
+      "t1": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "daily_login"
+        }
+      },
+      "t2": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "LEFT JOIN daily_login"
+        }
+      },
+      "t3": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "LEFT JOIN daily_login"
+        }
+      },
+      "num_bets": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "COUNT(t.user_id)"
+        }
+      },
+      "num_bets_bg": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "COUNT(CASE WHEN t.bet_type = 'BASE' THEN t.user_id END)"
+        }
+      },
+      "num_bets_fg": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "COUNT(CASE WHEN t.bet_type = 'FREE' THEN t.user_id END)"
+        }
+      },
+      "avg_delta_t_seconds": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "AVG(CASE WHEN EXTRACT(EPOCH FROM t.delta_t) BETWEEN 0 AND 86400 THEN EXTRACT(EPOCH FROM t.delta_t) END)"
+        }
+      },
+      "num_bets_per_user": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "ds.num_bets / NULLIF(ds.num_active_users, 0)"
+        }
+      },
+      "ds": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "FROM daily_stats"
+        }
+      },
+      "ur": {
+        "category": "etl_derived",
+        "description": "Computed in ETL. See source files for full SQL.",
+        "etl_formula": {
+          "jobs/operation_daily_report/etl_game_stats_daily_by_group.py": "INNER JOIN user_retention"
+        }
+      }
+    },
+    "groups": {
+      "user_group": {
+        "description": "User lifecycle segment based on how many days since the user's first bet in the game (first_bet_date from fct_bet_orders).\n",
+        "values": {
+          "new": {
+            "definition": "DATEDIFF('day', first_bet_date, activity_date) <= 3",
+            "description": "Users whose first bet in this game was within the last 3 calendar days."
+          },
+          "beginner": {
+            "definition": "DATEDIFF('day', first_bet_date, activity_date) BETWEEN 4 AND 7",
+            "description": "Users whose first bet was 4\u20137 calendar days ago."
+          },
+          "old": {
+            "definition": "DATEDIFF('day', first_bet_date, activity_date) > 7",
+            "description": "Users whose first bet was more than 7 calendar days ago."
+          }
+        }
+      },
+      "user_group2": {
+        "description": "Alternative lifecycle segment with finer day-0 granularity.\n",
+        "values": {
+          "day0_user": {
+            "definition": "DATEDIFF('day', first_bet_date, activity_date) < 1",
+            "description": "Brand-new users on the same calendar day as their very first bet."
+          },
+          "day1-6_user": {
+            "definition": "DATEDIFF('day', first_bet_date, activity_date) BETWEEN 1 AND 6",
+            "description": "Users 1\u20136 days after first bet."
+          },
+          "day7+_user": {
+            "definition": "DATEDIFF('day', first_bet_date, activity_date) >= 7",
+            "description": "Users 7 or more days after first bet."
+          }
+        }
+      },
+      "ai_group": {
+        "description": "AB-test partition from the bet_orders table (partition_ab[0]). 'AI' = users assigned to the AI strategy; 'Default' = control group. Sub-groups like 'Default_<mathtable>' or individual math-table IDs are also generated for deeper analysis.\n",
+        "values": {
+          "AI": {
+            "description": "Users in the AI-controlled AB group (partition_ab matches the AI group ID)."
+          },
+          "Default": {
+            "description": "Users NOT in the AI group (control / default strategy)."
+          },
+          "HG": {
+            "description": "Horizontal-group aggregate of ALL users regardless of AB partition."
+          }
+        }
+      },
+      "daily_group": {
+        "description": "Fish Hunter (FM01) grouping column \u2014 varies by config. Typically the strategy_name or an AB-test partition.\n"
+      }
+    },
+    "games": {
+      "SS01": {
+        "full_name": "Wucaishen (\u9152\u9986\u5b9d\u85cf)",
+        "type": "Slot Machine",
+        "source_table": "public.fct_bet_orders",
+        "bet_types": [
+          "BASE (background spin)",
+          "FREE (foreground / free-game spin)"
+        ],
+        "notes": "Base game (bg) is the regular paid spin. Free game (fg) is a bonus round triggered by the base game. fg bets use the triggering base-game bet amount.\n"
+      },
+      "SS02": {
+        "full_name": "Deep Dive",
+        "type": "Slot Machine",
+        "source_table": "public.fct_bet_orders",
+        "bet_types": [
+          "BASE",
+          "FREE"
+        ]
+      },
+      "SS03": {
+        "full_name": "Mahjong Streak (\u9ebb\u5c06\u8fde\u5e84)",
+        "type": "Slot Machine",
+        "source_table": "public.fct_bet_orders",
+        "bet_types": [
+          "BASE",
+          "FREE"
+        ]
+      },
+      "FM01": {
+        "full_name": "Fish Hunter (\u6355\u9c7c\u5927\u5e08)",
+        "type": "Fishing Game",
+        "source_table": "public.bullet",
+        "notes": "Each row in the bullet table represents one bullet fired. Fish have value tiers: low (<=10), medium (<=130), high (<=200), ultra (>200).\n"
+      }
+    },
+    "etl_sources": [
+      {
+        "file": "jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py",
+        "game_id": "SS01",
+        "sql_column_aliases": {
+          "mathtable": "t.script_id",
+          "payout": "t.actual_payout",
+          "profit": "t.actual_payout - t.bet_amount",
+          "ab_group_id": "t.partition_ab[0]",
+          "delta_t": "t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.created_at)",
+          "prev_bet_type": "LAG(t.bet_type) OVER (PARTITION BY t.user_id ORDER BY t.created_at)",
+          "prev_bet_amount": "LAG(t.bet_amount) OVER (PARTITION BY t.user_id ORDER BY t.created_at)",
+          "user_bet_count": "COUNT(t.user_id) OVER (PARTITION BY t.user_id)",
+          "mathtable_change": "END",
+          "t": "FROM user_bets_group",
+          "ai_group": "(10))",
+          "user_num_bets": "COUNT(t.user_id)",
+          "user_num_bets_bg": "COUNT(CASE WHEN t.bet_type = 'BASE' THEN t.user_id END)",
+          "user_num_bets_fg": "COUNT(CASE WHEN t.bet_type = 'FREE' THEN t.user_id END)",
+          "user_total_bet": "SUM(t.bet_amount)",
+          "user_total_bet_bg": "SUM(CASE WHEN t.bet_type = 'BASE' THEN t.bet_amount END)",
+          "user_total_payout": "SUM(t.payout)",
+          "user_total_payout_bg": "SUM(CASE WHEN t.bet_type = 'BASE' THEN t.payout END)",
+          "user_total_payout_fg": "SUM(CASE WHEN t.bet_type = 'FREE' THEN t.payout END)",
+          "user_total_bet_fg": "SUM(t.fg_session_trigger_bet)",
+          "user_num_bets_with_payout": "COUNT(CASE WHEN t.payout > 0 THEN 1 END)",
+          "user_num_bets_bg_with_payout": "COUNT(CASE WHEN t.bet_type = 'BASE' AND t.payout > 0 THEN 1 END)",
+          "user_num_bets_fg_with_payout": "COUNT(CASE WHEN t.bet_type = 'FREE' AND t.payout > 0 THEN 1 END)",
+          "user_avg_delta_t_seconds": "AVG(CASE WHEN EXTRACT(EPOCH FROM t.delta_t) BETWEEN 0 AND 86400 THEN EXTRACT(EPOCH FROM t.delta_t) END)",
+          "user_mathtable_change": "SUM(t.mathtable_change)",
+          "activity_date": "us.{stats_agg_col}",
+          "user_group": "END",
+          "user_group2": "END",
+          "user_rtp": "us.user_total_payout * 1.0 / NULLIF(us.user_total_bet, 0)",
+          "user_fg_ratio": "us.user_num_bets_fg * 1.0 / NULLIF(us.user_num_bets, 0)",
+          "user_total_profit": "(us.user_total_payout - us.user_total_bet)",
+          "user_rtp_bg": "us.user_total_payout_bg * 1.0 / NULLIF(us.user_total_bet, 0)",
+          "user_rtp_fg": "us.user_total_payout_fg * 1.0 / NULLIF(us.user_total_bet_fg, 0)",
+          "user_hit_rate": "us.user_num_bets_with_payout * 1.0 / NULLIF(us.user_num_bets, 0)",
+          "user_hit_rate_bg": "us.user_num_bets_bg_with_payout * 1.0 / NULLIF(us.user_num_bets_bg, 0)",
+          "user_hit_rate_fg": "us.user_num_bets_fg_with_payout * 1.0 / NULLIF(us.user_num_bets_fg, 0)",
+          "us": "FROM user_stats",
+          "fb": "LEFT JOIN user_first_bet"
+        },
+        "sql_snippets_count": 1
+      },
+      {
+        "file": "jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py",
+        "game_id": "SS02",
+        "sql_column_aliases": {
+          "mathtable": "t.script_id",
+          "payout": "t.actual_payout",
+          "profit": "t.actual_payout - t.bet_amount",
+          "ab_group_id": "t.partition_ab[0]",
+          "delta_t": "t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.created_at)",
+          "prev_bet_type": "LAG(t.bet_type) OVER (PARTITION BY t.user_id ORDER BY t.created_at)",
+          "prev_bet_amount": "LAG(t.bet_amount) OVER (PARTITION BY t.user_id ORDER BY t.created_at)",
+          "user_bet_count": "COUNT(t.user_id) OVER (PARTITION BY t.user_id)",
+          "mathtable_change": "END",
+          "t": "FROM user_bets_group",
+          "ai_group": "t.mathtable",
+          "user_num_bets": "COUNT(t.user_id)",
+          "user_num_bets_bg": "COUNT(CASE WHEN t.bet_type = 'BASE' THEN t.user_id END)",
+          "user_num_bets_fg": "COUNT(CASE WHEN t.bet_type = 'FREE' THEN t.user_id END)",
+          "user_total_bet": "SUM(t.bet_amount)",
+          "user_total_bet_bg": "SUM(CASE WHEN t.bet_type = 'BASE' THEN t.bet_amount END)",
+          "user_total_payout": "SUM(t.payout)",
+          "user_total_payout_bg": "SUM(CASE WHEN t.bet_type = 'BASE' THEN t.payout END)",
+          "user_total_payout_fg": "SUM(CASE WHEN t.bet_type = 'FREE' THEN t.payout END)",
+          "user_total_bet_fg": "SUM(t.fg_session_trigger_bet)",
+          "user_num_bets_with_payout": "COUNT(CASE WHEN t.payout > 0 THEN 1 END)",
+          "user_num_bets_bg_with_payout": "COUNT(CASE WHEN t.bet_type = 'BASE' AND t.payout > 0 THEN 1 END)",
+          "user_num_bets_fg_with_payout": "COUNT(CASE WHEN t.bet_type = 'FREE' AND t.payout > 0 THEN 1 END)",
+          "user_avg_delta_t_seconds": "AVG(CASE WHEN EXTRACT(EPOCH FROM t.delta_t) BETWEEN 0 AND 86400 THEN EXTRACT(EPOCH FROM t.delta_t) END)",
+          "user_mathtable_change": "SUM(t.mathtable_change)",
+          "activity_date": "us.{stats_agg_col}",
+          "user_group": "END",
+          "user_group2": "END",
+          "user_rtp": "us.user_total_payout * 1.0 / NULLIF(us.user_total_bet, 0)",
+          "user_fg_ratio": "us.user_num_bets_fg * 1.0 / NULLIF(us.user_num_bets, 0)",
+          "user_total_profit": "(us.user_total_payout - us.user_total_bet)",
+          "user_rtp_bg": "us.user_total_payout_bg * 1.0 / NULLIF(us.user_total_bet, 0)",
+          "user_rtp_fg": "us.user_total_payout_fg * 1.0 / NULLIF(us.user_total_bet_fg, 0)",
+          "user_hit_rate": "us.user_num_bets_with_payout * 1.0 / NULLIF(us.user_num_bets, 0)",
+          "user_hit_rate_bg": "us.user_num_bets_bg_with_payout * 1.0 / NULLIF(us.user_num_bets_bg, 0)",
+          "user_hit_rate_fg": "us.user_num_bets_fg_with_payout * 1.0 / NULLIF(us.user_num_bets_fg, 0)",
+          "us": "FROM user_stats",
+          "fb": "LEFT JOIN user_first_bet"
+        },
+        "sql_snippets_count": 1
+      },
+      {
+        "file": "jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py",
+        "game_id": "SS03",
+        "sql_column_aliases": {
+          "mathtable": "t.math_table_id",
+          "payout": "t.actual_payout",
+          "profit": "t.actual_payout - t.bet_amount",
+          "ab_group_id": "t.partition_ab[0]",
+          "delta_t": "t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.created_at)",
+          "prev_bet_type": "LAG(t.bet_type) OVER (PARTITION BY t.user_id ORDER BY t.created_at)",
+          "prev_bet_amount": "LAG(t.bet_amount) OVER (PARTITION BY t.user_id ORDER BY t.created_at)",
+          "user_bet_count": "COUNT(t.user_id) OVER (PARTITION BY t.user_id)",
+          "mathtable_change": "END",
+          "t": "FROM user_bets_group",
+          "ai_group": "END",
+          "user_num_bets": "COUNT(t.user_id)",
+          "user_num_bets_bg": "COUNT(CASE WHEN t.bet_type = 'BASE' THEN t.user_id END)",
+          "user_num_bets_fg": "COUNT(CASE WHEN t.bet_type = 'FREE' THEN t.user_id END)",
+          "user_total_bet": "SUM(t.bet_amount)",
+          "user_total_bet_bg": "SUM(CASE WHEN t.bet_type = 'BASE' THEN t.bet_amount END)",
+          "user_total_payout": "SUM(t.payout)",
+          "user_total_payout_bg": "SUM(CASE WHEN t.bet_type = 'BASE' THEN t.payout END)",
+          "user_total_payout_fg": "SUM(CASE WHEN t.bet_type = 'FREE' THEN t.payout END)",
+          "user_total_bet_fg": "SUM(t.fg_session_trigger_bet)",
+          "user_num_bets_with_payout": "COUNT(CASE WHEN t.payout > 0 THEN 1 END)",
+          "user_num_bets_bg_with_payout": "COUNT(CASE WHEN t.bet_type = 'BASE' AND t.payout > 0 THEN 1 END)",
+          "user_num_bets_fg_with_payout": "COUNT(CASE WHEN t.bet_type = 'FREE' AND t.payout > 0 THEN 1 END)",
+          "user_avg_delta_t_seconds": "AVG(CASE WHEN EXTRACT(EPOCH FROM t.delta_t) BETWEEN 0 AND 86400 THEN EXTRACT(EPOCH FROM t.delta_t) END)",
+          "user_mathtable_change": "SUM(t.mathtable_change)",
+          "activity_date": "us.{stats_agg_col}",
+          "user_group": "END",
+          "user_rtp": "us.user_total_payout * 1.0 / NULLIF(us.user_total_bet, 0)",
+          "user_fg_ratio": "us.user_num_bets_fg * 1.0 / NULLIF(us.user_num_bets, 0)",
+          "user_total_profit": "(us.user_total_payout - us.user_total_bet)",
+          "user_rtp_bg": "us.user_total_payout_bg * 1.0 / NULLIF(us.user_total_bet, 0)",
+          "user_rtp_fg": "us.user_total_payout_fg * 1.0 / NULLIF(us.user_total_bet_fg, 0)",
+          "user_hit_rate": "us.user_num_bets_with_payout * 1.0 / NULLIF(us.user_num_bets, 0)",
+          "user_hit_rate_bg": "us.user_num_bets_bg_with_payout * 1.0 / NULLIF(us.user_num_bets_bg, 0)",
+          "user_hit_rate_fg": "us.user_num_bets_fg_with_payout * 1.0 / NULLIF(us.user_num_bets_fg, 0)",
+          "us": "FROM user_stats",
+          "fb": "LEFT JOIN user_first_bet"
+        },
+        "sql_snippets_count": 1
+      },
+      {
+        "file": "jobs/fish_hunter/etl_game_stats_daily_by_user.py",
+        "game_id": null,
+        "sql_column_aliases": {
+          "partition_val": "b.partition_ab[0]",
+          "bet_time": "b.event_timestamp",
+          "fish_type": "END",
+          "prev_bet_time": "LAG(b.event_timestamp) OVER (PARTITION BY b.user_id ORDER BY b.event_timestamp)",
+          "TIMESTAMP": "DATEADD(day, -{RETURN_USER_DAYS}, CAST('{effective_start}'",
+          "daily_group": "END",
+          "bj_date_last_bet": "LAG(activity_date) OVER (PARTITION BY user_id ORDER BY activity_date)",
+          "is_new_global_streak": "END",
+          "is_new_type_streak": "END",
+          "global_streak_id": "SUM(is_new_global_streak) OVER(PARTITION BY user_id ORDER BY bet_time ROWS UNBOUNDED PRECEDING)",
+          "type_streak_id": "SUM(is_new_type_streak) OVER(PARTITION BY user_id, fish_type ORDER BY bet_time ROWS UNBOUNDED PRECEDING)",
+          "global_streak_len": "COUNT(*) OVER(PARTITION BY user_id, global_streak_id)",
+          "type_streak_len": "COUNT(*) OVER(PARTITION BY user_id, fish_type, type_streak_id)",
+          "max_kill_streak": "MAX(global_streak_len)",
+          "max_kill_streak_low": "MAX(CASE WHEN fish_type = 'low' THEN type_streak_len END)",
+          "max_kill_streak_medium": "MAX(CASE WHEN fish_type = 'medium' THEN type_streak_len END)",
+          "max_kill_streak_high": "MAX(CASE WHEN fish_type = 'high' THEN type_streak_len END)",
+          "max_kill_streak_ultra": "MAX(CASE WHEN fish_type = 'ultra' THEN type_streak_len END)",
+          "avg_kill_streak": "AVG(global_streak_len)",
+          "avg_kill_streak_low": "AVG(CASE WHEN fish_type = 'low' THEN type_streak_len END)",
+          "avg_kill_streak_medium": "AVG(CASE WHEN fish_type = 'medium' THEN type_streak_len END)",
+          "avg_kill_streak_high": "AVG(CASE WHEN fish_type = 'high' THEN type_streak_len END)",
+          "avg_kill_streak_ultra": "AVG(CASE WHEN fish_type = 'ultra' THEN type_streak_len END)",
+          "session_id": ")",
+          "bet_index": ")",
+          "seconds_to_kill_fish": "AVG(seconds_to_kill_fish)",
+          "seconds_to_kill_fish_low": "AVG(seconds_to_kill_fish_low)",
+          "seconds_to_kill_fish_medium": "AVG(seconds_to_kill_fish_medium)",
+          "seconds_to_kill_fish_high": "AVG(seconds_to_kill_fish_high)",
+          "seconds_to_kill_fish_ultra": "AVG(seconds_to_kill_fish_ultra)",
+          "bets_to_kill_fish": "AVG(bets_to_kill_fish)",
+          "bets_to_kill_fish_low": "AVG(bets_to_kill_fish_low)",
+          "bets_to_kill_fish_medium": "AVG(bets_to_kill_fish_medium)",
+          "bets_to_kill_fish_high": "AVG(bets_to_kill_fish_high)",
+          "bets_to_kill_fish_ultra": "AVG(bets_to_kill_fish_ultra)",
+          "session_length": "COUNT(t.user_id)",
+          "num_streak_sessions": "COUNT(DISTINCT t.session_id)",
+          "max_streak_length": "MAX(t.session_length)",
+          "min_streak_length": "MIN(t.session_length)",
+          "user_num_streak_sessions": "SUM(t.num_streak_sessions)",
+          "user_avg_streak_length": "AVG(t.avg_streak_length)",
+          "user_max_streak_length": "MAX(t.max_streak_length)",
+          "user_min_streak_length": "MIN(t.min_streak_length)",
+          "user_seconds_to_kill_fish": "AVG(t.seconds_to_kill_fish)",
+          "user_seconds_to_kill_fish_low": "AVG(t.seconds_to_kill_fish_low)",
+          "user_seconds_to_kill_fish_medium": "AVG(t.seconds_to_kill_fish_medium)",
+          "user_seconds_to_kill_fish_high": "AVG(t.seconds_to_kill_fish_high)",
+          "user_seconds_to_kill_fish_ultra": "AVG(t.seconds_to_kill_fish_ultra)",
+          "user_bets_to_kill_fish": "AVG(t.bets_to_kill_fish)",
+          "user_bets_to_kill_fish_low": "AVG(t.bets_to_kill_fish_low)",
+          "user_bets_to_kill_fish_medium": "AVG(t.bets_to_kill_fish_medium)",
+          "user_bets_to_kill_fish_high": "AVG(t.bets_to_kill_fish_high)",
+          "user_bets_to_kill_fish_ultra": "AVG(t.bets_to_kill_fish_ultra)",
+          "user_max_kill_streak": "MAX(t.max_kill_streak)",
+          "user_max_kill_streak_low": "MAX(t.max_kill_streak_low)",
+          "user_max_kill_streak_medium": "MAX(t.max_kill_streak_medium)",
+          "user_max_kill_streak_high": "MAX(t.max_kill_streak_high)",
+          "user_max_kill_streak_ultra": "MAX(t.max_kill_streak_ultra)",
+          "user_avg_kill_streak": "AVG(t.avg_kill_streak)",
+          "user_avg_kill_streak_low": "AVG(t.avg_kill_streak_low)",
+          "user_avg_kill_streak_medium": "AVG(t.avg_kill_streak_medium)",
+          "user_avg_kill_streak_high": "AVG(t.avg_kill_streak_high)",
+          "user_avg_kill_streak_ultra": "AVG(t.avg_kill_streak_ultra)",
+          "user_num_rooms": "COUNT(DISTINCT b.user_id || '-' || b.room_id)",
+          "user_num_bets": "COUNT(b.user_id)",
+          "user_num_hits_fish_low": "SUM(CASE WHEN b.fish_type = 'low'    THEN 1 END)",
+          "user_num_hits_fish_medium": "SUM(CASE WHEN b.fish_type = 'medium' THEN 1 END)",
+          "user_num_hits_fish_high": "SUM(CASE WHEN b.fish_type = 'high'   THEN 1 END)",
+          "user_num_hits_fish_ultra": "SUM(CASE WHEN b.fish_type = 'ultra'  THEN 1 END)",
+          "user_num_killed_bullets": "SUM(b.killed)",
+          "user_num_killed_fish_low": "SUM(CASE WHEN b.fish_type = 'low'    THEN b.killed END)",
+          "user_num_killed_fish_medium": "SUM(CASE WHEN b.fish_type = 'medium' THEN b.killed END)",
+          "user_num_killed_fish_high": "SUM(CASE WHEN b.fish_type = 'high'   THEN b.killed END)",
+          "user_num_killed_fish_ultra": "SUM(CASE WHEN b.fish_type = 'ultra'  THEN b.killed END)",
+          "user_total_bet": "SUM(b.bet)",
+          "user_total_payout": "SUM(b.payout)",
+          "user_total_profit": "SUM(b.profit)",
+          "user_max_profit": "MAX(b.profit)",
+          "user_rtp": ") / NULLIF(SUM(b.bet), 0), 3)",
+          "user_profit_coef_var": "STDDEV(b.profit) / NULLIF(ABS(AVG(b.profit)), 0)",
+          "user_killed_fish": "MAX(CASE WHEN b.killed >= 1 THEN 1 ELSE 0 END)",
+          "user_avg_fish_value": "AVG(b.fish_value)",
+          "user_avg_fish_value_20_200": "AVG(CASE WHEN b.fish_value > 19 AND b.fish_value < 201 THEN b.fish_value END)",
+          "user_avg_killed_fish_value": "AVG(CASE WHEN b.killed = 1 THEN b.fish_value END)",
+          "user_avg_killed_fish_value_20_200": "AVG(CASE WHEN b.fish_value > 19 AND b.fish_value < 201 AND b.killed = 1 THEN b.fish_value END)",
+          "user_bullet_avg_profit": "AVG(b.profit)",
+          "user_bullet_kill_avg_profit": "AVG(CASE WHEN b.killed = 1 THEN b.profit END)",
+          "activity_date": "t1.{stats_agg_col}",
+          "user_group": "END",
+          "user_hits_fish_low_ratio": "t1.user_num_hits_fish_low    * 1.0 / NULLIF(t1.user_num_bets, 0)",
+          "user_hits_fish_medium_ratio": "t1.user_num_hits_fish_medium * 1.0 / NULLIF(t1.user_num_bets, 0)",
+          "user_hits_fish_high_ratio": "t1.user_num_hits_fish_high   * 1.0 / NULLIF(t1.user_num_bets, 0)",
+          "user_hits_fish_ultra_ratio": "t1.user_num_hits_fish_ultra  * 1.0 / NULLIF(t1.user_num_bets, 0)",
+          "user_killed_fish_low_ratio": "t1.user_num_killed_fish_low    * 1.0 / NULLIF(t1.user_num_killed_bullets, 0)",
+          "user_killed_fish_medium_ratio": "t1.user_num_killed_fish_medium * 1.0 / NULLIF(t1.user_num_killed_bullets, 0)",
+          "user_killed_fish_high_ratio": "t1.user_num_killed_fish_high   * 1.0 / NULLIF(t1.user_num_killed_bullets, 0)",
+          "user_killed_fish_ultra_ratio": "t1.user_num_killed_fish_ultra  * 1.0 / NULLIF(t1.user_num_killed_bullets, 0)",
+          "user_bullet_kill_ratio": ") / NULLIF(t1.user_num_bets, 0), 3)",
+          "fb": "LEFT JOIN user_first_bet"
+        },
+        "sql_snippets_count": 1
+      },
+      {
+        "file": "jobs/operation_daily_report/etl_game_stats_daily_by_group.py",
+        "game_id": null,
+        "sql_column_aliases": {
+          "mathtable": "t.script_id",
+          "payout": "t.actual_payout",
+          "profit": "t.actual_payout - t.bet_amount",
+          "activity_date": "TRUNC(DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at)))",
+          "ab_group_id": "t.partition_ab[0]",
+          "delta_t": "t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.created_at)",
+          "user_bet_count": "COUNT(t.user_id) OVER (PARTITION BY t.user_id)",
+          "t": "FROM user_bets_group",
+          "ai_group": "t.mathtable",
+          "day0_num_users": "COUNT(distinct t1.user_id)",
+          "day1_num_users": "COUNT(distinct t2.user_id)",
+          "day3_num_users": "COUNT(distinct t3.user_id)",
+          "t1": "daily_login",
+          "t2": "LEFT JOIN daily_login",
+          "t3": "LEFT JOIN daily_login",
+          "num_active_users": "COUNT(DISTINCT t.user_id)",
+          "num_bets": "COUNT(t.user_id)",
+          "num_bets_bg": "COUNT(CASE WHEN t.bet_type = 'BASE' THEN t.user_id END)",
+          "num_bets_fg": "COUNT(CASE WHEN t.bet_type = 'FREE' THEN t.user_id END)",
+          "total_bet": "SUM(t.bet_amount)",
+          "total_bet_bg": "SUM(CASE WHEN t.bet_type = 'BASE' THEN t.bet_amount END)",
+          "total_payout": "SUM(t.payout)",
+          "total_payout_bg": "SUM(CASE WHEN t.bet_type = 'BASE' THEN t.payout END)",
+          "total_payout_fg": "SUM(CASE WHEN t.bet_type = 'FREE' THEN t.payout END)",
+          "avg_delta_t_seconds": "AVG(CASE WHEN EXTRACT(EPOCH FROM t.delta_t) BETWEEN 0 AND 86400 THEN EXTRACT(EPOCH FROM t.delta_t) END)",
+          "fg_ratio": "ds.num_bets_fg * 1.0 / NULLIF(ds.num_bets, 0)",
+          "num_bets_per_user": "ds.num_bets / NULLIF(ds.num_active_users, 0)",
+          "total_bet_per_user": "ds.total_bet / NULLIF(ds.num_active_users, 0)",
+          "total_profit": "(ds.total_payout - ds.total_bet)",
+          "rtp": "ds.total_payout / NULLIF(ds.total_bet, 0)",
+          "rtp_bg": "ds.total_payout_bg / NULLIF(ds.total_bet, 0)",
+          "ds": "FROM daily_stats",
+          "ur": "INNER JOIN user_retention"
+        },
+        "sql_snippets_count": 1
+      },
+      {
+        "file": "jobs/operation_daily_report/etl_weekly_report_all_games.py",
+        "game_id": null,
+        "sql_column_aliases": {},
+        "sql_snippets_count": 1
+      }
+    ],
+    "dashboard_config": {
+      "title": "Fish Hunter Analytics",
+      "stats_by_date": {
+        "files": {
+          "day": [
+            "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/daily_stats",
+            "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/daily_stats_pa"
+          ],
+          "week": [
+            "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/weekly_stats",
+            "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/weekly_stats_pa"
+          ],
+          "month": [
+            "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/monthly_stats",
+            "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/monthly_stats_pa"
+          ]
+        },
+        "group_col": "daily_group",
+        "date_col": "activity_date",
+        "user_group_cols": [
+          "user_group",
+          "daily_group"
+        ],
+        "group1_label": "DAU and Retention",
+        "group1_columns": [
+          "num_active_users",
+          "day0_num_users",
+          "day1_num_users",
+          "day3_num_users",
+          "retention_rate_day1",
+          "retention_rate_day3",
+          "user_killed_fish"
+        ],
+        "group2_label": "Bet and RTP",
+        "group2_columns": [
+          "user_total_bet",
+          "user_total_payout",
+          "user_rtp",
+          "rtp",
+          "user_total_profit",
+          "user_max_profit",
+          "user_bullet_avg_profit",
+          "user_bullet_kill_avg_profit",
+          "user_num_streak_sessions",
+          "user_avg_streak_length",
+          "user_max_streak_length",
+          "user_min_streak_length",
+          "user_seconds_to_kill_fish",
+          "user_seconds_to_kill_fish_low",
+          "user_seconds_to_kill_fish_medium",
+          "user_seconds_to_kill_fish_high",
+          "user_seconds_to_kill_fish_ultra",
+          "user_bets_to_kill_fish",
+          "user_bets_to_kill_fish_low",
+          "user_bets_to_kill_fish_medium",
+          "user_bets_to_kill_fish_high",
+          "user_bets_to_kill_fish_ultra"
+        ],
+        "group3_label": "Fish Value and Bullets",
+        "group3_columns": [
+          "user_avg_fish_value",
+          "user_avg_fish_value_20_200",
+          "user_avg_killed_fish_value",
+          "user_avg_killed_fish_value_20_200",
+          "user_num_bets",
+          "user_num_killed_bullets",
+          "user_bullet_kill_ratio",
+          "user_num_rooms",
+          "user_profit_coef_var",
+          "user_killed_fish_low_ratio",
+          "user_killed_fish_medium_ratio",
+          "user_killed_fish_high_ratio",
+          "user_killed_fish_ultra_ratio",
+          "user_hits_fish_low_ratio",
+          "user_hits_fish_medium_ratio",
+          "user_hits_fish_high_ratio",
+          "user_hits_fish_ultra_ratio",
+          "user_max_kill_streak",
+          "user_max_kill_streak_low",
+          "user_max_kill_streak_medium",
+          "user_max_kill_streak_high",
+          "user_max_kill_streak_ultra",
+          "user_avg_kill_streak",
+          "user_avg_kill_streak_low",
+          "user_avg_kill_streak_medium",
+          "user_avg_kill_streak_high",
+          "user_avg_kill_streak_ultra"
+        ]
+      },
+      "stats_by_bet": {
+        "files": [
+          "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/bullet_stats_by_index.parquet",
+          "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/bullet_stats_by_index_pa.parquet"
+        ],
+        "group_col": "session_group"
+      },
+      "weekly_report": {
+        "game_id": "FM01",
+        "currency_type": "CNY",
+        "files": [
+          "s3://bituslabs-team-ai/etl-results/jobs/output_weekly_report_all_games/ops_daily_report"
+        ]
+      }
+    }
+  }
+}
