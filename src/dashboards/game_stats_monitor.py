@@ -52,8 +52,12 @@ _CHAT_API_URL = os.environ.get("CHAT_API_URL", "http://localhost:8051")
 
 # Dash exposes `Dropdown.Options` as a TypedDict for this prop.
 _CHAT_PROVIDER_DROPDOWN_OPTIONS: list[dcc.Dropdown.Options] = [
-    {"label": "OpenAI (gpt-4o-mini)", "value": "openai"},
-    {"label": "Gemini (gemini-2.5-flash)", "value": "gemini"},
+    {"label": "Gemini 2.5 Flash (fast)", "value": "gemini:gemini-2.5-flash"},
+    {"label": "Gemini 2.5 Pro (powerful)", "value": "gemini:gemini-2.5-pro"},
+    {"label": "GPT-4o-mini (fast)", "value": "openai:gpt-4o-mini"},
+    {"label": "GPT-4o (balanced)", "value": "openai:gpt-4o"},
+    {"label": "GPT-4.1-mini (balanced)", "value": "openai:gpt-4.1-mini"},
+    {"label": "GPT-4.1 (powerful)", "value": "openai:gpt-4.1"},
 ]
 
 
@@ -3608,7 +3612,7 @@ class GameStatsDashboard:
                                         dcc.Dropdown(
                                             id="chat-provider-select",
                                             options=_CHAT_PROVIDER_DROPDOWN_OPTIONS,
-                                            value=os.environ.get("CHAT_PROVIDER", "openai").lower(),
+                                            value=os.environ.get("CHAT_MODEL_KEY", "gemini:gemini-2.5-flash"),
                                             clearable=False,
                                             style={"width": "200px", "fontSize": "12px"},
                                         ),
@@ -3871,13 +3875,14 @@ class GameStatsDashboard:
             thinking_history = history + [{"role": "assistant", "content": "Thinking..."}]
             messages_ui = self._render_chat_messages(thinking_history)
 
+            model_label = provider.split(":")[-1] if ":" in provider else provider
             pending = {
                 "message": user_input.strip(),
                 "history": [{"role": m["role"], "content": m["content"]} for m in history[:-1]],
                 "dashboard_config": config_path or "",
-                "provider": provider,
+                "model": provider,
             }
-            return messages_ui, history, "", f"Waiting for response ({provider})...", pending
+            return messages_ui, history, "", f"Waiting for response ({model_label})...", pending
 
         # Step 2: Call the AI agent API and display the response
         @self.app.callback(
@@ -3895,7 +3900,8 @@ class GameStatsDashboard:
             if not pending:
                 return no_update, no_update, no_update
 
-            provider = pending.get("provider", "")
+            model_key = pending.get("model", "")
+            model_label = model_key.split(":")[-1] if ":" in model_key else model_key
 
             try:
                 payload = _json.dumps(pending).encode()
@@ -3909,7 +3915,7 @@ class GameStatsDashboard:
                     body = _json.loads(resp.read().decode())
                 response = body.get("response", "No response received.")
                 elapsed = body.get("elapsed_ms", "")
-                status = f"({provider}) {elapsed}ms" if elapsed else f"({provider})"
+                status = f"({model_label}) {elapsed}ms" if elapsed else f"({model_label})"
             except urllib.error.URLError as exc:
                 logger.exception("Chat agent unreachable at %s", _CHAT_API_URL)
                 response = (

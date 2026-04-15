@@ -56,8 +56,13 @@ class ChatRequest(BaseModel):
     )
     provider: Optional[str] = Field(
         None,
-        description="LLM provider override for this request (openai | gemini). "
+        description="(Deprecated — use 'model' instead) LLM provider override. "
         "Falls back to CHAT_PROVIDER env var if not set.",
+    )
+    model: Optional[str] = Field(
+        None,
+        description="Model key from the catalog, e.g. 'openai:gpt-4.1' or 'gemini:gemini-2.5-pro'. "
+        "Overrides 'provider' when set.",
     )
 
 
@@ -154,7 +159,8 @@ def create_chat_app(*, prefix: str = "") -> FastAPI:
     async def post_chat(req: ChatRequest) -> ChatResponse:
         t0 = time.monotonic()
 
-        if req.provider:
+        model_key = req.model
+        if not model_key and req.provider:
             os.environ["CHAT_PROVIDER"] = req.provider
 
         config_path: Optional[Path] = None
@@ -173,6 +179,7 @@ def create_chat_app(*, prefix: str = "") -> FastAPI:
                 user_message=req.message,
                 history=history,
                 dashboard_config_path=config_path,
+                model_key=model_key,
             )
         except Exception as exc:
             logger.exception("Chat agent error")

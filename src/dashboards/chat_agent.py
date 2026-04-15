@@ -18,6 +18,10 @@ Set ``CHAT_PROVIDER`` to choose the LLM backend:
 
 Model override: set ``CHAT_MODEL`` to any model name supported by the chosen
 provider (e.g. ``gpt-4o-mini``, ``gemini-2.5-flash``).
+
+You can also pass a catalog key like ``"openai:gpt-4.1"`` or
+``"gemini:gemini-2.5-pro"`` via the ``model_key`` parameter in
+``chat()`` / ``achat()`` to select both provider and model at once.
 """
 
 from __future__ import annotations
@@ -384,6 +388,17 @@ _DEFAULT_MODELS = {
     "gemini": "gemini-2.5-flash",
 }
 
+# Full model catalog — keyed by "provider:model" for the UI dropdown.
+# "tier" is just informational for the dropdown label.
+MODEL_CATALOG = {
+    "openai:gpt-4o-mini": {"provider": "openai", "model": "gpt-4o-mini", "tier": "fast"},
+    "openai:gpt-4o": {"provider": "openai", "model": "gpt-4o", "tier": "balanced"},
+    "openai:gpt-4.1-mini": {"provider": "openai", "model": "gpt-4.1-mini", "tier": "balanced"},
+    "openai:gpt-4.1": {"provider": "openai", "model": "gpt-4.1", "tier": "powerful"},
+    "gemini:gemini-2.5-flash": {"provider": "gemini", "model": "gemini-2.5-flash", "tier": "fast"},
+    "gemini:gemini-2.5-pro": {"provider": "gemini", "model": "gemini-2.5-pro", "tier": "powerful"},
+}
+
 # Secrets Manager secret name (stores GOOGLE_API_KEY and OPENAI_API_KEY).
 _SECRETS_MANAGER_NAME = "ai-dashboard_ai_agent"
 _SECRETS_MANAGER_REGION = "us-west-2"
@@ -414,9 +429,20 @@ def _get_secret(key: str) -> Optional[str]:
     return (_secrets_cache or {}).get(key)
 
 
-def _build_llm() -> BaseChatModel:
-    provider = os.environ.get("CHAT_PROVIDER", "openai").lower()
-    model = os.environ.get("CHAT_MODEL", _DEFAULT_MODELS.get(provider, "gpt-4o-mini"))
+def _build_llm(model_key: Optional[str] = None) -> BaseChatModel:
+    """Build the LLM instance.
+
+    Args:
+        model_key: A catalog key like ``"openai:gpt-4.1"`` or ``"gemini:gemini-2.5-pro"``.
+                   Falls back to ``CHAT_PROVIDER`` / ``CHAT_MODEL`` env vars.
+    """
+    if model_key and model_key in MODEL_CATALOG:
+        entry = MODEL_CATALOG[model_key]
+        provider = entry["provider"]
+        model = entry["model"]
+    else:
+        provider = os.environ.get("CHAT_PROVIDER", "openai").lower()
+        model = os.environ.get("CHAT_MODEL", _DEFAULT_MODELS.get(provider, "gpt-4o-mini"))
 
     if provider == "gemini":
         try:
@@ -447,9 +473,9 @@ def _build_llm() -> BaseChatModel:
     return ChatOpenAI(model=model, temperature=0, api_key=SecretStr(api_key))
 
 
-def create_agent():
+def create_agent(model_key: Optional[str] = None):
     """Create and return the LangGraph ReAct agent."""
-    llm = _build_llm()
+    llm = _build_llm(model_key=model_key)
     return create_react_agent(llm, _TOOLS)
 
 
@@ -491,12 +517,13 @@ def chat(
     user_message: str,
     history: Optional[List[Dict[str, str]]] = None,
     dashboard_config_path: Optional[Path] = None,
+    model_key: Optional[str] = None,
 ) -> str:
     """
     Synchronous chat — used by the Dash embedded panel (Gunicorn / threaded).
     """
     _ensure_metadata(dashboard_config_path=dashboard_config_path)
-    agent = create_agent()
+    agent = create_agent(model_key=model_key)
     messages = _build_messages(user_message, history)
     result = agent.invoke({"messages": messages})
     return _extract_response(result)
@@ -506,6 +533,7 @@ async def achat(
     user_message: str,
     history: Optional[List[Dict[str, str]]] = None,
     dashboard_config_path: Optional[Path] = None,
+    model_key: Optional[str] = None,
 ) -> str:
     """
     Async chat — used by the FastAPI standalone service (Uvicorn / ASGI).
@@ -515,7 +543,7 @@ async def achat(
     requests on a single worker.
     """
     _ensure_metadata(dashboard_config_path=dashboard_config_path)
-    agent = create_agent()
+    agent = create_agent(model_key=model_key)
     messages = _build_messages(user_message, history)
     result = await agent.ainvoke({"messages": messages})
     return _extract_response(result)

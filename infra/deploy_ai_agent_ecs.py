@@ -424,8 +424,17 @@ def main() -> None:
         "containerDefinitions": [container_def],
     }
 
-    ecs.register_task_definition(**task_def)
-    print(f"  Registered task definition: {SERVICE_NAME}")
+    resp_td = ecs.register_task_definition(**task_def)
+    new_revision = resp_td["taskDefinition"]["taskDefinitionArn"]
+    print(f"  Registered task definition: {SERVICE_NAME} (revision {resp_td['taskDefinition']['revision']})")
+
+    # Deregister old revisions (keep only the new one)
+    old_revisions = ecs.list_task_definitions(familyPrefix=SERVICE_NAME, status="ACTIVE")["taskDefinitionArns"]
+    for old_arn in old_revisions:
+        if old_arn != new_revision:
+            ecs.deregister_task_definition(taskDefinition=old_arn)
+            rev = old_arn.split(":")[-1]
+            print(f"  Deregistered old revision: {rev}")
 
     # 9. ECS service
     print("\n9. ECS service...")
