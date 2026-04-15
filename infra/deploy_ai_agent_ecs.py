@@ -44,6 +44,9 @@ TASK_MEMORY = 1024  # 1 GB
 DESIRED_COUNT = 1  # always keep 1 task running
 CHAT_PROVIDER = "gemini"
 
+# API keys are fetched at runtime by the app from AWS Secrets Manager
+# (secret name: "ai-dashboard_ai_agent"). No need to inject them here.
+
 HEALTH_CHECK_PATH = "/health"
 TG_HEALTH_CHECK_INTERVAL = 300
 TG_HEALTHY_THRESHOLD = 2
@@ -359,9 +362,26 @@ def main() -> None:
             raise
         print("  Listener exists")
 
-    # 7b. Execution role
+    # 7b. Execution role + Secrets Manager access for the task
     print("\n7b. ECS task execution role...")
     exec_role_arn = ensure_ecs_task_execution_role(iam, account_id)
+    iam.put_role_policy(
+        RoleName=ECS_TASK_EXECUTION_ROLE_NAME,
+        PolicyName="ecsTaskRole-secrets-ai-agent",
+        PolicyDocument=json.dumps(
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Action": ["secretsmanager:GetSecretValue"],
+                        "Resource": [f"arn:aws:secretsmanager:{REGION}:{account_id}:secret:ai-dashboard_ai_agent*"],
+                    }
+                ],
+            }
+        ),
+    )
+    print("  Attached Secrets Manager read policy for ai-dashboard_ai_agent")
 
     # 8. Task definition
     print("\n8. Task definition...")
@@ -369,6 +389,30 @@ def main() -> None:
         {"name": "CHAT_PROVIDER", "value": CHAT_PROVIDER},
     ]
 
+    container_def = {
+        "name": "ai-agent",
+        "image": ecr_uri,
+        "portMappings": [{"containerPort": AGENT_PORT, "protocol": "tcp"}],
+        "logConfiguration": {
+            "logDriver": "awslogs",
+            "options": {
+                "awslogs-group": log_group,
+                "awslogs-region": REGION,
+                "awslogs-stream-prefix": "ai-agent",
+            },
+        },
+        "environment": env_vars,
+        "healthCheck": {
+            "command": [
+                "CMD-SHELL",
+                f"curl -sf http://localhost:{AGENT_PORT}{HEALTH_CHECK_PATH} || exit 1",
+            ],
+            "interval": 10,
+            "timeout": 5,
+            "retries": 3,
+            "startPeriod": 30,
+        },
+    }
     task_def = {
         "family": SERVICE_NAME,
         "networkMode": "awsvpc",
@@ -377,32 +421,7 @@ def main() -> None:
         "memory": str(TASK_MEMORY),
         "executionRoleArn": exec_role_arn,
         "taskRoleArn": exec_role_arn,
-        "containerDefinitions": [
-            {
-                "name": "ai-agent",
-                "image": ecr_uri,
-                "portMappings": [{"containerPort": AGENT_PORT, "protocol": "tcp"}],
-                "logConfiguration": {
-                    "logDriver": "awslogs",
-                    "options": {
-                        "awslogs-group": log_group,
-                        "awslogs-region": REGION,
-                        "awslogs-stream-prefix": "ai-agent",
-                    },
-                },
-                "environment": env_vars,
-                "healthCheck": {
-                    "command": [
-                        "CMD-SHELL",
-                        f"curl -sf http://localhost:{AGENT_PORT}{HEALTH_CHECK_PATH} || exit 1",
-                    ],
-                    "interval": 10,
-                    "timeout": 5,
-                    "retries": 3,
-                    "startPeriod": 30,
-                },
-            }
-        ],
+        "containerDefinitions": [container_def],
     }
 
     ecs.register_task_definition(**task_def)

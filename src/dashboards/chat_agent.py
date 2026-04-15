@@ -275,6 +275,35 @@ _DEFAULT_MODELS = {
     "gemini": "gemini-2.5-flash",
 }
 
+# Secrets Manager secret name (stores GOOGLE_API_KEY and OPENAI_API_KEY).
+_SECRETS_MANAGER_NAME = "ai-dashboard_ai_agent"
+_SECRETS_MANAGER_REGION = "us-west-2"
+_secrets_cache: Optional[Dict[str, str]] = None
+
+
+def _get_secret(key: str) -> Optional[str]:
+    """Return an API key from env var first, then AWS Secrets Manager."""
+    value = os.environ.get(key)
+    if value:
+        return value
+
+    global _secrets_cache
+    if _secrets_cache is None:
+        try:
+            import json as _json
+
+            import boto3  # type: ignore[import-untyped]
+
+            session = boto3.Session(region_name=_SECRETS_MANAGER_REGION)
+            client = session.client(service_name="secretsmanager")
+            resp = client.get_secret_value(SecretId=_SECRETS_MANAGER_NAME)
+            _secrets_cache = _json.loads(resp["SecretString"])
+        except Exception as exc:
+            logger.warning("Secrets Manager lookup failed: %s", exc)
+            _secrets_cache = {}
+
+    return (_secrets_cache or {}).get(key)
+
 
 def _build_llm() -> BaseChatModel:
     provider = os.environ.get("CHAT_PROVIDER", "openai").lower()
@@ -290,19 +319,22 @@ def _build_llm() -> BaseChatModel:
             )
         from pydantic import SecretStr
 
-        api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+        api_key = _get_secret("GOOGLE_API_KEY") or _get_secret("GEMINI_API_KEY")
         if not api_key:
             raise ValueError(
-                "Gemini requires GOOGLE_API_KEY or GEMINI_API_KEY. " "Add to .env or export in your shell."
+                "Gemini requires GOOGLE_API_KEY or GEMINI_API_KEY. "
+                "Add to .env, export in your shell, or store in Secrets Manager."
             )
         return ChatGoogleGenerativeAI(model=model, temperature=0, api_key=SecretStr(api_key))
 
     from langchain_openai import ChatOpenAI
     from pydantic import SecretStr
 
-    api_key = os.environ.get("OPENAI_API_KEY")
+    api_key = _get_secret("OPENAI_API_KEY")
     if not api_key:
-        raise ValueError("OpenAI requires OPENAI_API_KEY. Add to .env or export in your shell.")
+        raise ValueError(
+            "OpenAI requires OPENAI_API_KEY. " "Add to .env, export in your shell, or store in Secrets Manager."
+        )
     return ChatOpenAI(model=model, temperature=0, api_key=SecretStr(api_key))
 
 
