@@ -879,6 +879,7 @@ class GameStatsDashboard:
                 dcc.Store(id="tab-bet-state", data=None),
                 dcc.Store(id="dashboard-load-trigger", data=None),
                 dcc.Store(id="chat-history", data=[]),
+                dcc.Store(id="chat-pending-request", data=None),
                 html.Div(
                     self._layout_stats_by_date(),
                     id="tab-date-content",
@@ -3827,11 +3828,13 @@ class GameStatsDashboard:
             Input("chat-dialog", "style"),
         )
 
+        # Step 1: Show user message immediately + "Thinking..." indicator
         @self.app.callback(
-            Output("chat-messages-container", "children"),
-            Output("chat-history", "data"),
-            Output("chat-input", "value"),
-            Output("chat-status", "children"),
+            Output("chat-messages-container", "children", allow_duplicate=True),
+            Output("chat-history", "data", allow_duplicate=True),
+            Output("chat-input", "value", allow_duplicate=True),
+            Output("chat-status", "children", allow_duplicate=True),
+            Output("chat-pending-request", "data"),
             Input("chat-send-btn", "n_clicks"),
             Input("chat-input", "n_submit"),
             Input("chat-clear-btn", "n_clicks"),
@@ -3841,7 +3844,7 @@ class GameStatsDashboard:
             State("chat-provider-select", "value"),
             prevent_initial_call=True,
         )
-        def handle_chat(
+        def handle_chat_submit(
             send_clicks: int,
             n_submit: int,
             clear_clicks: int,
@@ -3850,34 +3853,52 @@ class GameStatsDashboard:
             config_path: str,
             provider: str,
         ) -> Any:
-            import json as _json
-            import urllib.error
-            import urllib.request
-
             ctx = callback_context
             if not ctx.triggered:
-                return no_update, no_update, no_update, no_update
+                return no_update, no_update, no_update, no_update, no_update
 
             triggered_id = ctx.triggered[0]["prop_id"].split(".")[0]
 
             if triggered_id == "chat-clear-btn":
-                return [], [], "", "Chat cleared."
+                return [], [], "", "Chat cleared.", None
 
             if not user_input or not user_input.strip():
-                return no_update, no_update, no_update, no_update
+                return no_update, no_update, no_update, no_update, no_update
 
             history = list(history or [])
             history.append({"role": "user", "content": user_input.strip()})
 
+            thinking_history = history + [{"role": "assistant", "content": "Thinking..."}]
+            messages_ui = self._render_chat_messages(thinking_history)
+
+            pending = {
+                "message": user_input.strip(),
+                "history": [{"role": m["role"], "content": m["content"]} for m in history[:-1]],
+                "dashboard_config": config_path or "",
+                "provider": provider,
+            }
+            return messages_ui, history, "", f"Waiting for response ({provider})...", pending
+
+        # Step 2: Call the AI agent API and display the response
+        @self.app.callback(
+            Output("chat-messages-container", "children"),
+            Output("chat-history", "data"),
+            Output("chat-status", "children"),
+            Input("chat-pending-request", "data"),
+            prevent_initial_call=True,
+        )
+        def handle_chat_response(pending: Optional[dict]) -> Any:
+            import json as _json
+            import urllib.error
+            import urllib.request
+
+            if not pending:
+                return no_update, no_update, no_update
+
+            provider = pending.get("provider", "")
+
             try:
-                payload = _json.dumps(
-                    {
-                        "message": user_input.strip(),
-                        "history": [{"role": m["role"], "content": m["content"]} for m in history[:-1]],
-                        "dashboard_config": config_path or "",
-                        "provider": provider,
-                    }
-                ).encode()
+                payload = _json.dumps(pending).encode()
                 req = urllib.request.Request(
                     f"{_CHAT_API_URL}/api/chat",
                     data=payload,
@@ -3888,30 +3909,29 @@ class GameStatsDashboard:
                     body = _json.loads(resp.read().decode())
                 response = body.get("response", "No response received.")
                 elapsed = body.get("elapsed_ms", "")
-                history.append({"role": "assistant", "content": response})
                 status = f"({provider}) {elapsed}ms" if elapsed else f"({provider})"
             except urllib.error.URLError as exc:
                 logger.exception("Chat agent unreachable at %s", _CHAT_API_URL)
-                history.append(
-                    {
-                        "role": "assistant",
-                        "content": (
-                            f"Cannot reach the AI Agent at `{_CHAT_API_URL}`.\n\n"
-                            "**Local dev:** start the agent first:\n"
-                            "```\nPYTHONPATH=src uvicorn dashboards.chat_api:app --port 8051\n```\n\n"
-                            "**ECS:** ensure the ai-chat-agent service is running and "
-                            "`CHAT_API_URL` is set to its ALB URL."
-                        ),
-                    }
+                response = (
+                    f"Cannot reach the AI Agent at `{_CHAT_API_URL}`.\n\n"
+                    "**Local dev:** start the agent first:\n"
+                    "```\nPYTHONPATH=src uvicorn dashboards.chat_api:app --port 8051\n```\n\n"
+                    "**ECS:** ensure the ai-chat-agent service is running and "
+                    "`CHAT_API_URL` is set to its ALB URL."
                 )
                 status = f"Agent unreachable at {_CHAT_API_URL}"
             except Exception as exc:
                 logger.exception("Chat agent error")
-                history.append({"role": "assistant", "content": f"Error: {exc}"})
+                response = f"Error: {exc}"
                 status = "An error occurred."
 
+            # Retrieve current history from the pending request context
+            history = pending.get("history", [])
+            history.append({"role": "user", "content": pending["message"]})
+            history.append({"role": "assistant", "content": response})
+
             messages_ui = self._render_chat_messages(history)
-            return messages_ui, history, "", status
+            return messages_ui, history, status
 
     @staticmethod
     def _render_chat_messages(history: list) -> List[Component]:
