@@ -1,19 +1,19 @@
-"""SS03 mahjong streak incentive stats: merge user-day stats with AB group file, aggregate, plot RTP, export CSV.
+"""SS03 mahjong streak incentive stats from one merged extract, aggregate, plot RTP, export CSV.
 
 Summary DataFrame columns (``analyze()[0]``, also ``incentive_stats_summary.csv``)
 --------------------------------------------------------------------------------
 date
-    Day from incentive stats, matched to ``activity_date`` in the group file.
+    Activity day from the merged incentive extract.
 partition_ab
     AB cohort id (UUID string); arm is inferred from the first two characters
     (``4a`` vs ``4f``) for thresholds.
 num_users
-    Count of distinct ``user_id`` with merged stats for this date and partition.
+    Count of distinct ``user_id`` for this date and partition.
 num_users_with_fg: users with at least one free game (not incentivized) row that day
-    Users with at least one detail row where ``type == 1`` (free game) that day
+    Users with at least one detail row where ``bet_type != 'BASE'`` (free game) that day
     in this partition.
 num_users_low_spin
-    Users whose **base-game** spin total (``type == 0`` ``spin_count`` summed)
+    Users whose **base-game** spin total (``bet_type == 'BASE'`` ``spin_count`` summed)
     is **strictly less** than the arm spin threshold (100 for ``4a*``, 130 for ``4f*``).
 num_users_high_rtp
     Users with base-game spin total **greater than or equal** to the arm spin
@@ -28,7 +28,7 @@ median_spin_below_thresh
     Median of base-game spin totals among users in ``num_users_low_spin`` only;
     missing (NaN) when there are no users below the spin threshold for that row.
 mean_rtp_no_fg_not_incentivized
-    Mean of per-user base-game ``rtp`` among users with **no** ``type == 1`` row and
+    Mean of per-user base-game ``rtp`` among users with **no** non-``'BASE'`` row and
     **no** ``incentivized == 1`` row that day. Rows with missing ``rtp`` are ignored in
     the mean; NaN if no such user has a defined ``rtp``.
 avg_base_spin_no_fg_not_incentivized
@@ -48,15 +48,15 @@ ratio_users_high_rtp_incentivized
 Per-user working frame ``user_day`` (``analyze()[1]``)
 ------------------------------------------------------
 total_spin
-    Sum of ``spin_count`` over rows with ``type == 0`` only (base game).
+    Sum of ``spin_count`` over rows with ``bet_type == 'BASE'`` only (base game).
 has_fg
-    True if any row that day has ``type == 1``.
+    True if any row that day has ``bet_type != 'BASE'``.
 has_incentivized
     True if any row that day has ``incentivized == 1``.
 spin_thresh / rtp_thresh
     Arm-specific cutoffs copied from merged detail rows.
 rtp
-    Mean of ``rtp`` over ``type == 0`` rows only (missing if no base-game rows).
+    Mean of ``rtp`` over ``bet_type == 'BASE'`` rows only (missing if no base-game rows).
 low_spin
     ``total_spin < spin_thresh``.
 high_rtp
@@ -64,7 +64,7 @@ high_rtp
 high_rtp_incentivized
     ``high_rtp`` and ``has_incentivized`` (high RTP bucket and got incentivized).
 no_fg_not_incentivized
-    True when the user had no free-game (``type == 1``) and no incentivized row that day.
+    True when the user had no non-``'BASE'`` row and no incentivized row that day.
 """
 
 import argparse
@@ -82,8 +82,7 @@ logger = logging.getLogger(__name__)
 from bituslabs_ds.config import LOCAL_ROOT, S3_BUCKET
 from bituslabs_ds.s3_utils import upload_file_to_s3
 
-file1 = "/Users/niuxin/Documents/data_ss03/ss03_incentive_stats.csv"
-file2 = "/Users/niuxin/Documents/data_ss03/ss03_incentive_user_group_by_day.csv"
+file1 = "/Users/niuxin/Documents/data_ss03/ab_cny_bet_rtp_by_user_mathtable.parquet"
 
 OUTPUT_DIR = Path(LOCAL_ROOT) / "jobs" / "output" / "ss03_mahjiang_streak"
 S3_ANALYSIS_PREFIX = "ds-analysis/ss03_mahjiang_streak"
@@ -95,46 +94,17 @@ DEFAULT_LOCAL_SUMMARY_CSV = OUTPUT_DIR / "incentive_stats_summary.csv"
 DEFAULT_S3_SUMMARY_KEY = f"{S3_ANALYSIS_PREFIX}/incentive_stats_summary.csv"
 
 
-def warn_user_ids_in_multiple_partitions(groups: pd.DataFrame) -> None:
-    """Log a warning when the same user_id is listed under more than one partition_ab."""
-    n_part = cast(
-        pd.Series,
-        groups.groupby("user_id")["partition_ab"].nunique(),
-    )
-    multi = cast(pd.Series, n_part[n_part > 1])
-    if multi.size == 0:
-        return
-    uids = sorted(multi.index.tolist())
-    logger.warning(
-        "%s user_id(s) appear in more than one partition_ab group; "
-        "merge will duplicate stats rows per user. Details:",
-        len(uids),
-    )
-    for uid in uids:
-        parts = sorted(groups.loc[groups["user_id"] == uid, "partition_ab"].drop_duplicates().tolist())
-        ab_arm = [str(p)[:2].lower() for p in parts]
-        logger.warning(
-            "  user_id=%s ab_arm=%s partition_ab=%s",
-            uid,
-            ab_arm,
-            parts,
-        )
-
-
 def analyze(
     path_stats: str = file1,
-    path_groups: str = file2,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Load CSVs, merge, aggregate. See module docstring for column definitions."""
-    data1 = pd.read_csv(path_stats)
-    data2 = pd.read_csv(path_groups)
-
-    data2 = data2.copy()
-    data2["partition_ab"] = data2["partition_ab"].astype(str).str.strip().str.strip('"')
-    warn_user_ids_in_multiple_partitions(data2)
-
-    m = pd.merge(data1, data2, left_on=["user_id", "date"], right_on=["user_id", "activity_date"], how="inner")
-    prefix = m["partition_ab"].str[:2].str.lower()
+    """Load merged extract and aggregate. See module docstring for column definitions."""
+    if path_stats.lower().endswith(".parquet"):
+        m = pd.read_parquet(path_stats)
+    else:
+        m = pd.read_csv(path_stats)
+    m = m.copy()
+    m["ab_group_id"] = m["ab_group_id"].astype(str).str.strip().str.strip('"')
+    prefix = m["ab_group_id"].str[:2].str.lower()
     m["spin_thresh"] = np.select(
         [prefix == "4f", prefix == "4a"],
         [130, 100],
@@ -146,15 +116,15 @@ def analyze(
         default=np.nan,
     )
     m = m[m["spin_thresh"].notna()].copy()
-    # Spin thresholds compare only base-game (type == 0) spins, not free-game rows.
-    m["spin_count_base"] = np.where(m["type"] == 0, m["spin_count"], 0)
+    # Spin thresholds compare only base-game (bet_type == 'BASE') spins.
+    m["spin_count_base"] = np.where(m["bet_type"] == "BASE", m["spin_count"], 0)
 
-    gcols = ["date", "partition_ab", "user_id"]
+    gcols = ["activity_date", "ab_group_id", "user_id"]
     user_day = cast(
         pd.DataFrame,
         m.groupby(gcols, as_index=False).agg(
             total_spin=("spin_count_base", "sum"),
-            has_fg=("type", lambda s: (s == 1).any()),
+            has_fg=("bet_type", lambda s: (s != "BASE").any()),
             has_incentivized=("incentivized", lambda s: (s == 1).any()),
             spin_thresh=("spin_thresh", "first"),
             rtp_thresh=("rtp_thresh", "first"),
@@ -162,7 +132,7 @@ def analyze(
     )
     rtp_base = cast(
         pd.DataFrame,
-        m.loc[m["type"] == 0].groupby(gcols, as_index=False).agg(rtp=("rtp", "mean")),
+        m.loc[m["bet_type"] == "BASE"].groupby(gcols, as_index=False).agg(rtp=("rtp", "mean")),
     )
     user_day = cast(pd.DataFrame, user_day.merge(rtp_base, on=gcols, how="left"))
 
@@ -173,7 +143,7 @@ def analyze(
     user_day["high_rtp_incentivized"] = user_day["high_rtp"] & user_day["has_incentivized"]
     user_day["no_fg_not_incentivized"] = (~user_day["has_fg"]) & (~user_day["has_incentivized"])
 
-    summary = user_day.groupby(["date", "partition_ab"], as_index=False).agg(
+    summary = user_day.groupby(["activity_date", "ab_group_id"], as_index=False).agg(
         num_users=("user_id", "count"),
         num_users_with_fg=("has_fg", "sum"),
         num_users_low_spin=("low_spin", "sum"),
@@ -185,24 +155,26 @@ def analyze(
     med_below = cast(
         pd.DataFrame,
         user_day[user_day["low_spin"]]
-        .groupby(["date", "partition_ab"], as_index=False)
+        .groupby(["activity_date", "ab_group_id"], as_index=False)
         .agg(
             median_spin_below_thresh=("total_spin", "median"),
         ),
     )
-    summary = cast(pd.DataFrame, summary.merge(med_below, on=["date", "partition_ab"], how="left"))
+    summary = cast(pd.DataFrame, summary.merge(med_below, on=["activity_date", "ab_group_id"], how="left"))
 
     pure = user_day[user_day["no_fg_not_incentivized"]]
     pure_stats = cast(
         pd.DataFrame,
-        pure.groupby(["date", "partition_ab"], as_index=False).agg(
+        pure.groupby(["activity_date", "ab_group_id"], as_index=False).agg(
             mean_rtp_no_fg_not_incentivized=("rtp", "mean"),
             avg_base_spin_no_fg_not_incentivized=("total_spin", "mean"),
         ),
     )
-    summary = cast(pd.DataFrame, summary.merge(pure_stats, on=["date", "partition_ab"], how="left"))
+    summary = cast(pd.DataFrame, summary.merge(pure_stats, on=["activity_date", "ab_group_id"], how="left"))
 
-    summary = summary.sort_values(["date", "partition_ab"]).reset_index(drop=True)  # pyright: ignore[reportCallIssue]
+    summary = summary.sort_values(["activity_date", "ab_group_id"]).reset_index(
+        drop=True
+    )  # pyright: ignore[reportCallIssue]
 
     nu = summary["num_users"].replace(0, np.nan)
     summary["ratio_users_with_fg"] = summary["num_users_with_fg"] / nu
@@ -217,10 +189,10 @@ def analyze(
 def rtp_per_user_per_day(user_day: pd.DataFrame) -> pd.DataFrame:
     """One base-game RTP per user per day and AB prefix group (4a / 4f)."""
     base = user_day.dropna(subset=["rtp"]).copy()
-    base["ab_group"] = base["partition_ab"].str[:2].str.lower()
+    base["ab_group_id"] = base["ab_group_id"].str[:2].str.lower()
     return cast(
         pd.DataFrame,
-        base.groupby(["date", "ab_group", "user_id"], as_index=False).agg(
+        base.groupby(["activity_date", "ab_group_id", "user_id"], as_index=False).agg(
             rtp=("rtp", "mean"),
         ),
     )
@@ -230,18 +202,18 @@ def save_rtp_histplot_by_day(plot_df: pd.DataFrame, out_path: Path) -> None:
     if plot_df.empty:
         return
     df = plot_df.copy()
-    df["date"] = df["date"].astype(str)
-    ab_cats = sorted(df["ab_group"].astype(str).str.lower().unique())
+    df["activity_date"] = df["activity_date"].astype(str)
+    ab_cats = sorted(df["ab_group_id"].astype(str).str.lower().unique())
     df["ab_group"] = pd.Categorical(
-        df["ab_group"].astype(str).str.lower(),
+        df["ab_group_id"].astype(str).str.lower(),
         categories=ab_cats,
         ordered=True,
     )
     g = sns.displot(
         df,
         x="rtp",
-        row="ab_group",
-        col="date",
+        row="ab_group_id",
+        col="activity_date",
         kind="hist",
         bins=30,
         height=2.8,
@@ -250,7 +222,7 @@ def save_rtp_histplot_by_day(plot_df: pd.DataFrame, out_path: Path) -> None:
     )
     g.set_axis_labels("Base-game RTP (mean)", "Users")
     g.figure.suptitle(
-        "Per-user base-game RTP (type = 0) by day and group (4a vs 4f)",
+        "Per-user base-game RTP (bet_type = 'BASE') by day and AB group (4a vs 4f)",
         y=1.02,
     )
     g.figure.savefig(out_path, bbox_inches="tight", dpi=150)
@@ -290,18 +262,13 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     parser = argparse.ArgumentParser(description="SS03 incentive stats summary and RTP histogram.")
     parser.add_argument(
-        "--stats-csv",
+        "--stats-file",
         default=file1,
-        help="Path to incentive stats CSV.",
-    )
-    parser.add_argument(
-        "--groups-csv",
-        default=file2,
-        help="Path to user group CSV.",
+        help="Path to merged incentive stats file (parquet or csv).",
     )
     args = parser.parse_args()
 
-    summary, user_day = analyze(args.stats_csv, args.groups_csv)
+    summary, user_day = analyze(args.stats_file)
     print(summary.to_string(index=False))
 
     csv_path, csv_uri = save_summary_local_and_s3(summary)
