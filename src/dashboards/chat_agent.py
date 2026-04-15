@@ -93,6 +93,8 @@ def _format_column(name: str, info: Dict[str, Any]) -> str:
     if isinstance(etl, dict):
         for src, expr in etl.items():
             parts.append(f"ETL source ({src}): `{expr}`")
+    if info.get("python_aggregation"):
+        parts.append(f"Python aggregation code:\n```python\n{info['python_aggregation']}\n```")
     return "\n".join(parts)
 
 
@@ -273,6 +275,91 @@ def get_game_info(game_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# ETL source reading tool
+# ---------------------------------------------------------------------------
+
+
+@tool
+def read_etl_source(file_path: str, column_name: str = "") -> str:
+    """Read the full SQL query from an ETL source file.
+
+    Use this when a user asks for the actual SQL code or detailed computation
+    logic behind a column. The ETL sources are scanned at startup and their
+    SQL snippets are stored in the metadata cache.
+
+    Args:
+        file_path: Path to the ETL file (e.g. "jobs/fish_hunter/etl_game_stats_daily_by_user.py").
+                   Use get_dashboard_config_summary or lookup_column to discover which ETL files
+                   are relevant for the current dashboard.
+        column_name: Optional column name to highlight in the SQL output.
+    """
+    meta = _ensure_metadata()
+    etl_sources = meta.get("etl_sources", [])
+
+    matching = [s for s in etl_sources if file_path in s.get("file", "")]
+    if not matching:
+        available = [s.get("file", "?") for s in etl_sources]
+        return f"ETL file '{file_path}' not found in scanned sources. Available:\n" + "\n".join(
+            f"- {f}" for f in available
+        )
+
+    source = matching[0]
+    snippets = source.get("sql_snippets", [])
+    if not snippets:
+        return f"No SQL snippets found in '{source['file']}'."
+
+    parts = [f"ETL file: **{source['file']}**"]
+    if source.get("game_id"):
+        parts.append(f"Game ID: {source['game_id']}")
+    parts.append(f"SQL snippets found: {len(snippets)}\n")
+
+    for i, snippet in enumerate(snippets, 1):
+        if column_name:
+            if column_name.lower() not in snippet.lower():
+                continue
+        header = f"--- SQL Snippet {i} ---"
+        # Truncate very long snippets
+        if len(snippet) > 4000:
+            snippet = snippet[:4000] + "\n-- ... (truncated, query too long)"
+        parts.append(f"{header}\n```sql\n{snippet}\n```\n")
+
+    if len(parts) <= 3 and column_name:
+        parts.append(f"Column '{column_name}' not found in SQL snippets. Showing all snippets:")
+        for i, snippet in enumerate(snippets, 1):
+            if len(snippet) > 4000:
+                snippet = snippet[:4000] + "\n-- ... (truncated)"
+            parts.append(f"--- SQL Snippet {i} ---\n```sql\n{snippet}\n```\n")
+
+    # Also include Python aggregation logic if available
+    agg_constants = meta.get("python_aggregation_constants", "")
+    if agg_constants:
+        parts.append(f"Dashboard aggregation constants:\n```python\n{agg_constants}\n```")
+
+    return "\n".join(parts)
+
+
+@tool
+def list_etl_sources() -> str:
+    """List all ETL source files that have been scanned for column computation logic.
+
+    Use this to discover which ETL files are available, then use read_etl_source
+    to read the actual SQL from a specific file.
+    """
+    meta = _ensure_metadata()
+    etl_sources = meta.get("etl_sources", [])
+    if not etl_sources:
+        return "No ETL source files have been scanned."
+
+    lines = [f"Scanned {len(etl_sources)} ETL source file(s):\n"]
+    for s in etl_sources:
+        game = s.get("game_id") or "all"
+        aliases = len(s.get("sql_column_aliases", {}))
+        snippets = s.get("sql_snippets_count", 0)
+        lines.append(f"- **{s['file']}** (game: {game}, {aliases} aliases, {snippets} SQL snippets)")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Confluence tools
 # ---------------------------------------------------------------------------
 
@@ -340,19 +427,38 @@ segmentations, game-specific terminology, and team documentation.
 
 Your knowledge comes from:
 1. A curated column metadata file covering all dashboard columns
-2. ETL source code that computes these columns from Redshift SQL
-3. The dashboard configuration YAML for the currently active game
-4. Confluence documentation (searchable and readable via tools)
+2. ETL source code (Redshift SQL) that computes per-user statistics
+3. Python aggregation code (user_stats_aggregates.py) that derives dashboard
+   metrics from ETL output — e.g. filtering users, computing ratios
+4. The dashboard configuration YAML for the currently active game
+5. Confluence documentation (searchable and readable via tools)
 
-IMPORTANT — how to find the right column:
-- If the user provides an exact column name, use lookup_column.
+IMPORTANT — how to answer column questions:
+- ALWAYS use lookup_column first. It returns the full description, formula,
+  ETL SQL expression, AND Python aggregation code for the column.
+- Include ALL details from the tool output in your answer: the description,
+  the threshold/filter conditions, the formula, and the code. NEVER
+  simplify or omit conditions (like minimum bet thresholds).
+- If the user asks for the actual SQL or code, use read_etl_source with the
+  ETL file path shown in lookup_column's output. Use list_etl_sources to
+  discover available ETL files if needed.
 - If the user describes a metric conceptually (e.g. "users who lose a lot",
-  "how many people came back", "payout ratio"), use search_columns_by_keyword
-  with descriptive keywords extracted from their question.
+  "how many people came back"), use search_columns_by_keyword with
+  descriptive keywords extracted from their question.
 - If search_columns_by_keyword returns no results, try different keywords or
   use list_columns_by_category to browse and find the closest match.
 - NEVER repeat a previous answer if you cannot find the column. Instead, tell
   the user what you searched for and suggest they clarify.
+
+Understanding the data pipeline:
+- ETL SQL queries run on Redshift and produce per-user per-day rows
+  (columns prefixed with user_*: user_num_bets, user_total_bet, user_rtp, etc.)
+- The dashboard Python code (DataMetrics class) reads these user-level rows
+  and computes group-level aggregate metrics (num_active_users, rtp, hit_rate,
+  etc.) using thresholds like ACTIVE_USER_MIN_BETS = 40.
+- When explaining aggregate metrics, always mention both the ETL source
+  (how per-user data is computed) and the Python aggregation (how users are
+  filtered and aggregated into the dashboard metric).
 
 Other guidelines:
 - When asked about user groups (new/old/beginner/AI/Default), use lookup_group.
@@ -378,6 +484,8 @@ _TOOLS = [
     list_columns_by_category,
     get_dashboard_config_summary,
     get_game_info,
+    read_etl_source,
+    list_etl_sources,
     search_confluence,
     read_confluence_page,
 ]

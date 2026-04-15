@@ -94,7 +94,46 @@ def _scan_etl_file(path: Path) -> Dict[str, Any]:
         "game_id": game_id,
         "sql_column_aliases": all_aliases,
         "sql_snippets_count": len(sql_snippets),
+        "sql_snippets": sql_snippets,
     }
+
+
+def _scan_python_aggregation_file(path: Path) -> Dict[str, str]:
+    """Scan a Python file for aggregation logic (cached_property methods with column names).
+
+    Returns {column_name: code_snippet} for each ``@cached_property`` method
+    whose name starts with ``_`` and produces a dashboard column.
+    """
+    try:
+        source = path.read_text(encoding="utf-8")
+    except Exception as exc:
+        logger.warning("Could not read %s: %s", path, exc)
+        return {}
+
+    results: Dict[str, str] = {}
+    # Match @cached_property blocks: method name + body up to next @cached_property or class-level def
+    pattern = re.compile(
+        r"@cached_property\s*\n\s+def\s+(_\w+)\(self\).*?(?=\n\s+@|\n\s+def\s+[^_]|\nclass\s|\Z)",
+        re.DOTALL,
+    )
+    for m in pattern.finditer(source):
+        method_name = m.group(1)
+        col_name = method_name.lstrip("_")
+        body = m.group(0).strip()
+        # Limit to reasonable size
+        if len(body) > 2000:
+            body = body[:2000] + "\n    # ... (truncated)"
+        results[col_name] = body
+
+    # Also extract class-level constants that affect aggregation
+    constants: List[str] = []
+    for cm in re.finditer(r"^\s+(\w+):\s+ClassVar\[.+?\]\s*=\s*(.+)", source, re.MULTILINE):
+        constants.append(f"{cm.group(1)} = {cm.group(2).strip()}")
+
+    if constants:
+        results["__class_constants__"] = "\n".join(constants)
+
+    return results
 
 
 def load_metadata_yaml() -> Dict[str, Any]:
@@ -174,12 +213,19 @@ def build_metadata(
             src = result.get("file", "unknown")
             etl_aliases[alias][src] = expr
 
+    # Scan Python aggregation logic (user_stats_aggregates.py)
+    agg_file = _THIS_DIR / "user_stats_aggregates.py"
+    python_agg: Dict[str, str] = {}
+    if agg_file.exists():
+        python_agg = _scan_python_aggregation_file(agg_file)
+        logger.info("Scanned %d aggregation methods from %s", len(python_agg), agg_file.name)
+
     columns = dict(meta_yaml.get("columns", {}))
     for alias, sources in etl_aliases.items():
         if alias not in columns:
             columns[alias] = {
                 "category": "etl_derived",
-                "description": f"Computed in ETL. See source files for full SQL.",
+                "description": "Computed in ETL. See source files for full SQL.",
                 "etl_formula": sources,
             }
         else:
@@ -187,6 +233,19 @@ def build_metadata(
             if isinstance(columns[alias].get("etl_formula"), str):
                 columns[alias]["etl_formula"] = {"note": columns[alias]["etl_formula"]}
             columns[alias]["etl_formula"].update(sources)
+
+    # Attach Python aggregation logic to matching columns
+    for col_name, code_snippet in python_agg.items():
+        if col_name == "__class_constants__":
+            continue
+        if col_name in columns:
+            columns[col_name]["python_aggregation"] = code_snippet
+        else:
+            columns[col_name] = {
+                "category": "aggregate_metric",
+                "description": "Computed in Python aggregation. See code for full logic.",
+                "python_aggregation": code_snippet,
+            }
 
     dashboard_info: Optional[Dict[str, Any]] = None
     if dashboard_config_path and dashboard_config_path.exists():
@@ -197,6 +256,7 @@ def build_metadata(
         "groups": meta_yaml.get("groups", {}),
         "games": meta_yaml.get("games", {}),
         "etl_sources": etl_results,
+        "python_aggregation_constants": python_agg.get("__class_constants__", ""),
         "dashboard_config": dashboard_info,
     }
 
