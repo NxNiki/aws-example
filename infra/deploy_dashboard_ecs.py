@@ -53,11 +53,10 @@ S3_BUCKET = "bituslabs-team-ai"
 IMAGE_NAME = "bituslabs-ds-dashboard"
 DASHBOARD_PORT = 8050
 
-# Target group health check: use /health path (excluded from request counting for scale-in)
-# Max interval 300s to minimize health-check traffic so scale-to-zero can trigger
 HEALTH_CHECK_PATH = "/health"
-TG_HEALTH_CHECK_INTERVAL = 300
-TG_HEALTHY_THRESHOLD = 2
+TG_HEALTH_CHECK_INTERVAL = 30  # fast health checks so new tasks become healthy quickly
+TG_HEALTHY_THRESHOLD = 2  # 2 consecutive checks = ~60s to become healthy
+TG_DEREGISTRATION_DELAY = 30  # seconds to drain old task before removing from ALB
 SCALE_IN_IDLE_MINUTES = 180  # Scale to 0 after 3 hours with no user requests
 
 
@@ -490,12 +489,17 @@ def main() -> None:
         tg_arn = tgs[0]["TargetGroupArn"]
         print(f"  Target group exists: {tg_arn}")
 
-    # Update target group health check (affects existing TGs too)
     elbv2.modify_target_group(
         TargetGroupArn=tg_arn,
         HealthCheckPath=HEALTH_CHECK_PATH,
         HealthCheckIntervalSeconds=TG_HEALTH_CHECK_INTERVAL,
         HealthyThresholdCount=TG_HEALTHY_THRESHOLD,
+    )
+    elbv2.modify_target_group_attributes(
+        TargetGroupArn=tg_arn,
+        Attributes=[
+            {"Key": "deregistration_delay.timeout_seconds", "Value": str(TG_DEREGISTRATION_DELAY)},
+        ],
     )
 
     # 7. Listener
@@ -600,6 +604,10 @@ def main() -> None:
             taskDefinition=args.service_name,
             desiredCount=args.desired_count,
             launchType="FARGATE",
+            deploymentConfiguration={
+                "minimumHealthyPercent": 100,
+                "maximumPercent": 200,
+            },
             networkConfiguration={
                 "awsvpcConfiguration": {
                     "subnets": subnet_ids,
