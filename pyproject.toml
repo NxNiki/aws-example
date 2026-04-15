@@ -72,6 +72,7 @@ langchain-google-genai = ">=4.0.0"
 langgraph = ">=0.2.0"
 fastapi = ">=0.115.0"
 uvicorn = {extras = ["standard"], version = ">=0.30.0"}
+atlassian-python-api = ">=3.41.0"
 
 [tool.poetry.group.etl]
 optional = true 

@@ -39,7 +39,7 @@ def generate_query(start_date: str) -> str:
     return dedent(
         f"""
         SELECT *
-        FROM platform.public.fct_platform_ops_daily_report
+        FROM public.fct_platform_ops_daily_report
         WHERE bj_date_key >= DATE '{start_date}'
           AND currency_type IN {ETL_CURRENCY_CODES}
           AND game_id IN ({games_sql})
@@ -71,7 +71,7 @@ if __name__ == "__main__":
     redshift_loader = DataLoader(
         backend=RedshiftBackend(
             host=REDSHIFT_HOST,
-            database="slot-machine",
+            database="platform",
             user=get_redshift_user(),
             password=get_redshift_password(),
             port=REDSHIFT_PORT,

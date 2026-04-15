@@ -39,11 +39,12 @@ COPY --from=builder /app/.venv /app/.venv
 
 # Application code — only the modules the chat agent needs
 COPY src/bituslabs_ds ./src/bituslabs_ds
-COPY src/dashboards/chat_agent.py       ./src/dashboards/chat_agent.py
-COPY src/dashboards/chat_api.py         ./src/dashboards/chat_api.py
-COPY src/dashboards/metadata_builder.py ./src/dashboards/metadata_builder.py
-COPY src/dashboards/column_metadata.yaml ./src/dashboards/column_metadata.yaml
-COPY src/dashboards/__init__.py         ./src/dashboards/__init__.py
+COPY src/dashboards/chat_agent.py         ./src/dashboards/chat_agent.py
+COPY src/dashboards/chat_api.py           ./src/dashboards/chat_api.py
+COPY src/dashboards/metadata_builder.py   ./src/dashboards/metadata_builder.py
+COPY src/dashboards/confluence_client.py  ./src/dashboards/confluence_client.py
+COPY src/dashboards/column_metadata.yaml  ./src/dashboards/column_metadata.yaml
+COPY src/dashboards/__init__.py           ./src/dashboards/__init__.py
 # Dashboard config YAMLs — the agent reads these to contextualize answers
 COPY src/dashboards/dashboard_config*.yaml ./src/dashboards/
 # ETL source files — the metadata builder scans SQL from these

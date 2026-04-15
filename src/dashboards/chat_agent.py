@@ -79,6 +79,19 @@ def _get_metadata_text() -> str:
 # ---------------------------------------------------------------------------
 
 
+def _format_column(name: str, info: Dict[str, Any]) -> str:
+    parts = [f"**{name}**"]
+    parts.append(f"Category: {info.get('category', 'unknown')}")
+    parts.append(f"Description: {info.get('description', 'No description.')}")
+    if info.get("formula"):
+        parts.append(f"Formula: {info['formula']}")
+    etl = info.get("etl_formula", {})
+    if isinstance(etl, dict):
+        for src, expr in etl.items():
+            parts.append(f"ETL source ({src}): `{expr}`")
+    return "\n".join(parts)
+
+
 @tool
 def lookup_column(column_name: str) -> str:
     """Look up the definition, formula, and category of a dashboard column by name.
@@ -90,19 +103,8 @@ def lookup_column(column_name: str) -> str:
     columns = meta.get("columns", {})
 
     if column_name in columns:
-        info = columns[column_name]
-        parts = [f"**{column_name}**"]
-        parts.append(f"Category: {info.get('category', 'unknown')}")
-        parts.append(f"Description: {info.get('description', 'No description.')}")
-        if info.get("formula"):
-            parts.append(f"Formula: {info['formula']}")
-        etl = info.get("etl_formula", {})
-        if isinstance(etl, dict):
-            for src, expr in etl.items():
-                parts.append(f"ETL source ({src}): `{expr}`")
-        return "\n".join(parts)
+        return _format_column(column_name, columns[column_name])
 
-    # Fuzzy match
     query_lower = column_name.lower().replace(" ", "_")
     matches = [c for c in columns if query_lower in c.lower() or c.lower() in query_lower]
     if matches:
@@ -112,7 +114,44 @@ def lookup_column(column_name: str) -> str:
             results.append(f"- **{m}**: {desc[:120]}")
         return "\n".join(results)
 
-    return f"Column '{column_name}' not found in metadata. Available categories: dimension, user_metric, aggregate_metric, retention, fish_hunter."
+    return (
+        f"Column '{column_name}' not found by name. "
+        "Try search_columns_by_keyword with descriptive keywords, "
+        "or list_columns_by_category to browse available columns."
+    )
+
+
+@tool
+def search_columns_by_keyword(keyword: str) -> str:
+    """Search columns by keyword across both names AND descriptions.
+
+    Use this when the user describes a metric conceptually (e.g. "users who
+    lose a lot", "retention rate", "how many people came back") rather than
+    by exact column name.
+
+    Args:
+        keyword: One or two descriptive words (e.g. "rtp", "retention", "loss", "payout", "bet count")
+    """
+    meta = _ensure_metadata()
+    columns = meta.get("columns", {})
+    kw = keyword.lower()
+
+    matches = []
+    for name, info in columns.items():
+        desc = info.get("description", "").lower()
+        formula = info.get("formula", "").lower()
+        if kw in name.lower() or kw in desc or kw in formula:
+            matches.append((name, info.get("description", "")[:120]))
+
+    if not matches:
+        return f"No columns match '{keyword}'. " "Try broader keywords or use list_columns_by_category to browse."
+
+    lines = [f"Found {len(matches)} column(s) matching '{keyword}':\n"]
+    for name, desc in matches[:15]:
+        lines.append(f"- **{name}**: {desc}")
+    if len(matches) > 15:
+        lines.append(f"\n... and {len(matches) - 15} more.")
+    return "\n".join(lines)
 
 
 @tool
@@ -230,29 +269,96 @@ def get_game_info(game_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Confluence tools
+# ---------------------------------------------------------------------------
+
+
+@tool
+def search_confluence(query: str, space_key: str = "") -> str:
+    """Search Confluence documentation for pages matching a query.
+
+    Use this when the user asks about processes, policies, documentation,
+    or anything not covered by the dashboard metadata tools.
+
+    Args:
+        query: Search keywords (e.g. "RTP calculation", "user segmentation rules")
+        space_key: Optional Confluence space key to narrow the search
+    """
+    try:
+        from dashboards.confluence_client import search_pages as _search
+    except ImportError:
+        return "Confluence integration is not available (atlassian-python-api not installed)."
+    try:
+        pages = _search(query, space_key=space_key or None, max_results=5)
+    except Exception as exc:
+        return f"Confluence search failed: {exc}"
+
+    if not pages:
+        return f"No Confluence pages found for '{query}'."
+
+    lines = [f"Found {len(pages)} page(s) for '{query}':\n"]
+    for p in pages:
+        lines.append(f"- **{p['title']}** (id: {p['id']}, space: {p['space']})")
+        if p.get("excerpt"):
+            lines.append(f"  _{p['excerpt']}_")
+    lines.append("\nUse `read_confluence_page` with the page id to read the full content.")
+    return "\n".join(lines)
+
+
+@tool
+def read_confluence_page(page_id: str) -> str:
+    """Read the full content of a Confluence page by its ID.
+
+    Use this after search_confluence returns page IDs to read the actual content
+    and answer the user's question based on the documentation.
+
+    Args:
+        page_id: The Confluence page ID (numeric string from search results)
+    """
+    try:
+        from dashboards.confluence_client import get_page_content as _get_page
+    except ImportError:
+        return "Confluence integration is not available (atlassian-python-api not installed)."
+    try:
+        return _get_page(page_id)
+    except Exception as exc:
+        return f"Failed to read Confluence page {page_id}: {exc}"
+
+
+# ---------------------------------------------------------------------------
 # System prompt
 # ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT = """\
 You are a data analytics assistant for a game analytics dashboard.
 You help users understand dashboard metrics, column definitions, user group
-segmentations, and game-specific terminology.
+segmentations, game-specific terminology, and team documentation.
 
 Your knowledge comes from:
 1. A curated column metadata file covering all dashboard columns
 2. ETL source code that computes these columns from Redshift SQL
 3. The dashboard configuration YAML for the currently active game
+4. Confluence documentation (searchable and readable via tools)
 
-Guidelines:
-- When asked about a column, use the lookup_column tool to get its exact definition.
+IMPORTANT — how to find the right column:
+- If the user provides an exact column name, use lookup_column.
+- If the user describes a metric conceptually (e.g. "users who lose a lot",
+  "how many people came back", "payout ratio"), use search_columns_by_keyword
+  with descriptive keywords extracted from their question.
+- If search_columns_by_keyword returns no results, try different keywords or
+  use list_columns_by_category to browse and find the closest match.
+- NEVER repeat a previous answer if you cannot find the column. Instead, tell
+  the user what you searched for and suggest they clarify.
+
+Other guidelines:
 - When asked about user groups (new/old/beginner/AI/Default), use lookup_group.
-- When asked what columns are available, use list_columns_by_category.
 - For game-specific questions, use get_game_info.
+- For questions about processes, policies, or documentation, use search_confluence
+  to find relevant pages, then read_confluence_page to read the content.
 - Be precise about formulas and SQL definitions.
 - If a column has both a hand-curated description and ETL-derived formula, include both.
 - Explain RTP (Return to Player) as total_payout / total_bet when relevant.
-- Explain the difference between user-level metrics (per-player) and
-  group-level aggregates when the user seems confused.
+- When citing Confluence pages, mention the page title so the user can find it.
 - Answer in the same language the user uses (English or Chinese).
 """
 
@@ -263,10 +369,13 @@ Guidelines:
 
 _TOOLS = [
     lookup_column,
+    search_columns_by_keyword,
     lookup_group,
     list_columns_by_category,
     get_dashboard_config_summary,
     get_game_info,
+    search_confluence,
+    read_confluence_page,
 ]
 
 
