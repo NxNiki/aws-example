@@ -472,6 +472,10 @@ def main() -> None:
                 service=SERVICE_NAME,
                 taskDefinition=SERVICE_NAME,
                 desiredCount=DESIRED_COUNT,
+                deploymentConfiguration={
+                    "minimumHealthyPercent": 100,
+                    "maximumPercent": 200,
+                },
                 forceNewDeployment=True,
             )
             print(f"  Updated existing service: {SERVICE_NAME}")
