@@ -3891,9 +3891,20 @@ class GameStatsDashboard:
                 history.append({"role": "assistant", "content": response})
                 status = f"({provider}) {elapsed}ms" if elapsed else f"({provider})"
             except urllib.error.URLError as exc:
-                logger.exception("Chat agent unreachable")
-                history.append({"role": "assistant", "content": "AI Agent is not reachable. Is the service running?"})
-                status = f"Connection error: {exc.reason}"
+                logger.exception("Chat agent unreachable at %s", _CHAT_API_URL)
+                history.append(
+                    {
+                        "role": "assistant",
+                        "content": (
+                            f"Cannot reach the AI Agent at `{_CHAT_API_URL}`.\n\n"
+                            "**Local dev:** start the agent first:\n"
+                            "```\nPYTHONPATH=src uvicorn dashboards.chat_api:app --port 8051\n```\n\n"
+                            "**ECS:** ensure the ai-chat-agent service is running and "
+                            "`CHAT_API_URL` is set to its ALB URL."
+                        ),
+                    }
+                )
+                status = f"Agent unreachable at {_CHAT_API_URL}"
             except Exception as exc:
                 logger.exception("Chat agent error")
                 history.append({"role": "assistant", "content": f"Error: {exc}"})

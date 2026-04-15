@@ -13,22 +13,8 @@ Prerequisites:
 
 Usage:
   python infra/deploy_ai_agent_ecs.py
-  python infra/deploy_ai_agent_ecs.py --region us-west-2 --cluster-name ai-team-dashboard-cluster
-
-Options:
-  --region              AWS region (default: us-west-2)
-  --cluster-name        ECS cluster name (default: ai-team-dashboard-cluster)
-  --service-name        ECS service name (default: ai-chat-agent)
-  --vpc-id              VPC ID (default: use default VPC)
-  --subnet-ids          Comma-separated subnet IDs (default: public subnets of default VPC)
-  --task-cpu            Task CPU units (default: 512)
-  --task-memory         Task memory MB (default: 1024)
-  --desired-count       Number of tasks (default: 0 with scale-to-zero, else 1)
-  --no-scale-to-zero    Disable scale-to-zero; keep 1 task always running
-  --chat-provider       CHAT_PROVIDER env (openai | gemini, default: gemini)
-  --chat-model          CHAT_MODEL env (default: provider default)
-  --build-first         Run docker_build_ai_agent.sh before deploying
-  --dry-run             Print planned actions without executing
+  python infra/deploy_ai_agent_ecs.py --build-first
+  python infra/deploy_ai_agent_ecs.py --dry-run
 """
 
 import argparse
@@ -47,19 +33,24 @@ except ImportError:
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 
-DEFAULT_REGION = "us-west-2"
+# ---- Configuration (edit these directly) ------------------------------------
+REGION = "us-west-2"
+CLUSTER_NAME = "ai-team-dashboard-cluster"
+SERVICE_NAME = "ai-chat-agent"
 IMAGE_NAME = "bituslabs-ds-ai-agent"
 AGENT_PORT = 8051
+TASK_CPU = 512  # 0.5 vCPU
+TASK_MEMORY = 1024  # 1 GB
+DESIRED_COUNT = 1  # always keep 1 task running
+CHAT_PROVIDER = "gemini"
 
 HEALTH_CHECK_PATH = "/health"
 TG_HEALTH_CHECK_INTERVAL = 300
 TG_HEALTHY_THRESHOLD = 2
-SCALE_IN_IDLE_MINUTES = 60  # scale to 0 after 1 hour idle (lighter than dashboard)
 
 
 # ---------------------------------------------------------------------------
-# Helpers (shared with deploy_dashboard_ecs.py — kept inline so this script
-# is self-contained and runnable without importing the dashboard deploy)
+# Helpers
 # ---------------------------------------------------------------------------
 
 
@@ -70,7 +61,7 @@ def get_account_id(sts_client) -> str:
 def get_default_vpc_id(ec2_client) -> str:
     vpcs = ec2_client.describe_vpcs(Filters=[{"Name": "isDefault", "Values": ["true"]}])["Vpcs"]
     if not vpcs:
-        raise RuntimeError("No default VPC found. Set --vpc-id and --subnet-ids explicitly.")
+        raise RuntimeError("No default VPC found.")
     return vpcs[0]["VpcId"]
 
 
@@ -140,7 +131,7 @@ def ensure_ecs_task_execution_role(iam_client, account_id: str) -> str:
         Description="Allows ECS tasks to pull images and write logs",
     )
     iam_client.attach_role_policy(RoleName=role_name, PolicyArn=ECS_TASK_EXECUTION_MANAGED_POLICY)
-    print(f"  Created role, attached execution policy")
+    print("  Created role, attached execution policy")
     return role_arn
 
 
@@ -150,34 +141,11 @@ def ensure_ecs_task_execution_role(iam_client, account_id: str) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Deploy AI Chat Agent to ECS Fargate with public ALB")
-    parser.add_argument("--region", default=DEFAULT_REGION)
-    parser.add_argument(
-        "--cluster-name",
-        default="ai-team-dashboard-cluster",
-        help="ECS cluster name (reuse the dashboard cluster for cost savings)",
-    )
-    parser.add_argument("--service-name", default="ai-chat-agent")
-    parser.add_argument("--vpc-id", default=None)
-    parser.add_argument("--subnet-ids", default=None, help="Comma-separated subnet IDs")
-    parser.add_argument("--task-cpu", type=int, default=512, help="Task CPU units (0.5 vCPU)")
-    parser.add_argument("--task-memory", type=int, default=1024, help="Task memory MB")
-    parser.add_argument("--desired-count", type=int, default=None)
-    parser.add_argument("--no-scale-to-zero", action="store_true")
-    parser.add_argument(
-        "--chat-provider", default="gemini", choices=["openai", "gemini"], help="LLM provider (default: gemini)"
-    )
-    parser.add_argument("--chat-model", default=None, help="Model name override")
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--build-first", action="store_true")
-    parser.add_argument("--create-cluster", action="store_true")
-    parser.add_argument("--wait", action="store_true")
+    parser = argparse.ArgumentParser(description="Deploy AI Chat Agent to ECS Fargate")
+    parser.add_argument("--dry-run", action="store_true", help="Print planned actions without executing")
+    parser.add_argument("--build-first", action="store_true", help="Run docker_build_ai_agent.sh before deploying")
+    parser.add_argument("--wait", action="store_true", help="Wait for service to stabilize")
     args = parser.parse_args()
-    args.use_existing_cluster = not args.create_cluster
-    args.skip_wait = not args.wait
-    args.scale_to_zero = not args.no_scale_to_zero
-    if args.desired_count is None:
-        args.desired_count = 0 if args.scale_to_zero else 1
 
     if args.build_first and not args.dry_run:
         print("Building and pushing AI Agent Docker image...")
@@ -187,33 +155,29 @@ def main() -> None:
             cwd=PROJECT_ROOT,
         )
 
-    region = args.region
-    session = boto3.Session(region_name=region)
+    session = boto3.Session(region_name=REGION)
     sts = session.client("sts")
     ec2 = session.client("ec2")
     ecs = session.client("ecs")
     elbv2 = session.client("elbv2")
     logs = session.client("logs")
     iam = session.client("iam")
-    as_client = session.client("application-autoscaling")
 
     account_id = get_account_id(sts)
-    ecr_uri = f"{account_id}.dkr.ecr.{region}.amazonaws.com/{IMAGE_NAME}:latest"
+    ecr_uri = f"{account_id}.dkr.ecr.{REGION}.amazonaws.com/{IMAGE_NAME}:latest"
 
-    print(f"Region: {region}, Account: {account_id}")
+    print(f"Region: {REGION}, Account: {account_id}")
     print(f"Image: {ecr_uri}")
 
-    vpc_id = args.vpc_id or get_default_vpc_id(ec2)
-    subnet_ids = (
-        [s.strip() for s in args.subnet_ids.split(",")] if args.subnet_ids else get_default_vpc_subnets(ec2, vpc_id)
-    )
+    vpc_id = get_default_vpc_id(ec2)
+    subnet_ids = get_default_vpc_subnets(ec2, vpc_id)
     print(f"VPC: {vpc_id}, Subnets: {subnet_ids}")
 
     if args.dry_run:
         print("\n[DRY RUN] Would create:")
-        print("  - ECS cluster (reuse), log group, security groups")
+        print("  - Log group, security groups")
         print("  - ALB, target group, listener")
-        print(f"  - Task definition ({args.service_name}), ECS service")
+        print(f"  - Task definition ({SERVICE_NAME}), ECS service")
         return
 
     # 1. ECR
@@ -221,28 +185,17 @@ def main() -> None:
     ecr = session.client("ecr")
     ensure_ecr_repo(ecr, IMAGE_NAME)
 
-    # 2. ECS cluster (reuse the dashboard cluster by default)
+    # 2. ECS cluster (reuse the dashboard cluster)
     print("\n2. ECS cluster...")
-    if args.use_existing_cluster:
-        resp = ecs.describe_clusters(clusters=[args.cluster_name])
-        if resp.get("failures") or not resp.get("clusters") or resp["clusters"][0].get("status") != "ACTIVE":
-            raise RuntimeError(
-                f"Cluster {args.cluster_name} not found or not ACTIVE. "
-                "Deploy the dashboard first or use --create-cluster."
-            )
-        print(f"  Using existing cluster: {args.cluster_name}")
-    else:
-        try:
-            ecs.create_cluster(clusterName=args.cluster_name)
-            print(f"  Created cluster: {args.cluster_name}")
-        except ClientError as e:
-            if "AlreadyExists" in str(e):
-                print(f"  Cluster exists: {args.cluster_name}")
-            else:
-                raise
+    resp = ecs.describe_clusters(clusters=[CLUSTER_NAME])
+    if resp.get("failures") or not resp.get("clusters") or resp["clusters"][0].get("status") != "ACTIVE":
+        raise RuntimeError(
+            f"Cluster {CLUSTER_NAME} not found or not ACTIVE. " "Deploy the dashboard first to create the cluster."
+        )
+    print(f"  Using existing cluster: {CLUSTER_NAME}")
 
     # 3. Log group
-    log_group = f"/ecs/{args.service_name}"
+    log_group = f"/ecs/{SERVICE_NAME}"
     print(f"\n3. Log group: {log_group}")
     try:
         logs.create_log_group(logGroupName=log_group)
@@ -254,8 +207,8 @@ def main() -> None:
 
     # 4. Security groups
     print("\n4. Security groups...")
-    sg_name_alb = f"{args.service_name}-alb-sg"
-    sg_name_task = f"{args.service_name}-task-sg"
+    sg_name_alb = f"{SERVICE_NAME}-alb-sg"
+    sg_name_task = f"{SERVICE_NAME}-task-sg"
 
     try:
         sg_alb = ec2.create_security_group(GroupName=sg_name_alb, Description="ALB for AI chat agent", VpcId=vpc_id)
@@ -321,7 +274,10 @@ def main() -> None:
         ec2.authorize_security_group_egress(
             GroupId=sg_task_id,
             IpPermissions=[
-                {"IpProtocol": "-1", "IpRanges": [{"CidrIp": "0.0.0.0/0", "Description": "All outbound (LLM APIs)"}]}
+                {
+                    "IpProtocol": "-1",
+                    "IpRanges": [{"CidrIp": "0.0.0.0/0", "Description": "All outbound (LLM APIs)"}],
+                }
             ],
         )
     except ClientError as e:
@@ -331,7 +287,7 @@ def main() -> None:
 
     # 5. ALB
     print("\n5. Application Load Balancer...")
-    lb_name = f"{args.service_name}-alb"
+    lb_name = f"{SERVICE_NAME}-alb"
     try:
         alb = elbv2.create_load_balancer(
             Name=lb_name,
@@ -358,7 +314,7 @@ def main() -> None:
 
     # 6. Target group
     print("\n6. Target group...")
-    tg_name = f"{args.service_name}-tg"
+    tg_name = f"{SERVICE_NAME}-tg"
     try:
         tg = elbv2.create_target_group(
             Name=tg_name,
@@ -410,22 +366,15 @@ def main() -> None:
     # 8. Task definition
     print("\n8. Task definition...")
     env_vars = [
-        {"name": "CHAT_PROVIDER", "value": args.chat_provider},
+        {"name": "CHAT_PROVIDER", "value": CHAT_PROVIDER},
     ]
-    if args.chat_model:
-        env_vars.append({"name": "CHAT_MODEL", "value": args.chat_model})
-
-    # API keys — In production, use AWS Secrets Manager or SSM Parameter Store.
-    # For initial deployment you can pass them as env vars; the container
-    # also reads .env if present in the image (not recommended for secrets).
-    # Example: add {"name": "GOOGLE_API_KEY", "value": "<key>"} here.
 
     task_def = {
-        "family": args.service_name,
+        "family": SERVICE_NAME,
         "networkMode": "awsvpc",
         "requiresCompatibilities": ["FARGATE"],
-        "cpu": str(args.task_cpu),
-        "memory": str(args.task_memory),
+        "cpu": str(TASK_CPU),
+        "memory": str(TASK_MEMORY),
         "executionRoleArn": exec_role_arn,
         "taskRoleArn": exec_role_arn,
         "containerDefinitions": [
@@ -437,13 +386,16 @@ def main() -> None:
                     "logDriver": "awslogs",
                     "options": {
                         "awslogs-group": log_group,
-                        "awslogs-region": region,
+                        "awslogs-region": REGION,
                         "awslogs-stream-prefix": "ai-agent",
                     },
                 },
                 "environment": env_vars,
                 "healthCheck": {
-                    "command": ["CMD-SHELL", f"curl -sf http://localhost:{AGENT_PORT}{HEALTH_CHECK_PATH} || exit 1"],
+                    "command": [
+                        "CMD-SHELL",
+                        f"curl -sf http://localhost:{AGENT_PORT}{HEALTH_CHECK_PATH} || exit 1",
+                    ],
                     "interval": 10,
                     "timeout": 5,
                     "retries": 3,
@@ -454,16 +406,16 @@ def main() -> None:
     }
 
     ecs.register_task_definition(**task_def)
-    print(f"  Registered task definition: {args.service_name}")
+    print(f"  Registered task definition: {SERVICE_NAME}")
 
     # 9. ECS service
     print("\n9. ECS service...")
     try:
         ecs.create_service(
-            cluster=args.cluster_name,
-            serviceName=args.service_name,
-            taskDefinition=args.service_name,
-            desiredCount=args.desired_count,
+            cluster=CLUSTER_NAME,
+            serviceName=SERVICE_NAME,
+            taskDefinition=SERVICE_NAME,
+            desiredCount=DESIRED_COUNT,
             launchType="FARGATE",
             networkConfiguration={
                 "awsvpcConfiguration": {
@@ -480,7 +432,7 @@ def main() -> None:
                 }
             ],
         )
-        print(f"  Created service: {args.service_name}")
+        print(f"  Created service: {SERVICE_NAME}")
     except ClientError as e:
         err = e.response.get("Error", {})
         code, msg = err.get("Code", ""), err.get("Message", "")
@@ -488,112 +440,26 @@ def main() -> None:
             code == "InvalidParameterException" and "not idempotent" in (msg or "").lower()
         ):
             ecs.update_service(
-                cluster=args.cluster_name,
-                service=args.service_name,
-                taskDefinition=args.service_name,
-                desiredCount=args.desired_count,
+                cluster=CLUSTER_NAME,
+                service=SERVICE_NAME,
+                taskDefinition=SERVICE_NAME,
+                desiredCount=DESIRED_COUNT,
                 forceNewDeployment=True,
             )
-            print(f"  Updated existing service: {args.service_name}")
+            print(f"  Updated existing service: {SERVICE_NAME}")
         else:
             raise
 
-    # 9b. Auto scaling
-    if args.scale_to_zero:
-        print("\n9b. Application Auto Scaling (scale to 0 when idle)...")
-        resource_id = f"service/{args.cluster_name}/{args.service_name}"
-        alb_dim = alb_arn.split(":")[-1].replace("loadbalancer/", "")
-
-        try:
-            as_client.register_scalable_target(
-                ServiceNamespace="ecs",
-                ResourceId=resource_id,
-                ScalableDimension="ecs:service:DesiredCount",
-                MinCapacity=0,
-                MaxCapacity=1,
-            )
-            print("  Registered scalable target (min=0, max=1)")
-
-            cw = session.client("cloudwatch")
-
-            # Scale out on ALB 503 (no running tasks)
-            resp_out = as_client.put_scaling_policy(
-                ServiceNamespace="ecs",
-                ResourceId=resource_id,
-                ScalableDimension="ecs:service:DesiredCount",
-                PolicyName=f"{args.service_name}-scale-out",
-                PolicyType="StepScaling",
-                StepScalingPolicyConfiguration={
-                    "AdjustmentType": "ChangeInCapacity",
-                    "Cooldown": 60,
-                    "MetricAggregationType": "Average",
-                    "StepAdjustments": [{"MetricIntervalLowerBound": 0.0, "ScalingAdjustment": 1}],
-                },
-            )
-            policy_arn_out = resp_out["PolicyARN"]
-            cw.put_metric_alarm(
-                AlarmName=f"{args.service_name}-scale-out-on-503",
-                MetricName="HTTPCode_ELB_503_Count",
-                Namespace="AWS/ApplicationELB",
-                Dimensions=[{"Name": "LoadBalancer", "Value": alb_dim}],
-                Statistic="Sum",
-                Period=60,
-                EvaluationPeriods=1,
-                Threshold=1.0,
-                ComparisonOperator="GreaterThanOrEqualToThreshold",
-                AlarmActions=[policy_arn_out],
-            )
-            print("  Scale-out: 503 -> add 1 task")
-
-            # Scale in after idle period
-            resp_in = as_client.put_scaling_policy(
-                ServiceNamespace="ecs",
-                ResourceId=resource_id,
-                ScalableDimension="ecs:service:DesiredCount",
-                PolicyName=f"{args.service_name}-scale-in",
-                PolicyType="StepScaling",
-                StepScalingPolicyConfiguration={
-                    "AdjustmentType": "ChangeInCapacity",
-                    "Cooldown": 300,
-                    "MetricAggregationType": "Average",
-                    "StepAdjustments": [{"MetricIntervalUpperBound": 0.0, "ScalingAdjustment": -1}],
-                },
-            )
-            policy_arn_in = resp_in["PolicyARN"]
-            scale_in_period = 60
-            scale_in_evals = (SCALE_IN_IDLE_MINUTES * 60) // scale_in_period
-            tg_dim = tg_arn.split(":")[-1]
-            cw.put_metric_alarm(
-                AlarmName=f"{args.service_name}-scale-in-on-idle",
-                MetricName="RequestCount",
-                Namespace="AWS/ApplicationELB",
-                Dimensions=[
-                    {"Name": "TargetGroup", "Value": tg_dim},
-                    {"Name": "LoadBalancer", "Value": alb_dim},
-                ],
-                Statistic="Sum",
-                Period=scale_in_period,
-                EvaluationPeriods=scale_in_evals,
-                Threshold=1.0,
-                ComparisonOperator="LessThanThreshold",
-                TreatMissingData="breaching",
-                AlarmActions=[policy_arn_in],
-            )
-            print(f"  Scale-in: no requests for {SCALE_IN_IDLE_MINUTES} min -> remove 1 task (min 0)")
-        except ClientError as e:
-            print(f"  Warning: Auto Scaling setup failed: {e}")
-            print("  Configure manually in ECS Console -> Service -> Auto Scaling")
-
     # Wait
-    if args.skip_wait:
+    if not args.wait:
         print("\nSkipping wait. Check ECS console and CloudWatch logs if tasks fail.")
     else:
         print("\nWaiting for service to stabilize (up to 5 min)...")
         try:
             waiter = ecs.get_waiter("services_stable")
             waiter.wait(
-                cluster=args.cluster_name,
-                services=[args.service_name],
+                cluster=CLUSTER_NAME,
+                services=[SERVICE_NAME],
                 WaiterConfig={"Delay": 10, "MaxAttempts": 30},
             )
             print("  Service is stable")
