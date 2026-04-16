@@ -85,7 +85,8 @@ def search_pages(query: str, space_key: Optional[str] = None, max_results: int =
         cql += f' AND space="{space_key}"'
 
     try:
-        results = confluence.cql(cql, limit=max_results, expand="content.body.view")
+        raw = confluence.cql(cql, limit=max_results, expand="content.body.view")
+        results: Dict[str, Any] = raw if isinstance(raw, dict) else {}
         pages = []
         for item in results.get("results", []):
             content = item.get("content", item)
@@ -117,9 +118,18 @@ def get_page_content(page_id: str) -> str:
     confluence = _get_client()
 
     try:
-        page = confluence.get_page_by_id(page_id, expand="body.storage")
-        title = page.get("title", "Untitled")
-        html_body = page.get("body", {}).get("storage", {}).get("value", "")
+        raw_page = confluence.get_page_by_id(page_id, expand="body.storage")
+        if not isinstance(raw_page, dict):
+            raise RuntimeError(f"Unexpected page response type for id={page_id!r}")
+        page: Dict[str, Any] = raw_page
+        title = str(page.get("title", "Untitled"))
+        body = page.get("body")
+        if not isinstance(body, dict):
+            body = {}
+        storage = body.get("storage")
+        if not isinstance(storage, dict):
+            storage = {}
+        html_body = str(storage.get("value", "") or "")
         text = _strip_html(html_body)
 
         MAX_CHARS = 8000
@@ -138,7 +148,8 @@ def list_spaces() -> List[Dict[str, str]]:
     """List available Confluence spaces (key and name)."""
     confluence = _get_client()
     try:
-        spaces = confluence.get_all_spaces(start=0, limit=50)
+        raw = confluence.get_all_spaces(start=0, limit=50)
+        spaces: Dict[str, Any] = raw if isinstance(raw, dict) else {}
         return [{"key": s["key"], "name": s["name"]} for s in spaces.get("results", [])]
     except Exception as exc:
         logger.exception("Confluence list spaces failed")
