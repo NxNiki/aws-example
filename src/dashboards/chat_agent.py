@@ -667,9 +667,29 @@ def _truncate_debug(text: str, max_len: int = _DEBUG_PREVIEW_MAX) -> str:
     return text[: max_len - 30] + "\n\n… (truncated for chat)"
 
 
+def _messages_for_current_turn(msgs: List[BaseMessage]) -> List[BaseMessage]:
+    """Keep only messages after the last ``HumanMessage`` (the active user question).
+
+    The graph appends multiple ``AIMessage`` / tool steps per turn. If the final
+    ``AIMessage`` has no extractable text, scanning the **whole** thread walks
+    backward into the **previous** user question's reply — producing the same
+    answer for every new question.
+    """
+    last_human = -1
+    for i in range(len(msgs) - 1, -1, -1):
+        if isinstance(msgs[i], HumanMessage):
+            last_human = i
+            break
+    if last_human < 0:
+        return msgs
+    return msgs[last_human + 1 :]
+
+
 def _extract_response(result: dict) -> str:
     msgs: List[BaseMessage] = list(result.get("messages", []))
-    for m in reversed(msgs):
+    turn_msgs = _messages_for_current_turn(msgs)
+
+    for m in reversed(turn_msgs):
         if isinstance(m, AIMessage):
             text = _stringify_ai_content(m.content)
             if text:
@@ -685,17 +705,19 @@ def _extract_response(result: dict) -> str:
                 "Raw `AIMessage.content`:\n\n```\n" + _truncate_debug(payload) + "\n```"
             )
 
-    # No AIMessage at all
-    tail_types = [type(x).__name__ for x in msgs[-12:]]
+    # No AIMessage in this turn
+    tail_types = [type(x).__name__ for x in turn_msgs[-12:]]
     logger.warning(
-        "Agent result had no AIMessage; count=%d tail_types=%s",
+        "Agent result had no AIMessage in current turn; turn_len=%d total=%d tail_types=%s",
+        len(turn_msgs),
         len(msgs),
         tail_types,
     )
     return (
         "**Debug: no assistant message in the agent result.**\n\n"
+        f"- Messages in current turn: {len(turn_msgs)}\n"
         f"- Total messages: {len(msgs)}\n"
-        f"- Last message types (up to 12): `{', '.join(tail_types) or 'none'}`\n\n"
+        f"- Last message types this turn (up to 12): `{', '.join(tail_types) or 'none'}`\n\n"
         "If this persists, check CloudWatch logs for the full trace."
     )
 
