@@ -26,6 +26,7 @@ You can also pass a catalog key like ``"openai:gpt-4.1"`` or
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -614,11 +615,89 @@ def _build_messages(
     return messages
 
 
+def _stringify_ai_content(content: Any) -> str:
+    """Turn ``AIMessage.content`` into plain text.
+
+    Gemini and some LangChain providers return ``content`` as a list of blocks
+    (e.g. ``[{"type": "text", "text": "..."}]``), which made the old
+    ``isinstance(..., str)`` check fail and drop the real answer.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: List[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                t = block.get("text")
+                if t is not None:
+                    parts.append(str(t))
+                elif isinstance(block.get("content"), str):
+                    parts.append(block["content"])
+            else:
+                parts.append(str(block))
+        return "\n".join(p for p in parts if p).strip()
+    if isinstance(content, dict):
+        if "text" in content:
+            return str(content["text"]).strip()
+        if isinstance(content.get("content"), str):
+            return str(content["content"]).strip()
+    return str(content).strip()
+
+
+_DEBUG_PREVIEW_MAX = 6000
+
+
+def _format_debug_payload(content: Any) -> str:
+    """Human-readable dump for in-chat debugging."""
+    try:
+        if isinstance(content, (dict, list)):
+            return json.dumps(content, indent=2, default=str)
+    except Exception:
+        pass
+    return repr(content)
+
+
+def _truncate_debug(text: str, max_len: int = _DEBUG_PREVIEW_MAX) -> str:
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 30] + "\n\n… (truncated for chat)"
+
+
 def _extract_response(result: dict) -> str:
-    for m in reversed(result.get("messages", [])):
-        if isinstance(m, AIMessage) and m.content and isinstance(m.content, str):
-            return m.content
-    return "I'm sorry, I couldn't generate a response. Please try rephrasing your question."
+    msgs: List[BaseMessage] = list(result.get("messages", []))
+    for m in reversed(msgs):
+        if isinstance(m, AIMessage):
+            text = _stringify_ai_content(m.content)
+            if text:
+                return text
+            # Model returned something we could not stringify — show it in the chat UI.
+            payload = _format_debug_payload(m.content)
+            logger.warning(
+                "Agent AIMessage had no extractable text; content=%r",
+                m.content,
+            )
+            return (
+                "**Could not turn the model reply into plain text.** "
+                "Raw `AIMessage.content`:\n\n```\n" + _truncate_debug(payload) + "\n```"
+            )
+
+    # No AIMessage at all
+    tail_types = [type(x).__name__ for x in msgs[-12:]]
+    logger.warning(
+        "Agent result had no AIMessage; count=%d tail_types=%s",
+        len(msgs),
+        tail_types,
+    )
+    return (
+        "**Debug: no assistant message in the agent result.**\n\n"
+        f"- Total messages: {len(msgs)}\n"
+        f"- Last message types (up to 12): `{', '.join(tail_types) or 'none'}`\n\n"
+        "If this persists, check CloudWatch logs for the full trace."
+    )
 
 
 def chat(
