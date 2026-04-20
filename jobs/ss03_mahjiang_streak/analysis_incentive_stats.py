@@ -284,6 +284,7 @@ def _aggregate_from_prepared(m: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFram
         num_users_incentivized=("has_incentivized", "sum"),
         num_users_high_rtp_incentivized=("high_rtp_incentivized", "sum"),
         num_user_pass_incentive_thresh=("pass_incentive_thresh", "sum"),
+        num_users_no_fg_not_incentivized=("no_fg_not_incentivized", "sum"),
     )
     med_below = cast(
         pd.DataFrame,
@@ -317,6 +318,7 @@ def _aggregate_from_prepared(m: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFram
     summary["ratio_users_incentivized"] = summary["num_users_incentivized"] / nu
     summary["ratio_users_high_rtp_incentivized"] = summary["num_users_high_rtp_incentivized"] / nu
     summary["num_user_pass_incentive_thresh_ratio"] = summary["num_user_pass_incentive_thresh"] / nu
+    summary["ratio_users_no_fg_not_incentivized"] = summary["num_users_no_fg_not_incentivized"] / nu
 
     return summary, user_day
 
@@ -325,6 +327,8 @@ def analyze(path_stats: str = file1) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Load merged extract and aggregate. See module docstring for column definitions.
 
     Uses module ``CUTOFF_DATE`` (``None`` or ``""`` means no before/after split).
+
+    Returns ``(summary, user_day)``.
     """
     cutoff_date: str | None = CUTOFF_DATE
     if cutoff_date is not None and isinstance(cutoff_date, str) and not cutoff_date.strip():
@@ -534,6 +538,8 @@ h2 {{ font-size: 1.1rem; margin-top: 0; }}
 const RAW = {data_safe};
 const METRICS = {metrics_json};
 const CUTOFF = {cutoff_json};
+
+/* ---- Daily metrics line chart ---- */
 (function () {{
   const sel = document.getElementById("metric-select");
   const chartEl = document.getElementById("line-chart");
