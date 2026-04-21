@@ -21,8 +21,8 @@ import numpy as np
 import pandas as pd
 
 DEFAULT_DATA_DIR = Path.home() / "Documents" / "data_ss03"
-DEFAULT_AB = DEFAULT_DATA_DIR / "ss03_ab_user_id.csv"
-DEFAULT_STATS = DEFAULT_DATA_DIR / "user_id_20260401-202604016.csv"
+DEFAULT_AB = DEFAULT_DATA_DIR / "ss03_ab_group_users.csv"
+DEFAULT_STATS = DEFAULT_DATA_DIR / "date_user_rtp_20260421-UTC-7.csv"
 
 
 def _strip_ab_group_id(series: pd.Series) -> pd.Series:

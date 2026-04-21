@@ -112,8 +112,7 @@ import pandas as pd
 from bituslabs_ds.config import LOCAL_ROOT
 from bituslabs_ds.reports import escape_json_for_html_script, load_template, render_page
 
-# file1 = "/Users/niuxin/Documents/data_ss03/ab_cny_bet_rtp_by_user_mathtable.parquet"
-file1 = "/Users/niuxin/Documents/data_ss03/merged_user_id_20260401-202604016_with_ab.csv"
+file1 = "/Users/niuxin/Documents/data_ss03/merged_date_user_rtp_20260421-UTC-7_with_ab.csv"
 
 OUTPUT_DIR = Path(LOCAL_ROOT) / "jobs" / "output" / "ss03_mahjiang_streak"
 
