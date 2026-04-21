@@ -69,13 +69,22 @@ def load_stats_csv(path: Path) -> pd.DataFrame:
 
 
 def merge_ab_and_stats(ab: pd.DataFrame, stats: pd.DataFrame) -> pd.DataFrame:
-    """Left-join stats to AB mapping on user_id; preserves all dated stat rows."""
+    """Left-join stats to AB mapping on user_id; preserves all dated stat rows.
+
+    Adds ``ab_arm`` — the first four lowercased characters of ``ab_group_id`` (e.g. ``4a04``,
+    ``4f1a``) — so downstream scripts can group/label by arm without re-slicing.
+    """
     merged = stats.merge(ab, on="user_id", how="left")
+    if "ab_group_id" in merged.columns:
+        merged["ab_arm"] = merged["ab_group_id"].astype(str).str[:4].str.lower()
     cols = list(merged.columns)
     if "ab_group_id" in cols:
         cols.remove("ab_group_id")
         insert_at = cols.index("user_id") + 1
         cols.insert(insert_at, "ab_group_id")
+        if "ab_arm" in cols:
+            cols.remove("ab_arm")
+            cols.insert(insert_at + 1, "ab_arm")
         merged = cast(pd.DataFrame, merged[cols])
     return merged
 

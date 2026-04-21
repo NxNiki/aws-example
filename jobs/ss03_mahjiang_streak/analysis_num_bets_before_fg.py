@@ -29,9 +29,11 @@ from bituslabs_ds.config import (
     setup_logging,
 )
 from bituslabs_ds.etl import DataLoader, RedshiftBackend
+from bituslabs_ds.reports import escape_json_for_html_script, load_template, render_page
 
 OUTPUT_DIR = Path(LOCAL_ROOT) / "jobs" / "output" / "ss03_mahjiang_streak"
 DEFAULT_HTML = OUTPUT_DIR / "num_bets_before_fg_histogram.html"
+_JS_TEMPLATE_PATH = Path(__file__).with_suffix(".js")
 
 
 def _sql_num_bets_no_free() -> str:
@@ -44,6 +46,7 @@ def _sql_num_bets_no_free() -> str:
                 t.bet_amount,
                 t.bet_type,
                 t.partition_ab[0] AS ab_group_id,
+                LOWER(LEFT(t.partition_ab[0], 4)) AS ab_arm,
                 CAST(DATE_TRUNC('day', CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at)) AS DATE) AS activity_date,
                 -- get the accumulative number of free game played for at each bet
                 SUM(CASE WHEN t.bet_type = 'FREE' THEN 1 ELSE 0 END) OVER(
@@ -65,45 +68,41 @@ def _sql_num_bets_no_free() -> str:
             activity_date,
             user_id,
             COUNT(bet_amount) AS num_bets,
-            ab_group_id
+            ab_arm
         FROM ranked_bets
         WHERE fg_count = 0
         GROUP BY
             activity_date,
             user_id,
-            ab_group_id
+            ab_arm
         ORDER BY
             activity_date,
-            ab_group_id
+            ab_arm
         ;
 
         """
     ).strip()
 
 
-def _escape_json_for_html_script(s: str) -> str:
-    return s.replace("</", "<\\/")
-
-
 def _prepare_num_bets_histogram_payload(df: pd.DataFrame) -> tuple[list[dict], int]:
-    """Return JSON-serializable rows ``{{num_bets, ab_group_id}}`` and sample count after dedupe.
+    """Return JSON-serializable rows ``{num_bets, ab_arm}`` and sample count after dedupe.
 
-    Each ``(user_id, activity_date, ab_group_id)`` is **one** sample; y-axis frequency counts such
+    Each ``(user_id, activity_date, ab_arm)`` is **one** sample; y-axis frequency counts such
     samples per ``num_bets`` bin. Dedupes when ``user_id`` and ``activity_date`` are present.
     """
-    if df.empty or not {"num_bets", "ab_group_id"}.issubset(df.columns):
+    if df.empty or not {"num_bets", "ab_arm"}.issubset(df.columns):
         return [], 0
-    work = df.loc[:, [c for c in ("user_id", "activity_date", "num_bets", "ab_group_id") if c in df.columns]].copy()
+    work = df.loc[:, [c for c in ("user_id", "activity_date", "num_bets", "ab_arm") if c in df.columns]].copy()
     work["num_bets"] = pd.to_numeric(work["num_bets"], errors="coerce")
-    work["ab_group_id"] = work["ab_group_id"].astype(str)
+    work["ab_arm"] = work["ab_arm"].astype(str)
     work = work.dropna(subset=["num_bets"])
-    if {"user_id", "activity_date", "ab_group_id"}.issubset(work.columns):
+    if {"user_id", "activity_date", "ab_arm"}.issubset(work.columns):
         work = cast(
             pd.DataFrame,
-            work.drop_duplicates(subset=["user_id", "activity_date", "ab_group_id"], keep="first"),
+            work.drop_duplicates(subset=["user_id", "activity_date", "ab_arm"], keep="first"),
         )
     n = len(work)
-    payload_json = work[["num_bets", "ab_group_id"]].to_json(orient="records", date_format="iso")
+    payload_json = work[["num_bets", "ab_arm"]].to_json(orient="records", date_format="iso")
     rows = cast(list[dict], json.loads(payload_json or "[]"))
     return rows, n
 
@@ -119,33 +118,19 @@ def write_num_bets_histogram_html(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     payload, n_samples = _prepare_num_bets_histogram_payload(df)
 
-    records_json = json.dumps(payload)
-    records_safe = _escape_json_for_html_script(records_json)
+    records_safe = escape_json_for_html_script(json.dumps(payload))
+    inline_js = (
+        load_template(_JS_TEMPLATE_PATH)
+        .replace('"__RAW__"', records_safe)
+        .replace('"__DEFAULT_BINS__"', str(default_bins))
+    )
 
-    page = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8"/>
-<title>SS03 num_bets before first FREE (per user-day)</title>
-<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
-<style>
-body {{ font-family: system-ui, sans-serif; max-width: 1100px; margin: 1rem auto; padding: 0 1rem; }}
-section {{ margin-bottom: 1.5rem; }}
-.controls {{ margin-bottom: 0.75rem; display: flex; align-items: center; flex-wrap: wrap; gap: 0.75rem; }}
-input[type="number"] {{ width: 5rem; padding: 0.35rem 0.5rem; }}
-label {{ margin-right: 0.25rem; }}
-h1 {{ font-size: 1.25rem; }}
-h2 {{ font-size: 1.05rem; }}
-code {{ font-size: 0.9em; }}
-</style>
-</head>
-<body>
-<h1>SS03 — Distribution of <code>num_bets</code> (before first FREE bet that day)</h1>
+    body = f"""<h1>SS03 — Distribution of <code>num_bets</code> (before first FREE bet that day)</h1>
 <section>
-<p>Each <strong>sample</strong> is one <code>(user_id, activity_date, ab_group_id)</code> row from the query:
+<p>Each <strong>sample</strong> is one <code>(user_id, activity_date, ab_arm)</code> row from the query:
 <code>num_bets</code> is the number of bet rows in the prefix where cumulative FREE count is still 0
 (before the first <code>FREE</code> that calendar day). The histogram <strong>frequency</strong> is how
-many user-days fall in each <code>num_bets</code> bin. One chart per <code>ab_group_id</code>.
+many user-days fall in each <code>num_bets</code> bin. One chart per <code>ab_arm</code>.
 Use the <strong>threshold</strong> to split counts into <code>num_bets &lt; T</code> (green) vs <code>num_bets ≥ T</code> (blue);
 <strong>P</strong> is the fraction of samples with <code>num_bets &lt; T</code>.</p>
 <div class="controls">
@@ -157,167 +142,13 @@ Use the <strong>threshold</strong> to split counts into <code>num_bets &lt; T</c
 </div>
 <p id="threshold-note" style="margin: 0.35rem 0 0.75rem; color: #333; font-size: 0.95rem;"></p>
 <div id="bet-hist-container"></div>
-</section>
-<script>
-const RAW = {records_safe};
+</section>"""
 
-(function () {{
-  const binsInput = document.getElementById("bet-bins");
-  const thresholdInput = document.getElementById("bet-threshold");
-  const logCheck = document.getElementById("bet-log");
-  const note = document.getElementById("threshold-note");
-  const host = document.getElementById("bet-hist-container");
-  const COLOR_BELOW = "#27ae60";
-  const COLOR_AT_ABOVE = "#2980b9";
-  if (!RAW.length) {{
-    host.innerHTML = "<p><em>No rows to plot.</em></p>";
-    return;
-  }}
-  const groups = Array.from(new Set(RAW.map(function (r) {{ return r.ab_group_id; }}))).sort();
-  const plotIds = [];
-
-  function draw() {{
-    const nbins = Math.max(1, parseInt(binsInput.value, 10) || {default_bins});
-    const T = parseFloat(thresholdInput.value);
-    const useLog = logCheck.checked;
-    const Tvalid = !isNaN(T) && isFinite(T);
-    plotIds.forEach(function (id) {{
-      const el = document.getElementById(id);
-      if (el) {{ Plotly.purge(el); }}
-    }});
-    plotIds.length = 0;
-    host.innerHTML = "";
-
-    const summaryParts = [];
-    if (Tvalid) {{
-      summaryParts.push("Threshold: <code>num_bets &lt; " + T + "</code>. ");
-    }}
-
-    groups.forEach(function (g, idx) {{
-      const x = RAW.filter(function (r) {{ return r.ab_group_id === g; }}).map(function (r) {{ return r.num_bets; }});
-      const n = x.length;
-      let xBelow = [];
-      let xAbove = [];
-      if (Tvalid) {{
-        xBelow = x.filter(function (v) {{ return v < T; }});
-        xAbove = x.filter(function (v) {{ return v >= T; }});
-      }}
-      const belowCount = Tvalid ? xBelow.length : 0;
-      const propBelow = n > 0 && Tvalid ? (100 * belowCount / n) : null;
-
-      const panel = document.createElement("div");
-      panel.style.marginBottom = "2rem";
-      const h = document.createElement("h2");
-      h.style.fontSize = "1.05rem";
-      h.appendChild(document.createTextNode("ab_group_id: " + g + " (n = " + n + " user-days)"));
-      if (propBelow !== null) {{
-        h.appendChild(document.createTextNode(" — "));
-        const s = document.createElement("span");
-        s.innerHTML = "P(<code>num_bets</code> &lt; " + T + ") = <strong>" + propBelow.toFixed(2) + "%</strong> (" + belowCount + "/" + n + ")";
-        h.appendChild(s);
-      }} else {{
-        h.appendChild(document.createTextNode(" — set a numeric threshold to color bars and see proportion below T."));
-      }}
-      panel.appendChild(h);
-      const gd = document.createElement("div");
-      const gid = "bet-hist-" + idx;
-      gd.id = gid;
-      gd.style.width = "100%";
-      gd.style.minHeight = "360px";
-      panel.appendChild(gd);
-      host.appendChild(panel);
-      plotIds.push(gid);
-
-      let data;
-      const bingroup = "bg-" + idx;
-      if (Tvalid) {{
-        data = [
-          {{
-            type: "histogram",
-            name: "num_bets < " + T,
-            x: xBelow,
-            nbinsx: nbins,
-            bingroup: bingroup,
-            histfunc: "count",
-            marker: {{ color: COLOR_BELOW, line: {{ width: 1, color: "#1e8449" }} }},
-            opacity: 0.88,
-          }},
-          {{
-            type: "histogram",
-            name: "num_bets ≥ " + T,
-            x: xAbove,
-            nbinsx: nbins,
-            bingroup: bingroup,
-            histfunc: "count",
-            marker: {{ color: COLOR_AT_ABOVE, line: {{ width: 1, color: "#1f618d" }} }},
-            opacity: 0.88,
-          }},
-        ];
-      }} else {{
-        data = [{{
-          type: "histogram",
-          name: "all",
-          x: x,
-          nbinsx: nbins,
-          histfunc: "count",
-          marker: {{ color: "#7f8c8d", line: {{ width: 1, color: "#333" }} }},
-          opacity: 0.85,
-        }}];
-      }}
-
-      const shapes = Tvalid ? [{{
-        type: "line",
-        xref: "x",
-        yref: "paper",
-        x0: T,
-        x1: T,
-        y0: 0,
-        y1: 1,
-        line: {{ color: "#555", width: 1.5, dash: "dash" }},
-      }}] : [];
-
-      const layout = {{
-        title: "Frequency of user-days by num_bets",
-        barmode: Tvalid ? "stack" : "overlay",
-        xaxis: {{ title: "num_bets (bets before first FREE that day)" }},
-        yaxis: {{
-          title: "Count of user-days (frequency)",
-          type: useLog ? "log" : "linear",
-        }},
-        showlegend: Tvalid,
-        legend: {{ orientation: "h", yanchor: "bottom", y: 1.02, xanchor: "right", x: 1 }},
-        shapes: shapes,
-      }};
-      Plotly.newPlot(gd, data, layout, {{ responsive: true }});
-
-      if (propBelow !== null) {{
-        summaryParts.push(
-          "<strong>" + g + "</strong>: " + propBelow.toFixed(2) + "% &lt; " + T + " (" + belowCount + "/" + n + ")"
-        );
-      }}
-    }});
-
-    if (note) {{
-      note.innerHTML = Tvalid
-        ? summaryParts.join(" &nbsp;|&nbsp; ")
-        : ('Enter a numeric threshold to split each bar into '
-          + '<span style="color:' + COLOR_BELOW + '">num_bets &lt; T</span> vs '
-          + '<span style="color:' + COLOR_AT_ABOVE + '">num_bets ≥ T</span>, '
-          + 'and to show P(num_bets &lt; T).');
-    }}
-  }}
-
-  binsInput.addEventListener("change", draw);
-  binsInput.addEventListener("input", draw);
-  thresholdInput.addEventListener("change", draw);
-  thresholdInput.addEventListener("input", draw);
-  logCheck.addEventListener("change", draw);
-  draw();
-}})();
-</script>
-</body>
-</html>
-"""
+    page = render_page(
+        title="SS03 num_bets before first FREE (per user-day)",
+        body=body,
+        inline_scripts=inline_js,
+    )
     out_path.write_text(page, encoding="utf-8")
     return out_path, n_samples
 
