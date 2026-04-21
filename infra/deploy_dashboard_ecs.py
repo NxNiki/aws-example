@@ -5,8 +5,8 @@ Deploy the Game Stats Dashboard to AWS ECS Fargate with a public Application Loa
 Prerequisites:
   1. Run `bash infra/docker_build_dashboard.sh` to build and push the image to ECR.
   2. Ensure ecsTaskExecutionRole exists (ECS console creates it, or use the default).
-  3. ecsTaskExecutionRole (or your task role) needs S3 read access for dashboard data:
-     Add policy: s3:GetObject, s3:ListBucket on s3://bituslabs-team-ai/*
+  3. ecsTaskExecutionRole (or your task role) needs S3 read/write access for dashboard data:
+     Add policy: s3:GetObject, s3:PutObject, s3:ListBucket on s3://bituslabs-team-ai/*
   4. Default: use existing cluster. Pass --create-cluster to create new (requires ecs:CreateCluster).
      IAM needs: ecs:*, elasticloadbalancing:*, ec2:*, logs:*, iam:PassRole/CreateRole/AttachRolePolicy/PutRolePolicy.
 
@@ -107,13 +107,13 @@ ECS_TASK_EXECUTION_TRUST_POLICY = {
 ECS_TASK_EXECUTION_MANAGED_POLICY = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 
 S3_DASHBOARD_BUCKET = "bituslabs-team-ai"
-S3_DASHBOARD_POLICY_NAME = "ecsTaskExecutionRole-s3-dashboard-read"
+S3_DASHBOARD_POLICY_NAME = "ecsTaskExecutionRole-s3-dashboard-rw"
 S3_DASHBOARD_POLICY = {
     "Version": "2012-10-17",
     "Statement": [
         {
             "Effect": "Allow",
-            "Action": ["s3:GetObject", "s3:ListBucket"],
+            "Action": ["s3:GetObject", "s3:PutObject", "s3:ListBucket"],
             "Resource": [
                 f"arn:aws:s3:::{S3_DASHBOARD_BUCKET}",
                 f"arn:aws:s3:::{S3_DASHBOARD_BUCKET}/*",
