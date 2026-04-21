@@ -50,11 +50,36 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
     effective_start = effective_start_date(stats_agg_col, start_date)
     query = dedent(
         f"""
-        WITH user_bets AS (
+        WITH bet_events AS (
+            SELECT
+                t.user_id,
+                t.created_at,
+                CASE
+                    WHEN t.math_table_id = 'FourScatter'
+                    THEN LEAD(t.math_table_id) OVER (PARTITION BY t.user_id ORDER BY t.created_at)
+                    ELSE t.math_table_id
+                END AS math_table_id,
+                CASE WHEN t.math_table_id = 'FourScatter' THEN 1 ELSE 0 END AS buy_free_game,
+                t.bet_amount,
+                t.actual_payout,
+                t.bet_type,
+                t.partition_ab
+            FROM
+                public.fct_bet_orders AS t
+            WHERE
+                t.game_id = '{GAME_ID}'
+                AND CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at) >= '{effective_start}'
+                AND t.currency_type IN {ETL_CURRENCY_CODES}
+                AND t.status = 'COMPLETED'
+                AND t.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
+        ),
+
+        user_bets AS (
         SELECT
             t.user_id,
             t.created_at,
-            t.script_id AS mathtable,
+            t.math_table_id AS mathtable,
+            t.buy_free_game,
             t.bet_amount,
             t.actual_payout AS payout,
             t.bet_type,
@@ -68,18 +93,12 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             LAG(t.bet_amount) OVER (PARTITION BY t.user_id ORDER BY t.created_at) AS prev_bet_amount,
             COUNT(t.user_id) OVER (PARTITION BY t.user_id) AS user_bet_count,
             CASE
-                WHEN LAG(t.script_id) OVER (PARTITION BY t.user_id ORDER BY t.created_at) IS NULL THEN 0
-                WHEN LAG(t.script_id) OVER (PARTITION BY t.user_id ORDER BY t.created_at) <> t.script_id THEN 1
+                WHEN LAG(t.math_table_id) OVER (PARTITION BY t.user_id ORDER BY t.created_at) IS NULL THEN 0
+                WHEN LAG(t.math_table_id) OVER (PARTITION BY t.user_id ORDER BY t.created_at) <> t.math_table_id THEN 1
                 ELSE 0
             END AS mathtable_change
         FROM
-            public.fct_bet_orders AS t
-        WHERE
-            t.game_id = '{GAME_ID}'
-            AND CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at) >= '{effective_start}'
-            AND t.currency_type IN {ETL_CURRENCY_CODES}
-            AND t.status = 'COMPLETED'
-            AND t.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
+            bet_events AS t
         ),
 
         user_bets_group AS (
