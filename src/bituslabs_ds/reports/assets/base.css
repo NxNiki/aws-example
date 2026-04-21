@@ -1,0 +1,21 @@
+body {
+  font-family: system-ui, sans-serif;
+  max-width: 1200px;
+  margin: 1rem auto;
+  padding: 0 1rem;
+}
+section { margin-bottom: 2rem; }
+h1 { font-size: 1.35rem; }
+h2 { font-size: 1.1rem; margin-top: 0; }
+code { font-size: 0.9em; }
+img { max-width: 100%; height: auto; border: 1px solid #ddd; }
+select { margin-left: 0.5rem; padding: 0.35rem 0.5rem; min-width: 16rem; }
+input[type="number"] { width: 5rem; padding: 0.35rem 0.5rem; }
+label { margin-right: 0.25rem; }
+.controls {
+  margin-bottom: 0.75rem;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
