@@ -714,6 +714,12 @@ class GameStatsDashboard:
                                     selected_style=Styles.NAV_TAB_SELECTED,
                                 ),
                                 dcc.Tab(
+                                    label="Stats Visualization",
+                                    value="tab-viz",
+                                    style=Styles.NAV_TAB,
+                                    selected_style=Styles.NAV_TAB_SELECTED,
+                                ),
+                                dcc.Tab(
                                     label="Weekly Report",
                                     value="tab-weekly",
                                     style=Styles.NAV_TAB,
@@ -880,6 +886,8 @@ class GameStatsDashboard:
                 dcc.Store(id="tab-group-g1-state", data=None),
                 dcc.Store(id="tab-group-g2-state", data=None),
                 dcc.Store(id="tab-group-g3-state", data=None),
+                dcc.Store(id="tab-viz-p1-state", data=None),
+                dcc.Store(id="tab-viz-p2-state", data=None),
                 dcc.Store(id="tab-bet-state", data=None),
                 dcc.Store(id="dashboard-load-trigger", data=None),
                 dcc.Store(id="chat-history", data=[]),
@@ -892,6 +900,11 @@ class GameStatsDashboard:
                 html.Div(
                     self._layout_stats_by_group(),
                     id="tab-group-content",
+                    style={**Styles.PAGE_CONTENT, "display": "none"},
+                ),
+                html.Div(
+                    self._layout_stats_visualization(),
+                    id="tab-viz-content",
                     style={**Styles.PAGE_CONTENT, "display": "none"},
                 ),
                 html.Div(
@@ -1389,6 +1402,215 @@ class GameStatsDashboard:
             ]
         )
 
+    def _viz_derived_metric_options(self) -> list[dcc.Dropdown.Options]:
+        """Derived metric options — all ``DataMetrics.METRICS`` (computed aggregates)."""
+        return _dropdown_options_from_strings(sorted(DataMetrics.METRICS))
+
+    def _viz_user_metric_options(self) -> list[dcc.Dropdown.Options]:
+        """User-level raw metric options — the user_* input columns consumed by ``DataMetrics``."""
+        return _dropdown_options_from_strings(sorted(ENRICH_USER_ROW_INPUT_COLUMNS - {"user_id"}))
+
+    _VIZ_DISPLAY_MODES: List[Tuple[str, str]] = [
+        ("Histogram", "histogram"),
+        ("Heatmap", "heatmap"),
+        ("Scatter Plot", "scatter"),
+    ]
+
+    def _layout_stats_visualization(self) -> html.Div:
+        """Layout for the 'Stats Visualization' tab.
+
+        Header mirrors ``stats_by_group`` (3 date pickers + 2 group-column selectors).
+        Two plotting panels — DataMetrics-derived and user-level raw — share the same
+        controls (metrics multi-select, display mode, range/group toggles, clipping).
+        """
+        ranges = self._loaded_group_date_ranges or self._compute_group_date_ranges()
+
+        col1 = self.df_user_group_cols[0] if self.df_user_group_cols else None
+        col2 = self.df_user_group_cols[1] if len(self.df_user_group_cols) > 1 else None
+        has_col2 = col2 is not None
+
+        ug1_opts, ug1_defaults = self._col_opts_and_default(col1)
+        ug2_opts, ug2_defaults = self._col_opts_and_default(col2)
+
+        col1_init_opts = self.df_user_group_col_options
+        col2_init_opts = self.df_user_group_col_options
+
+        _col2_hide = {"display": "none"} if not has_col2 else {}
+
+        def range_block(label: str, idx: int, start: Any, end: Any, init_month: Any) -> html.Div:
+            return html.Div(
+                [
+                    html.Label(label, style=Styles.CONTROL_LABEL),
+                    dcc.DatePickerRange(
+                        id=f"viz-date-picker-range{idx}",
+                        min_date_allowed=ranges[0],
+                        max_date_allowed=ranges[1],
+                        initial_visible_month=init_month or ranges[0],
+                        start_date=start or ranges[0],
+                        end_date=end or start,
+                        display_format="YYYY-MM-DD",
+                        style={"width": "100%"},
+                    ),
+                ],
+                style={"marginRight": "20px"},
+            )
+
+        date_group_picker = html.Div(
+            [
+                html.Div(
+                    [
+                        range_block("Range 1 (Oldest)", 1, ranges[2], ranges[3], ranges[2]),
+                        range_block("Range 2", 2, ranges[4], ranges[5], ranges[4]),
+                        range_block("Range 3 (Newest)", 3, ranges[6], ranges[7], ranges[6]),
+                        self._layout_inline_group_column_dropdown(
+                            "Group Column 1:",
+                            "viz-ug-col-1",
+                            col1_init_opts,
+                            col1,
+                            clearable=False,
+                            margin_left="8px",
+                        ),
+                        self._layout_inline_group_column_dropdown(
+                            "Group Column 2:",
+                            "viz-ug-col-2",
+                            col2_init_opts,
+                            col2,
+                            clearable=True,
+                            margin_left="8px",
+                            extra_style=_col2_hide,
+                        ),
+                    ],
+                    style={**Styles.FLEX_ROW_CENTER, "alignItems": "flex-start", "flexWrap": "wrap"},
+                ),
+            ],
+            style=Styles.SECTION_GROUP,
+        )
+
+        download_config: Dict[str, Any] = dict(
+            toImageButtonOptions=dict(format="png", height=700, width=1200, scale=3), displaylogo=False
+        )
+
+        def create_panel(panel_id: str, label: str, metric_options: list[dcc.Dropdown.Options]) -> html.Div:
+            dl_id = f"viz-{panel_id}-plot"
+            return html.Div(
+                [
+                    html.H4(label, style=Styles.PANEL_HEADER),
+                    html.Div(
+                        [
+                            html.Div(
+                                [
+                                    html.Div(
+                                        [
+                                            html.Label("Metrics:", style=Styles.CONTROL_LABEL),
+                                            dcc.Dropdown(
+                                                id=f"viz-{panel_id}-metrics",
+                                                options=metric_options,
+                                                value=[],
+                                                multi=True,
+                                                style=Styles.DROPDOWN_WIDE,
+                                            ),
+                                        ],
+                                        style=Styles.CONTROL_GROUP,
+                                    ),
+                                    html.Div(
+                                        [
+                                            html.Label("Display Mode:", style=Styles.CONTROL_LABEL),
+                                            dcc.RadioItems(
+                                                id=f"viz-{panel_id}-display",
+                                                options=_dropdown_option_rows(self._VIZ_DISPLAY_MODES),
+                                                value="histogram",
+                                                labelStyle={"display": "inline-block", "marginRight": "15px"},
+                                            ),
+                                        ],
+                                        style=Styles.CONTROL_GROUP,
+                                    ),
+                                    html.Hr(style=Styles.HR),
+                                    html.Div(
+                                        [
+                                            html.Label("Show Date Range(s):", style=Styles.CONTROL_LABEL),
+                                            dcc.Checklist(
+                                                id=f"viz-{panel_id}-show-r1",
+                                                options=_dropdown_option_rows([("Range 1", "ON")]),
+                                                value=["ON"],
+                                                style=Styles.CHECKLIST_INLINE,
+                                            ),
+                                            dcc.Checklist(
+                                                id=f"viz-{panel_id}-show-r2",
+                                                options=_dropdown_option_rows([("Range 2", "ON")]),
+                                                value=["ON"],
+                                                style=Styles.CHECKLIST_INLINE,
+                                            ),
+                                            dcc.Checklist(
+                                                id=f"viz-{panel_id}-show-r3",
+                                                options=_dropdown_option_rows([("Range 3", "ON")]),
+                                                value=["ON"],
+                                                style=Styles.CHECKLIST_INLINE,
+                                            ),
+                                        ],
+                                        style=Styles.CONTROL_GROUP,
+                                    ),
+                                    html.Hr(style=Styles.HR),
+                                    *self._layout_show_group_checklist_sections(
+                                        f"viz-{panel_id}",
+                                        ug1_opts,
+                                        ug1_defaults,
+                                        ug2_opts,
+                                        ug2_defaults,
+                                        _col2_hide,
+                                    ),
+                                    html.Div(
+                                        [
+                                            html.Label("Clip Data:", style=Styles.CONTROL_LABEL),
+                                            html.Div(
+                                                [
+                                                    dcc.Checklist(
+                                                        id=f"viz-{panel_id}-clip-enable",
+                                                        options=_dropdown_option_rows([("Enable", "ON")]),
+                                                        value=[],
+                                                        style=Styles.CHECKLIST_INLINE,
+                                                    ),
+                                                    html.Label("Min:", style={"marginLeft": "5px"}),
+                                                    dcc.Input(
+                                                        id=f"viz-{panel_id}-clip-min",
+                                                        type="number",
+                                                        placeholder="min",
+                                                        style=Styles.INPUT_SMALL,
+                                                    ),
+                                                    html.Label("Max:", style={"marginLeft": "5px"}),
+                                                    dcc.Input(
+                                                        id=f"viz-{panel_id}-clip-max",
+                                                        type="number",
+                                                        placeholder="max",
+                                                        style=Styles.INPUT_SMALL,
+                                                    ),
+                                                ],
+                                                style=Styles.FLEX_ROW_CENTER,
+                                            ),
+                                        ],
+                                        style=Styles.CONTROL_GROUP,
+                                    ),
+                                ],
+                                style=Styles.CONTROL_PANEL_CONTAINER,
+                            ),
+                            html.Div(
+                                [dcc.Graph(id=dl_id, style={"height": "700px"}, config=cast(Any, download_config))],
+                                style=Styles.GRAPH_CONTAINER,
+                            ),
+                        ],
+                        style=Styles.FLEX_ROW,
+                    ),
+                ],
+                style=Styles.BOX,
+            )
+
+        return html.Div(
+            [
+                date_group_picker,
+                create_panel("p1", "Derived Metrics (DataMetrics)", self._viz_derived_metric_options()),
+                create_panel("p2", "User-Level Metrics", self._viz_user_metric_options()),
+            ]
+        )
+
     def _layout_weekly_report(self) -> html.Div:
         wr = self.config.get("weekly_report") or {}
         game_id = wr.get("game_id")
@@ -1611,6 +1833,7 @@ class GameStatsDashboard:
         @self.app.callback(
             Output("tab-date-content", "children"),
             Output("tab-group-content", "children"),
+            Output("tab-viz-content", "children"),
             Output("tab-weekly-content", "children"),
             Output("tab-bet-content", "children"),
             Input("config-dropdown", "value"),
@@ -1623,6 +1846,7 @@ class GameStatsDashboard:
             return (
                 self._layout_stats_by_date(),
                 self._layout_stats_by_group(),
+                self._layout_stats_visualization(),
                 self._layout_weekly_report(),
                 self._layout_stats_by_bet(),
             )
@@ -1630,6 +1854,7 @@ class GameStatsDashboard:
         @self.app.callback(
             Output("tab-date-content", "style"),
             Output("tab-group-content", "style"),
+            Output("tab-viz-content", "style"),
             Output("tab-weekly-content", "style"),
             Output("tab-bet-content", "style"),
             Input("navigator-tabs", "value"),
@@ -1638,9 +1863,10 @@ class GameStatsDashboard:
         def render_content(tab: str) -> Any:
             date_style = {**Styles.PAGE_CONTENT, "display": "block" if tab == "tab-date" else "none"}
             group_style = {**Styles.PAGE_CONTENT, "display": "block" if tab == "tab-group" else "none"}
+            viz_style = {**Styles.PAGE_CONTENT, "display": "block" if tab == "tab-viz" else "none"}
             weekly_style = {**Styles.PAGE_CONTENT, "display": "block" if tab == "tab-weekly" else "none"}
             bet_style = {**Styles.PAGE_CONTENT, "display": "block" if tab == "tab-bet" else "none"}
-            return date_style, group_style, weekly_style, bet_style
+            return date_style, group_style, viz_style, weekly_style, bet_style
 
         @self.app.callback(
             Output("weekly-report-chart", "figure"),
@@ -2020,6 +2246,120 @@ class GameStatsDashboard:
                 ],
             )(_group_plot_with_state_factory(f"g{i}"))
 
+        # ── Stats Visualization tab ────────────────────────────────────
+        @self.app.callback(
+            [Output("viz-ug-col-2", "value")] + [Output(f"viz-{pid}-show-ug-1", "options") for pid in ("p1", "p2")],
+            Input("viz-ug-col-1", "value"),
+            State("viz-ug-col-2", "value"),
+            prevent_initial_call=True,
+        )
+        def on_viz_ug_col_1_change(col1_val: Any, current_col2: Any):
+            new_col2 = current_col2 if current_col2 != col1_val else self._next_col(col1_val)
+            opts = self._make_ug_opts(col1_val)
+            return [new_col2] + [opts] * 2
+
+        @self.app.callback(
+            [Output(f"viz-{pid}-show-ug-2", "options") for pid in ("p1", "p2")],
+            Input("viz-ug-col-2", "value"),
+            prevent_initial_call=True,
+        )
+        def on_viz_ug_col_2_change(col2_val: Any):
+            opts = self._make_ug_opts(col2_val)
+            return [opts] * 2
+
+        def _viz_plot_with_state_factory(pid: str) -> Callable[..., Any]:
+            base = self.update_viz_plot_factory(pid)
+
+            def _inner(
+                metrics: Any,
+                display: Any,
+                r1_s: Any,
+                r1_e: Any,
+                r2_s: Any,
+                r2_e: Any,
+                r3_s: Any,
+                r3_e: Any,
+                show_r1: Any,
+                show_r2: Any,
+                show_r3: Any,
+                clip_en: Any,
+                clip_min: Any,
+                clip_max: Any,
+                ug_col_1: Any,
+                ug_col_2: Any,
+                show_ug_1: Any,
+                show_ug_2: Any,
+            ):
+                fig = base(
+                    metrics,
+                    display,
+                    r1_s,
+                    r1_e,
+                    r2_s,
+                    r2_e,
+                    r3_s,
+                    r3_e,
+                    show_r1,
+                    show_r2,
+                    show_r3,
+                    clip_en,
+                    clip_min,
+                    clip_max,
+                    ug_col_1,
+                    ug_col_2,
+                    show_ug_1,
+                    show_ug_2,
+                )
+                state = {
+                    "metrics": metrics,
+                    "display": display,
+                    "date_range1_start": r1_s,
+                    "date_range1_end": r1_e,
+                    "date_range2_start": r2_s,
+                    "date_range2_end": r2_e,
+                    "date_range3_start": r3_s,
+                    "date_range3_end": r3_e,
+                    "show_r1": show_r1,
+                    "show_r2": show_r2,
+                    "show_r3": show_r3,
+                    "clip_enable": clip_en,
+                    "clip_min": clip_min,
+                    "clip_max": clip_max,
+                    "ug_col_1": ug_col_1,
+                    "ug_col_2": ug_col_2,
+                    "show_ug_1": show_ug_1,
+                    "show_ug_2": show_ug_2,
+                }
+                return fig, state
+
+            return _inner
+
+        for pid in ("p1", "p2"):
+            self.app.callback(
+                Output(f"viz-{pid}-plot", "figure"),
+                Output(f"tab-viz-{pid}-state", "data"),
+                [
+                    Input(f"viz-{pid}-metrics", "value"),
+                    Input(f"viz-{pid}-display", "value"),
+                    Input("viz-date-picker-range1", "start_date"),
+                    Input("viz-date-picker-range1", "end_date"),
+                    Input("viz-date-picker-range2", "start_date"),
+                    Input("viz-date-picker-range2", "end_date"),
+                    Input("viz-date-picker-range3", "start_date"),
+                    Input("viz-date-picker-range3", "end_date"),
+                    Input(f"viz-{pid}-show-r1", "value"),
+                    Input(f"viz-{pid}-show-r2", "value"),
+                    Input(f"viz-{pid}-show-r3", "value"),
+                    Input(f"viz-{pid}-clip-enable", "value"),
+                    Input(f"viz-{pid}-clip-min", "value"),
+                    Input(f"viz-{pid}-clip-max", "value"),
+                    Input("viz-ug-col-1", "value"),
+                    Input("viz-ug-col-2", "value"),
+                    Input(f"viz-{pid}-show-ug-1", "value"),
+                    Input(f"viz-{pid}-show-ug-2", "value"),
+                ],
+            )(_viz_plot_with_state_factory(pid))
+
         # Save config: open modal and fetch existing configs
         # NOTE: Output("save-config-overwrite", "value") is included so the dropdown is
         # always reset to None when the modal opens.  Without this, a value selected in a
@@ -2108,6 +2448,10 @@ class GameStatsDashboard:
             State("tab-group-g1-state", "data"),
             State("tab-group-g2-state", "data"),
             State("tab-group-g3-state", "data"),
+            State("tab-viz-p1-state", "data"),
+            State("tab-viz-p2-state", "data"),
+            State("viz-ug-col-1", "value"),
+            State("viz-ug-col-2", "value"),
             State("date-granularity", "value"),
             State("date-picker-range", "start_date"),
             State("date-picker-range", "end_date"),
@@ -2142,6 +2486,10 @@ class GameStatsDashboard:
             group_tab_g1_state: Optional[Dict],
             group_tab_g2_state: Optional[Dict],
             group_tab_g3_state: Optional[Dict],
+            viz_tab_p1_state: Optional[Dict],
+            viz_tab_p2_state: Optional[Dict],
+            viz_ug_col_1: Any,
+            viz_ug_col_2: Any,
             date_granularity: Optional[str],
             date_picker_start_date: Any,
             date_picker_end_date: Any,
@@ -2271,6 +2619,17 @@ class GameStatsDashboard:
                     "g2": _group_tab_panel_for_config(group_tab_g2_state),
                     "g3": _group_tab_panel_for_config(group_tab_g3_state),
                 },
+                "tab_viz": {
+                    "date_ranges": (
+                        {k: viz_tab_p1_state.get(k) for k in date_range_keys if viz_tab_p1_state.get(k) is not None}
+                        if viz_tab_p1_state
+                        else {}
+                    ),
+                    "ug_col_1": viz_ug_col_1,
+                    "ug_col_2": viz_ug_col_2,
+                    "p1": _group_tab_panel_for_config(viz_tab_p1_state),
+                    "p2": _group_tab_panel_for_config(viz_tab_p2_state),
+                },
                 "tab_bet": bet,
             }
             normalized = _normalize_dates_in_state(payload)
@@ -2314,47 +2673,27 @@ class GameStatsDashboard:
             Output("tab-group-g1-state", "data", allow_duplicate=True),
             Output("tab-group-g2-state", "data", allow_duplicate=True),
             Output("tab-group-g3-state", "data", allow_duplicate=True),
+            Output("tab-viz-p1-state", "data", allow_duplicate=True),
+            Output("tab-viz-p2-state", "data", allow_duplicate=True),
             Output("tab-bet-state", "data", allow_duplicate=True),
             Output("dashboard-load-trigger", "data", allow_duplicate=True),
             Input("load-config-dropdown", "value"),
             prevent_initial_call=True,
         )
         def load_config_select(s3_uri: Optional[str]):
+            nothing = (no_update,) * 13
             if not s3_uri:
-                return (
-                    no_update,
-                    no_update,
-                    no_update,
-                    no_update,
-                    no_update,
-                    no_update,
-                    no_update,
-                    no_update,
-                    no_update,
-                    no_update,
-                    no_update,
-                )
+                return nothing
             try:
                 data = read_json_from_s3(s3_uri)
                 config_file = data.get("config_file")
                 current_tab = data.get("current_tab", "tab-date")
                 tab_date = data.get("tab_date", {})
                 tab_group = data.get("tab_group", {})
+                tab_viz = data.get("tab_viz", {}) or {}
                 tab_bet = data.get("tab_bet")
                 if not config_file:
-                    return (
-                        no_update,
-                        no_update,
-                        no_update,
-                        no_update,
-                        no_update,
-                        no_update,
-                        no_update,
-                        no_update,
-                        no_update,
-                        no_update,
-                        no_update,
-                    )
+                    return nothing
                 # Ensure config_file matches an option (path may differ by machine)
                 saved_basename = Path(config_file).name
                 if not any(str(opt["value"]) == config_file for opt in self.config_files):
@@ -2446,6 +2785,26 @@ class GameStatsDashboard:
                 g1_out = _g_with_dates("g1")
                 g2_out = _g_with_dates("g2")
                 g3_out = _g_with_dates("g3")
+
+                # tab_viz: mirror tab_group's shape — date_ranges + ug_col_1/2 + per-panel state
+                viz_date_ranges = tab_viz.get("date_ranges") or {}
+                viz_ug_col_1 = tab_viz.get("ug_col_1", self.df_user_group_cols[0] if self.df_user_group_cols else None)
+                viz_ug_col_2 = tab_viz.get(
+                    "ug_col_2", self.df_user_group_cols[1] if len(self.df_user_group_cols) > 1 else None
+                )
+
+                def _p_with_dates(pi: str) -> Optional[Dict]:
+                    p = tab_viz.get(pi)
+                    if not p:
+                        return p
+                    merged_p: Dict[str, Any] = {**viz_date_ranges, **p}
+                    merged_p["ug_col_1"] = viz_ug_col_1
+                    merged_p["ug_col_2"] = viz_ug_col_2
+                    return merged_p
+
+                p1_out = _p_with_dates("p1")
+                p2_out = _p_with_dates("p2")
+
                 return (
                     config_file,
                     current_tab,
@@ -2456,24 +2815,14 @@ class GameStatsDashboard:
                     g1_out,
                     g2_out,
                     g3_out,
+                    p1_out,
+                    p2_out,
                     tab_bet,
                     datetime.now().isoformat(),
                 )
             except Exception as e:
                 logger.error(f"Failed to load config: {e}")
-            return (
-                no_update,
-                no_update,
-                no_update,
-                no_update,
-                no_update,
-                no_update,
-                no_update,
-                no_update,
-                no_update,
-                no_update,
-                no_update,
-            )
+            return (no_update,) * 13
 
         # Restore: apply loaded state to all UI components when load-trigger fires
         @self.app.callback(
@@ -2539,6 +2888,34 @@ class GameStatsDashboard:
             Output("group-g3-clip-max", "value", allow_duplicate=True),
             Output("group-g3-show-ug-1", "value", allow_duplicate=True),
             Output("group-g3-show-ug-2", "value", allow_duplicate=True),
+            Output("viz-date-picker-range1", "start_date", allow_duplicate=True),
+            Output("viz-date-picker-range1", "end_date", allow_duplicate=True),
+            Output("viz-date-picker-range2", "start_date", allow_duplicate=True),
+            Output("viz-date-picker-range2", "end_date", allow_duplicate=True),
+            Output("viz-date-picker-range3", "start_date", allow_duplicate=True),
+            Output("viz-date-picker-range3", "end_date", allow_duplicate=True),
+            Output("viz-ug-col-1", "value", allow_duplicate=True),
+            Output("viz-ug-col-2", "value", allow_duplicate=True),
+            Output("viz-p1-metrics", "value", allow_duplicate=True),
+            Output("viz-p1-display", "value", allow_duplicate=True),
+            Output("viz-p1-show-r1", "value", allow_duplicate=True),
+            Output("viz-p1-show-r2", "value", allow_duplicate=True),
+            Output("viz-p1-show-r3", "value", allow_duplicate=True),
+            Output("viz-p1-clip-enable", "value", allow_duplicate=True),
+            Output("viz-p1-clip-min", "value", allow_duplicate=True),
+            Output("viz-p1-clip-max", "value", allow_duplicate=True),
+            Output("viz-p1-show-ug-1", "value", allow_duplicate=True),
+            Output("viz-p1-show-ug-2", "value", allow_duplicate=True),
+            Output("viz-p2-metrics", "value", allow_duplicate=True),
+            Output("viz-p2-display", "value", allow_duplicate=True),
+            Output("viz-p2-show-r1", "value", allow_duplicate=True),
+            Output("viz-p2-show-r2", "value", allow_duplicate=True),
+            Output("viz-p2-show-r3", "value", allow_duplicate=True),
+            Output("viz-p2-clip-enable", "value", allow_duplicate=True),
+            Output("viz-p2-clip-min", "value", allow_duplicate=True),
+            Output("viz-p2-clip-max", "value", allow_duplicate=True),
+            Output("viz-p2-show-ug-1", "value", allow_duplicate=True),
+            Output("viz-p2-show-ug-2", "value", allow_duplicate=True),
             Output("session-dropdown", "value", allow_duplicate=True),
             Output("strategy-checklist", "value", allow_duplicate=True),
             Output("metric-checklist", "value", allow_duplicate=True),
@@ -2557,6 +2934,8 @@ class GameStatsDashboard:
             State("tab-group-g1-state", "data"),
             State("tab-group-g2-state", "data"),
             State("tab-group-g3-state", "data"),
+            State("tab-viz-p1-state", "data"),
+            State("tab-viz-p2-state", "data"),
             State("tab-bet-state", "data"),
             prevent_initial_call=True,
         )
@@ -2569,10 +2948,12 @@ class GameStatsDashboard:
             g1: Optional[Dict],
             g2: Optional[Dict],
             g3: Optional[Dict],
+            v1: Optional[Dict],
+            v2: Optional[Dict],
             bet: Optional[Dict],
         ):
             if trigger is None:
-                return (no_update,) * 72
+                return (no_update,) * 100
             # Keep the load trigger token so default-picker callbacks don't recompute
             # and clamp restored DatePickerRange values.
             out: List[Any] = [trigger]
@@ -2625,6 +3006,48 @@ class GameStatsDashboard:
                         sg.get("clip_max"),
                         sg.get("show_ug_1", no_update),
                         sg.get("show_ug_2", no_update),
+                    ]
+                )
+
+            # Viz tab: shared date ranges + ug cols (from v1), then per-panel fields.
+            # Use `no_update` as the fallback so loading a legacy config (no tab_viz section)
+            # does not overwrite the viz DatePickerRange / dropdown / checklist values with
+            # nulls — which otherwise surfaces as "Cannot read properties of null
+            # (reading 'indexOf')" from the date picker JS when start_date/end_date is None.
+            def _viz_or_skip(d: Optional[Dict], key: str) -> Any:
+                if not d or key not in d or d.get(key) is None:
+                    return no_update
+                return d[key]
+
+            def _viz_date_or_skip(d: Optional[Dict], key: str) -> Any:
+                val = _viz_or_skip(d, key)
+                return _normalize_date_value(val) if val is not no_update else no_update
+
+            out.extend(
+                [
+                    _viz_date_or_skip(v1, "date_range1_start"),
+                    _viz_date_or_skip(v1, "date_range1_end"),
+                    _viz_date_or_skip(v1, "date_range2_start"),
+                    _viz_date_or_skip(v1, "date_range2_end"),
+                    _viz_date_or_skip(v1, "date_range3_start"),
+                    _viz_date_or_skip(v1, "date_range3_end"),
+                    _viz_or_skip(v1, "ug_col_1"),
+                    _viz_or_skip(v1, "ug_col_2"),
+                ]
+            )
+            for s in [v1, v2]:
+                out.extend(
+                    [
+                        _viz_or_skip(s, "metrics"),
+                        _viz_or_skip(s, "display"),
+                        _viz_or_skip(s, "show_r1"),
+                        _viz_or_skip(s, "show_r2"),
+                        _viz_or_skip(s, "show_r3"),
+                        _viz_or_skip(s, "clip_enable"),
+                        _viz_or_skip(s, "clip_min"),
+                        _viz_or_skip(s, "clip_max"),
+                        _viz_or_skip(s, "show_ug_1"),
+                        _viz_or_skip(s, "show_ug_2"),
                     ]
                 )
             sb = bet or {}
@@ -2852,6 +3275,9 @@ class GameStatsDashboard:
         elif current_tab == "tab-group":
             self._ensure_tab_data_loaded()
             return self._layout_stats_by_group()
+        elif current_tab == "tab-viz":
+            self._ensure_tab_data_loaded()
+            return self._layout_stats_visualization()
         elif current_tab == "tab-weekly":
             return self._layout_weekly_report()
         elif current_tab == "tab-bet":
@@ -2865,12 +3291,14 @@ class GameStatsDashboard:
         self._ensure_tab_data_loaded()
         date_visible = "block" if current_tab == "tab-date" else "none"
         group_visible = "block" if current_tab == "tab-group" else "none"
+        viz_visible = "block" if current_tab == "tab-viz" else "none"
         weekly_visible = "block" if current_tab == "tab-weekly" else "none"
         bet_visible = "block" if current_tab == "tab-bet" else "none"
         return html.Div(
             [
                 html.Div(self._layout_stats_by_date(), id="tab-date-content", style={"display": date_visible}),
                 html.Div(self._layout_stats_by_group(), id="tab-group-content", style={"display": group_visible}),
+                html.Div(self._layout_stats_visualization(), id="tab-viz-content", style={"display": viz_visible}),
                 html.Div(self._layout_weekly_report(), id="tab-weekly-content", style={"display": weekly_visible}),
                 html.Div(self._layout_stats_by_bet(), id="tab-bet-content", style={"display": bet_visible}),
             ]
@@ -3531,6 +3959,427 @@ class GameStatsDashboard:
             return fig
 
         return callback
+
+    # ------------------------------------------------------------------
+    # Stats Visualization (histogram / heatmap / scatter)
+    # ------------------------------------------------------------------
+
+    def _viz_collect_panel_data(
+        self,
+        panel_id: str,
+        metrics: List[str],
+        r1_start: Any,
+        r1_end: Any,
+        r2_start: Any,
+        r2_end: Any,
+        r3_start: Any,
+        r3_end: Any,
+        show_r1: Any,
+        show_r2: Any,
+        show_r3: Any,
+        clip_enable: Any,
+        clip_min: Any,
+        clip_max: Any,
+        ug_col_1: Any,
+        ug_col_2: Any,
+        show_ug_1: Any,
+        show_ug_2: Any,
+    ) -> List[Tuple[str, pl.DataFrame]]:
+        """Collect one DataFrame per (range × g1 × g2) combo with the selected metric columns.
+
+        For ``panel_id == "p1"`` (derived metrics) rows are at (date, date_group_col) granularity,
+        joined from ``DataMetrics[metric]`` for each selected metric.  For ``panel_id == "p2"``
+        (user-level metrics) rows are kept at the per-user granularity.
+        """
+        if not metrics:
+            return []
+        granularity = list(self.date_files_config.keys())[0]
+        lf = self.lfs_by_date.get(granularity, pl.DataFrame().lazy())
+        if lf.collect_schema().len() == 0:
+            return []
+
+        data_ranges = [
+            {
+                "label": "R1",
+                "start": self._parse_date(r1_start),
+                "end": self._parse_date(r1_end),
+                "show": "ON" in (show_r1 or []),
+            },
+            {
+                "label": "R2",
+                "start": self._parse_date(r2_start),
+                "end": self._parse_date(r2_end),
+                "show": "ON" in (show_r2 or []),
+            },
+            {
+                "label": "R3",
+                "start": self._parse_date(r3_start),
+                "end": self._parse_date(r3_end),
+                "show": "ON" in (show_r3 or []),
+            },
+        ]
+        active_ranges = [r for r in data_ranges if r["show"] and r["start"] is not None and r["end"] is not None]
+        if not active_ranges:
+            return []
+
+        min_d = min(cast(datetime, r["start"]) for r in active_ranges)
+        max_d = max(cast(datetime, r["end"]) for r in active_ranges)
+        load_end = (
+            max_d + timedelta(days=RETENTION_LOAD_EXTRA_DAYS)
+            if self._aggregate_stats_from_user_rows_enabled()
+            else max_d
+        )
+        df_loaded = lf.filter((pl.col(self.date_col) >= min_d) & (pl.col(self.date_col) <= load_end)).collect()
+        if df_loaded.is_empty():
+            return []
+
+        selected_g1 = self._normalize_ug_selection(show_ug_1)
+        effective_col2 = self._effective_ug_col2(ug_col_1, ug_col_2)
+        selected_g2 = self._normalize_ug_selection(show_ug_2) if effective_col2 else []
+        g1_vals: List[Any] = sorted(selected_g1, key=str) if selected_g1 else ["all"]
+        g2_vals: List[Any] = (sorted(selected_g2, key=str) if selected_g2 else ["all"]) if effective_col2 else ["all"]
+
+        enable_clip = clip_enable is not None and "ON" in (clip_enable or [])
+        cmin = float(clip_min) if enable_clip and clip_min is not None else None
+        cmax = float(clip_max) if enable_clip and clip_max is not None else None
+
+        out: List[Tuple[str, pl.DataFrame]] = []
+        for g1 in g1_vals:
+            for g2 in g2_vals:
+                g1_sel: List[Any] = [g1] if str(g1) != "all" else []
+                g2_sel: List[Any] = [g2] if (effective_col2 and str(g2) != "all") else []
+                df_ug, _, _, _ = self._filter_df_for_ug_selection(
+                    df_loaded,
+                    ug_col_1,
+                    effective_col2,
+                    g1_sel,
+                    g2_sel,
+                )
+                if df_ug.is_empty():
+                    continue
+
+                if panel_id == "p1":
+                    dm = self._make_data_metrics(df_ug, min_d, max_d, granularity)
+                    combined: Optional[pl.DataFrame] = None
+                    combined_keys: List[str] = []
+                    for m in metrics:
+                        if m not in dm:
+                            continue
+                        mdf = dm[str(m)]
+                        if mdf is None or mdf.is_empty():
+                            continue
+                        if combined is None:
+                            combined = mdf
+                            combined_keys = [c for c in mdf.columns if c != m]
+                        else:
+                            join_on = [c for c in combined_keys if c in mdf.columns]
+                            if not join_on:
+                                continue
+                            combined = combined.join(mdf, on=join_on, how="inner")
+                    if combined is None or combined.is_empty():
+                        continue
+                    source_df = combined
+                    date_col_name = combined_keys[0] if combined_keys else self.date_col
+                else:
+                    keep_cols = [c for c in metrics if c in df_ug.columns]
+                    if not keep_cols:
+                        continue
+                    source_df = df_ug.select([self.date_col] + keep_cols)
+                    date_col_name = self.date_col
+
+                for r in active_ranges:
+                    r_start = cast(datetime, r["start"])
+                    r_end = cast(datetime, r["end"])
+                    rdf = source_df.filter((pl.col(date_col_name) >= r_start) & (pl.col(date_col_name) <= r_end))
+                    if rdf.is_empty():
+                        continue
+                    rdf = rdf.drop(date_col_name) if date_col_name in rdf.columns else rdf
+                    keep_metric_cols = [c for c in metrics if c in rdf.columns]
+                    if not keep_metric_cols:
+                        continue
+                    rdf = rdf.select(keep_metric_cols)
+                    if enable_clip and (cmin is not None or cmax is not None):
+                        lo = cmin if cmin is not None else -float("inf")
+                        hi = cmax if cmax is not None else float("inf")
+                        rdf = rdf.with_columns(
+                            [
+                                pl.col(c).cast(pl.Float64).clip(lower_bound=lo, upper_bound=hi).alias(c)
+                                for c in keep_metric_cols
+                            ]
+                        )
+                    parts: List[str] = []
+                    if str(g1) != "all":
+                        parts.append(str(g1))
+                    if effective_col2 and str(g2) != "all":
+                        parts.append(str(g2))
+                    parts.append(f"{cast(str, r['label'])}: {r_start.strftime('%m/%d')}-{r_end.strftime('%m/%d')}")
+                    label = " | ".join(parts) if parts else cast(str, r["label"])
+                    out.append((label, rdf))
+
+        return out
+
+    def update_viz_plot_factory(self, panel_id: str) -> Callable[..., Any]:
+        """Callback factory for the Stats Visualization tab.
+
+        Dispatches to histogram / heatmap / pairplot based on ``display_mode`` and the number
+        of selected metrics.
+        """
+
+        def callback(
+            metrics: Any,
+            display_mode: Any,
+            r1_start: Any,
+            r1_end: Any,
+            r2_start: Any,
+            r2_end: Any,
+            r3_start: Any,
+            r3_end: Any,
+            show_r1: Any,
+            show_r2: Any,
+            show_r3: Any,
+            clip_enable: Any,
+            clip_min: Any,
+            clip_max: Any,
+            ug_col_1: Any,
+            ug_col_2: Any,
+            show_ug_1: Any,
+            show_ug_2: Any,
+        ) -> go.Figure:
+            metrics_list: List[str] = [str(m) for m in (metrics or [])]
+            if not metrics_list:
+                return go.Figure()
+            mode = str(display_mode or "histogram")
+            if mode == "heatmap" and len(metrics_list) < 2:
+                fig = go.Figure()
+                fig.add_annotation(
+                    text="Select at least two metrics to show a correlation heatmap.",
+                    showarrow=False,
+                    x=0.5,
+                    y=0.5,
+                    xref="paper",
+                    yref="paper",
+                    font=dict(size=14),
+                )
+                return fig
+
+            combos = self._viz_collect_panel_data(
+                panel_id,
+                metrics_list,
+                r1_start,
+                r1_end,
+                r2_start,
+                r2_end,
+                r3_start,
+                r3_end,
+                show_r1,
+                show_r2,
+                show_r3,
+                clip_enable,
+                clip_min,
+                clip_max,
+                ug_col_1,
+                ug_col_2,
+                show_ug_1,
+                show_ug_2,
+            )
+            if not combos:
+                return go.Figure()
+
+            if mode == "histogram":
+                return self._viz_build_histogram(metrics_list, combos)
+            if mode == "heatmap":
+                return self._viz_build_heatmap(metrics_list, combos)
+            if mode == "scatter":
+                if len(metrics_list) == 1:
+                    return self._viz_build_histogram(metrics_list, combos)
+                if len(metrics_list) == 2:
+                    return self._viz_build_scatter_pair(metrics_list, combos)
+                return self._viz_build_scatter_grid(metrics_list, combos)
+            return go.Figure()
+
+        return callback
+
+    @staticmethod
+    def _viz_values(df: pl.DataFrame, metric: str) -> np.ndarray:
+        if metric not in df.columns:
+            return np.array([])
+        return df.get_column(metric).cast(pl.Float64).drop_nulls().to_numpy()
+
+    def _viz_build_histogram(self, metrics: List[str], combos: List[Tuple[str, pl.DataFrame]]) -> go.Figure:
+        n = len(metrics)
+        cols = min(2, n)
+        rows = int(np.ceil(n / cols))
+        fig = make_subplots(rows=rows, cols=cols, subplot_titles=metrics)
+        base_colors = Styles.COLORS
+        shown_labels: set[str] = set()
+        for i, metric in enumerate(metrics):
+            r = i // cols + 1
+            c = i % cols + 1
+            for ci, (label, df) in enumerate(combos):
+                vals = self._viz_values(df, metric)
+                if len(vals) == 0:
+                    continue
+                color = base_colors[ci % len(base_colors)]
+                fig.add_trace(
+                    go.Histogram(
+                        x=vals,
+                        name=label,
+                        marker=dict(color=color),
+                        opacity=0.55,
+                        legendgroup=label,
+                        showlegend=label not in shown_labels,
+                        nbinsx=40,
+                    ),
+                    row=r,
+                    col=c,
+                )
+                shown_labels.add(label)
+        fig.update_layout(
+            barmode="overlay",
+            template="plotly_white",
+            height=max(350 * rows, 400),
+            margin=dict(l=60, r=20, t=60, b=50),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0),
+            font=dict(size=14),
+        )
+        return fig
+
+    def _viz_build_heatmap(self, metrics: List[str], combos: List[Tuple[str, pl.DataFrame]]) -> go.Figure:
+        n_combos = len(combos)
+        cols = min(2, n_combos) if n_combos > 0 else 1
+        rows = int(np.ceil(n_combos / cols)) if n_combos > 0 else 1
+        titles = [label for label, _ in combos] or [""]
+        fig = make_subplots(rows=rows, cols=cols, subplot_titles=titles)
+        for idx, (_label, df) in enumerate(combos):
+            r = idx // cols + 1
+            c = idx % cols + 1
+            available = [m for m in metrics if m in df.columns]
+            if len(available) < 2:
+                continue
+            pdf = cast(pd.DataFrame, df.select(available).to_pandas().apply(pd.to_numeric, errors="coerce"))
+            corr = np.asarray(pdf.corr().values)
+            fig.add_trace(
+                go.Heatmap(
+                    z=corr,
+                    x=available,
+                    y=available,
+                    colorscale="RdBu",
+                    zmid=0,
+                    zmin=-1,
+                    zmax=1,
+                    colorbar=dict(title="corr"),
+                    text=[[f"{v:.2f}" for v in row] for row in corr],
+                    texttemplate="%{text}",
+                    hovertemplate="%{x} vs %{y}: %{z:.3f}<extra></extra>",
+                ),
+                row=r,
+                col=c,
+            )
+        fig.update_layout(
+            template="plotly_white",
+            height=max(420 * rows, 450),
+            margin=dict(l=80, r=40, t=60, b=60),
+            font=dict(size=14),
+        )
+        return fig
+
+    def _viz_build_scatter_pair(self, metrics: List[str], combos: List[Tuple[str, pl.DataFrame]]) -> go.Figure:
+        mx, my = metrics[0], metrics[1]
+        fig = go.Figure()
+        base_colors = Styles.COLORS
+        for ci, (label, df) in enumerate(combos):
+            if mx not in df.columns or my not in df.columns:
+                continue
+            pdf = cast(pd.DataFrame, df.select([mx, my]).to_pandas().apply(pd.to_numeric, errors="coerce")).dropna()
+            if pdf.empty:
+                continue
+            fig.add_trace(
+                go.Scatter(
+                    x=np.asarray(pdf[mx].values),
+                    y=np.asarray(pdf[my].values),
+                    mode="markers",
+                    name=label,
+                    marker=dict(color=base_colors[ci % len(base_colors)], size=6, opacity=0.6),
+                )
+            )
+        fig.update_layout(
+            template="plotly_white",
+            xaxis_title=mx,
+            yaxis_title=my,
+            height=600,
+            margin=dict(l=70, r=20, t=40, b=60),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0),
+            font=dict(size=14),
+        )
+        return fig
+
+    def _viz_build_scatter_grid(self, metrics: List[str], combos: List[Tuple[str, pl.DataFrame]]) -> go.Figure:
+        n = len(metrics)
+        fig = make_subplots(
+            rows=n, cols=n, shared_xaxes=False, shared_yaxes=False, horizontal_spacing=0.03, vertical_spacing=0.03
+        )
+        base_colors = Styles.COLORS
+        shown_labels: set[str] = set()
+        for i, m_row in enumerate(metrics):
+            for j, m_col in enumerate(metrics):
+                r, c = i + 1, j + 1
+                for ci, (label, df) in enumerate(combos):
+                    color = base_colors[ci % len(base_colors)]
+                    show_legend = (i == 0 and j == 0) and (label not in shown_labels)
+                    if i == j:
+                        vals = self._viz_values(df, m_row)
+                        if len(vals) == 0:
+                            continue
+                        fig.add_trace(
+                            go.Histogram(
+                                x=vals,
+                                name=label,
+                                marker=dict(color=color),
+                                opacity=0.55,
+                                legendgroup=label,
+                                showlegend=show_legend,
+                                nbinsx=30,
+                            ),
+                            row=r,
+                            col=c,
+                        )
+                    else:
+                        if m_col not in df.columns or m_row not in df.columns:
+                            continue
+                        pdf = cast(
+                            pd.DataFrame,
+                            df.select([m_col, m_row]).to_pandas().apply(pd.to_numeric, errors="coerce"),
+                        ).dropna()
+                        if pdf.empty:
+                            continue
+                        fig.add_trace(
+                            go.Scatter(
+                                x=np.asarray(pdf[m_col].values),
+                                y=np.asarray(pdf[m_row].values),
+                                mode="markers",
+                                name=label,
+                                marker=dict(color=color, size=4, opacity=0.55),
+                                legendgroup=label,
+                                showlegend=show_legend,
+                            ),
+                            row=r,
+                            col=c,
+                        )
+                    shown_labels.add(label)
+                if j == 0:
+                    fig.update_yaxes(title_text=m_row, row=r, col=c)
+                if i == n - 1:
+                    fig.update_xaxes(title_text=m_col, row=r, col=c)
+        fig.update_layout(
+            barmode="overlay",
+            template="plotly_white",
+            height=max(220 * n, 450),
+            width=max(220 * n, 600),
+            margin=dict(l=70, r=20, t=40, b=60),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0),
+            font=dict(size=12),
+        )
+        return fig
 
     # ------------------------------------------------------------------
     # AI Chat — floating dialog
