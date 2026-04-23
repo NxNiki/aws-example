@@ -714,7 +714,7 @@ class GameStatsDashboard:
                                     selected_style=Styles.NAV_TAB_SELECTED,
                                 ),
                                 dcc.Tab(
-                                    label="Stats Visualization",
+                                    label="Stats Deepdive",
                                     value="tab-viz",
                                     style=Styles.NAV_TAB,
                                     selected_style=Styles.NAV_TAB_SELECTED,
@@ -1417,7 +1417,7 @@ class GameStatsDashboard:
     ]
 
     def _layout_stats_visualization(self) -> html.Div:
-        """Layout for the 'Stats Visualization' tab.
+        """Layout for the 'Stats Deepdive' tab.
 
         Header mirrors ``stats_by_group`` (3 date pickers + 2 group-column selectors).
         Two plotting panels — DataMetrics-derived and user-level raw — share the same
@@ -1487,7 +1487,12 @@ class GameStatsDashboard:
         )
 
         download_config: Dict[str, Any] = dict(
-            toImageButtonOptions=dict(format="png", height=700, width=1200, scale=3), displaylogo=False
+            toImageButtonOptions=dict(format="png", height=700, width=1200, scale=3),
+            displaylogo=False,
+            # Plotly installs a ResizeObserver when responsive is True; without this the
+            # plot measures its container only at creation (0px while display:none) and
+            # keeps that stale width, then stretches on the first real resize event.
+            responsive=True,
         )
 
         def create_panel(panel_id: str, label: str, metric_options: list[dcc.Dropdown.Options]) -> html.Div:
@@ -1522,6 +1527,52 @@ class GameStatsDashboard:
                                                 labelStyle={"display": "inline-block", "marginRight": "15px"},
                                             ),
                                         ],
+                                        style=Styles.CONTROL_GROUP,
+                                    ),
+                                    # Histogram-only controls — live inside the fixed-width sidebar so
+                                    # showing/hiding them never changes the graph container's size.
+                                    html.Div(
+                                        [
+                                            html.Div(
+                                                [
+                                                    html.Label(
+                                                        "Bins:",
+                                                        style={
+                                                            **Styles.CONTROL_LABEL,
+                                                            "marginBottom": "0",
+                                                            "marginRight": "6px",
+                                                            "whiteSpace": "nowrap",
+                                                        },
+                                                    ),
+                                                    dcc.Dropdown(
+                                                        id=f"viz-{panel_id}-nbins",
+                                                        options=_dropdown_option_rows(
+                                                            [
+                                                                ("50", "50"),
+                                                                ("100", "100"),
+                                                                ("200", "200"),
+                                                                ("500", "500"),
+                                                            ]
+                                                        ),
+                                                        value="50",
+                                                        clearable=False,
+                                                        style={"width": "80px", "marginRight": "10px"},
+                                                    ),
+                                                    dcc.Checklist(
+                                                        id=f"viz-{panel_id}-log-y",
+                                                        options=_dropdown_option_rows([(" Log Y", "ON")]),
+                                                        value=[],
+                                                        style={**Styles.CHECKLIST_INLINE, "marginBottom": "0"},
+                                                    ),
+                                                ],
+                                                style={
+                                                    **Styles.FLEX_ROW_CENTER,
+                                                    "flexWrap": "wrap",
+                                                    "gap": "4px",
+                                                },
+                                            ),
+                                        ],
+                                        id=f"viz-{panel_id}-hist-controls",
                                         style=Styles.CONTROL_GROUP,
                                     ),
                                     html.Hr(style=Styles.HR),
@@ -1617,8 +1668,17 @@ class GameStatsDashboard:
         if not game_id:
             return html.Div(
                 html.P(
-                    "Weekly report is not configured for this dashboard. Add a weekly_report section "
-                    "(game_id, files, currency_type) to the YAML.",
+                    [
+                        "Weekly report is not configured for this dashboard. Add a weekly_report section "
+                        "(game_id, files, currency_type) to the YAML. Also make sure the weekly-report "
+                        "parquet data has been uploaded to S3 at ",
+                        html.Code(
+                            "s3://bituslabs-team-ai/etl-results/jobs/output_weekly_report_all_games/ops_daily_report"
+                        ),
+                        " (produced by ",
+                        html.Code("jobs/operation_daily_report/etl_weekly_report_all_games.py"),
+                        ").",
+                    ],
                     style={"color": "#64748b"},
                 ),
                 style=Styles.PAGE_CONTENT,
@@ -2246,7 +2306,7 @@ class GameStatsDashboard:
                 ],
             )(_group_plot_with_state_factory(f"g{i}"))
 
-        # ── Stats Visualization tab ────────────────────────────────────
+        # ── Stats Deepdive tab ─────────────────────────────────────────
         @self.app.callback(
             [Output("viz-ug-col-2", "value")] + [Output(f"viz-{pid}-show-ug-1", "options") for pid in ("p1", "p2")],
             Input("viz-ug-col-1", "value"),
@@ -2266,6 +2326,26 @@ class GameStatsDashboard:
         def on_viz_ug_col_2_change(col2_val: Any):
             opts = self._make_ug_opts(col2_val)
             return [opts] * 2
+
+        # Show/hide the histogram-only controls (Bins + Log Y) per panel based on Display Mode.
+        # The controls live inside the fixed-width sidebar (CONTROL_PANEL_CONTAINER), so
+        # toggling their display does NOT reflow the graph container — the plot keeps
+        # its stable width across mode switches.
+        def _make_toggle_hist_controls(pid: str) -> Callable[..., Any]:
+            visible_style: Dict[str, Any] = dict(Styles.CONTROL_GROUP)
+            hidden_style: Dict[str, Any] = {"display": "none"}
+
+            def _inner(mode: Any) -> Any:
+                return visible_style if str(mode or "") == "histogram" else hidden_style
+
+            _inner.__name__ = f"toggle_viz_hist_controls_{pid}"
+            return _inner
+
+        for _pid in ("p1", "p2"):
+            self.app.callback(
+                Output(f"viz-{_pid}-hist-controls", "style"),
+                Input(f"viz-{_pid}-display", "value"),
+            )(_make_toggle_hist_controls(_pid))
 
         def _viz_plot_with_state_factory(pid: str) -> Callable[..., Any]:
             base = self.update_viz_plot_factory(pid)
@@ -2289,6 +2369,8 @@ class GameStatsDashboard:
                 ug_col_2: Any,
                 show_ug_1: Any,
                 show_ug_2: Any,
+                nbins: Any,
+                log_y: Any,
             ):
                 fig = base(
                     metrics,
@@ -2309,6 +2391,8 @@ class GameStatsDashboard:
                     ug_col_2,
                     show_ug_1,
                     show_ug_2,
+                    nbins,
+                    log_y,
                 )
                 state = {
                     "metrics": metrics,
@@ -2329,6 +2413,8 @@ class GameStatsDashboard:
                     "ug_col_2": ug_col_2,
                     "show_ug_1": show_ug_1,
                     "show_ug_2": show_ug_2,
+                    "nbins": nbins,
+                    "log_y": log_y,
                 }
                 return fig, state
 
@@ -2357,6 +2443,8 @@ class GameStatsDashboard:
                     Input("viz-ug-col-2", "value"),
                     Input(f"viz-{pid}-show-ug-1", "value"),
                     Input(f"viz-{pid}-show-ug-2", "value"),
+                    Input(f"viz-{pid}-nbins", "value"),
+                    Input(f"viz-{pid}-log-y", "value"),
                 ],
             )(_viz_plot_with_state_factory(pid))
 
@@ -2906,6 +2994,8 @@ class GameStatsDashboard:
             Output("viz-p1-clip-max", "value", allow_duplicate=True),
             Output("viz-p1-show-ug-1", "value", allow_duplicate=True),
             Output("viz-p1-show-ug-2", "value", allow_duplicate=True),
+            Output("viz-p1-nbins", "value", allow_duplicate=True),
+            Output("viz-p1-log-y", "value", allow_duplicate=True),
             Output("viz-p2-metrics", "value", allow_duplicate=True),
             Output("viz-p2-display", "value", allow_duplicate=True),
             Output("viz-p2-show-r1", "value", allow_duplicate=True),
@@ -2916,6 +3006,8 @@ class GameStatsDashboard:
             Output("viz-p2-clip-max", "value", allow_duplicate=True),
             Output("viz-p2-show-ug-1", "value", allow_duplicate=True),
             Output("viz-p2-show-ug-2", "value", allow_duplicate=True),
+            Output("viz-p2-nbins", "value", allow_duplicate=True),
+            Output("viz-p2-log-y", "value", allow_duplicate=True),
             Output("session-dropdown", "value", allow_duplicate=True),
             Output("strategy-checklist", "value", allow_duplicate=True),
             Output("metric-checklist", "value", allow_duplicate=True),
@@ -2953,7 +3045,7 @@ class GameStatsDashboard:
             bet: Optional[Dict],
         ):
             if trigger is None:
-                return (no_update,) * 100
+                return (no_update,) * 104
             # Keep the load trigger token so default-picker callbacks don't recompute
             # and clamp restored DatePickerRange values.
             out: List[Any] = [trigger]
@@ -3048,6 +3140,8 @@ class GameStatsDashboard:
                         _viz_or_skip(s, "clip_max"),
                         _viz_or_skip(s, "show_ug_1"),
                         _viz_or_skip(s, "show_ug_2"),
+                        _viz_or_skip(s, "nbins"),
+                        _viz_or_skip(s, "log_y"),
                     ]
                 )
             sb = bet or {}
@@ -3961,7 +4055,7 @@ class GameStatsDashboard:
         return callback
 
     # ------------------------------------------------------------------
-    # Stats Visualization (histogram / heatmap / scatter)
+    # Stats Deepdive (histogram / heatmap / scatter)
     # ------------------------------------------------------------------
 
     def _viz_collect_panel_data(
@@ -4119,7 +4213,7 @@ class GameStatsDashboard:
         return out
 
     def update_viz_plot_factory(self, panel_id: str) -> Callable[..., Any]:
-        """Callback factory for the Stats Visualization tab.
+        """Callback factory for the Stats Deepdive tab.
 
         Dispatches to histogram / heatmap / pairplot based on ``display_mode`` and the number
         of selected metrics.
@@ -4144,6 +4238,8 @@ class GameStatsDashboard:
             ug_col_2: Any,
             show_ug_1: Any,
             show_ug_2: Any,
+            nbins: Any = 50,
+            log_y: Any = None,
         ) -> go.Figure:
             metrics_list: List[str] = [str(m) for m in (metrics or [])]
             if not metrics_list:
@@ -4185,13 +4281,19 @@ class GameStatsDashboard:
             if not combos:
                 return go.Figure()
 
+            try:
+                nbins_int = int(nbins) if nbins is not None else 50
+            except (TypeError, ValueError):
+                nbins_int = 50
+            log_y_on = "ON" in (log_y or [])
+
             if mode == "histogram":
-                return self._viz_build_histogram(metrics_list, combos)
+                return self._viz_build_histogram(metrics_list, combos, nbins=nbins_int, log_y=log_y_on)
             if mode == "heatmap":
                 return self._viz_build_heatmap(metrics_list, combos)
             if mode == "scatter":
                 if len(metrics_list) == 1:
-                    return self._viz_build_histogram(metrics_list, combos)
+                    return self._viz_build_histogram(metrics_list, combos, nbins=nbins_int, log_y=log_y_on)
                 if len(metrics_list) == 2:
                     return self._viz_build_scatter_pair(metrics_list, combos)
                 return self._viz_build_scatter_grid(metrics_list, combos)
@@ -4205,7 +4307,13 @@ class GameStatsDashboard:
             return np.array([])
         return df.get_column(metric).cast(pl.Float64).drop_nulls().to_numpy()
 
-    def _viz_build_histogram(self, metrics: List[str], combos: List[Tuple[str, pl.DataFrame]]) -> go.Figure:
+    def _viz_build_histogram(
+        self,
+        metrics: List[str],
+        combos: List[Tuple[str, pl.DataFrame]],
+        nbins: int = 50,
+        log_y: bool = False,
+    ) -> go.Figure:
         n = len(metrics)
         cols = min(2, n)
         rows = int(np.ceil(n / cols))
@@ -4228,7 +4336,7 @@ class GameStatsDashboard:
                         opacity=0.55,
                         legendgroup=label,
                         showlegend=label not in shown_labels,
-                        nbinsx=40,
+                        nbinsx=int(nbins),
                     ),
                     row=r,
                     col=c,
@@ -4237,11 +4345,17 @@ class GameStatsDashboard:
         fig.update_layout(
             barmode="overlay",
             template="plotly_white",
-            height=max(350 * rows, 400),
-            margin=dict(l=60, r=20, t=60, b=50),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0),
-            font=dict(size=14),
+            autosize=True,
+            margin=dict(l=70, r=20, t=70, b=60),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0, font=dict(size=16)),
+            font=dict(size=18),
         )
+        fig.update_xaxes(title_font=dict(size=18), tickfont=dict(size=16))
+        fig.update_yaxes(title_font=dict(size=18), tickfont=dict(size=16))
+        for ann in fig.layout.annotations or []:
+            ann.font = dict(size=20)
+        if log_y:
+            fig.update_yaxes(type="log")
         return fig
 
     def _viz_build_heatmap(self, metrics: List[str], combos: List[Tuple[str, pl.DataFrame]]) -> go.Figure:
@@ -4277,7 +4391,7 @@ class GameStatsDashboard:
             )
         fig.update_layout(
             template="plotly_white",
-            height=max(420 * rows, 450),
+            autosize=True,
             margin=dict(l=80, r=40, t=60, b=60),
             font=dict(size=14),
         )
@@ -4306,7 +4420,7 @@ class GameStatsDashboard:
             template="plotly_white",
             xaxis_title=mx,
             yaxis_title=my,
-            height=600,
+            autosize=True,
             margin=dict(l=70, r=20, t=40, b=60),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0),
             font=dict(size=14),
@@ -4373,8 +4487,7 @@ class GameStatsDashboard:
         fig.update_layout(
             barmode="overlay",
             template="plotly_white",
-            height=max(220 * n, 450),
-            width=max(220 * n, 600),
+            autosize=True,
             margin=dict(l=70, r=20, t=40, b=60),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0),
             font=dict(size=12),
