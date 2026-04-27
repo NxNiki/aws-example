@@ -36,6 +36,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
             SELECT
                 b.user_id,
                 b.room_id,
+                b.bullet_id,
                 b.strategy_name, -- Keep Raw
                 b.partition_ab[0] as partition_val, -- Extract partition once here
                 b.event_timestamp AS bet_time,
@@ -50,7 +51,8 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
                 END as fish_type,
                 b.killed,
                 b.profit,
-                LAG(b.event_timestamp) OVER (PARTITION BY b.user_id ORDER BY b.event_timestamp) AS prev_bet_time,
+                LAG(b.event_timestamp) OVER (PARTITION BY b.user_id ORDER BY b.bullet_id, b.event_timestamp) AS prev_bet_time,
+                LAG(b.bet) OVER (PARTITION BY b.user_id ORDER BY b.bullet_id, b.event_timestamp) AS prev_bet_amount,
                 CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', b.created_at))) AS DATE) AS activity_date,
                 CAST(DATE_TRUNC('week', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', b.created_at))) AS DATE) AS activity_week,
                 CAST(DATE_TRUNC('month', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', b.created_at))) AS DATE) AS activity_month
@@ -97,6 +99,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
                 user_id, 
                 activity_date, 
                 fish_type, 
+                bullet_id,
                 bet_time
             FROM base_data 
             WHERE killed = 1
@@ -110,15 +113,15 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
                 bet_time,
                 -- GLOBAL: ignores fish_type. Checks if ANY fish was killed recently.
                 CASE 
-                    WHEN DATEDIFF(SECOND, LAG(bet_time) OVER(PARTITION BY user_id ORDER BY bet_time), bet_time) > {STREAK_KILL_THRESH} 
-                        OR LAG(bet_time) OVER(PARTITION BY user_id ORDER BY bet_time) IS NULL 
+                    WHEN DATEDIFF(SECOND, LAG(bet_time) OVER(PARTITION BY user_id ORDER BY bullet_id, bet_time), bet_time) > {STREAK_KILL_THRESH} 
+                        OR LAG(bet_time) OVER(PARTITION BY user_id ORDER BY bullet_id, bet_time) IS NULL 
                     THEN 1 ELSE 0 
                 END AS is_new_global_streak,
                 
                 -- TYPE-SPECIFIC: isolated by fish_type. Only checks previous kill of SAME type.
                 CASE 
-                    WHEN DATEDIFF(SECOND, LAG(bet_time) OVER(PARTITION BY user_id, fish_type ORDER BY bet_time), bet_time) > {STREAK_KILL_THRESH} 
-                        OR LAG(bet_time) OVER(PARTITION BY user_id, fish_type ORDER BY bet_time) IS NULL 
+                    WHEN DATEDIFF(SECOND, LAG(bet_time) OVER(PARTITION BY user_id, fish_type ORDER BY bullet_id, bet_time), bet_time) > {STREAK_KILL_THRESH} 
+                        OR LAG(bet_time) OVER(PARTITION BY user_id, fish_type ORDER BY bullet_id, bet_time) IS NULL 
                     THEN 1 ELSE 0 
                 END AS is_new_type_streak
             FROM base_kills
@@ -130,8 +133,8 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
                 activity_date,
                 fish_type,
                 bet_time,
-                SUM(is_new_global_streak) OVER(PARTITION BY user_id ORDER BY bet_time ROWS UNBOUNDED PRECEDING) AS global_streak_id,
-                SUM(is_new_type_streak) OVER(PARTITION BY user_id, fish_type ORDER BY bet_time ROWS UNBOUNDED PRECEDING) AS type_streak_id
+                SUM(is_new_global_streak) OVER(PARTITION BY user_id ORDER BY bullet_id, bet_time ROWS UNBOUNDED PRECEDING) AS global_streak_id,
+                SUM(is_new_type_streak) OVER(PARTITION BY user_id, fish_type ORDER BY bullet_id, bet_time ROWS UNBOUNDED PRECEDING) AS type_streak_id
             FROM calculate_islands
         ),
 
@@ -178,12 +181,12 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
                         ELSE 1 
                     END) OVER (
                         PARTITION BY t.activity_date, t.user_id 
-                        ORDER BY t.bet_time 
+                        ORDER BY t.bullet_id, t.bet_time 
                         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
                     ) AS session_id,
                 ROW_NUMBER() OVER (
                         PARTITION BY t.activity_date, t.user_id 
-                        ORDER BY t.bet_time 
+                        ORDER BY t.bullet_id, t.bet_time 
                     ) AS bet_index
                 
             FROM base_data t
@@ -319,7 +322,17 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
                 AVG(CASE WHEN b.killed = 1 THEN b.fish_value END)                     AS user_avg_killed_fish_value,
                 AVG(CASE WHEN b.fish_value > 19 AND b.fish_value < 201 AND b.killed = 1 THEN b.fish_value END)         AS user_avg_killed_fish_value_20_200,
                 AVG(b.profit)                                                          AS user_bullet_avg_profit,
-                AVG(CASE WHEN b.killed = 1 THEN b.profit END)                         AS user_bullet_kill_avg_profit
+                AVG(CASE WHEN b.killed = 1 THEN b.profit END)                         AS user_bullet_kill_avg_profit,
+
+                -- delta bet amount metrics:
+                SUM(CASE WHEN (b.bet - b.prev_bet_amount) > 0 THEN (b.bet - b.prev_bet_amount) END) AS user_accu_pos_delta_bet,
+                SUM(CASE WHEN (b.bet - b.prev_bet_amount) < 0 THEN (b.bet - b.prev_bet_amount) END) AS user_accu_neg_delta_bet,
+                AVG(CASE WHEN (b.bet - b.prev_bet_amount) > 0 THEN (b.bet - b.prev_bet_amount) END) AS user_accu_pos_delta_bet_avg,
+                AVG(CASE WHEN (b.bet - b.prev_bet_amount) < 0 THEN (b.bet - b.prev_bet_amount) END) AS user_accu_neg_delta_bet_avg,
+                SUM(b.bet - b.prev_bet_amount) AS user_accu_delta_bet,
+                AVG(b.bet - b.prev_bet_amount) AS user_accu_delta_bet_avg,
+                COUNT(CASE WHEN (b.bet - b.prev_bet_amount) > 0 THEN 1 END) AS user_pos_delta_bet_num,
+                COUNT(CASE WHEN (b.bet - b.prev_bet_amount) < 0 THEN 1 END) AS user_neg_delta_bet_num
             FROM base_data b
             JOIN user_daily_group u ON b.user_id = u.user_id AND b.activity_date = u.activity_date
             GROUP BY b.user_id, u.daily_group, b.{stats_agg_col}
@@ -389,6 +402,16 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
             t1.user_avg_killed_fish_value_20_200,
             t1.user_bullet_avg_profit,
             t1.user_bullet_kill_avg_profit,
+
+            -- delta bet amount metrics:
+            t1.user_accu_pos_delta_bet,
+            t1.user_accu_neg_delta_bet,
+            t1.user_accu_pos_delta_bet_avg,
+            t1.user_accu_neg_delta_bet_avg,
+            t1.user_accu_delta_bet,
+            t1.user_accu_delta_bet_avg,
+            t1.user_pos_delta_bet_num,
+            t1.user_neg_delta_bet_num,
 
             -- Session stats:
             t4.user_num_streak_sessions,
