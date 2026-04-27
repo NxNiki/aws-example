@@ -82,6 +82,36 @@ Redshift (prod) → SSH bastion tunnel → DataLoader (etl.py) → S3 parquet ca
 
 Never commit secrets. Copy `.env.example` → `.env` and set `REDSHIFT_USER`, `REDSHIFT_PASSWORD`, `BASTION_KEY_PATH`. On ECS, secrets come from environment variables / Secrets Manager.
 
+## Commit Guidelines
+
+### Message format
+```
+[type] short imperative description
+
+Optional longer explanation if the why is non-obvious.
+```
+
+**Types:** `feat` · `fix` · `chore` · `refactor` · `docs` · `test`
+
+### How to split commits
+- One commit per logical concern. Ask: "would reverting this commit make sense on its own?"
+- All changes to a single file go in one commit — never split one file across commits.
+- Related changes across multiple files that serve the same purpose belong together (e.g., renaming a metric in three ETL jobs + the dashboard config that references it).
+- Unrelated changes that happen to land at the same time should be separate commits (e.g., a Dockerfile tweak is separate from an ETL query change).
+
+### Examples of good groupings
+| Commit | Files |
+|--------|-------|
+| `[feat] add delta bet metrics to fish_hunter ETL` | one ETL file |
+| `[feat] rename metric to _bg and restrict to BASE game in ss01/ss02/ss03` | three parallel ETL files |
+| `[chore] use ECR mirror for Python base image` | one Dockerfile |
+| `[feat] update dashboard configs for renamed/new metrics` | dashboard config + metadata files |
+
+### What not to do
+- Don't commit all modified files in one giant commit.
+- Don't add unrelated cleanup to a feature commit.
+- Don't use vague messages like `update` or `fix stuff`.
+
 ## Poetry Dependency Groups
 
 All optional groups: `ds` (scipy, pymc), `ml` (scikit-learn, sagemaker), `dl` (pytorch), `dashboard` (dash, plotly, polars), `ai_agent` (langchain, fastapi), `etl` (redshift, paramiko, slack), `spark` (pyspark — do NOT bundle when deploying to EMR).
