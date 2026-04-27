@@ -53,10 +53,11 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
         WITH bet_events AS (
             SELECT
                 t.user_id,
+                t.spin_id,
                 t.created_at,
                 CASE
                     WHEN t.math_table_id = 'FourScatter'
-                    THEN LEAD(t.math_table_id) OVER (PARTITION BY t.user_id ORDER BY t.created_at)
+                    THEN LEAD(t.math_table_id) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at)
                     ELSE t.math_table_id
                 END AS math_table_id,
                 CASE WHEN t.math_table_id = 'FourScatter' THEN 1 ELSE 0 END AS buy_free_game,
@@ -88,13 +89,14 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             CAST(DATE_TRUNC('week', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at))) AS DATE) AS activity_week,
             CAST(DATE_TRUNC('month', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at))) AS DATE) AS activity_month,
             t.partition_ab[0] AS ab_group_id,
-            t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.created_at) AS delta_t,
-            LAG(t.bet_type) OVER (PARTITION BY t.user_id ORDER BY t.created_at) AS prev_bet_type,
-            LAG(t.bet_amount) OVER (PARTITION BY t.user_id ORDER BY t.created_at) AS prev_bet_amount,
+            LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) AS prev_created_at,
+            t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) AS delta_t,
+            LAG(t.bet_type) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) AS prev_bet_type,
+            LAG(t.bet_amount) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) AS prev_bet_amount,
             COUNT(t.user_id) OVER (PARTITION BY t.user_id) AS user_bet_count,
             CASE
-                WHEN LAG(t.math_table_id) OVER (PARTITION BY t.user_id ORDER BY t.created_at) IS NULL THEN 0
-                WHEN LAG(t.math_table_id) OVER (PARTITION BY t.user_id ORDER BY t.created_at) <> t.math_table_id THEN 1
+                WHEN LAG(t.math_table_id) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) IS NULL THEN 0
+                WHEN LAG(t.math_table_id) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) <> t.math_table_id THEN 1
                 ELSE 0
             END AS mathtable_change
         FROM
@@ -159,10 +161,20 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 COUNT(CASE WHEN t.bet_type = 'BASE' AND t.payout > 0 THEN 1 END) AS user_num_bets_bg_with_payout,
                 COUNT(CASE WHEN t.bet_type = 'FREE' AND t.payout > 0 THEN 1 END) AS user_num_bets_fg_with_payout,
 
-                AVG(CASE WHEN EXTRACT(EPOCH FROM t.delta_t) BETWEEN 0 AND 86400 THEN EXTRACT(EPOCH FROM t.delta_t) END)
-                    AS user_avg_delta_t_seconds,
+                AVG(CASE WHEN t.bet_type = 'BASE' AND t.prev_bet_type = 'BASE' AND EXTRACT(EPOCH FROM t.delta_t) BETWEEN 0 AND 86400 THEN EXTRACT(EPOCH FROM t.delta_t) END)
+                    AS user_avg_delta_t_seconds_bg,
 
-                SUM(t.mathtable_change) AS user_mathtable_change
+                SUM(t.mathtable_change) AS user_mathtable_change,
+
+                -- delta bet amount metrics:
+                SUM(CASE WHEN (t.bet_amount - t.prev_bet_amount) > 0 THEN (t.bet_amount - t.prev_bet_amount) END) AS user_accu_pos_delta_bet,
+                SUM(CASE WHEN (t.bet_amount - t.prev_bet_amount) < 0 THEN (t.bet_amount - t.prev_bet_amount) END) AS user_accu_neg_delta_bet,
+                AVG(CASE WHEN (t.bet_amount - t.prev_bet_amount) > 0 THEN (t.bet_amount - t.prev_bet_amount) END) AS user_accu_pos_delta_bet_avg,
+                AVG(CASE WHEN (t.bet_amount - t.prev_bet_amount) < 0 THEN (t.bet_amount - t.prev_bet_amount) END) AS user_accu_neg_delta_bet_avg,
+                SUM(t.bet_amount - t.prev_bet_amount) AS user_accu_delta_bet,
+                AVG(t.bet_amount - t.prev_bet_amount) AS user_accu_delta_bet_avg,
+                COUNT(CASE WHEN (t.bet_amount - t.prev_bet_amount) > 0 THEN 1 END) AS user_pos_delta_bet_num,
+                COUNT(CASE WHEN (t.bet_amount - t.prev_bet_amount) < 0 THEN 1 END) AS user_neg_delta_bet_num
 
             FROM user_bets_group AS t
             GROUP BY t.{stats_agg_col}, t.ai_group, t.user_id
@@ -213,14 +225,24 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             us.user_total_payout * 1.0 / NULLIF(us.user_total_bet, 0) AS user_rtp,
 
             -- User-level derived (not computed by DataMetrics):
-            us.user_avg_delta_t_seconds,
+            us.user_avg_delta_t_seconds_bg,
             us.user_num_bets_fg * 1.0 / NULLIF(us.user_num_bets, 0) AS user_fg_ratio,
             (us.user_total_payout - us.user_total_bet) AS user_total_profit,
             us.user_total_payout_bg * 1.0 / NULLIF(us.user_total_bet, 0) AS user_rtp_bg,
             us.user_total_payout_fg * 1.0 / NULLIF(us.user_total_bet_fg, 0) AS user_rtp_fg,
             us.user_num_bets_with_payout * 1.0 / NULLIF(us.user_num_bets, 0) AS user_hit_rate,
             us.user_num_bets_bg_with_payout * 1.0 / NULLIF(us.user_num_bets_bg, 0) AS user_hit_rate_bg,
-            us.user_num_bets_fg_with_payout * 1.0 / NULLIF(us.user_num_bets_fg, 0) AS user_hit_rate_fg
+            us.user_num_bets_fg_with_payout * 1.0 / NULLIF(us.user_num_bets_fg, 0) AS user_hit_rate_fg,
+
+            -- delta bet amount metrics:
+            us.user_accu_pos_delta_bet,
+            us.user_accu_neg_delta_bet,
+            us.user_accu_pos_delta_bet_avg,
+            us.user_accu_neg_delta_bet_avg,
+            us.user_accu_delta_bet,
+            us.user_accu_delta_bet_avg,
+            us.user_pos_delta_bet_num,
+            us.user_neg_delta_bet_num
 
         FROM user_stats AS us
         LEFT JOIN user_first_bet AS fb ON us.user_id = fb.user_id
