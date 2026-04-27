@@ -1407,14 +1407,51 @@ class GameStatsDashboard:
         return _dropdown_options_from_strings(sorted(DataMetrics.METRICS))
 
     def _viz_user_metric_options(self) -> list[dcc.Dropdown.Options]:
-        """User-level raw metric options — the user_* input columns consumed by ``DataMetrics``."""
-        return _dropdown_options_from_strings(sorted(ENRICH_USER_ROW_INPUT_COLUMNS - {"user_id"}))
+        """User-level raw metric options — every ``user_*`` column actually present in the loaded parquet.
+
+        Derived from the dataframe schema (not a hardcoded list) so any ``user_*`` column produced
+        by the per-game ETL — e.g. ``user_avg_delta_t_seconds``, ``user_fg_ratio``,
+        ``user_mathtable_change``, ``user_hit_rate`` — automatically appears here without a code
+        change.  Two types of columns are excluded:
+
+        - Columns computed by ``DataMetrics`` (``user_rtp_median``, ``user_rtp_ultilization_ratio``)
+          — they belong in the Derived panel even if the ETL pre-materialises them.
+        - Columns listed in ``stats_by_date.user_group_cols`` (e.g. ``ai_group``, ``user_group``,
+          ``user_group2``) — they are group-by keys, not metrics to plot.
+
+        Falls back to ``ENRICH_USER_ROW_INPUT_COLUMNS`` (with the same exclusions) if no data is
+        loaded yet.
+        """
+        excluded_group_cols = set(self.df_user_group_cols or [])
+        gran = next(iter(self.date_files_config.keys()), None)
+        lf = self.lfs_by_date.get(gran) if gran else None
+        if lf is not None and lf.collect_schema().len() > 0:
+            names = lf.collect_schema().names()
+            cols = sorted(
+                c
+                for c in names
+                if c.startswith("user_")
+                and c != "user_id"
+                and c not in DataMetrics.METRICS
+                and c not in excluded_group_cols
+            )
+            if cols:
+                return _dropdown_options_from_strings(cols)
+        fallback = ENRICH_USER_ROW_INPUT_COLUMNS - {"user_id"} - DataMetrics.METRICS - excluded_group_cols
+        return _dropdown_options_from_strings(sorted(fallback))
 
     _VIZ_DISPLAY_MODES: List[Tuple[str, str]] = [
         ("Histogram", "histogram"),
         ("Heatmap", "heatmap"),
         ("Scatter Plot", "scatter"),
     ]
+    # Metric-selector rows: MAX_ROWS slots are pre-rendered with fixed IDs.  The first
+    # ``DEFAULT_FILLED`` rows are pre-populated with default metrics; the row immediately
+    # after the last filled row is always shown empty (so the user can add one more).
+    # Visibility is data-driven — no explicit "Add metrics" button needed.
+    _VIZ_MS_MAX_ROWS: int = 16
+    _VIZ_HM_DEFAULT_FILLED: int = 3
+    _VIZ_SM_DEFAULT_FILLED: int = 2
 
     def _layout_stats_visualization(self) -> html.Div:
         """Layout for the 'Stats Deepdive' tab.
@@ -1497,6 +1534,72 @@ class GameStatsDashboard:
 
         def create_panel(panel_id: str, label: str, metric_options: list[dcc.Dropdown.Options]) -> html.Div:
             dl_id = f"viz-{panel_id}-plot"
+
+            def build_metric_rows(prefix: str, default_filled: int) -> List[Component]:
+                """Build MAX_ROWS per-metric rows for heatmap (prefix='hm') / scatter (prefix='sm').
+
+                The first ``default_filled`` rows are pre-populated with the first alphabetical
+                metrics (so the panel is useful immediately) plus one trailing empty row so the
+                user can "add more" simply by picking a value.  Extra rows are rendered but
+                hidden — a visibility callback driven by current row values shows/hides them
+                dynamically: ``show rows 0..max_filled+1``.
+                """
+                default_metrics: List[Optional[str]] = [
+                    (str(opt["value"]) if i < len(metric_options) else None)
+                    for i, opt in enumerate(metric_options[: self._VIZ_MS_MAX_ROWS])
+                ]
+                while len(default_metrics) < self._VIZ_MS_MAX_ROWS:
+                    default_metrics.append(None)
+                rows: List[Component] = []
+                # ``default_filled`` rows filled + 1 trailing empty = ``default_filled + 1`` visible initially.
+                initial_visible_until = min(default_filled, self._VIZ_MS_MAX_ROWS - 1)
+                for i in range(self._VIZ_MS_MAX_ROWS):
+                    default_val = default_metrics[i] if i < default_filled else None
+                    row_visible = i <= initial_visible_until
+                    rows.append(
+                        html.Div(
+                            [
+                                html.Label(
+                                    f"Metric {i + 1}:",
+                                    style={
+                                        **Styles.CONTROL_LABEL,
+                                        "marginBottom": "0",
+                                        "marginRight": "6px",
+                                        "minWidth": "72px",
+                                        "whiteSpace": "nowrap",
+                                    },
+                                ),
+                                dcc.Dropdown(
+                                    id=f"viz-{panel_id}-{prefix}-metric-{i}",
+                                    options=metric_options,
+                                    value=default_val,
+                                    clearable=True,
+                                    style={"flex": "1", "minWidth": "120px"},
+                                ),
+                                dcc.Checklist(
+                                    id=f"viz-{panel_id}-{prefix}-log-{i}",
+                                    options=_dropdown_option_rows([(" Log", "ON")]),
+                                    value=[],
+                                    style={
+                                        **Styles.CHECKLIST_INLINE,
+                                        "marginBottom": "0",
+                                        "marginLeft": "6px",
+                                        "whiteSpace": "nowrap",
+                                    },
+                                ),
+                            ],
+                            id=f"viz-{panel_id}-{prefix}-row-{i}",
+                            style={
+                                **Styles.FLEX_ROW_CENTER,
+                                "marginBottom": "4px",
+                                "display": "flex" if row_visible else "none",
+                            },
+                        )
+                    )
+                return rows
+
+            hm_rows = build_metric_rows("hm", self._VIZ_HM_DEFAULT_FILLED)
+            sm_rows = build_metric_rows("sm", self._VIZ_SM_DEFAULT_FILLED)
             return html.Div(
                 [
                     html.H4(label, style=Styles.PANEL_HEADER),
@@ -1504,19 +1607,6 @@ class GameStatsDashboard:
                         [
                             html.Div(
                                 [
-                                    html.Div(
-                                        [
-                                            html.Label("Metrics:", style=Styles.CONTROL_LABEL),
-                                            dcc.Dropdown(
-                                                id=f"viz-{panel_id}-metrics",
-                                                options=metric_options,
-                                                value=[],
-                                                multi=True,
-                                                style=Styles.DROPDOWN_WIDE,
-                                            ),
-                                        ],
-                                        style=Styles.CONTROL_GROUP,
-                                    ),
                                     html.Div(
                                         [
                                             html.Label("Display Mode:", style=Styles.CONTROL_LABEL),
@@ -1528,6 +1618,36 @@ class GameStatsDashboard:
                                             ),
                                         ],
                                         style=Styles.CONTROL_GROUP,
+                                    ),
+                                    # General Metrics multi-select — visible for histogram / scatter.
+                                    html.Div(
+                                        [
+                                            html.Label("Metrics:", style=Styles.CONTROL_LABEL),
+                                            dcc.Dropdown(
+                                                id=f"viz-{panel_id}-metrics",
+                                                options=metric_options,
+                                                value=[],
+                                                multi=True,
+                                                style=Styles.DROPDOWN_WIDE,
+                                            ),
+                                        ],
+                                        id=f"viz-{panel_id}-metrics-container",
+                                        style=Styles.CONTROL_GROUP,
+                                    ),
+                                    # Heatmap metrics — visible only for heatmap mode.  Each row is a
+                                    # single-column dropdown plus an optional "Log" (Yeo-Johnson) flag.
+                                    # Rows auto-add: always shows one trailing empty row; filling it reveals
+                                    # the next; clearing the last filled row collapses the trailing empty.
+                                    html.Div(
+                                        hm_rows,
+                                        id=f"viz-{panel_id}-hm-container",
+                                        style={**Styles.CONTROL_GROUP, "display": "none"},
+                                    ),
+                                    # Scatter metrics — same dynamic-row logic as heatmap, default 2 filled.
+                                    html.Div(
+                                        sm_rows,
+                                        id=f"viz-{panel_id}-sm-container",
+                                        style={**Styles.CONTROL_GROUP, "display": "none"},
                                     ),
                                     # Histogram-only controls — live inside the fixed-width sidebar so
                                     # showing/hiding them never changes the graph container's size.
@@ -1564,6 +1684,12 @@ class GameStatsDashboard:
                                                         value=[],
                                                         style={**Styles.CHECKLIST_INLINE, "marginBottom": "0"},
                                                     ),
+                                                    dcc.Checklist(
+                                                        id=f"viz-{panel_id}-normalize",
+                                                        options=_dropdown_option_rows([(" Normalize", "ON")]),
+                                                        value=[],
+                                                        style={**Styles.CHECKLIST_INLINE, "marginBottom": "0"},
+                                                    ),
                                                 ],
                                                 style={
                                                     **Styles.FLEX_ROW_CENTER,
@@ -1573,6 +1699,83 @@ class GameStatsDashboard:
                                             ),
                                         ],
                                         id=f"viz-{panel_id}-hist-controls",
+                                        style=Styles.CONTROL_GROUP,
+                                    ),
+                                    # Scatter-only controls — shown only when Display Mode == "scatter".
+                                    # Lives inside the fixed-width sidebar so toggling does not reflow the graph.
+                                    html.Div(
+                                        [
+                                            html.Div(
+                                                [
+                                                    dcc.Checklist(
+                                                        id=f"viz-{panel_id}-scatter-log-x",
+                                                        options=_dropdown_option_rows([(" Log X", "ON")]),
+                                                        value=[],
+                                                        style={**Styles.CHECKLIST_INLINE, "marginBottom": "0"},
+                                                    ),
+                                                    dcc.Checklist(
+                                                        id=f"viz-{panel_id}-scatter-symlog-x",
+                                                        options=_dropdown_option_rows([(" Sym Log X", "ON")]),
+                                                        value=[],
+                                                        style={**Styles.CHECKLIST_INLINE, "marginBottom": "0"},
+                                                    ),
+                                                    dcc.Checklist(
+                                                        id=f"viz-{panel_id}-scatter-log-y",
+                                                        options=_dropdown_option_rows([(" Log Y", "ON")]),
+                                                        value=[],
+                                                        style={**Styles.CHECKLIST_INLINE, "marginBottom": "0"},
+                                                    ),
+                                                    dcc.Checklist(
+                                                        id=f"viz-{panel_id}-scatter-symlog-y",
+                                                        options=_dropdown_option_rows([(" Sym Log Y", "ON")]),
+                                                        value=[],
+                                                        style={**Styles.CHECKLIST_INLINE, "marginBottom": "0"},
+                                                    ),
+                                                ],
+                                                style={**Styles.FLEX_ROW_CENTER, "flexWrap": "wrap", "gap": "4px"},
+                                            ),
+                                            html.Div(
+                                                [
+                                                    dcc.Checklist(
+                                                        id=f"viz-{panel_id}-outliers-enable",
+                                                        options=_dropdown_option_rows([(" Remove outliers", "ON")]),
+                                                        value=[],
+                                                        style={**Styles.CHECKLIST_INLINE, "marginBottom": "0"},
+                                                    ),
+                                                    html.Label(
+                                                        "σ:",
+                                                        style={
+                                                            **Styles.CONTROL_LABEL,
+                                                            "marginBottom": "0",
+                                                            "marginLeft": "6px",
+                                                            "marginRight": "4px",
+                                                        },
+                                                    ),
+                                                    dcc.Dropdown(
+                                                        id=f"viz-{panel_id}-outliers-std",
+                                                        options=_dropdown_option_rows(
+                                                            [
+                                                                ("2", "2"),
+                                                                ("2.5", "2.5"),
+                                                                ("3", "3"),
+                                                                ("3.5", "3.5"),
+                                                                ("4", "4"),
+                                                            ]
+                                                        ),
+                                                        value="3",
+                                                        clearable=False,
+                                                        style={"width": "70px"},
+                                                    ),
+                                                ],
+                                                style={
+                                                    **Styles.FLEX_ROW_CENTER,
+                                                    "flexWrap": "wrap",
+                                                    "gap": "4px",
+                                                    "marginTop": "6px",
+                                                },
+                                            ),
+                                        ],
+                                        id=f"viz-{panel_id}-scatter-controls",
                                         style=Styles.CONTROL_GROUP,
                                     ),
                                     html.Hr(style=Styles.HR),
@@ -1644,7 +1847,7 @@ class GameStatsDashboard:
                                 style=Styles.CONTROL_PANEL_CONTAINER,
                             ),
                             html.Div(
-                                [dcc.Graph(id=dl_id, style={"height": "700px"}, config=cast(Any, download_config))],
+                                [dcc.Graph(id=dl_id, style={"height": "900px"}, config=cast(Any, download_config))],
                                 style=Styles.GRAPH_CONTAINER,
                             ),
                         ],
@@ -2327,25 +2530,79 @@ class GameStatsDashboard:
             opts = self._make_ug_opts(col2_val)
             return [opts] * 2
 
-        # Show/hide the histogram-only controls (Bins + Log Y) per panel based on Display Mode.
-        # The controls live inside the fixed-width sidebar (CONTROL_PANEL_CONTAINER), so
-        # toggling their display does NOT reflow the graph container — the plot keeps
-        # its stable width across mode switches.
-        def _make_toggle_hist_controls(pid: str) -> Callable[..., Any]:
+        # Show/hide the per-mode controls (histogram-only vs scatter-only) per panel based
+        # on Display Mode.  The controls live inside the fixed-width sidebar, so toggling
+        # their display does NOT reflow the graph container — the plot keeps its stable
+        # width across mode switches.
+        def _make_toggle_mode_controls(pid: str, mode_key: str) -> Callable[..., Any]:
             visible_style: Dict[str, Any] = dict(Styles.CONTROL_GROUP)
             hidden_style: Dict[str, Any] = {"display": "none"}
 
             def _inner(mode: Any) -> Any:
-                return visible_style if str(mode or "") == "histogram" else hidden_style
+                return visible_style if str(mode or "") == mode_key else hidden_style
 
-            _inner.__name__ = f"toggle_viz_hist_controls_{pid}"
+            _inner.__name__ = f"toggle_viz_{mode_key}_controls_{pid}"
             return _inner
 
         for _pid in ("p1", "p2"):
             self.app.callback(
                 Output(f"viz-{_pid}-hist-controls", "style"),
                 Input(f"viz-{_pid}-display", "value"),
-            )(_make_toggle_hist_controls(_pid))
+            )(_make_toggle_mode_controls(_pid, "histogram"))
+            self.app.callback(
+                Output(f"viz-{_pid}-scatter-controls", "style"),
+                Input(f"viz-{_pid}-display", "value"),
+            )(_make_toggle_mode_controls(_pid, "scatter"))
+
+        # General Metrics multi-select is shown ONLY for histogram (heatmap and scatter both
+        # use the per-row metric selector container instead).
+        def _make_toggle_metrics_general(pid: str) -> Callable[..., Any]:
+            visible: Dict[str, Any] = dict(Styles.CONTROL_GROUP)
+            hidden: Dict[str, Any] = {"display": "none"}
+
+            def _inner(mode: Any) -> Any:
+                return visible if str(mode or "") == "histogram" else hidden
+
+            _inner.__name__ = f"toggle_viz_metrics_general_{pid}"
+            return _inner
+
+        for _pid in ("p1", "p2"):
+            self.app.callback(
+                Output(f"viz-{_pid}-metrics-container", "style"),
+                Input(f"viz-{_pid}-display", "value"),
+            )(_make_toggle_metrics_general(_pid))
+            self.app.callback(
+                Output(f"viz-{_pid}-hm-container", "style"),
+                Input(f"viz-{_pid}-display", "value"),
+            )(_make_toggle_mode_controls(_pid, "heatmap"))
+            self.app.callback(
+                Output(f"viz-{_pid}-sm-container", "style"),
+                Input(f"viz-{_pid}-display", "value"),
+            )(_make_toggle_mode_controls(_pid, "scatter"))
+
+        # Metric-row visibility is purely data-driven: show rows 0..max_filled+1 (always one
+        # trailing empty slot so the user can add a new metric simply by picking a value; clearing
+        # the last filled row collapses the empty slot, effectively removing that metric).
+        def _make_ms_rows_visibility(pid: str, prefix: str) -> Callable[..., Any]:
+            visible_style: Dict[str, Any] = {**Styles.FLEX_ROW_CENTER, "marginBottom": "4px", "display": "flex"}
+            hidden_style: Dict[str, Any] = {**Styles.FLEX_ROW_CENTER, "marginBottom": "4px", "display": "none"}
+            max_rows = self._VIZ_MS_MAX_ROWS
+
+            def _inner(*values: Any) -> Any:
+                filled_idx = [i for i, v in enumerate(values) if v not in (None, "", [])]
+                max_filled = max(filled_idx) if filled_idx else -1
+                visible_until = min(max_rows - 1, max_filled + 1)
+                return [visible_style if i <= visible_until else hidden_style for i in range(max_rows)]
+
+            _inner.__name__ = f"viz_{prefix}_rows_visibility_{pid}"
+            return _inner
+
+        for _pid in ("p1", "p2"):
+            for _prefix in ("hm", "sm"):
+                self.app.callback(
+                    [Output(f"viz-{_pid}-{_prefix}-row-{i}", "style") for i in range(self._VIZ_MS_MAX_ROWS)],
+                    [Input(f"viz-{_pid}-{_prefix}-metric-{i}", "value") for i in range(self._VIZ_MS_MAX_ROWS)],
+                )(_make_ms_rows_visibility(_pid, _prefix))
 
         def _viz_plot_with_state_factory(pid: str) -> Callable[..., Any]:
             base = self.update_viz_plot_factory(pid)
@@ -2371,7 +2628,21 @@ class GameStatsDashboard:
                 show_ug_2: Any,
                 nbins: Any,
                 log_y: Any,
+                normalize: Any,
+                scatter_log_x: Any,
+                scatter_log_y: Any,
+                scatter_symlog_x: Any,
+                scatter_symlog_y: Any,
+                outliers_enable: Any,
+                outliers_std: Any,
+                *ms_rows: Any,
             ):
+                # ms_rows flattened: [hm_m0..hm_m7, hm_l0..hm_l7, sm_m0..sm_m7, sm_l0..sm_l7]
+                max_rows = self._VIZ_MS_MAX_ROWS
+                hm_metrics = list(ms_rows[:max_rows])
+                hm_logs = list(ms_rows[max_rows : 2 * max_rows])
+                sm_metrics = list(ms_rows[2 * max_rows : 3 * max_rows])
+                sm_logs = list(ms_rows[3 * max_rows : 4 * max_rows])
                 fig = base(
                     metrics,
                     display,
@@ -2393,6 +2664,17 @@ class GameStatsDashboard:
                     show_ug_2,
                     nbins,
                     log_y,
+                    normalize,
+                    scatter_log_x,
+                    scatter_log_y,
+                    scatter_symlog_x,
+                    scatter_symlog_y,
+                    outliers_enable,
+                    outliers_std,
+                    hm_metrics,
+                    hm_logs,
+                    sm_metrics,
+                    sm_logs,
                 )
                 state = {
                     "metrics": metrics,
@@ -2415,6 +2697,17 @@ class GameStatsDashboard:
                     "show_ug_2": show_ug_2,
                     "nbins": nbins,
                     "log_y": log_y,
+                    "normalize": normalize,
+                    "scatter_log_x": scatter_log_x,
+                    "scatter_log_y": scatter_log_y,
+                    "scatter_symlog_x": scatter_symlog_x,
+                    "scatter_symlog_y": scatter_symlog_y,
+                    "outliers_enable": outliers_enable,
+                    "outliers_std": outliers_std,
+                    "hm_metrics": hm_metrics,
+                    "hm_logs": hm_logs,
+                    "sm_metrics": sm_metrics,
+                    "sm_logs": sm_logs,
                 }
                 return fig, state
 
@@ -2445,6 +2738,17 @@ class GameStatsDashboard:
                     Input(f"viz-{pid}-show-ug-2", "value"),
                     Input(f"viz-{pid}-nbins", "value"),
                     Input(f"viz-{pid}-log-y", "value"),
+                    Input(f"viz-{pid}-normalize", "value"),
+                    Input(f"viz-{pid}-scatter-log-x", "value"),
+                    Input(f"viz-{pid}-scatter-log-y", "value"),
+                    Input(f"viz-{pid}-scatter-symlog-x", "value"),
+                    Input(f"viz-{pid}-scatter-symlog-y", "value"),
+                    Input(f"viz-{pid}-outliers-enable", "value"),
+                    Input(f"viz-{pid}-outliers-std", "value"),
+                    *[Input(f"viz-{pid}-hm-metric-{i}", "value") for i in range(self._VIZ_MS_MAX_ROWS)],
+                    *[Input(f"viz-{pid}-hm-log-{i}", "value") for i in range(self._VIZ_MS_MAX_ROWS)],
+                    *[Input(f"viz-{pid}-sm-metric-{i}", "value") for i in range(self._VIZ_MS_MAX_ROWS)],
+                    *[Input(f"viz-{pid}-sm-log-{i}", "value") for i in range(self._VIZ_MS_MAX_ROWS)],
                 ],
             )(_viz_plot_with_state_factory(pid))
 
@@ -2996,6 +3300,17 @@ class GameStatsDashboard:
             Output("viz-p1-show-ug-2", "value", allow_duplicate=True),
             Output("viz-p1-nbins", "value", allow_duplicate=True),
             Output("viz-p1-log-y", "value", allow_duplicate=True),
+            Output("viz-p1-normalize", "value", allow_duplicate=True),
+            Output("viz-p1-scatter-log-x", "value", allow_duplicate=True),
+            Output("viz-p1-scatter-log-y", "value", allow_duplicate=True),
+            Output("viz-p1-scatter-symlog-x", "value", allow_duplicate=True),
+            Output("viz-p1-scatter-symlog-y", "value", allow_duplicate=True),
+            Output("viz-p1-outliers-enable", "value", allow_duplicate=True),
+            Output("viz-p1-outliers-std", "value", allow_duplicate=True),
+            *[Output(f"viz-p1-hm-metric-{i}", "value", allow_duplicate=True) for i in range(self._VIZ_MS_MAX_ROWS)],
+            *[Output(f"viz-p1-hm-log-{i}", "value", allow_duplicate=True) for i in range(self._VIZ_MS_MAX_ROWS)],
+            *[Output(f"viz-p1-sm-metric-{i}", "value", allow_duplicate=True) for i in range(self._VIZ_MS_MAX_ROWS)],
+            *[Output(f"viz-p1-sm-log-{i}", "value", allow_duplicate=True) for i in range(self._VIZ_MS_MAX_ROWS)],
             Output("viz-p2-metrics", "value", allow_duplicate=True),
             Output("viz-p2-display", "value", allow_duplicate=True),
             Output("viz-p2-show-r1", "value", allow_duplicate=True),
@@ -3008,6 +3323,17 @@ class GameStatsDashboard:
             Output("viz-p2-show-ug-2", "value", allow_duplicate=True),
             Output("viz-p2-nbins", "value", allow_duplicate=True),
             Output("viz-p2-log-y", "value", allow_duplicate=True),
+            Output("viz-p2-normalize", "value", allow_duplicate=True),
+            Output("viz-p2-scatter-log-x", "value", allow_duplicate=True),
+            Output("viz-p2-scatter-log-y", "value", allow_duplicate=True),
+            Output("viz-p2-scatter-symlog-x", "value", allow_duplicate=True),
+            Output("viz-p2-scatter-symlog-y", "value", allow_duplicate=True),
+            Output("viz-p2-outliers-enable", "value", allow_duplicate=True),
+            Output("viz-p2-outliers-std", "value", allow_duplicate=True),
+            *[Output(f"viz-p2-hm-metric-{i}", "value", allow_duplicate=True) for i in range(self._VIZ_MS_MAX_ROWS)],
+            *[Output(f"viz-p2-hm-log-{i}", "value", allow_duplicate=True) for i in range(self._VIZ_MS_MAX_ROWS)],
+            *[Output(f"viz-p2-sm-metric-{i}", "value", allow_duplicate=True) for i in range(self._VIZ_MS_MAX_ROWS)],
+            *[Output(f"viz-p2-sm-log-{i}", "value", allow_duplicate=True) for i in range(self._VIZ_MS_MAX_ROWS)],
             Output("session-dropdown", "value", allow_duplicate=True),
             Output("strategy-checklist", "value", allow_duplicate=True),
             Output("metric-checklist", "value", allow_duplicate=True),
@@ -3045,7 +3371,7 @@ class GameStatsDashboard:
             bet: Optional[Dict],
         ):
             if trigger is None:
-                return (no_update,) * 104
+                return (no_update,) * 246
             # Keep the load trigger token so default-picker callbacks don't recompute
             # and clamp restored DatePickerRange values.
             out: List[Any] = [trigger]
@@ -3115,6 +3441,22 @@ class GameStatsDashboard:
                 val = _viz_or_skip(d, key)
                 return _normalize_date_value(val) if val is not no_update else no_update
 
+            def _viz_hm_list_or_skip(d: Optional[Dict], key: str, n: int) -> List[Any]:
+                """Expand a saved list-valued heatmap field (hm_metrics / hm_logs) to n slots.
+
+                Missing or short lists get ``no_update`` for the uncovered slots so untouched
+                rows aren't overwritten on config load.
+                """
+                if not d or key not in d or d.get(key) is None:
+                    return [no_update] * n
+                raw = d[key]
+                if not isinstance(raw, list):
+                    return [no_update] * n
+                out_list: List[Any] = []
+                for i in range(n):
+                    out_list.append(raw[i] if i < len(raw) else no_update)
+                return out_list
+
             out.extend(
                 [
                     _viz_date_or_skip(v1, "date_range1_start"),
@@ -3142,6 +3484,17 @@ class GameStatsDashboard:
                         _viz_or_skip(s, "show_ug_2"),
                         _viz_or_skip(s, "nbins"),
                         _viz_or_skip(s, "log_y"),
+                        _viz_or_skip(s, "normalize"),
+                        _viz_or_skip(s, "scatter_log_x"),
+                        _viz_or_skip(s, "scatter_log_y"),
+                        _viz_or_skip(s, "scatter_symlog_x"),
+                        _viz_or_skip(s, "scatter_symlog_y"),
+                        _viz_or_skip(s, "outliers_enable"),
+                        _viz_or_skip(s, "outliers_std"),
+                        *_viz_hm_list_or_skip(s, "hm_metrics", self._VIZ_MS_MAX_ROWS),
+                        *_viz_hm_list_or_skip(s, "hm_logs", self._VIZ_MS_MAX_ROWS),
+                        *_viz_hm_list_or_skip(s, "sm_metrics", self._VIZ_MS_MAX_ROWS),
+                        *_viz_hm_list_or_skip(s, "sm_logs", self._VIZ_MS_MAX_ROWS),
                     ]
                 )
             sb = bet or {}
@@ -4240,11 +4593,52 @@ class GameStatsDashboard:
             show_ug_2: Any,
             nbins: Any = 50,
             log_y: Any = None,
+            normalize: Any = None,
+            scatter_log_x: Any = None,
+            scatter_log_y: Any = None,
+            scatter_symlog_x: Any = None,
+            scatter_symlog_y: Any = None,
+            outliers_enable: Any = None,
+            outliers_std: Any = "3",
+            hm_metrics: Optional[List[Any]] = None,
+            hm_logs: Optional[List[Any]] = None,
+            sm_metrics: Optional[List[Any]] = None,
+            sm_logs: Optional[List[Any]] = None,
         ) -> go.Figure:
-            metrics_list: List[str] = [str(m) for m in (metrics or [])]
+            mode = str(display_mode or "histogram")
+
+            # Heatmap / scatter both use per-row metric selectors with an optional Yeo-Johnson
+            # log flag.  Histogram uses the shared multi-select "Metrics".
+            def _collect_rows(
+                raw_metrics: Optional[List[Any]], raw_logs: Optional[List[Any]]
+            ) -> List[Tuple[str, bool]]:
+                pairs: List[Tuple[str, bool]] = []
+                metrics_raw = raw_metrics or []
+                logs_raw = raw_logs or []
+                seen: set[str] = set()
+                for i in range(self._VIZ_MS_MAX_ROWS):
+                    m = metrics_raw[i] if i < len(metrics_raw) else None
+                    if not m:
+                        continue
+                    m_str = str(m)
+                    if m_str in seen:
+                        continue
+                    seen.add(m_str)
+                    log_flag = "ON" in (logs_raw[i] if i < len(logs_raw) and logs_raw[i] else [])
+                    pairs.append((m_str, log_flag))
+                return pairs
+
+            mode_pairs: List[Tuple[str, bool]] = []
+            if mode == "heatmap":
+                mode_pairs = _collect_rows(hm_metrics, hm_logs)
+                metrics_list: List[str] = [m for m, _ in mode_pairs]
+            elif mode == "scatter":
+                mode_pairs = _collect_rows(sm_metrics, sm_logs)
+                metrics_list = [m for m, _ in mode_pairs]
+            else:
+                metrics_list = [str(m) for m in (metrics or [])]
             if not metrics_list:
                 return go.Figure()
-            mode = str(display_mode or "histogram")
             if mode == "heatmap" and len(metrics_list) < 2:
                 fig = go.Figure()
                 fig.add_annotation(
@@ -4286,17 +4680,58 @@ class GameStatsDashboard:
             except (TypeError, ValueError):
                 nbins_int = 50
             log_y_on = "ON" in (log_y or [])
+            normalize_on = "ON" in (normalize or [])
+            scatter_log_x_on = "ON" in (scatter_log_x or [])
+            scatter_log_y_on = "ON" in (scatter_log_y or [])
+            scatter_symlog_x_on = "ON" in (scatter_symlog_x or [])
+            scatter_symlog_y_on = "ON" in (scatter_symlog_y or [])
+            # Symlog wins if both are on (it's strictly more general and handles negatives).
+            if scatter_symlog_x_on:
+                scatter_log_x_on = False
+            if scatter_symlog_y_on:
+                scatter_log_y_on = False
+            outliers_on = "ON" in (outliers_enable or [])
+            try:
+                outliers_threshold = float(outliers_std) if outliers_std is not None else 3.0
+            except (TypeError, ValueError):
+                outliers_threshold = 3.0
+
+            active_outliers_threshold: Optional[float] = outliers_threshold if outliers_on else None
 
             if mode == "histogram":
-                return self._viz_build_histogram(metrics_list, combos, nbins=nbins_int, log_y=log_y_on)
+                return self._viz_build_histogram(
+                    metrics_list, combos, nbins=nbins_int, log_y=log_y_on, normalize=normalize_on
+                )
             if mode == "heatmap":
-                return self._viz_build_heatmap(metrics_list, combos)
+                log_flags = {m: flag for m, flag in mode_pairs}
+                return self._viz_build_heatmap(metrics_list, combos, log_flags=log_flags)
             if mode == "scatter":
+                scatter_log_flags = {m: flag for m, flag in mode_pairs}
                 if len(metrics_list) == 1:
-                    return self._viz_build_histogram(metrics_list, combos, nbins=nbins_int, log_y=log_y_on)
+                    return self._viz_build_histogram(
+                        metrics_list, combos, nbins=nbins_int, log_y=log_y_on, normalize=normalize_on
+                    )
                 if len(metrics_list) == 2:
-                    return self._viz_build_scatter_pair(metrics_list, combos)
-                return self._viz_build_scatter_grid(metrics_list, combos)
+                    return self._viz_build_scatter_pair(
+                        metrics_list,
+                        combos,
+                        log_x=scatter_log_x_on,
+                        log_y=scatter_log_y_on,
+                        symlog_x=scatter_symlog_x_on,
+                        symlog_y=scatter_symlog_y_on,
+                        outliers_threshold=active_outliers_threshold,
+                        log_flags=scatter_log_flags,
+                    )
+                return self._viz_build_scatter_grid(
+                    metrics_list,
+                    combos,
+                    log_x=scatter_log_x_on,
+                    log_y=scatter_log_y_on,
+                    symlog_x=scatter_symlog_x_on,
+                    symlog_y=scatter_symlog_y_on,
+                    outliers_threshold=active_outliers_threshold,
+                    log_flags=scatter_log_flags,
+                )
             return go.Figure()
 
         return callback
@@ -4307,12 +4742,66 @@ class GameStatsDashboard:
             return np.array([])
         return df.get_column(metric).cast(pl.Float64).drop_nulls().to_numpy()
 
+    @staticmethod
+    def _viz_symlog(arr: np.ndarray) -> np.ndarray:
+        """Symmetric log transform: ``sign(x) * log10(|x| + 1)``.
+
+        Preserves sign, passes through 0 unchanged, and stays roughly linear near 0 while
+        compressing large magnitudes — so negative and positive values can share the axis.
+        """
+        a = np.asarray(arr, dtype=float)
+        return np.sign(a) * np.log10(np.abs(a) + 1.0)
+
+    @staticmethod
+    def _viz_symlog_ticks(vmin: float, vmax: float) -> Tuple[List[float], List[str]]:
+        """Return (tickvals, ticktext) for a symlog-transformed axis spanning [vmin, vmax]
+        in original (untransformed) units.  Places ticks at 0 and ±10^k out to the data extent.
+        """
+        if not np.isfinite(vmin) or not np.isfinite(vmax):
+            return [0.0], ["0"]
+        lo = min(vmin, 0.0)
+        hi = max(vmax, 0.0)
+        max_mag = max(abs(lo), abs(hi), 1.0)
+        max_exp = int(np.ceil(np.log10(max_mag)))
+        originals: List[float] = [0.0]
+        for exp in range(0, max_exp + 1):
+            v = 10.0**exp
+            if v <= hi:
+                originals.append(v)
+            if -v >= lo:
+                originals.append(-v)
+        originals = sorted(set(originals))
+        tickvals = [float(np.sign(t) * np.log10(abs(t) + 1.0)) for t in originals]
+        ticktext = [f"{t:g}" for t in originals]
+        return tickvals, ticktext
+
+    @staticmethod
+    def _viz_drop_outliers(pdf: pd.DataFrame, threshold: Optional[float]) -> pd.DataFrame:
+        """Drop rows where any column's absolute z-score exceeds ``threshold``.
+
+        Operates per-column: a row is kept only when every selected metric stays within
+        ``threshold`` standard deviations of that metric's mean.  A column with zero / NaN
+        std is ignored (no rows removed on its account).  ``threshold is None`` returns ``pdf``
+        unchanged.
+        """
+        if threshold is None or pdf.empty:
+            return pdf
+        mask = pd.Series(True, index=pdf.index)
+        for col in pdf.columns:
+            s = pdf[col]
+            std = s.std()
+            if std is None or not np.isfinite(std) or std == 0:
+                continue
+            mask &= (s - s.mean()).abs() / std <= threshold
+        return pdf.loc[mask]
+
     def _viz_build_histogram(
         self,
         metrics: List[str],
         combos: List[Tuple[str, pl.DataFrame]],
         nbins: int = 50,
         log_y: bool = False,
+        normalize: bool = False,
     ) -> go.Figure:
         n = len(metrics)
         cols = min(2, n)
@@ -4320,6 +4809,10 @@ class GameStatsDashboard:
         fig = make_subplots(rows=rows, cols=cols, subplot_titles=metrics)
         base_colors = Styles.COLORS
         shown_labels: set[str] = set()
+        # When normalize is on, each trace's bars show the relative frequency (fraction of
+        # the combo's samples per bin).  Using "probability" here normalises per-trace, so
+        # overlayed histograms with different sample sizes remain visually comparable.
+        histnorm = "probability" if normalize else ""
         for i, metric in enumerate(metrics):
             r = i // cols + 1
             c = i % cols + 1
@@ -4337,6 +4830,7 @@ class GameStatsDashboard:
                         legendgroup=label,
                         showlegend=label not in shown_labels,
                         nbinsx=int(nbins),
+                        histnorm=histnorm,
                     ),
                     row=r,
                     col=c,
@@ -4350,20 +4844,38 @@ class GameStatsDashboard:
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0, font=dict(size=16)),
             font=dict(size=18),
         )
+        y_title = "Frequency" if normalize else "Count"
         fig.update_xaxes(title_font=dict(size=18), tickfont=dict(size=16))
-        fig.update_yaxes(title_font=dict(size=18), tickfont=dict(size=16))
+        fig.update_yaxes(title_text=y_title, title_font=dict(size=18), tickfont=dict(size=16))
         for ann in fig.layout.annotations or []:
             ann.font = dict(size=20)
         if log_y:
             fig.update_yaxes(type="log")
         return fig
 
-    def _viz_build_heatmap(self, metrics: List[str], combos: List[Tuple[str, pl.DataFrame]]) -> go.Figure:
+    def _viz_build_heatmap(
+        self,
+        metrics: List[str],
+        combos: List[Tuple[str, pl.DataFrame]],
+        log_flags: Optional[Dict[str, bool]] = None,
+    ) -> go.Figure:
+        log_flags = log_flags or {}
         n_combos = len(combos)
         cols = min(2, n_combos) if n_combos > 0 else 1
         rows = int(np.ceil(n_combos / cols)) if n_combos > 0 else 1
         titles = [label for label, _ in combos] or [""]
         fig = make_subplots(rows=rows, cols=cols, subplot_titles=titles)
+        # Lazy import sklearn so the rest of the dashboard keeps working if it's not installed.
+        power_transformer = None
+        if any(log_flags.values()):
+            try:
+                from sklearn.preprocessing import PowerTransformer  # type: ignore[import-not-found]
+
+                power_transformer = PowerTransformer(method="yeo-johnson", standardize=False)
+            except ImportError:
+                logger.warning("Heatmap log-transform requested but sklearn is not installed; skipping Yeo-Johnson.")
+                power_transformer = None
+        axis_labels = [f"{m}*" if log_flags.get(m) and power_transformer is not None else m for m in metrics]
         for idx, (_label, df) in enumerate(combos):
             r = idx // cols + 1
             c = idx % cols + 1
@@ -4371,18 +4883,31 @@ class GameStatsDashboard:
             if len(available) < 2:
                 continue
             pdf = cast(pd.DataFrame, df.select(available).to_pandas().apply(pd.to_numeric, errors="coerce"))
-            corr = np.asarray(pdf.corr().values)
+            # Apply Yeo-Johnson to each flagged column independently (per-combo fit).
+            if power_transformer is not None:
+                for m in available:
+                    if not log_flags.get(m):
+                        continue
+                    col = np.asarray(pdf[m].to_numpy(), dtype=float).reshape(-1, 1)
+                    try:
+                        transformed = np.asarray(power_transformer.fit_transform(col)).ravel()
+                        pdf[m] = transformed
+                    except Exception as exc:
+                        logger.warning("Yeo-Johnson failed for %r: %s", m, exc)
+            corr_values, text_matrix = self._viz_corr_with_significance(pdf)
+            # Re-label axes to show which columns were transformed.
+            x_labels = [f"{m}†" if log_flags.get(m) and power_transformer is not None else m for m in available]
             fig.add_trace(
                 go.Heatmap(
-                    z=corr,
-                    x=available,
-                    y=available,
+                    z=corr_values,
+                    x=x_labels,
+                    y=x_labels,
                     colorscale="RdBu",
                     zmid=0,
                     zmin=-1,
                     zmax=1,
                     colorbar=dict(title="corr"),
-                    text=[[f"{v:.2f}" for v in row] for row in corr],
+                    text=text_matrix,
                     texttemplate="%{text}",
                     hovertemplate="%{x} vs %{y}: %{z:.3f}<extra></extra>",
                 ),
@@ -4392,25 +4917,156 @@ class GameStatsDashboard:
         fig.update_layout(
             template="plotly_white",
             autosize=True,
-            margin=dict(l=80, r=40, t=60, b=60),
+            # Top margin a little larger to leave room for the significance legend above the
+            # subplot titles; bottom margin stays minimal now that the legend moved up.
+            margin=dict(l=80, r=40, t=90, b=60),
             font=dict(size=14),
         )
+        # Legend for * / ** significance stars and (if any) the Yeo-Johnson † axis marker.
+        # Placed at the top of the figure (above subplot titles) so it never overlaps with
+        # x-tick labels at the bottom.
+        legend_text = "* p < 0.05    ** p < 0.01"
+        if any(log_flags.get(m) and power_transformer is not None for m in metrics):
+            legend_text += "    † Yeo-Johnson transformed before correlation"
+        fig.add_annotation(
+            text=legend_text,
+            showarrow=False,
+            xref="paper",
+            yref="paper",
+            x=0,
+            y=1.08,
+            xanchor="left",
+            yanchor="bottom",
+            font=dict(size=14, color="#64748b"),
+        )
+        # Silence the unused-variable warning about axis_labels if not referenced.
+        _ = axis_labels
         return fig
 
-    def _viz_build_scatter_pair(self, metrics: List[str], combos: List[Tuple[str, pl.DataFrame]]) -> go.Figure:
+    @staticmethod
+    def _viz_corr_with_significance(pdf: pd.DataFrame, decimals: int = 2) -> Tuple[np.ndarray, List[List[str]]]:
+        """Pearson correlation matrix + a parallel text matrix with significance stars.
+
+        Returns ``(r_matrix, text_matrix)`` where ``text_matrix[i][j]`` is formatted as
+        ``f"{r:.2f}"`` with a trailing ``*`` when p < 0.05 and ``**`` when p < 0.01.  P-values
+        are computed via the standard Pearson t-statistic ``t = r * sqrt((n-2)/(1-r²))`` and
+        scipy's Student-t survival function.  If scipy isn't installed, the stars are
+        silently omitted (and a warning is logged once per call).
+
+        Edge cases:
+          - Diagonal (r=1, i==j) is never starred.
+          - Cells where fewer than 3 non-null pairs contributed get no stars (test is invalid).
+          - NaN correlations render as ``"nan"`` with no stars.
+        """
+        corr_values = np.asarray(pdf.corr().values, dtype=float)
+        K = corr_values.shape[0]
+        text: List[List[str]] = [[""] * K for _ in range(K)]
+        # Pairwise non-null sample sizes: (K x K) matrix where entry (i,j) = # rows where
+        # both column i and column j are non-null.
+        notna = pdf.notna().astype(int).to_numpy()  # shape (N, K)
+        n_matrix = notna.T @ notna
+
+        p_matrix: Optional[np.ndarray] = None
+        try:
+            from scipy.stats import t as scipy_t  # type: ignore[import-not-found]
+
+            with np.errstate(divide="ignore", invalid="ignore"):
+                dof = np.maximum(n_matrix - 2, 0)
+                denom = 1.0 - corr_values**2
+                denom = np.where(np.abs(denom) < 1e-12, np.nan, denom)
+                t_stat = corr_values * np.sqrt(dof / denom)
+                p_matrix = 2.0 * scipy_t.sf(np.abs(t_stat), df=dof)
+        except ImportError:
+            logger.warning(
+                "Heatmap significance stars requested but scipy is not installed; skipping p-value annotations."
+            )
+        for i in range(K):
+            for j in range(K):
+                r = corr_values[i, j]
+                if not np.isfinite(r):
+                    text[i][j] = "nan"
+                    continue
+                base = f"{r:.{decimals}f}"
+                if i == j or p_matrix is None or n_matrix[i, j] < 3:
+                    text[i][j] = base
+                    continue
+                p = p_matrix[i, j]
+                if not np.isfinite(p):
+                    text[i][j] = base
+                elif p < 0.01:
+                    text[i][j] = f"{base}**"
+                elif p < 0.05:
+                    text[i][j] = f"{base}*"
+                else:
+                    text[i][j] = base
+        return corr_values, text
+
+    @staticmethod
+    def _viz_yeo_johnson_columns(pdf: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
+        """Apply Yeo-Johnson to each named column in ``pdf`` (in-place on a copy).
+
+        Lazy-imports sklearn.  If sklearn is not installed, logs a warning and returns
+        ``pdf`` unchanged so the rest of the plot still renders.
+        """
+        if not cols:
+            return pdf
+        try:
+            from sklearn.preprocessing import PowerTransformer  # type: ignore[import-not-found]
+        except ImportError:
+            logger.warning("Per-metric log-transform requested but sklearn is not installed; skipping Yeo-Johnson.")
+            return pdf
+        pt = PowerTransformer(method="yeo-johnson", standardize=False)
+        out = pdf.copy()
+        for col in cols:
+            if col not in out.columns:
+                continue
+            arr = np.asarray(out[col].to_numpy(), dtype=float).reshape(-1, 1)
+            try:
+                out[col] = np.asarray(pt.fit_transform(arr)).ravel()
+            except Exception as exc:
+                logger.warning("Yeo-Johnson failed for %r: %s", col, exc)
+        return out
+
+    def _viz_build_scatter_pair(
+        self,
+        metrics: List[str],
+        combos: List[Tuple[str, pl.DataFrame]],
+        log_x: bool = False,
+        log_y: bool = False,
+        symlog_x: bool = False,
+        symlog_y: bool = False,
+        outliers_threshold: Optional[float] = None,
+        log_flags: Optional[Dict[str, bool]] = None,
+    ) -> go.Figure:
+        log_flags = log_flags or {}
+        cols_to_log = [m for m in metrics if log_flags.get(m)]
         mx, my = metrics[0], metrics[1]
+        mx_label = f"{mx}*" if log_flags.get(mx) else mx
+        my_label = f"{my}*" if log_flags.get(my) else my
         fig = go.Figure()
         base_colors = Styles.COLORS
+        all_x_raw: List[float] = []
+        all_y_raw: List[float] = []
         for ci, (label, df) in enumerate(combos):
             if mx not in df.columns or my not in df.columns:
                 continue
             pdf = cast(pd.DataFrame, df.select([mx, my]).to_pandas().apply(pd.to_numeric, errors="coerce")).dropna()
+            pdf = self._viz_drop_outliers(pdf, outliers_threshold)
             if pdf.empty:
                 continue
+            pdf = self._viz_yeo_johnson_columns(pdf, cols_to_log)
+            xs = np.asarray(pdf[mx].values, dtype=float)
+            ys = np.asarray(pdf[my].values, dtype=float)
+            if symlog_x:
+                all_x_raw.extend(xs.tolist())
+                xs = self._viz_symlog(xs)
+            if symlog_y:
+                all_y_raw.extend(ys.tolist())
+                ys = self._viz_symlog(ys)
             fig.add_trace(
                 go.Scatter(
-                    x=np.asarray(pdf[mx].values),
-                    y=np.asarray(pdf[my].values),
+                    x=xs,
+                    y=ys,
                     mode="markers",
                     name=label,
                     marker=dict(color=base_colors[ci % len(base_colors)], size=6, opacity=0.6),
@@ -4418,35 +5074,84 @@ class GameStatsDashboard:
             )
         fig.update_layout(
             template="plotly_white",
-            xaxis_title=mx,
-            yaxis_title=my,
+            xaxis_title=mx_label + (" (symlog)" if symlog_x else ""),
+            yaxis_title=my_label + (" (symlog)" if symlog_y else ""),
             autosize=True,
             margin=dict(l=70, r=20, t=40, b=60),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0),
             font=dict(size=14),
         )
+        if symlog_x and all_x_raw:
+            tv, tt = self._viz_symlog_ticks(min(all_x_raw), max(all_x_raw))
+            fig.update_xaxes(tickvals=tv, ticktext=tt)
+        elif log_x:
+            fig.update_xaxes(type="log")
+        if symlog_y and all_y_raw:
+            tv, tt = self._viz_symlog_ticks(min(all_y_raw), max(all_y_raw))
+            fig.update_yaxes(tickvals=tv, ticktext=tt)
+        elif log_y:
+            fig.update_yaxes(type="log")
         return fig
 
-    def _viz_build_scatter_grid(self, metrics: List[str], combos: List[Tuple[str, pl.DataFrame]]) -> go.Figure:
+    def _viz_build_scatter_grid(
+        self,
+        metrics: List[str],
+        combos: List[Tuple[str, pl.DataFrame]],
+        log_x: bool = False,
+        log_y: bool = False,
+        symlog_x: bool = False,
+        symlog_y: bool = False,
+        outliers_threshold: Optional[float] = None,
+        log_flags: Optional[Dict[str, bool]] = None,
+    ) -> go.Figure:
+        log_flags = log_flags or {}
+        cols_to_log = [m for m in metrics if log_flags.get(m)]
+        metric_labels = [f"{m}*" if log_flags.get(m) else m for m in metrics]
         n = len(metrics)
         fig = make_subplots(
             rows=n, cols=n, shared_xaxes=False, shared_yaxes=False, horizontal_spacing=0.03, vertical_spacing=0.03
         )
         base_colors = Styles.COLORS
         shown_labels: set[str] = set()
+        # Pre-filter each combo to drop outliers across *all* selected metrics once, so the
+        # same row mask is applied on the diagonal (histogram) and off-diagonal (scatter).
+        filtered_combos: List[Tuple[str, pd.DataFrame]] = []
+        for label, df in combos:
+            available = [m for m in metrics if m in df.columns]
+            if not available:
+                continue
+            pdf = cast(pd.DataFrame, df.select(available).to_pandas().apply(pd.to_numeric, errors="coerce")).dropna()
+            pdf = self._viz_drop_outliers(pdf, outliers_threshold)
+            # Apply Yeo-Johnson to flagged columns *before* computing symlog ranges so ticks
+            # reflect the transformed distribution.
+            pdf = self._viz_yeo_johnson_columns(pdf, cols_to_log)
+            filtered_combos.append((label, pdf))
+        # Per-metric raw-value ranges (untransformed) — needed for symlog tick generation.
+        metric_ranges: Dict[str, Tuple[float, float]] = {}
+        for m in metrics:
+            vals: List[float] = []
+            for _, pdf in filtered_combos:
+                if m in pdf.columns:
+                    vals.extend(pdf[m].dropna().tolist())
+            if vals:
+                metric_ranges[m] = (float(min(vals)), float(max(vals)))
         for i, m_row in enumerate(metrics):
             for j, m_col in enumerate(metrics):
                 r, c = i + 1, j + 1
-                for ci, (label, df) in enumerate(combos):
+                for ci, (label, pdf) in enumerate(filtered_combos):
                     color = base_colors[ci % len(base_colors)]
                     show_legend = (i == 0 and j == 0) and (label not in shown_labels)
                     if i == j:
-                        vals = self._viz_values(df, m_row)
-                        if len(vals) == 0:
+                        # Diagonal: histogram of raw values (no log/symlog transform applied —
+                        # histogram Y axis is counts, and transforming X would distort the bins).
+                        if m_row not in pdf.columns:
+                            continue
+                        h_vals = np.asarray(pdf[m_row].values)
+                        if len(h_vals) == 0:
                             continue
                         fig.add_trace(
                             go.Histogram(
-                                x=vals,
+                                x=h_vals,
                                 name=label,
                                 marker=dict(color=color),
                                 opacity=0.55,
@@ -4458,18 +5163,20 @@ class GameStatsDashboard:
                             col=c,
                         )
                     else:
-                        if m_col not in df.columns or m_row not in df.columns:
+                        if m_col not in pdf.columns or m_row not in pdf.columns:
                             continue
-                        pdf = cast(
-                            pd.DataFrame,
-                            df.select([m_col, m_row]).to_pandas().apply(pd.to_numeric, errors="coerce"),
-                        ).dropna()
                         if pdf.empty:
                             continue
+                        xs = np.asarray(pdf[m_col].values, dtype=float)
+                        ys = np.asarray(pdf[m_row].values, dtype=float)
+                        if symlog_x:
+                            xs = self._viz_symlog(xs)
+                        if symlog_y:
+                            ys = self._viz_symlog(ys)
                         fig.add_trace(
                             go.Scatter(
-                                x=np.asarray(pdf[m_col].values),
-                                y=np.asarray(pdf[m_row].values),
+                                x=xs,
+                                y=ys,
                                 mode="markers",
                                 name=label,
                                 marker=dict(color=color, size=4, opacity=0.55),
@@ -4481,9 +5188,21 @@ class GameStatsDashboard:
                         )
                     shown_labels.add(label)
                 if j == 0:
-                    fig.update_yaxes(title_text=m_row, row=r, col=c)
+                    fig.update_yaxes(title_text=metric_labels[i], row=r, col=c)
                 if i == n - 1:
-                    fig.update_xaxes(title_text=m_col, row=r, col=c)
+                    fig.update_xaxes(title_text=metric_labels[j], row=r, col=c)
+                # Apply log / symlog scales only to non-diagonal cells.
+                if i != j:
+                    if symlog_x and m_col in metric_ranges:
+                        tv, tt = self._viz_symlog_ticks(*metric_ranges[m_col])
+                        fig.update_xaxes(tickvals=tv, ticktext=tt, row=r, col=c)
+                    elif log_x:
+                        fig.update_xaxes(type="log", row=r, col=c)
+                    if symlog_y and m_row in metric_ranges:
+                        tv, tt = self._viz_symlog_ticks(*metric_ranges[m_row])
+                        fig.update_yaxes(tickvals=tv, ticktext=tt, row=r, col=c)
+                    elif log_y:
+                        fig.update_yaxes(type="log", row=r, col=c)
         fig.update_layout(
             barmode="overlay",
             template="plotly_white",

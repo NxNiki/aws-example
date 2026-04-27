@@ -219,18 +219,72 @@ columns:
     description: "Net profit for the user (positive = player won money)."
     formula: "user_total_payout - user_total_bet"
 
-  user_avg_delta_t_seconds:
+  user_avg_delta_t_seconds_bg:
     category: user_metric
     description: >
-      Average time between consecutive bets by the user, in seconds.
-      Only intervals between 0 and 86400 seconds are included (filters
-      out session breaks longer than 24h).
+      Average time between consecutive BASE game bets by the user, in seconds.
+      Only BASE-to-BASE transitions are included; the first BASE bet after a free
+      game (or any non-BASE predecessor) is treated as a new session and excluded.
+      Intervals outside 0–86400 seconds are also excluded.
 
   user_mathtable_change:
     category: user_metric
     description: >
       Number of times the math table (script_id) changed between
       consecutive bets for this user. Indicates strategy switches by the AI system.
+
+  user_accu_pos_delta_bet:
+    category: user_metric
+    description: >
+      Sum of positive bet-amount changes for a user in the period.
+      delta_bet = bet_amount − prev_bet_amount (per consecutive bet pair).
+      Only increments (user raised their bet) are included.
+    formula: "SUM(CASE WHEN bet_amount - prev_bet_amount > 0 THEN bet_amount - prev_bet_amount END)"
+
+  user_accu_neg_delta_bet:
+    category: user_metric
+    description: >
+      Sum of negative bet-amount changes for a user in the period.
+      Only decrements (user lowered their bet) are included; values are negative.
+    formula: "SUM(CASE WHEN bet_amount - prev_bet_amount < 0 THEN bet_amount - prev_bet_amount END)"
+
+  user_accu_pos_delta_bet_avg:
+    category: user_metric
+    description: >
+      Average size of bet-amount increases for a user in the period.
+      Only positive deltas (raises) are averaged.
+    formula: "AVG(CASE WHEN bet_amount - prev_bet_amount > 0 THEN bet_amount - prev_bet_amount END)"
+
+  user_accu_neg_delta_bet_avg:
+    category: user_metric
+    description: >
+      Average size of bet-amount decreases for a user in the period.
+      Only negative deltas (cuts) are averaged; result is negative.
+    formula: "AVG(CASE WHEN bet_amount - prev_bet_amount < 0 THEN bet_amount - prev_bet_amount END)"
+
+  user_accu_delta_bet:
+    category: user_metric
+    description: >
+      Net sum of all bet-amount changes for a user in the period (positive + negative).
+      Represents the overall drift in bet sizing.
+    formula: "SUM(bet_amount - prev_bet_amount)"
+
+  user_accu_delta_bet_avg:
+    category: user_metric
+    description: >
+      Average bet-amount change across all consecutive bet pairs for a user.
+      Positive means the user tends to raise bets; negative means they tend to lower them.
+    formula: "AVG(bet_amount - prev_bet_amount)"
+
+  user_pos_delta_bet_num:
+    category: user_metric
+    description: "Number of bets where the user raised their bet relative to the previous bet (delta_bet > 0)."
+    formula: "COUNT(CASE WHEN bet_amount - prev_bet_amount > 0 THEN 1 END)"
+
+  user_neg_delta_bet_num:
+    category: user_metric
+    description: "Number of bets where the user lowered their bet relative to the previous bet (delta_bet < 0)."
+    formula: "COUNT(CASE WHEN bet_amount - prev_bet_amount < 0 THEN 1 END)"
 
   # === Group-Level Aggregate Metrics (DataMetrics) ===
   num_active_users:
