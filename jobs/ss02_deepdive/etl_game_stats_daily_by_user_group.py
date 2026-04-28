@@ -78,6 +78,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
         user_bets AS (
         SELECT
             t.user_id,
+            t.spin_id,
             t.created_at,
             t.math_table_id AS mathtable,
             t.buy_free_game,
@@ -149,6 +150,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 -- total bet amount:
                 SUM(t.bet_amount) AS user_total_bet,
                 SUM(CASE WHEN t.bet_type = 'BASE' THEN t.bet_amount END) AS user_total_bet_bg,
+                AVG(t.bet_amount) AS user_avg_bet_amount,
 
                 -- total payout amount:
                 SUM(t.payout) AS user_total_payout,
@@ -178,6 +180,37 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
 
             FROM user_bets_group AS t
             GROUP BY t.{stats_agg_col}, t.ai_group, t.user_id
+        ),
+
+        user_mathtable_last_spin_ai AS (
+            -- Last spin per (period, AI user, mathtable). Restricted to AI bets so the
+            -- downstream metric only applies to AI per-mathtable ai_groups.
+            SELECT
+                t.{stats_agg_col},
+                t.user_id,
+                t.mathtable,
+                MAX(t.spin_id) AS mathtable_last_spin_id
+            FROM user_bets AS t
+            WHERE t.ab_group_id = '{AI_GROUP_ID}'
+            GROUP BY t.{stats_agg_col}, t.user_id, t.mathtable
+        ),
+
+        user_remaining_bet AS (
+            -- Avg bet on bets the AI user made AFTER their last bet on the math table,
+            -- keyed by ai_group (= mathtable for the AI per-mathtable variant). All
+            -- other ai_groups are absent here, so the LEFT JOIN below yields NULL.
+            SELECT
+                m.{stats_agg_col},
+                m.user_id,
+                m.mathtable AS ai_group,
+                AVG(b.bet_amount) AS user_avg_remaining_bet_amount
+            FROM user_mathtable_last_spin_ai AS m
+            LEFT JOIN user_bets AS b
+                ON b.user_id = m.user_id
+                AND b.{stats_agg_col} = m.{stats_agg_col}
+                AND b.spin_id > m.mathtable_last_spin_id
+                AND b.ab_group_id = '{AI_GROUP_ID}'
+            GROUP BY m.{stats_agg_col}, m.user_id, m.mathtable
         ),
 
         user_first_bet AS (
@@ -215,6 +248,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             us.user_num_bets_fg,
             us.user_total_bet,
             us.user_total_bet_bg,
+            us.user_avg_bet_amount,
             us.user_total_payout,
             us.user_total_payout_bg,
             us.user_total_payout_fg,
@@ -242,10 +276,18 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             us.user_accu_delta_bet,
             us.user_accu_delta_bet_avg,
             us.user_pos_delta_bet_num,
-            us.user_neg_delta_bet_num
+            us.user_neg_delta_bet_num,
+
+            -- average bet amount on bets after the user's last bet on the ai_group's math table
+            -- (only populated for AI per-mathtable ai_groups; NULL for combined / Default groups)
+            rb.user_avg_remaining_bet_amount
 
         FROM user_stats AS us
         LEFT JOIN user_first_bet AS fb ON us.user_id = fb.user_id
+        LEFT JOIN user_remaining_bet AS rb
+            ON rb.user_id = us.user_id
+            AND rb.{stats_agg_col} = us.{stats_agg_col}
+            AND rb.ai_group = us.ai_group
         WHERE us.{stats_agg_col} >= '{effective_start}'
         ORDER BY us.{stats_agg_col} DESC, us.ai_group DESC, us.user_id DESC;
 
