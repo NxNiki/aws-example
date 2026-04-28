@@ -8,7 +8,7 @@ import logging
 import os
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import joblib
 import matplotlib.pyplot as plt
@@ -207,6 +207,8 @@ class ClusterAnalysisPipeline:
             columns = self.key_features + self.normal_features + self.skewed_features
             row_filters = self._config["data_loader"]["cluster_data"]["row_filters"]
             data_types = self.get_data_types("cluster_data")
+        else:
+            raise ValueError(f"unsupported data_label: {data_label!r}")
 
         if output_file.endswith(".csv"):
             raw_output_file = output_file.replace(".csv", "_raw.csv")
@@ -222,9 +224,11 @@ class ClusterAnalysisPipeline:
             row_filters=row_filters,
             data_types=data_types,
             reload=reload,
+            lazy_load=False,
+            return_as_list=False,
         )
 
-        return data
+        return cast(pd.DataFrame, data)
 
     def load_attach_data(self, reload: bool = False) -> pd.DataFrame:
         """Read attach data (enriched data) and remove samples with short sessions.
@@ -236,15 +240,22 @@ class ClusterAnalysisPipeline:
 
         if not reload and os.path.exists(local_cache_path):
             logger.info(f"read local attach data: {local_cache_path}")
-            data = read_local_cache(local_cache_path, data_types=self.get_data_types("attach_data"))
+            data = read_local_cache(
+                local_cache_path,
+                data_types=self.get_data_types("attach_data"),
+                lazy_load=False,
+            )
         else:
             data = self.load_raw_data(data_label="attach_data")
             data["merge_date"] = pd.to_datetime(data["billtime"]).dt.strftime("%Y_%m_%d")
-            group_counts = data[self.merge_features].value_counts(sort=False).reset_index(name="count")
-            valid_groups = group_counts[group_counts["count"] == self.session_length][self.merge_features]
-            data = data.merge(valid_groups, on=self.merge_features, how="inner")
+            merge_cols: List[str] = (
+                [self.merge_features] if isinstance(self.merge_features, str) else list(self.merge_features)
+            )
+            group_counts = data[merge_cols].value_counts(sort=False).reset_index(name="count")
+            valid_groups = group_counts.loc[group_counts["count"] == self.session_length, merge_cols]
+            data = data.merge(valid_groups, on=merge_cols, how="inner")
             save_local_cache(data, local_cache_path)
-        return data
+        return cast(pd.DataFrame, data)
 
     def load_cluster_data(
         self,
@@ -267,21 +278,29 @@ class ClusterAnalysisPipeline:
 
         if not reload and os.path.exists(local_cache_path):
             logger.info(f"read local attach data: {local_cache_path}")
-            data = read_local_cache(local_cache_path, data_types=self.get_data_types("cluster_data"))
+            data = read_local_cache(
+                local_cache_path,
+                data_types=self.get_data_types("cluster_data"),
+                lazy_load=False,
+            )
         else:
             data = self.load_raw_data(data_label="cluster_data")
             data = data[data["group_num"] == self.session_length]
-            data["merge_date"] = pd.to_datetime(data["start_time"]).dt.strftime("%Y_%m_%d")
+            merge_ts = pd.to_datetime(data["start_time"], errors="coerce")
+            if isinstance(merge_ts, pd.DatetimeIndex):
+                merge_ts = pd.Series(merge_ts.to_numpy(), index=data.index, dtype="datetime64[ns]")
+            data["merge_date"] = merge_ts.dt.strftime("%Y_%m_%d")
             # check if we have duplidated sample:
-            duplicated = data[["group_id", "merge_date"]].duplicated()
+            dup_subset = data.loc[:, ["group_id", "merge_date"]]
+            duplicated = dup_subset.duplicated()
             if duplicated.any():
                 logger.warning(f"duplicated samples found in cluster data: {duplicated.sum()} / {len(data)}")
                 # data = data.drop_duplicates(keep="first")
                 data = data[~duplicated]
-            data, _ = remove_outliers(data, self.outlier_threshold)
-            save_local_cache(data, local_cache_path)
+            data, _ = remove_outliers(cast(pd.DataFrame, data), self.outlier_threshold)
+            save_local_cache(cast(pd.DataFrame, data), local_cache_path)
 
-        return data
+        return cast(pd.DataFrame, data)
 
     def preprocess_data(self, data: pd.DataFrame) -> pd.DataFrame:
         """
@@ -323,7 +342,8 @@ class ClusterAnalysisPipeline:
         kept = set()
 
         for column in upper.columns:
-            high_corr = upper[column][upper[column] > threshold].index.tolist()
+            col_series = upper.loc[:, column]
+            high_corr = col_series[col_series > threshold].index.tolist()
             if high_corr:
                 high_corr = [column] + high_corr
                 keep_feat = high_corr[0]
@@ -350,6 +370,8 @@ class ClusterAnalysisPipeline:
         """Remove features with variance below threshold."""
         if threshold is None:
             threshold = self._config["feature_selection"]["variance_threshold"]
+        if threshold is None:
+            raise ValueError("variance_threshold must be set in config or passed as an argument")
 
         data = keep_numeric_columns(data)
         selector = VarianceThreshold(threshold=threshold)
@@ -461,9 +483,13 @@ class ClusterAnalysisPipeline:
         k_range = self._config["elbow_method"]["k_range"]
         n_features = self._config["elbow_method"]["top_features"]
         cluster_indices = {}
-        data, upper_bounds, lower_bounds = clip_outliers(
-            data[features_ordered_by_importance], self.clip_threshold[0], self.clip_threshold[1]
+        clipped = clip_outliers(
+            cast(pd.DataFrame, data[features_ordered_by_importance]),
+            self.clip_threshold[0],
+            self.clip_threshold[1],
         )
+        data = cast(pd.DataFrame, clipped[0])
+        upper_bounds, lower_bounds = clipped[1], clipped[2]
 
         for df_x, n in column_iterator(data, features_ordered_by_importance, n_features):
             cluster_indices_by_k = {}
@@ -566,7 +592,7 @@ class ClusterAnalysisPipeline:
         feature_columns = features_ordered_by_importance[: self.n_top_features]
         # don't use clip_outliers as this is skipped in deployment:
         # clustering_data = clip_outliers(data[feature_columns], self.clip_threshold[0], self.clip_threshold[1])
-        clustering_data = data[feature_columns]
+        clustering_data = cast(pd.DataFrame, data[feature_columns])
         transform_columns, transform_columns_index = self.get_transform_columns(clustering_data)
         pipeline = self.create_clustering_pipeline(
             n_clusters=self.n_clusters,
@@ -580,7 +606,10 @@ class ClusterAnalysisPipeline:
 
         # Save cluster centers
         if self.cluster_model == "kmeans":
-            centroids_df = pd.DataFrame(pipeline.named_steps["cluster"].cluster_centers_, columns=feature_columns)
+            centroids_df = pd.DataFrame(
+                pipeline.named_steps["cluster"].cluster_centers_,
+                columns=pd.Index(feature_columns),
+            )
             logger.info(f"Cluster centers:\n{centroids_df}")
             centroids_df.to_csv(
                 self.output_path
@@ -604,13 +633,16 @@ class ClusterAnalysisPipeline:
 
         x_transformed = pipeline[:-1].transform(clustering_data)
         self.plot_pca(x_transformed, cluster_label)
-        self.plot_radar_chart(pd.DataFrame(x_transformed, columns=feature_columns), cluster_label)
+        self.plot_radar_chart(
+            pd.DataFrame(x_transformed, columns=pd.Index(feature_columns)),
+            cluster_label,
+        )
 
         scaler = self.get_scaler()
         scaled_data = scaler.fit_transform(data[features_ordered_by_importance[: self.n_top_features]])
         self.plot_pca(scaled_data, cluster_label, output_file_name="pca_cluster_raw_feature")
         self.plot_radar_chart(
-            pd.DataFrame(scaled_data, columns=feature_columns),
+            pd.DataFrame(scaled_data, columns=pd.Index(feature_columns)),
             cluster_label,
             output_file_name="radar_clusters_raw_feature",
         )
@@ -635,7 +667,7 @@ class ClusterAnalysisPipeline:
                 f"{self.output_path}/output/grouped_data_2025_cluster_{cluster}.csv", index=False
             )
 
-        return cluster_labels
+        return np.asarray(cluster_labels)
 
     def plot_pca(
         self,
@@ -668,7 +700,10 @@ class ClusterAnalysisPipeline:
 
         # If n_components > 3, generate a pair plot for the PCA components
         if n_components >= 3:
-            df_pca = pd.DataFrame(x_pca, columns=[f"PC{i+1}" for i in range(n_components)])
+            df_pca = pd.DataFrame(
+                x_pca,
+                columns=pd.Index([f"PC{i+1}" for i in range(n_components)]),
+            )
             df_pca["cluster_label"] = cluster_label
             # Only lower triangle, diagonal = hist; hue as cluster. Disable upper triangle.
             pair_grid = sns.PairGrid(
@@ -757,17 +792,16 @@ class ClusterAnalysisPipeline:
 
     def load_trained_model(self, model_path: Optional[str] = None) -> KMeans:
         """Load the trained K-means model."""
-        if model_path is None:
-            model_path = self.output_path / "models" / self.pickle_model_name
+        resolved_path = self.output_path / "models" / self.pickle_model_name if model_path is None else model_path
 
-        if not os.path.exists(model_path):
+        if not os.path.exists(resolved_path):
             raise ValueError("clustering model is not trained!")
-        return joblib.load(model_path)
+        return joblib.load(resolved_path)
 
     def predict_clusters(self, data: pd.DataFrame, features: List[str], model_path: Optional[str] = None) -> np.ndarray:
         """Predict clusters for new data using trained model."""
         model = self.load_trained_model(model_path)
-        return model.predict(data[features])
+        return np.asarray(model.predict(data[features]))
 
     def save_pipeline_model(self, pipeline: Pipeline) -> None:
         """Save a complete pipeline model to disk."""
@@ -783,7 +817,8 @@ class ClusterAnalysisPipeline:
             onnx_opset_version = self.onnx_opset_version
             logger.info(f"Using ONNX opset version: {onnx_opset_version}")
             initial_type = [("float_input", FloatTensorType([None, self.n_top_features]))]
-            onnx_model = convert_sklearn(pipeline, initial_types=initial_type, target_opset=onnx_opset_version)
+            onnx_convert_result = convert_sklearn(pipeline, initial_types=initial_type, target_opset=onnx_opset_version)
+            onnx_model = onnx_convert_result[0] if isinstance(onnx_convert_result, tuple) else onnx_convert_result
 
             onnx_model_name = self.onnx_model_name
             with open(self.output_path / "models" / onnx_model_name, "wb") as f:
@@ -827,7 +862,7 @@ class ClusterAnalysisPipeline:
         cluster_labels = pipeline.fit_predict(data)
 
         logger.info(f"Fitted and predicted with n_clusters={n_clusters}")
-        return cluster_labels
+        return np.asarray(cluster_labels)
 
     def attach_cluster_label(self, reload: bool = False):
         """Attach cluster labels to enriched (attach) data and save per-cluster parquet files.
@@ -840,12 +875,15 @@ class ClusterAnalysisPipeline:
            clustering (e.g. due to NaN in cluster features) has no label; with how='inner'
            those rows are dropped here.
         """
+        merge_cols: List[str] = (
+            [self.merge_features] if isinstance(self.merge_features, str) else list(self.merge_features)
+        )
         cluster_column = "cluster_label"
         data_with_cluster_label = pd.read_parquet(
             self.output_path
             / "output"
             / f"cluster_label_top_features_{self.n_top_features}_k_{self.n_clusters}.parquet",
-            columns=[cluster_column] + self.merge_features,
+            columns=[cluster_column] + merge_cols,
         )
         unique_clusters = data_with_cluster_label[cluster_column].unique()
 
@@ -853,16 +891,14 @@ class ClusterAnalysisPipeline:
         feature_columns = attach_data.select_dtypes(include="number").columns.to_list()
 
         # Log key counts to explain row removal
-        attach_keys = attach_data[self.merge_features].drop_duplicates()
-        label_keys = data_with_cluster_label[self.merge_features].drop_duplicates()
-        keys_only_in_attach = attach_keys.merge(label_keys, on=self.merge_features, how="left", indicator=True)
+        attach_keys = attach_data.loc[:, merge_cols].drop_duplicates()
+        label_keys = data_with_cluster_label.loc[:, merge_cols].drop_duplicates()
+        keys_only_in_attach = attach_keys.merge(label_keys, on=merge_cols, how="left", indicator=True)
         keys_only_in_attach = keys_only_in_attach[keys_only_in_attach["_merge"] == "left_only"]
         n_keys_attach = len(attach_keys)
         n_keys_label = len(label_keys)
         n_keys_dropped = len(keys_only_in_attach)
-        n_rows_dropped = attach_data.merge(
-            keys_only_in_attach[self.merge_features], on=self.merge_features, how="inner"
-        ).shape[0]
+        n_rows_dropped = attach_data.merge(keys_only_in_attach.loc[:, merge_cols], on=merge_cols, how="inner").shape[0]
         logger.info(
             f"attach_cluster_label: attach_data keys={n_keys_attach}, cluster_label keys={n_keys_label}, "
             f"keys in attach but not in labels={n_keys_dropped}, enriched rows dropped by merge={n_rows_dropped}"
@@ -879,7 +915,7 @@ class ClusterAnalysisPipeline:
             file_name = f"enriched_data_cluster_{cluster}.parquet"
             cluster_data = attach_data.merge(
                 data_with_cluster_label[data_with_cluster_label[cluster_column] == cluster],
-                on=self.merge_features,
+                on=merge_cols,
                 how="inner",
                 suffixes=("", "_y"),
             )
@@ -887,8 +923,8 @@ class ClusterAnalysisPipeline:
             cluster_data.to_parquet(self.output_path / "output" / file_name, index=False)
             num_samples += len(cluster_data)
 
-            if feature_columns is not None:
-                stats = cluster_data[feature_columns].describe().T
+            if feature_columns:
+                stats = cast(pd.DataFrame, cluster_data.loc[:, feature_columns]).describe().T
                 logger.info(f"Cluster {cluster} feature statistics:")
                 logger.info(stats[["mean", "std", "min", "25%", "50%", "75%", "max"]])
 
@@ -903,13 +939,14 @@ class ClusterAnalysisPipeline:
 
     def get_cluster_stats(self):
 
-        scaler = StandardScaler()
         cluster_stats = {}
         for cluster_index in range(self.n_clusters):
             data = read_local_cache(
                 local_cache_path=self.output_path / f"output/enriched_data_cluster_{cluster_index}.parquet",
                 columns=self.cluster_stats_columns,
+                lazy_load=False,
             )
+            data = cast(pd.DataFrame, data)
 
             # Only set columns if the number of columns matches expected
             expected_columns = ["loginname", "billtime", "basepoint", "account", "fg_rounds"]
@@ -919,44 +956,55 @@ class ClusterAnalysisPipeline:
                 logger.error(
                     f"Number of columns in cluster data ({len(data.columns)}) does not match expected ({len(expected_columns)}). Skipping column rename."
                 )
-            scaler.fit(data["basepoint"].to_frame())
-            _basepoint_clean = data["basepoint"].dropna().astype(float)
-
-            stats = {
-                "basepoint_mean": _basepoint_clean.mean(),
-                "basepoint_min": _basepoint_clean.min(),
-                "basepoint_max": _basepoint_clean.max(),
-                "basepoint_p5": (np.percentile(_basepoint_clean, 5) if _basepoint_clean.size > 0 else None),
-                "basepoint_p25": (np.percentile(_basepoint_clean, 25) if _basepoint_clean.size > 0 else None),
-                "basepoint_p75": (np.percentile(_basepoint_clean, 75) if _basepoint_clean.size > 0 else None),
-                "basepoint_p95": (np.percentile(_basepoint_clean, 95) if _basepoint_clean.size > 0 else None),
-                "basepoint_median": _basepoint_clean.median(),
-                "basepoint_skewness": skew(_basepoint_clean),
-                "basepoint_std": _basepoint_clean.std(),
-                "basepoint_count": len(data["basepoint"]),
-                "basepoint_nan_count": len(data["basepoint"]) - len(_basepoint_clean),
-                "basepoint_nan_ratio": (len(data["basepoint"]) - len(_basepoint_clean)) / len(data["basepoint"]),
-                "basepoint_less_than_0_count": (_basepoint_clean < 0).sum(),
-                "basepoint_less_than_0_ratio": (_basepoint_clean < 0).sum() / len(data["basepoint"]),
-                "basepoint_scaler_mean": scaler.mean_[0],
-                "basepoint_scaler_std": np.sqrt(scaler.var_[0]),
-                "account_counter": Counter(data["account"]),
-            }
-
-            # For each loginname, select "fg_rounds" from their earliest "billtime"
-            first_slottype = (
-                data.sort_values(["loginname", "billtime"])
-                .groupby("loginname", as_index=False)
-                .first()[["loginname", "fg_rounds"]]
-            )
-            fg_rounds_ratio = first_slottype["fg_rounds"].value_counts(normalize=False).to_dict()
-            stats["fg_rounds_ratio"] = fg_rounds_ratio
-
-            cluster_stats[f"cluster_{cluster_index}"] = stats
+            cluster_stats[f"cluster_{cluster_index}"] = compute_cluster_stats(cast(pd.DataFrame, data))
 
         # Convert NumPy types to native Python types for JSON serialization
         cluster_stats_serializable = convert_numpy_types(cluster_stats)
         json.dump(cluster_stats_serializable, open(self.output_path / "output/cluster_stats.json", "w"), indent=4)
+
+
+def compute_cluster_stats(data: pd.DataFrame) -> Dict[str, Any]:
+    """Summary stats for one cluster.
+
+    ``data`` must already be renamed to columns ``loginname, billtime, basepoint, account, fg_rounds``;
+    callers handle the rename so this helper is reusable both inside the
+    :class:`ClusterAnalysisPipeline` per-cluster loop and from one-off analysis scripts that treat all
+    rows as a single cluster. NumPy/Counter values are returned as-is — pass through
+    :func:`bituslabs_ds.utils.convert_numpy_types` before JSON serialization.
+    """
+    scaler = StandardScaler()
+    scaler.fit(data["basepoint"].to_frame())
+    basepoint_clean = data["basepoint"].dropna().astype(float)
+
+    stats: Dict[str, Any] = {
+        "basepoint_mean": basepoint_clean.mean(),
+        "basepoint_min": basepoint_clean.min(),
+        "basepoint_max": basepoint_clean.max(),
+        "basepoint_p5": (np.percentile(basepoint_clean, 5) if basepoint_clean.size > 0 else None),
+        "basepoint_p25": (np.percentile(basepoint_clean, 25) if basepoint_clean.size > 0 else None),
+        "basepoint_p75": (np.percentile(basepoint_clean, 75) if basepoint_clean.size > 0 else None),
+        "basepoint_p95": (np.percentile(basepoint_clean, 95) if basepoint_clean.size > 0 else None),
+        "basepoint_median": basepoint_clean.median(),
+        "basepoint_skewness": skew(basepoint_clean),
+        "basepoint_std": basepoint_clean.std(),
+        "basepoint_count": len(data["basepoint"]),
+        "basepoint_nan_count": len(data["basepoint"]) - len(basepoint_clean),
+        "basepoint_nan_ratio": (len(data["basepoint"]) - len(basepoint_clean)) / len(data["basepoint"]),
+        "basepoint_less_than_0_count": (basepoint_clean < 0).sum(),
+        "basepoint_less_than_0_ratio": (basepoint_clean < 0).sum() / len(data["basepoint"]),
+        "basepoint_scaler_mean": cast(np.ndarray, scaler.mean_)[0],
+        "basepoint_scaler_std": np.sqrt(cast(np.ndarray, scaler.var_)[0]),
+        "account_counter": Counter(data["account"]),
+    }
+
+    # For each loginname, select "fg_rounds" from their earliest "billtime"
+    first_slottype = (
+        data.sort_values(["loginname", "billtime"])
+        .groupby("loginname", as_index=False)
+        .first()[["loginname", "fg_rounds"]]
+    )
+    stats["fg_rounds_ratio"] = cast(pd.Series, first_slottype["fg_rounds"]).value_counts(normalize=False).to_dict()
+    return stats
 
 
 def calculate_inertia(x: np.ndarray, y: np.ndarray) -> float:
