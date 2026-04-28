@@ -44,6 +44,7 @@ from bituslabs_ds.utils import convert_numpy_types
 logger = logging.getLogger(__name__)
 
 GAME_ID = "SS03"
+QUERY_START_DATE = "2026-03-01"
 
 S3_OUTPUT_PREFIX = f"s3://{S3_BUCKET}/ds-data-ss03_majiang_streak/cluster_stats"
 S3_RAW_FEATURES_PATH = f"{S3_OUTPUT_PREFIX}/raw_features_base_game.parquet"
@@ -80,6 +81,7 @@ def _sql_raw_base_with_fg_rounds() -> str:
                 ) AS base_group
             FROM public.fct_bet_orders t
             WHERE t.game_id = '{GAME_ID}'
+                AND t.created_at >= '{QUERY_START_DATE}'
                 AND t.currency_type IN {ETL_CURRENCY_CODES}
                 AND t.status = 'COMPLETED'
                 AND t.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
