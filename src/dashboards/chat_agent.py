@@ -417,6 +417,29 @@ def read_confluence_page(page_id: str) -> str:
         return f"Failed to read Confluence page {page_id}: {exc}"
 
 
+@tool
+def search_confluence_rag(query: str, top_k: int = 5) -> str:
+    """Semantically search the curated Confluence RAG index.
+
+    Prefer this over `search_confluence` for any documentation question — it
+    returns the most relevant passages (BM25 + vector hybrid) instead of just
+    keyword hits, and is much faster than live Confluence calls.
+
+    Falls back automatically with an explanatory message if the RAG service
+    is unreachable; in that case use `search_confluence` followed by
+    `read_confluence_page` as a backup.
+
+    Args:
+        query: A natural-language question or descriptive phrase.
+        top_k: Number of passages to return (default 5).
+    """
+    try:
+        from rag_service.client import retrieve_passages
+    except ImportError:
+        return "RAG service client is not installed in this environment."
+    return retrieve_passages(query, top_k=top_k)
+
+
 # ---------------------------------------------------------------------------
 # System prompt
 # ---------------------------------------------------------------------------
@@ -464,8 +487,10 @@ Understanding the data pipeline:
 Other guidelines:
 - When asked about user groups (new/old/beginner/AI/Default), use lookup_group.
 - For game-specific questions, use get_game_info.
-- For questions about processes, policies, or documentation, use search_confluence
-  to find relevant pages, then read_confluence_page to read the content.
+- For questions about processes, policies, or documentation, FIRST try
+  search_confluence_rag (the curated RAG index — fast, semantic). If it
+  returns nothing useful or reports the service is unavailable, fall back
+  to search_confluence + read_confluence_page (live Confluence API).
 - Be precise about formulas and SQL definitions.
 - If a column has both a hand-curated description and ETL-derived formula, include both.
 - Explain RTP (Return to Player) as total_payout / total_bet when relevant.
@@ -487,6 +512,7 @@ _TOOLS = [
     get_game_info,
     read_etl_source,
     list_etl_sources,
+    search_confluence_rag,
     search_confluence,
     read_confluence_page,
 ]

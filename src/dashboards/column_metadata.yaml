@@ -151,8 +151,10 @@ columns:
 
   user_avg_bet_amount:
     category: user_metric
-    description: "Average bet amount across all the user's bets in the period."
-    formula: "AVG(bet_amount)"
+    description: >
+      Mean stake per bet row in the period (day / week / month per activity_date grain):
+      average over all wager rows for that user and period (slots: AVG(bet_amount); fish: AVG(bet)).
+    formula: "AVG(line bet); slots use bet_amount, fish hunter uses bullet bet"
 
   user_total_payout:
     category: user_metric

@@ -1,0 +1,56 @@
+# --- Stage 1: Builder ---
+FROM python:3.11-slim AS builder
+
+ENV POETRY_NO_INTERACTION=1 \
+    POETRY_VIRTUALENVS_IN_PROJECT=1 \
+    POETRY_VIRTUALENVS_CREATE=1 \
+    POETRY_CACHE_DIR=/tmp/poetry_cache
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    gcc \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -sSL https://install.python-poetry.org | python3 -
+ENV PATH="/root/.local/bin:$PATH"
+
+COPY pyproject.toml poetry.lock ./
+
+# Only main + rag_service group — this image stays slim (no dash, no torch, no spark).
+RUN poetry install --only main,rag_service --no-root --no-cache && rm -rf $POETRY_CACHE_DIR
+
+# --- Stage 2: Runtime ---
+FROM python:3.11-slim AS runtime
+
+ENV VIRTUAL_ENV=/app/.venv \
+    PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH="/app/src" \
+    LOCAL_ROOT=/app
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/.venv /app/.venv
+
+# RAG service code (and the confluence_client it reuses for HTML stripping + auth).
+COPY src/rag_service ./src/rag_service
+COPY src/dashboards/__init__.py        ./src/dashboards/__init__.py
+COPY src/dashboards/confluence_client.py  ./src/dashboards/confluence_client.py
+COPY src/dashboards/chat_agent.py      ./src/dashboards/chat_agent.py
+COPY src/bituslabs_ds ./src/bituslabs_ds
+
+EXPOSE 8052
+
+# --workers 1   so the OpenSearch client cache is shared.
+CMD ["uvicorn", \
+     "rag_service.app:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8052", \
+     "--workers", "1", \
+     "--timeout-keep-alive", "65", \
+     "--access-log"]
