@@ -1,0 +1,43 @@
+# ---------------------------------------------------------------------------
+# rag_sources.yaml — declares which Confluence content to index.
+#
+# Each entry under `sources` is one logical group of docs. Use whichever
+# fields match how the content lives in Confluence — you can mix all four
+# selectors in the same group.
+#
+#   name              Human-readable label (also stored in the index for filtering).
+#   space_key         Confluence space key (e.g. DATA). If set with no page_ids,
+#                     the entire space is indexed.
+#   page_ids          Explicit page IDs to include.
+#   page_urls         Confluence URLs — page IDs are auto-extracted from
+#                     `/pages/<id>` segments. Convenient for copying links
+#                     out of a browser.
+#   include_children  If true, recursively crawl descendants of the listed
+#                     page_ids/page_urls.
+#   labels            Reserved for future label-based filtering.
+#   exclude_page_ids  Skip these page IDs (e.g. archived / drafts).
+#
+# Replace the placeholders below with your real Confluence content. Page IDs
+# are the numbers that appear in the URL after `/pages/`.
+# ---------------------------------------------------------------------------
+
+sources:
+  - name: data_team_handbook
+    space_key: DATA
+    page_ids: []
+    include_children: false
+    exclude_page_ids: []
+
+  - name: dashboard_runbooks
+    page_urls:
+      - https://yourcompany.atlassian.net/wiki/spaces/DATA/pages/123456789/Dashboard+Runbook
+      - https://yourcompany.atlassian.net/wiki/spaces/DATA/pages/123456790/Metric+Definitions
+    include_children: true
+
+  - name: etl_design_docs
+    space_key: ENG
+    page_ids:
+      - "987654321"
+    include_children: true
+    exclude_page_ids:
+      - "111111111"   # Archived: old ETL design v1

@@ -962,6 +962,7 @@ ENRICH_USER_ROW_INPUT_COLUMNS: FrozenSet[str] = frozenset(
         "user_num_bets_fg",
         "user_total_bet",
         "user_total_bet_bg",
+        "user_avg_bet_amount",
         "user_total_payout",
         "user_total_payout_bg",
         "user_total_payout_fg",

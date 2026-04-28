@@ -7,6 +7,7 @@ readme = "README.md"
 packages = [
     { include = "bituslabs_ds", from = "src" },
     { include = "dashboards", from = "src" },
+    { include = "rag_service", from = "src" },
 ]
 
 [tool.poetry.dependencies]
@@ -73,6 +74,23 @@ langgraph = ">=0.2.0"
 fastapi = ">=0.115.0"
 uvicorn = {extras = ["standard"], version = ">=0.30.0"}
 atlassian-python-api = ">=3.41.0"
+requests = ">=2.32.0"
+
+# RAG microservice — its own group keeps the service image slim
+# (no langchain, no dash). Only the indexer/retriever/FastAPI app pull this in.
+[tool.poetry.group.rag_service]
+optional = true
+[tool.poetry.group.rag_service.dependencies]
+fastapi = ">=0.115.0"
+uvicorn = {extras = ["standard"], version = ">=0.30.0"}
+opensearch-py = ">=2.6.0"
+# Embedding providers — at least one API key (OPENAI_API_KEY or
+# GOOGLE_API_KEY/GEMINI_API_KEY) must be set; both SDKs are installed so
+# the embedder can auto-fall-back at runtime.
+openai = ">=1.40.0"
+google-generativeai = ">=0.8.0"
+atlassian-python-api = ">=3.41.0"
+requests = ">=2.32.0"
 
 [tool.poetry.group.etl]
 optional = true 
@@ -97,6 +115,7 @@ pyjanitor = "^0.31.0"
 # pyspark-stubs = "^3.0.0.post3"
 types-pyyaml = "^6.0.12.20250822"
 types-paramiko = "^3.4.0"
+types-requests = "^2.32.0"
 jupyter = "^1.0"
 bokeh = "^3.4.3"
 ydata-profiling = "^4.16.1"
@@ -149,7 +168,7 @@ extraPaths = ["src"]
 [tool.isort]
 profile = "black"
 line_length = 120
-known_first_party = ["bituslabs_ds", "dashboards"]
+known_first_party = ["bituslabs_ds", "dashboards", "rag_service"]
 known_third_party = ["numpy", "pandas"]
 combine_as_imports = true
 include_trailing_comma = true
