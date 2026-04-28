@@ -1,20 +1,14 @@
 """
-Generate per-user risk reports from ``etl_get_risk_user_stats`` output.
+Risk vs control analysis from ETL parquet outputs.
 
-This script:
-1) loads ETL data from local cache (or S3 on cache miss),
-2) builds a markdown report for each user via ``analyze_user_by_name``,
-3) saves 5 count-based plots per user:
-   - bullet_level
-   - strategy_name
-   - ip location city (single stacked bar; city legend)
-   - fish_value
-   - multiplier x bullet_level
+Loads risk and control bullet aggregates, then writes one interactive HTML
+(dual charts) and one Markdown summary under ``<repo_parent>/data_fishhunter``.
 
-Cache/report directory is outside repo:
-``<repo_parent>/data_fishhunter``.
+Optional: ``analyze_user_by_name`` can still build per-user markdown + plots
+when called from code.
 """
 
+import argparse
 import json
 import logging
 import os
@@ -32,11 +26,31 @@ from bituslabs_ds.utils import get_ip_location
 logger = logging.getLogger(__name__)
 
 S3_RISK_USER_STATS_URI = f"{DEFAULT_ETL_OUTPUT}/jobs/output_risk_control/risk_user_stats/risk_user_stats.parquet"
+S3_CONTROL_USER_STATS_URI = (
+    f"{DEFAULT_ETL_OUTPUT}/jobs/output_risk_control/control_user_stats/control_user_stats.parquet"
+)
 DATA_ROOT = LOCAL_ROOT.parent / "data_fishhunter"
 CACHE_DIR = DATA_ROOT / "risk_control_cache"
 REPORT_DIR = DATA_ROOT / "risk_control_reports"
 PLOT_DIR = REPORT_DIR / "plots"
 LOCAL_CACHE_FILE = CACHE_DIR / "risk_user_stats.parquet"
+LOCAL_CONTROL_CACHE_FILE = CACHE_DIR / "control_user_stats.parquet"
+HTML_TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
+
+
+def _json_for_html_embed(obj: Any) -> str:
+    """Serialize JSON for embedding in HTML; avoid breaking out of script/context."""
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+
+
+def _render_html_from_template(template_name: str, replacements: dict[str, str]) -> str:
+    path = HTML_TEMPLATES_DIR / template_name
+    text = path.read_text(encoding="utf-8")
+    for key, val in replacements.items():
+        text = text.replace(key, val)
+    return text
+
+
 IP_STACK_TOP_N = 20
 CITY_LEGEND_TOP_N = 20
 ALL_USERS_MD_NAME = "risk_user_all_users.md"
@@ -54,6 +68,9 @@ CITY_COLOR_PALETTE = [
     "#BAB0AC",
 ]
 CITY_PATTERN_PALETTE = ["", "/", "\\", "x", "-", "|", "+", "."]
+MAX_STRATEGY_CATEGORIES = 40
+MAX_FISH_VALUE_CATEGORIES = 60
+MAX_MULTIPLIER_BULLET_CATEGORIES = 60
 
 
 def _sanitize_filename(value: str) -> str:
@@ -118,6 +135,7 @@ def _user_time_stats(df_user: pd.DataFrame, *, session_gap_seconds: int = 30 * 6
         return {
             "account_duration_hours": 0.0,
             "average_bet_interval_seconds": 0.0,
+            "median_bet_interval_seconds": 0.0,
             "num_bet_sessions": 0,
         }
 
@@ -126,6 +144,7 @@ def _user_time_stats(df_user: pd.DataFrame, *, session_gap_seconds: int = 30 * 6
         return {
             "account_duration_hours": 0.0,
             "average_bet_interval_seconds": 0.0,
+            "median_bet_interval_seconds": 0.0,
             "num_bet_sessions": 0,
         }
 
@@ -133,11 +152,13 @@ def _user_time_stats(df_user: pd.DataFrame, *, session_gap_seconds: int = 30 * 6
     diffs = ts.diff().dt.total_seconds().dropna()
     valid_diffs = diffs[(diffs >= 0) & (diffs <= session_gap_seconds)]
     avg_interval = float(valid_diffs.mean()) if len(valid_diffs) > 0 else 0.0
+    median_interval = float(valid_diffs.median()) if len(valid_diffs) > 0 else 0.0
     num_sessions = int(1 + (diffs > session_gap_seconds).sum())
 
     return {
         "account_duration_hours": duration_hours,
         "average_bet_interval_seconds": avg_interval,
+        "median_bet_interval_seconds": median_interval,
         "num_bet_sessions": num_sessions,
     }
 
@@ -203,13 +224,17 @@ def _counts_matrix(
         showlegend = True
     elif metric == "strategy_name":
         df["_metric"] = df["strategy_name"].fillna("UNKNOWN").astype(str)
-        categories = sorted(df["_metric"].unique().tolist())
+        top_metric = df["_metric"].value_counts().head(MAX_STRATEGY_CATEGORIES)
+        categories = [str(x) for x in top_metric.index.tolist()]
+        df = cast(pd.DataFrame, df.loc[df["_metric"].isin(categories)].copy())
         showlegend = True
     elif metric == "fish_value":
         values = pd.Series(pd.to_numeric(pd.Series(df["fish_value"]), errors="coerce")).dropna().astype(int).astype(str)
         df = df.loc[values.index].copy()
         df["_metric"] = values
-        categories = sorted(df["_metric"].unique().tolist(), key=lambda x: int(x))
+        top_metric = df["_metric"].value_counts().head(MAX_FISH_VALUE_CATEGORIES)
+        categories = sorted([str(x) for x in top_metric.index.tolist()], key=lambda x: int(x))
+        df = cast(pd.DataFrame, df.loc[df["_metric"].isin(categories)].copy())
         showlegend = True
     elif metric == "multiplier_x_bullet":
         combo_df = df.dropna(subset=["multiplier", "bullet_level"]).copy()
@@ -222,7 +247,9 @@ def _counts_matrix(
             .astype(str)
         )
         df = combo_df
-        categories = sorted(df["_metric"].unique().tolist())
+        top_metric = df["_metric"].value_counts().head(MAX_MULTIPLIER_BULLET_CATEGORIES)
+        categories = [str(x) for x in top_metric.index.tolist()]
+        df = cast(pd.DataFrame, df.loc[df["_metric"].isin(categories)].copy())
         showlegend = True
     elif metric == "ip":
         df["_ip_value"] = df["ip"].fillna("UNKNOWN").astype(str)
@@ -263,283 +290,18 @@ def _counts_matrix(
     return {"labels": categories, "traces": traces, "showlegend": showlegend}
 
 
-def _write_all_users_html_report(
-    events_df: pd.DataFrame,
-    user_names: list[str],
-    out_path: Path,
-) -> None:
-    metrics = [
-        ("bullet_level", "Bullet Level Counts"),
-        ("strategy_name", "Strategy Name Counts"),
-        ("ip", "IP Counts (Top IPs + OTHERS)"),
-        ("fish_value", "Fish Value Counts"),
-        ("multiplier_x_bullet", "Multiplier x Bullet Level Counts"),
-    ]
-
-    per_user = (
-        events_df.groupby("user_name")[["bet", "payout", "profit"]].sum(min_count=1).reindex(user_names).fillna(0)
-    )
-    rtp_vals = []
-    profit_vals = []
-    account_duration_vals = []
-    avg_bet_interval_vals = []
-    num_sessions_vals = []
-    for _, row in per_user.iterrows():
-        bet = float(row["bet"])
-        payout = float(row["payout"])
-        profit = float(row["profit"])
-        rtp_vals.append((payout / bet) * 100 if bet > 0 else 0.0)
-        profit_vals.append(profit)
-    for user_name in user_names:
-        df_user = cast(pd.DataFrame, events_df.loc[events_df["user_name"] == user_name].copy())
-        time_stats = _user_time_stats(df_user)
-        account_duration_vals.append(float(time_stats["account_duration_hours"]))
-        avg_bet_interval_vals.append(float(time_stats["average_bet_interval_seconds"]))
-        num_sessions_vals.append(int(time_stats["num_bet_sessions"]))
-
-    line_payload = {
-        "none": {"name": "None", "y": []},
-        "rtp": {"name": "RTP %", "y": rtp_vals},
-        "total_profit": {"name": "Total Profit", "y": profit_vals},
-        "account_duration_hours": {"name": "Account Duration (Hours)", "y": account_duration_vals},
-        "average_bet_interval_seconds": {"name": "Average Bet Interval (Seconds)", "y": avg_bet_interval_vals},
-        "num_bet_sessions": {"name": "Number of Bet Sessions", "y": num_sessions_vals},
-    }
-
-    payload: dict[str, Any] = {}
-    for metric_key, metric_title in metrics:
-        matrix = _counts_matrix(events_df, user_names, metric_key)
-        payload[metric_key] = {
-            "title": metric_title,
-            "data": matrix["traces"],
-            "layout": {
-                "barmode": "stack",
-                "xaxis": {"title": "User Name", "tickangle": -35},
-                "yaxis": {"title": "Count"},
-                "showlegend": bool(matrix["showlegend"]),
-                "margin": {"l": 60, "r": 30, "t": 70, "b": 140},
-            },
-        }
-
-    html = f"""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Risk User All-Users Stats</title>
-  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
-  <style>
-    body {{ font-family: Arial, sans-serif; margin: 20px; }}
-    .toolbar {{ margin-bottom: 16px; }}
-    #chart {{ width: 100%; height: 760px; }}
-    label {{ font-weight: 600; margin-right: 8px; }}
-    select {{ padding: 6px 8px; min-width: 320px; }}
-  </style>
-</head>
-<body>
-  <h1>Risk User Multi-User Stats</h1>
-  <div class="toolbar">
-    <label for="metricSelect">Select metric:</label>
-    <select id="metricSelect">
-      <option value="bullet_level">Bullet Level</option>
-      <option value="strategy_name">Strategy Name</option>
-      <option value="ip">IP</option>
-      <option value="fish_value">Fish Value</option>
-      <option value="multiplier_x_bullet">Multiplier x Bullet Level</option>
-    </select>
-    <label for="lineSelect" style="margin-left: 12px;">Right-axis line:</label>
-    <select id="lineSelect">
-      <option value="none">None</option>
-      <option value="rtp">RTP %</option>
-      <option value="total_profit">Total Profit</option>
-      <option value="account_duration_hours">Account Duration (Hours)</option>
-      <option value="average_bet_interval_seconds">Average Bet Interval (Seconds)</option>
-      <option value="num_bet_sessions">Number of Bet Sessions</option>
-    </select>
-  </div>
-  <div id="chart"></div>
-  <script>
-    const payload = {json.dumps(payload)};
-    const linePayload = {json.dumps(line_payload)};
-    const userNames = {json.dumps(user_names)};
-    function render(metricKey, lineKey) {{
-      const obj = payload[metricKey];
-      const traces = [...obj.data];
-      const layout = Object.assign({{}}, obj.layout, {{ title: obj.title }});
-      if (lineKey !== 'none') {{
-        const lineObj = linePayload[lineKey];
-        traces.push({{
-          x: userNames,
-          y: lineObj.y,
-          name: lineObj.name,
-          type: 'scatter',
-          mode: 'lines+markers',
-          yaxis: 'y2',
-          line: {{ width: 2 }}
-        }});
-        layout.yaxis2 = {{
-          title: lineObj.name,
-          overlaying: 'y',
-          side: 'right',
-          showgrid: false
-        }};
-      }}
-      Plotly.react('chart', traces, layout, {{responsive: true}});
-    }}
-    const metricSelect = document.getElementById('metricSelect');
-    const lineSelect = document.getElementById('lineSelect');
-    metricSelect.addEventListener('change', () => render(metricSelect.value, lineSelect.value));
-    lineSelect.addEventListener('change', () => render(metricSelect.value, lineSelect.value));
-    render(metricSelect.value, lineSelect.value);
-  </script>
-</body>
-</html>
-"""
-    out_path.write_text(html, encoding="utf-8")
-
-
-def _write_all_users_markdown_report(
-    events_df: pd.DataFrame,
-    user_names: list[str],
-    out_path: Path,
-    html_path: Path,
-) -> None:
-    user_blocks: list[dict[str, Any]] = []
-    for user_name in user_names:
-        df_user = cast(pd.DataFrame, events_df.loc[events_df["user_name"] == user_name].copy())
-        if df_user.empty:
-            continue
-        user_id = str(pd.Series(df_user["user_id"]).iloc[0]) if "user_id" in df_user.columns else "N/A"
-        total_orders = int(len(df_user))
-        total_bet = _sum_numeric(df_user, "bet")
-        total_payout = _sum_numeric(df_user, "payout")
-        total_profit = _sum_numeric(df_user, "profit")
-        rtp = (total_payout / total_bet) * 100 if total_bet > 0 else 0.0
-        time_stats = _user_time_stats(df_user)
-
-        ip_profit_rows: list[dict[str, Any]] = []
-        df_user_ip = df_user.copy()
-        df_user_ip["ip_key"] = pd.Series(df_user_ip["ip"]).fillna("UNKNOWN").astype(str)
-        ip_grouped = cast(
-            pd.DataFrame,
-            cast(Any, df_user_ip.groupby("ip_key")[["bet", "payout", "profit"]]).sum(min_count=1).fillna(0),
-        )
-        ip_grouped = ip_grouped.sort_values(by="profit", ascending=False)
-        for ip_key, ip_row in ip_grouped.iterrows():
-            ip_bet = float(ip_row["bet"])
-            ip_payout = float(ip_row["payout"])
-            ip_profit = float(ip_row["profit"])
-            ip_rtp = (ip_payout / ip_bet) * 100 if ip_bet > 0 else 0.0
-            ip_location = get_ip_location(str(ip_key)) if str(ip_key) not in {"UNKNOWN"} else "N/A"
-            ip_profit_rows.append(
-                {
-                    "ip": str(ip_key),
-                    "location": ip_location,
-                    "total_profit": ip_profit,
-                    "rtp_pct": ip_rtp,
-                }
-            )
-
-        strategy_profit_rows: list[dict[str, Any]] = []
-        df_user_strategy = df_user.copy()
-        df_user_strategy["strategy_key"] = pd.Series(df_user_strategy["strategy_name"]).fillna("UNKNOWN").astype(str)
-        strategy_grouped = cast(
-            pd.DataFrame,
-            cast(Any, df_user_strategy.groupby("strategy_key")[["bet", "payout", "profit"]]).sum(min_count=1).fillna(0),
-        )
-        strategy_grouped = strategy_grouped.sort_values(by="profit", ascending=False)
-        for strategy_key, strategy_row in strategy_grouped.iterrows():
-            strategy_bet = float(strategy_row["bet"])
-            strategy_payout = float(strategy_row["payout"])
-            strategy_profit = float(strategy_row["profit"])
-            strategy_rtp = (strategy_payout / strategy_bet) * 100 if strategy_bet > 0 else 0.0
-            strategy_profit_rows.append(
-                {
-                    "strategy_name": str(strategy_key),
-                    "total_profit": strategy_profit,
-                    "rtp_pct": strategy_rtp,
-                }
-            )
-
-        user_blocks.append(
-            {
-                "user_name": user_name,
-                "user_id": user_id,
-                "total_orders": total_orders,
-                "total_bet": total_bet,
-                "total_payout": total_payout,
-                "total_profit": total_profit,
-                "rtp_pct": rtp,
-                "account_duration_hours": float(time_stats["account_duration_hours"]),
-                "average_bet_interval_seconds": float(time_stats["average_bet_interval_seconds"]),
-                "num_bet_sessions": int(time_stats["num_bet_sessions"]),
-                "ip_rows": ip_profit_rows,
-                "strategy_rows": strategy_profit_rows,
-            }
-        )
-
-    summary_df = pd.DataFrame(user_blocks)
-    if not summary_df.empty:
-        summary_df = summary_df.sort_values(by="total_profit", ascending=False)
-
-    lines = [
-        "# Risk User Report (All Users)",
-        "",
-        f"- users_included: `{len(summary_df)}`",
-        f"- total_rows: `{len(events_df)}`",
-        f"- html_stats_report: `{html_path.name}`",
-        "",
-        f"[Open interactive chart report]({html_path.name})",
-        "",
-        "## User Summary",
-    ]
-
-    for idx, (_, row) in enumerate(summary_df.iterrows()):
-        if idx > 0:
-            lines.extend(["", "---", ""])
-        lines.extend(
-            [
-                f"### {str(row['user_name'])} ({str(row['user_id'])})",
-                (
-                    f"**total_orders:** {int(row['total_orders'])}, "
-                    f"**total_bet:** {float(row['total_bet']):,.2f}, "
-                    f"**total_payout:** {float(row['total_payout']):,.2f}, "
-                    f"**total_profit:** {float(row['total_profit']):,.2f}, "
-                    f"**rtp:** {float(row['rtp_pct']):.2f}%"
-                ),
-                (
-                    f"**account_duration_hours:** {float(row['account_duration_hours']):.2f}, "
-                    f"**average_bet_interval_seconds:** {float(row['average_bet_interval_seconds']):.2f}, "
-                    f"**num_bet_sessions:** {int(row['num_bet_sessions'])}"
-                ),
-                "",
-                "**IP Breakdown**",
-            ]
-        )
-        for ip_row in cast(list[dict[str, Any]], row["ip_rows"]):
-            lines.append(
-                f"- ip {ip_row['ip']} ({ip_row['location']}): total_profit: {float(ip_row['total_profit']):,.2f}, "
-                f"rtp: {float(ip_row['rtp_pct']):.2f}%"
-            )
-        lines.append("")
-        lines.append("**Strategy Breakdown**")
-        for strategy_row in cast(list[dict[str, Any]], row["strategy_rows"]):
-            lines.append(
-                f"- strategy_name {strategy_row['strategy_name']}: total_profit: {float(strategy_row['total_profit']):,.2f}, "
-                f"rtp: {float(strategy_row['rtp_pct']):.2f}%"
-            )
-        lines.append("")
-
-    out_path.write_text("\n".join(lines), encoding="utf-8")
-
-
-def _load_events_df(*, refresh_cache: bool = False) -> pd.DataFrame:
+def _load_events_df(
+    *,
+    s3_uri: str = S3_RISK_USER_STATS_URI,
+    local_cache_file: Path = LOCAL_CACHE_FILE,
+    refresh_cache: bool = False,
+) -> pd.DataFrame:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     df = cast(
         pd.DataFrame,
         read_files(
-            files=S3_RISK_USER_STATS_URI,
-            local_cache_path=str(LOCAL_CACHE_FILE),
+            files=s3_uri,
+            local_cache_path=str(local_cache_file),
             reload=refresh_cache,
             lazy_load=False,
         ),
@@ -772,40 +534,230 @@ def analyze_user_by_name(
     }
 
 
-def generate_reports_for_users(
-    user_names: list[str] | None = None,
-    *,
-    refresh_cache: bool = False,
-) -> list[dict[str, Any]]:
-    events_df = _load_events_df(refresh_cache=refresh_cache)
-    REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    ordered_names = _ordered_user_names(events_df, user_names)
-    if not ordered_names:
-        logger.warning("No matching user_name records found; skipping report generation.")
+def _sort_names_by_profit(events_df: pd.DataFrame, user_names: list[str]) -> list[str]:
+    if not user_names:
         return []
-
-    filtered_df = cast(pd.DataFrame, events_df.loc[events_df["user_name"].isin(ordered_names)].copy())
+    filtered_df = cast(pd.DataFrame, events_df.loc[events_df["user_name"].isin(user_names)].copy())
+    if filtered_df.empty:
+        return []
     profit_series = pd.Series(pd.to_numeric(pd.Series(filtered_df["profit"]), errors="coerce")).fillna(0)
     grouped_profit = cast(pd.Series, cast(Any, profit_series.groupby(filtered_df["user_name"])).sum())
     profit_order = cast(pd.Series, cast(Any, grouped_profit).sort_values(ascending=False))
-    ordered_names = [str(name) for name in profit_order.index.tolist()]
-    md_path = REPORT_DIR / ALL_USERS_MD_NAME
+    return [str(name) for name in profit_order.index.tolist()]
+
+
+def _build_group_plot_bundle(events_df: pd.DataFrame, user_names: list[str]) -> dict[str, Any]:
+    metrics = [
+        ("bullet_level", "Bullet Level Counts"),
+        ("strategy_name", "Strategy Name Counts"),
+        ("ip", "IP Counts (Top IPs + OTHERS)"),
+        ("fish_value", "Fish Value Counts"),
+        ("multiplier_x_bullet", "Multiplier x Bullet Level Counts"),
+    ]
+    per_user = (
+        events_df.groupby("user_name")[["bet", "payout", "profit"]].sum(min_count=1).reindex(user_names).fillna(0)
+    )
+    rtp_vals = []
+    profit_vals = []
+    account_duration_vals = []
+    avg_bet_interval_vals = []
+    median_bet_interval_vals = []
+    num_sessions_vals = []
+    for _, row in per_user.iterrows():
+        bet = float(row["bet"])
+        payout = float(row["payout"])
+        profit = float(row["profit"])
+        rtp_vals.append((payout / bet) * 100 if bet > 0 else 0.0)
+        profit_vals.append(profit)
+    for user_name in user_names:
+        df_user = cast(pd.DataFrame, events_df.loc[events_df["user_name"] == user_name].copy())
+        time_stats = _user_time_stats(df_user)
+        account_duration_vals.append(float(time_stats["account_duration_hours"]))
+        avg_bet_interval_vals.append(float(time_stats["average_bet_interval_seconds"]))
+        median_bet_interval_vals.append(float(time_stats["median_bet_interval_seconds"]))
+        num_sessions_vals.append(int(time_stats["num_bet_sessions"]))
+
+    line_payload = {
+        "none": {"name": "None", "y": []},
+        "rtp": {"name": "RTP %", "y": rtp_vals},
+        "total_profit": {"name": "Total Profit", "y": profit_vals},
+        "account_duration_hours": {"name": "Account Duration (Hours)", "y": account_duration_vals},
+        "average_bet_interval_seconds": {"name": "Average Bet Interval (Seconds)", "y": avg_bet_interval_vals},
+        "median_bet_interval_seconds": {"name": "Median Bet Interval (Seconds)", "y": median_bet_interval_vals},
+        "num_bet_sessions": {"name": "Number of Bet Sessions", "y": num_sessions_vals},
+    }
+    payload: dict[str, Any] = {}
+    for metric_key, metric_title in metrics:
+        matrix = _counts_matrix(events_df, user_names, metric_key)
+        payload[metric_key] = {
+            "title": metric_title,
+            "data": matrix["traces"],
+            "layout": {
+                "barmode": "stack",
+                "xaxis": {"title": "User Name", "tickangle": -35},
+                "yaxis": {"title": "Count"},
+                "showlegend": bool(matrix["showlegend"]),
+                "margin": {"l": 60, "r": 30, "t": 70, "b": 140},
+            },
+        }
+    return {"payload": payload, "line_payload": line_payload, "user_names": user_names}
+
+
+def _append_markdown_group_section(
+    lines: list[str],
+    events_df: pd.DataFrame,
+    user_names: list[str],
+    section_title: str,
+) -> None:
+    lines.extend(
+        [
+            "",
+            f"## {section_title}",
+            "",
+            f"- users_included: `{len(user_names)}`",
+            f"- total_rows: `{len(events_df)}`",
+            "",
+        ]
+    )
+    user_blocks: list[dict[str, Any]] = []
+    for user_name in user_names:
+        df_user = cast(pd.DataFrame, events_df.loc[events_df["user_name"] == user_name].copy())
+        if df_user.empty:
+            continue
+        user_id = str(pd.Series(df_user["user_id"]).iloc[0]) if "user_id" in df_user.columns else "N/A"
+        total_orders = int(len(df_user))
+        total_bet = _sum_numeric(df_user, "bet")
+        total_payout = _sum_numeric(df_user, "payout")
+        total_profit = _sum_numeric(df_user, "profit")
+        rtp = (total_payout / total_bet) * 100 if total_bet > 0 else 0.0
+        time_stats = _user_time_stats(df_user)
+        user_blocks.append(
+            {
+                "user_name": user_name,
+                "user_id": user_id,
+                "total_orders": total_orders,
+                "total_bet": total_bet,
+                "total_payout": total_payout,
+                "total_profit": total_profit,
+                "rtp_pct": rtp,
+                "account_duration_hours": float(time_stats["account_duration_hours"]),
+                "average_bet_interval_seconds": float(time_stats["average_bet_interval_seconds"]),
+                "num_bet_sessions": int(time_stats["num_bet_sessions"]),
+            }
+        )
+    summary_df = pd.DataFrame(user_blocks)
+    if summary_df.empty:
+        lines.append("- no matching data rows found")
+        return
+    summary_df = summary_df.sort_values(by="total_profit", ascending=False)
+    lines.append("| user_name | user_id | total_orders | total_bet | total_payout | total_profit | rtp | sessions |")
+    lines.append("|---|---|---:|---:|---:|---:|---:|---:|")
+    for _, row in summary_df.iterrows():
+        lines.append(
+            f"| {str(row['user_name'])} | {str(row['user_id'])} | {int(row['total_orders'])} | "
+            f"{float(row['total_bet']):,.2f} | {float(row['total_payout']):,.2f} | {float(row['total_profit']):,.2f} | "
+            f"{float(row['rtp_pct']):.2f}% | {int(row['num_bet_sessions'])} |"
+        )
+
+
+def generate_risk_control_reports(*, refresh_cache: bool = False) -> list[dict[str, Any]]:
+    risk_df = _load_events_df(
+        s3_uri=S3_RISK_USER_STATS_URI,
+        local_cache_file=LOCAL_CACHE_FILE,
+        refresh_cache=refresh_cache,
+    )
+    control_df = _load_events_df(
+        s3_uri=S3_CONTROL_USER_STATS_URI,
+        local_cache_file=LOCAL_CONTROL_CACHE_FILE,
+        refresh_cache=refresh_cache,
+    )
+
+    if "risk_user_group" not in risk_df.columns:
+        raise ValueError("Missing 'risk_user_group' column in ETL parquet. Please rerun etl_get_risk_user_stats.py.")
+    if "control_user_group" not in control_df.columns:
+        raise ValueError(
+            "Missing 'control_user_group' column in ETL parquet. Please rerun etl_get_control_user_stats.py."
+        )
+
+    REPORT_DIR.mkdir(parents=True, exist_ok=True)
+
+    risk_group_payload: dict[str, dict[str, Any]] = {}
+    control_group_payload: dict[str, dict[str, Any]] = {}
+    for group in ("group1", "group2"):
+        risk_group_df = cast(pd.DataFrame, risk_df.loc[risk_df["risk_user_group"] == group].copy())
+        risk_group_names = _sort_names_by_profit(risk_group_df, _ordered_user_names(risk_group_df, None))
+        risk_group_payload[group] = _build_group_plot_bundle(risk_group_df, risk_group_names)
+
+        control_group_df = cast(pd.DataFrame, control_df.loc[control_df["control_user_group"] == group].copy())
+        control_group_names = _sort_names_by_profit(control_group_df, _ordered_user_names(control_group_df, None))
+        control_group_payload[group] = _build_group_plot_bundle(control_group_df, control_group_names)
+
     html_path = REPORT_DIR / ALL_USERS_HTML_NAME
+    md_path = REPORT_DIR / ALL_USERS_MD_NAME
 
-    _write_all_users_html_report(filtered_df, ordered_names, html_path)
-    _write_all_users_markdown_report(filtered_df, ordered_names, md_path, html_path)
+    bootstrap = {"risk_payload": risk_group_payload, "control_payload": control_group_payload}
+    html = _render_html_from_template(
+        "risk_vs_control_stats.html",
+        {"__BOOTSTRAP_JSON__": _json_for_html_embed(bootstrap)},
+    )
+    html_path.write_text(html, encoding="utf-8")
 
-    logger.info("Generated all-user markdown report: %s", md_path)
-    logger.info("Generated all-user html report: %s", html_path)
-    return [{"markdown_report": str(md_path), "html_report": str(html_path), "users": len(ordered_names)}]
+    risk_default_group = "group1"
+    control_default_group = "group1"
+    risk_default_df = cast(pd.DataFrame, risk_df.loc[risk_df["risk_user_group"] == risk_default_group].copy())
+    control_default_df = cast(
+        pd.DataFrame,
+        control_df.loc[control_df["control_user_group"] == control_default_group].copy(),
+    )
+    risk_default_names = _sort_names_by_profit(risk_default_df, _ordered_user_names(risk_default_df, None))
+    control_default_names = _sort_names_by_profit(control_default_df, _ordered_user_names(control_default_df, None))
+
+    lines = [
+        "# Risk vs Control User Report",
+        "",
+        "- note: group labels come from ETL parquet columns `risk_user_group` and `control_user_group`",
+        "- default markdown sections use risk group1 and control group1",
+        f"- html_stats_report: `{html_path.name}`",
+        "",
+        f"[Open interactive chart report]({html_path.name})",
+        "",
+    ]
+    _append_markdown_group_section(lines, risk_default_df, risk_default_names, "Risk Group 1 (default)")
+    _append_markdown_group_section(lines, control_default_df, control_default_names, "Control Group 1 (default)")
+    md_path.write_text("\n".join(lines), encoding="utf-8")
+
+    logger.info("Generated combined markdown report: %s", md_path)
+    logger.info("Generated combined html report: %s", html_path)
+    return [
+        {
+            "markdown_report": str(md_path),
+            "html_report": str(html_path),
+            "risk_group1_users": len(risk_group_payload["group1"]["user_names"]),
+            "risk_group2_users": len(risk_group_payload["group2"]["user_names"]),
+            "control_group1_users": len(control_group_payload["group1"]["user_names"]),
+            "control_group2_users": len(control_group_payload["group2"]["user_names"]),
+        }
+    ]
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Generate risk vs control dual-chart HTML and Markdown reports.")
+    parser.add_argument(
+        "--refresh-cache",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Reload parquet from S3 instead of using local cache (default: false).",
+    )
+    return parser.parse_args()
 
 
 def main() -> None:
+    args = _parse_args()
     setup_logging(
         f"{LOCAL_ROOT}/jobs/log",
         log_filename=os.path.splitext(os.path.basename(__file__))[0] + ".log",
     )
-    generate_reports_for_users(user_names=None, refresh_cache=False)
+    generate_risk_control_reports(refresh_cache=bool(args.refresh_cache))
 
 
 if __name__ == "__main__":

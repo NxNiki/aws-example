@@ -5,17 +5,19 @@ from textwrap import dedent
 import pandas as pd
 
 from bituslabs_ds.config import (
+    DATE_START_HOUR,
     DEFAULT_BASTION_IP,
+    ETL_CURRENCY_CODES,
+    ETL_EXCLUDED_OP_CODES,
     LOCAL_ROOT,
     REDSHIFT_HOST,
     REDSHIFT_PORT,
+    TIMEZONE_SHANGHAI,
     get_redshift_password,
     get_redshift_user,
     setup_logging,
 )
 from bituslabs_ds.etl import DataLoader, RedshiftBackend
-
-DATE_START_HOUR = 6
 
 
 def generate_query():
@@ -26,7 +28,7 @@ def generate_query():
             SELECT
                 t.user_id,
                 t.created_at,
-                TRUNC(DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS activity_date,
+                TRUNC(DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at))) AS activity_date,
                 t.script_id AS mathtable,
                 t.bet_amount,
                 t.actual_payout AS payout,
@@ -48,10 +50,10 @@ def generate_query():
                 public.fct_bet_orders AS t
             WHERE
                 CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', t.created_at) >= '2026-01-01 06:00:00'
-            AND t.currency_type = 'CNY'
+            AND t.currency_type IN {ETL_CURRENCY_CODES}
             AND t.status = 'COMPLETED'
             AND t.game_id = 'SS01'
-            AND t.op_code not in ('B26','TST','TSB','TSO')
+            AND t.op_code not in {ETL_EXCLUDED_OP_CODES}
         ),
 
             user_bets_group AS (

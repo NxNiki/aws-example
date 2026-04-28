@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Risk vs Control User Report</title>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    .toolbar { margin-bottom: 16px; }
+    .chart { width: 100%; height: 620px; }
+    .panel { margin-bottom: 40px; }
+    label { font-weight: 600; margin-right: 8px; }
+    select { padding: 6px 8px; min-width: 260px; }
+  </style>
+</head>
+<body>
+  <h1>Risk vs Control User Report</h1>
+  <div class="toolbar">
+    <label for="metricSelect">Select metric:</label>
+    <select id="metricSelect">
+      <option value="bullet_level">Bullet Level</option>
+      <option value="strategy_name">Strategy Name</option>
+      <option value="ip">IP</option>
+      <option value="fish_value">Fish Value</option>
+      <option value="multiplier_x_bullet">Multiplier x Bullet Level</option>
+    </select>
+    <label for="lineSelect" style="margin-left: 12px;">Right-axis line:</label>
+    <select id="lineSelect">
+      <option value="none">None</option>
+      <option value="rtp">RTP %</option>
+      <option value="total_profit">Total Profit</option>
+      <option value="account_duration_hours">Account Duration (Hours)</option>
+      <option value="average_bet_interval_seconds">Average Bet Interval (Seconds)</option>
+      <option value="median_bet_interval_seconds">Median Bet Interval (Seconds)</option>
+      <option value="num_bet_sessions">Number of Bet Sessions</option>
+    </select>
+    <label for="riskGroupSelect" style="margin-left: 12px;">Risk group:</label>
+    <select id="riskGroupSelect">
+      <option value="group1" selected>group1</option>
+      <option value="group2">group2</option>
+    </select>
+    <label for="controlGroupSelect" style="margin-left: 12px;">Control group:</label>
+    <select id="controlGroupSelect">
+      <option value="group1" selected>group1</option>
+      <option value="group2">group2</option>
+    </select>
+  </div>
+  <div class="panel">
+    <h2 id="riskTitle">Risk Group: group1</h2>
+    <div id="chart_risk" class="chart"></div>
+  </div>
+  <div class="panel">
+    <h2 id="controlTitle">Control Group: group1</h2>
+    <div id="chart_control" class="chart"></div>
+  </div>
+  <script type="application/json" id="bootstrap-data">__BOOTSTRAP_JSON__</script>
+  <script>
+    (function () {
+      const bootstrap = JSON.parse(document.getElementById('bootstrap-data').textContent);
+      const riskPayload = bootstrap.risk_payload;
+      const controlPayload = bootstrap.control_payload;
+
+      function renderOne(sourcePayload, groupKey, chartId, metricKey, lineKey) {
+        const info = sourcePayload[groupKey] || { payload: {}, line_payload: {}, user_names: [] };
+        const obj = info.payload[metricKey] || { data: [], layout: {}, title: String(metricKey) };
+        const traces = Array.isArray(obj.data) ? [...obj.data] : [];
+        const layout = Object.assign({}, obj.layout || {}, { title: obj.title || String(metricKey) });
+        if (lineKey !== 'none') {
+          const lineMap = info.line_payload || {};
+          const lineObj = lineMap[lineKey] || null;
+          const names = info.user_names || [];
+          if (lineObj && Array.isArray(lineObj.y)) {
+            const yVals = lineObj.y.map((v) => {
+              const n = Number(v);
+              return Number.isFinite(n) ? n : 0;
+            });
+            traces.push({
+              x: names,
+              y: yVals,
+              name: lineObj.name || lineKey,
+              type: 'scatter',
+              mode: 'lines+markers',
+              yaxis: 'y2',
+              line: { width: 2, color: '#111111' },
+              marker: { size: 7, color: '#111111' },
+            });
+            layout.yaxis2 = {
+              title: lineObj.name || lineKey,
+              overlaying: 'y',
+              side: 'right',
+              showgrid: false,
+              showline: true,
+              zeroline: false,
+              rangemode: 'tozero',
+            };
+            layout.showlegend = true;
+          }
+        }
+        Plotly.react(chartId, traces, layout, { responsive: true });
+      }
+
+      function renderAll() {
+        const metricKey = document.getElementById('metricSelect').value;
+        const lineKey = document.getElementById('lineSelect').value;
+        const riskGroupKey = document.getElementById('riskGroupSelect').value;
+        const controlGroupKey = document.getElementById('controlGroupSelect').value;
+        document.getElementById('riskTitle').textContent = 'Risk Group: ' + riskGroupKey;
+        document.getElementById('controlTitle').textContent = 'Control Group: ' + controlGroupKey;
+        try {
+          renderOne(riskPayload, riskGroupKey, 'chart_risk', metricKey, lineKey);
+          renderOne(controlPayload, controlGroupKey, 'chart_control', metricKey, lineKey);
+        } catch (err) {
+          console.error('renderAll failed:', err);
+        }
+      }
+
+      document.getElementById('metricSelect').addEventListener('change', renderAll);
+      document.getElementById('lineSelect').addEventListener('change', renderAll);
+      document.getElementById('riskGroupSelect').addEventListener('change', renderAll);
+      document.getElementById('controlGroupSelect').addEventListener('change', renderAll);
+      renderAll();
+    })();
+  </script>
+</body>
+</html>

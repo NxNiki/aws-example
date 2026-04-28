@@ -5,22 +5,25 @@ from textwrap import dedent
 import pandas as pd
 
 from bituslabs_ds.config import (
+    DATE_START_HOUR,
     DEFAULT_BASTION_IP,
     DEFAULT_ETL_OUTPUT,
+    ETL_CURRENCY_CODES,
+    ETL_EXCLUDED_OP_CODES,
     LOCAL_ROOT,
     REDSHIFT_HOST,
     REDSHIFT_PORT,
+    TIMEZONE_SHANGHAI,
     get_redshift_password,
     get_redshift_user,
     setup_logging,
 )
 from bituslabs_ds.etl import AggCol, DataLoader, ETLScheduler, RedshiftBackend, effective_start_date
 
-# Day boundary: 6 AM Shanghai time (same as fish_hunter)
-DATE_START_HOUR = 6
-
 GAME_ID = "SS03"
 AI_GROUP_ID = "jojpin-9mokha-rexQug"
+AB_TEST_GROUP_A = "4a04df21-c749-4808-8e55-3a0b74c084d2"
+AB_TEST_GROUP_B = "4f1a46ca-7baa-4452-9a40-ef21d9b33b57"
 
 # Shared column list for user_bets_group UNION (reused across group variants)
 _USER_BETS_GROUP_COLS = """
@@ -53,32 +56,33 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
         SELECT
             t.user_id,
             t.created_at,
-            t.script_id AS mathtable,
+            t.math_table_id AS mathtable,
             t.bet_amount,
             t.actual_payout AS payout,
             t.bet_type,
             t.actual_payout - t.bet_amount AS profit,
-            CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_date,
-            CAST(DATE_TRUNC('week', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_week,
-            CAST(DATE_TRUNC('month', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_month,
+            CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at))) AS DATE) AS activity_date,
+            CAST(DATE_TRUNC('week', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at))) AS DATE) AS activity_week,
+            CAST(DATE_TRUNC('month', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at))) AS DATE) AS activity_month,
             t.partition_ab[0] AS ab_group_id,
-            t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.created_at) AS delta_t,
-            LAG(t.bet_type) OVER (PARTITION BY t.user_id ORDER BY t.created_at) AS prev_bet_type,
-            LAG(t.bet_amount) OVER (PARTITION BY t.user_id ORDER BY t.created_at) AS prev_bet_amount,
+            LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) AS prev_created_at,
+            t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) AS delta_t,
+            LAG(t.bet_type) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) AS prev_bet_type,
+            LAG(t.bet_amount) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) AS prev_bet_amount,
             COUNT(t.user_id) OVER (PARTITION BY t.user_id) AS user_bet_count,
             CASE
-                WHEN LAG(t.script_id) OVER (PARTITION BY t.user_id ORDER BY t.created_at) IS NULL THEN 0
-                WHEN LAG(t.script_id) OVER (PARTITION BY t.user_id ORDER BY t.created_at) <> t.script_id THEN 1
+                WHEN LAG(t.math_table_id) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) IS NULL THEN 0
+                WHEN LAG(t.math_table_id) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) <> t.math_table_id THEN 1
                 ELSE 0
             END AS mathtable_change
         FROM
             public.fct_bet_orders AS t
         WHERE
             t.game_id = '{GAME_ID}'
-            AND CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at) >= '{effective_start}'
-            AND t.currency_type = 'CNY'
+            AND CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at) >= '{effective_start}'
             AND t.status = 'COMPLETED'
-            AND t.op_code not in ('B26','TST','TSB','TSO') 
+            AND t.currency_type IN {ETL_CURRENCY_CODES}
+            AND t.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
         ),
 
         user_bets_group AS (
@@ -86,10 +90,24 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 {_USER_BETS_GROUP_COLS}
                 CASE
                     WHEN t.ab_group_id = '{AI_GROUP_ID}' THEN 'AI'
+                    WHEN t.ab_group_id = '{AB_TEST_GROUP_A}' THEN 'AB_TEST_A'
+                    WHEN t.ab_group_id = '{AB_TEST_GROUP_B}' THEN 'AB_TEST_B'
                     ELSE 'Default'
                 END AS ai_group
             FROM
                 user_bets AS t
+
+            UNION ALL
+
+            SELECT
+                {_USER_BETS_GROUP_COLS}
+                CASE
+                    WHEN t.ab_group_id != '{AI_GROUP_ID}' THEN CONCAT('Default_', t.mathtable)
+                    WHEN t.ab_group_id = '{AI_GROUP_ID}' THEN t.mathtable
+                END AS ai_group
+            FROM
+                user_bets AS t
+            WHERE t.ab_group_id IS NOT NULL
         ),
 
         user_stats AS (
@@ -118,10 +136,20 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 COUNT(CASE WHEN t.bet_type = 'BASE' AND t.payout > 0 THEN 1 END) AS user_num_bets_bg_with_payout,
                 COUNT(CASE WHEN t.bet_type = 'FREE' AND t.payout > 0 THEN 1 END) AS user_num_bets_fg_with_payout,
 
-                AVG(CASE WHEN EXTRACT(EPOCH FROM t.delta_t) BETWEEN 0 AND 86400 THEN EXTRACT(EPOCH FROM t.delta_t) END)
-                    AS user_avg_delta_t_seconds,
+                AVG(CASE WHEN t.bet_type = 'BASE' AND t.prev_bet_type = 'BASE' AND EXTRACT(EPOCH FROM t.delta_t) BETWEEN 0 AND 86400 THEN EXTRACT(EPOCH FROM t.delta_t) END)
+                    AS user_avg_delta_t_seconds_bg,
 
-                SUM(t.mathtable_change) AS user_mathtable_change
+                SUM(t.mathtable_change) AS user_mathtable_change,
+
+                -- delta bet amount metrics:
+                SUM(CASE WHEN (t.bet_amount - t.prev_bet_amount) > 0 THEN (t.bet_amount - t.prev_bet_amount) END) AS user_accu_pos_delta_bet,
+                SUM(CASE WHEN (t.bet_amount - t.prev_bet_amount) < 0 THEN (t.bet_amount - t.prev_bet_amount) END) AS user_accu_neg_delta_bet,
+                AVG(CASE WHEN (t.bet_amount - t.prev_bet_amount) > 0 THEN (t.bet_amount - t.prev_bet_amount) END) AS user_accu_pos_delta_bet_avg,
+                AVG(CASE WHEN (t.bet_amount - t.prev_bet_amount) < 0 THEN (t.bet_amount - t.prev_bet_amount) END) AS user_accu_neg_delta_bet_avg,
+                SUM(t.bet_amount - t.prev_bet_amount) AS user_accu_delta_bet,
+                AVG(t.bet_amount - t.prev_bet_amount) AS user_accu_delta_bet_avg,
+                COUNT(CASE WHEN (t.bet_amount - t.prev_bet_amount) > 0 THEN 1 END) AS user_pos_delta_bet_num,
+                COUNT(CASE WHEN (t.bet_amount - t.prev_bet_amount) < 0 THEN 1 END) AS user_neg_delta_bet_num
 
             FROM user_bets_group AS t
             GROUP BY t.{stats_agg_col}, t.ai_group, t.user_id
@@ -130,12 +158,12 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
         user_first_bet AS (
             SELECT
                 user_id,
-                MIN(CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', created_at))) AS DATE)) AS first_bet_date
+                MIN(CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', created_at))) AS DATE)) AS first_bet_date
             FROM public.fct_bet_orders
             WHERE game_id = '{GAME_ID}'
-              AND currency_type = 'CNY'
+              AND currency_type IN {ETL_CURRENCY_CODES}
               AND status = 'COMPLETED'
-              AND op_code NOT IN ('B26','TST','TSB','TSO')
+              AND op_code NOT IN {ETL_EXCLUDED_OP_CODES}
             GROUP BY user_id
         )
 
@@ -166,14 +194,24 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             us.user_total_payout * 1.0 / NULLIF(us.user_total_bet, 0) AS user_rtp,
 
             -- User-level derived (not computed by DataMetrics):
-            us.user_avg_delta_t_seconds,
+            us.user_avg_delta_t_seconds_bg,
             us.user_num_bets_fg * 1.0 / NULLIF(us.user_num_bets, 0) AS user_fg_ratio,
             (us.user_total_payout - us.user_total_bet) AS user_total_profit,
             us.user_total_payout_bg * 1.0 / NULLIF(us.user_total_bet, 0) AS user_rtp_bg,
             us.user_total_payout_fg * 1.0 / NULLIF(us.user_total_bet_fg, 0) AS user_rtp_fg,
             us.user_num_bets_with_payout * 1.0 / NULLIF(us.user_num_bets, 0) AS user_hit_rate,
             us.user_num_bets_bg_with_payout * 1.0 / NULLIF(us.user_num_bets_bg, 0) AS user_hit_rate_bg,
-            us.user_num_bets_fg_with_payout * 1.0 / NULLIF(us.user_num_bets_fg, 0) AS user_hit_rate_fg
+            us.user_num_bets_fg_with_payout * 1.0 / NULLIF(us.user_num_bets_fg, 0) AS user_hit_rate_fg,
+
+            -- delta bet amount metrics:
+            us.user_accu_pos_delta_bet,
+            us.user_accu_neg_delta_bet,
+            us.user_accu_pos_delta_bet_avg,
+            us.user_accu_neg_delta_bet_avg,
+            us.user_accu_delta_bet,
+            us.user_accu_delta_bet_avg,
+            us.user_pos_delta_bet_num,
+            us.user_neg_delta_bet_num
 
         FROM user_stats AS us
         LEFT JOIN user_first_bet AS fb ON us.user_id = fb.user_id

@@ -1,5 +1,7 @@
 """
 Incremental ETL: platform ops daily report for FM01 (fish hunter), SS01, SS03.
+This script is used to generate the weekly report for all games, adpated from stehpanie's code.
+Incorporated into the dashboard by Xin.
 
 Reads from Redshift `platform.public.fct_platform_ops_daily_report`, writes Parquet to S3
 under ``{DEFAULT_ETL_OUTPUT}/jobs/output_weekly_report_all_games/ops_daily_report``.
@@ -19,6 +21,7 @@ from textwrap import dedent
 from bituslabs_ds.config import (
     DEFAULT_BASTION_IP,
     DEFAULT_ETL_OUTPUT,
+    ETL_CURRENCY_CODES,
     LOCAL_ROOT,
     REDSHIFT_HOST,
     REDSHIFT_PORT,
@@ -28,7 +31,6 @@ from bituslabs_ds.config import (
 )
 from bituslabs_ds.etl import DataLoader, ETLScheduler, RedshiftBackend
 
-CURRENCY_TYPE = "CNY"
 GAME_IDS = ("FM01", "SS01", "SS03")
 
 
@@ -37,9 +39,9 @@ def generate_query(start_date: str) -> str:
     return dedent(
         f"""
         SELECT *
-        FROM platform.public.fct_platform_ops_daily_report
+        FROM public.fct_platform_ops_daily_report
         WHERE bj_date_key >= DATE '{start_date}'
-          AND currency_type = '{CURRENCY_TYPE}'
+          AND currency_type IN {ETL_CURRENCY_CODES}
           AND game_id IN ({games_sql})
         ORDER BY bj_date_key, game_id
         """
@@ -69,7 +71,7 @@ if __name__ == "__main__":
     redshift_loader = DataLoader(
         backend=RedshiftBackend(
             host=REDSHIFT_HOST,
-            database="slot-machine",
+            database="platform",
             user=get_redshift_user(),
             password=get_redshift_password(),
             port=REDSHIFT_PORT,

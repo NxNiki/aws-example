@@ -82,6 +82,12 @@ def main() -> int:
             True,
         ),
         (
+            "ss03_mahjiang_streak ETL",
+            JOBS_DIR / "ss03_mahjiang_streak" / "etl_game_stats_daily_by_user_group.py",
+            [],
+            True,
+        ),
+        (
             "fish_hunter ETL",
             JOBS_DIR / "fish_hunter" / "etl_game_stats_daily_by_user.py",
             [],

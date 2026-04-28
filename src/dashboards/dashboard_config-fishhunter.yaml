@@ -59,6 +59,14 @@ stats_by_date:
     "user_bets_to_kill_fish_medium",
     "user_bets_to_kill_fish_high",
     "user_bets_to_kill_fish_ultra",
+    "user_accu_pos_delta_bet",
+    "user_accu_neg_delta_bet",
+    "user_accu_pos_delta_bet_avg",
+    "user_accu_neg_delta_bet_avg",
+    "user_accu_delta_bet",
+    "user_accu_delta_bet_avg",
+    "user_pos_delta_bet_num",
+    "user_neg_delta_bet_num",
   ]
 
   group3_label: "Fish Value and Bullets"

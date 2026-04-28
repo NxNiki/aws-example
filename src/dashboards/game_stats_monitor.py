@@ -42,9 +42,34 @@ from dashboards.weekly_report import (
     weekly_report_end_date_bounds,
 )
 
+# The AI chat agent runs as a separate service (FastAPI + Uvicorn).
+# The dashboard calls it over HTTP — no langchain/langgraph deps needed here.
+_CHAT_API_URL = os.environ.get("CHAT_API_URL", "http://localhost:8051")
+
 # ==========================================
 # Styling & Constants
 # ==========================================
+
+# Dash exposes `Dropdown.Options` as a TypedDict for this prop.
+_CHAT_PROVIDER_DROPDOWN_OPTIONS: list[dcc.Dropdown.Options] = [
+    {"label": "Gemini 2.5 Flash (fast)", "value": "gemini:gemini-2.5-flash"},
+    {"label": "Gemini 2.5 Pro (powerful)", "value": "gemini:gemini-2.5-pro"},
+    {"label": "GPT-4o-mini (fast)", "value": "openai:gpt-4o-mini"},
+    {"label": "GPT-4o (balanced)", "value": "openai:gpt-4o"},
+    {"label": "GPT-4.1-mini (balanced)", "value": "openai:gpt-4.1-mini"},
+    {"label": "GPT-4.1 (powerful)", "value": "openai:gpt-4.1"},
+]
+
+
+def _dropdown_options_from_strings(items: Sequence[str]) -> list[dcc.Dropdown.Options]:
+    """Same string for label and value; matches Dash ``Dropdown.Options``."""
+    return [{"label": n, "value": n} for n in items]
+
+
+def _dropdown_option_rows(rows: Sequence[tuple[str, str]]) -> list[dcc.Dropdown.Options]:
+    """Arbitrary label/value pairs; valid for ``dcc.Dropdown``, ``Checklist``, and ``RadioItems`` ``options``."""
+    return [{"label": a, "value": b} for a, b in rows]
+
 
 logger: logging.Logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())  # Safe for import
@@ -260,7 +285,7 @@ class GameStatsDashboard:
 
     DEFAULT_VISIBLE_GROUPS: int = 2
 
-    config_files: List[Dict[str, str]]
+    config_files: list[dcc.Dropdown.Options]
     config: dict
     lfs_by_date: Dict[str, pl.LazyFrame]
     lf_bet: pl.LazyFrame
@@ -268,7 +293,7 @@ class GameStatsDashboard:
     df_date_group_col: str
     df_bet_group_col: str
     df_user_group_col: str
-    df_user_group_dropdown_options: List[Dict[str, str]]
+    df_user_group_dropdown_options: list[dcc.Dropdown.Options]
     sessions: List[str]
     bet_metrics: List[str]
     plot_metrics: Dict[str, List[str]]
@@ -280,7 +305,7 @@ class GameStatsDashboard:
 
         self.config_files = self._find_config_files()
         self._reset_state()
-        self.config = load_config(self.config_files[0]["value"])
+        self.config = load_config(str(self.config_files[0]["value"]))
 
         self.app: Dash = Dash(__name__, suppress_callback_exceptions=True)
 
@@ -318,6 +343,7 @@ class GameStatsDashboard:
         self._ensure_bet_groups()
         self._build_main_layout()
         self._register_callbacks()
+        self._register_chat_callbacks()
 
     @property
     def date_col(self) -> str:
@@ -332,8 +358,8 @@ class GameStatsDashboard:
         self.df_bet_group_col = ""
         self.df_user_group_col = ""
         self.df_user_group_cols: List[str] = []
-        self.df_user_group_col_options: List[Dict[str, str]] = []
-        self.df_user_group_dropdown_options = [{"label": "all", "value": "all"}]
+        self.df_user_group_col_options: list[dcc.Dropdown.Options] = []
+        self.df_user_group_dropdown_options = _dropdown_options_from_strings(["all"])
         self.bet_metrics = []
         self.plot_metrics = {}
         # When loading a saved config, we may want to reuse its group date ranges
@@ -352,8 +378,8 @@ class GameStatsDashboard:
         ] = None
         self._weekly_report_df = None
 
-    def _find_config_files(self) -> List[Dict[str, str]]:
-        config_files: List[Dict[str, str]] = []
+    def _find_config_files(self) -> list[dcc.Dropdown.Options]:
+        config_files: list[dcc.Dropdown.Options] = []
         config_dir_path = Path(self.config_dir)
         if not config_dir_path.exists() or not config_dir_path.is_dir():
             config_dir_path = Path(__file__).parent
@@ -367,7 +393,7 @@ class GameStatsDashboard:
                 except Exception as e:
                     logger.warning(f"Could not load config {file_path}: {e}")
                     config_files.append({"label": file_path.stem, "value": str(file_path.absolute())})
-        return sorted(config_files, key=lambda x: x["label"])
+        return sorted(config_files, key=lambda x: str(x["label"]))
 
     def _load_date_data(self) -> None:
         for gran, file_paths in self.date_files_config.items():
@@ -658,7 +684,7 @@ class GameStatsDashboard:
                     [
                         dcc.Dropdown(
                             id="config-dropdown",
-                            options=cast(Any, self.config_files),
+                            options=self.config_files,
                             value=self.config_files[0]["value"],
                             clearable=False,
                             style=dict(
@@ -684,6 +710,12 @@ class GameStatsDashboard:
                                 dcc.Tab(
                                     label="Stats by Group",
                                     value="tab-group",
+                                    style=Styles.NAV_TAB,
+                                    selected_style=Styles.NAV_TAB_SELECTED,
+                                ),
+                                dcc.Tab(
+                                    label="Stats Deepdive",
+                                    value="tab-viz",
                                     style=Styles.NAV_TAB,
                                     selected_style=Styles.NAV_TAB_SELECTED,
                                 ),
@@ -826,6 +858,22 @@ class GameStatsDashboard:
                                         ),
                                     ],
                                 ),
+                                html.Button(
+                                    "AI Assistant",
+                                    id="chat-toggle-btn",
+                                    n_clicks=0,
+                                    style={
+                                        "marginLeft": "12px",
+                                        "padding": "6px 14px",
+                                        "cursor": "pointer",
+                                        "backgroundColor": "#FF7F00",
+                                        "color": "white",
+                                        "border": "none",
+                                        "borderRadius": "4px",
+                                        "fontSize": "13px",
+                                        "fontWeight": "bold",
+                                    },
+                                ),
                             ],
                             style={"display": "flex", "alignItems": "center", "marginLeft": "auto"},
                         ),
@@ -838,8 +886,12 @@ class GameStatsDashboard:
                 dcc.Store(id="tab-group-g1-state", data=None),
                 dcc.Store(id="tab-group-g2-state", data=None),
                 dcc.Store(id="tab-group-g3-state", data=None),
+                dcc.Store(id="tab-viz-p1-state", data=None),
+                dcc.Store(id="tab-viz-p2-state", data=None),
                 dcc.Store(id="tab-bet-state", data=None),
                 dcc.Store(id="dashboard-load-trigger", data=None),
+                dcc.Store(id="chat-history", data=[]),
+                dcc.Store(id="chat-pending-request", data=None),
                 html.Div(
                     self._layout_stats_by_date(),
                     id="tab-date-content",
@@ -848,6 +900,11 @@ class GameStatsDashboard:
                 html.Div(
                     self._layout_stats_by_group(),
                     id="tab-group-content",
+                    style={**Styles.PAGE_CONTENT, "display": "none"},
+                ),
+                html.Div(
+                    self._layout_stats_visualization(),
+                    id="tab-viz-content",
                     style={**Styles.PAGE_CONTENT, "display": "none"},
                 ),
                 html.Div(
@@ -860,6 +917,7 @@ class GameStatsDashboard:
                     id="tab-bet-content",
                     style={**Styles.PAGE_CONTENT, "display": "none"},
                 ),
+                self._layout_chat_dialog(),
             ]
         )
 
@@ -867,8 +925,8 @@ class GameStatsDashboard:
         self,
         label: str,
         elem_id: str,
-        options: Any,
-        value: Any,
+        options: list[dcc.Dropdown.Options],
+        value: Optional[str],
         *,
         clearable: bool,
         margin_left: str = "8px",
@@ -889,7 +947,7 @@ class GameStatsDashboard:
                 html.Label(label, style={**Styles.CONTROL_LABEL, "marginRight": "6px", "whiteSpace": "nowrap"}),
                 dcc.Dropdown(
                     id=elem_id,
-                    options=cast(Any, options),
+                    options=options,
                     value=value,
                     clearable=clearable,
                     style=Styles.DROPDOWN_NARROW,
@@ -901,10 +959,10 @@ class GameStatsDashboard:
     def _layout_show_group_checklist_sections(
         self,
         checklist_id_prefix: str,
-        ug1_opts: list,
-        ug1_defaults: list,
-        ug2_opts: list,
-        ug2_defaults: list,
+        ug1_opts: list[dcc.Dropdown.Options],
+        ug1_defaults: list[str],
+        ug2_opts: list[dcc.Dropdown.Options],
+        ug2_defaults: list[str],
         col2_hide_style: Dict[str, str],
     ) -> List[Component]:
         """Show Group 1 / Show Group 2 blocks (same structure in tab_date and tab_group plot panels)."""
@@ -914,8 +972,8 @@ class GameStatsDashboard:
                     html.Label("Show Group 1:", style=Styles.CONTROL_LABEL),
                     dcc.Checklist(
                         id=f"{checklist_id_prefix}-show-ug-1",
-                        options=cast(Any, ug1_opts),
-                        value=cast(Any, ug1_defaults),
+                        options=ug1_opts,
+                        value=ug1_defaults,
                         labelStyle=Styles.CHECKLIST_BLOCK,
                         style={"columnCount": 3, "columnGap": "8px"},
                     ),
@@ -930,8 +988,8 @@ class GameStatsDashboard:
                             html.Label("Show Group 2:", style=Styles.CONTROL_LABEL),
                             dcc.Checklist(
                                 id=f"{checklist_id_prefix}-show-ug-2",
-                                options=cast(Any, ug2_opts),
-                                value=cast(Any, ug2_defaults),
+                                options=ug2_opts,
+                                value=ug2_defaults,
                                 labelStyle=Styles.CHECKLIST_BLOCK,
                                 style={"columnCount": 3, "columnGap": "8px"},
                             ),
@@ -947,10 +1005,10 @@ class GameStatsDashboard:
         self,
         checklist_id_prefix: str,
         panel_id: str,
-        ug1_opts: list,
-        ug1_defaults: list,
-        ug2_opts: list,
-        ug2_defaults: list,
+        ug1_opts: list[dcc.Dropdown.Options],
+        ug1_defaults: list[str],
+        ug2_opts: list[dcc.Dropdown.Options],
+        ug2_defaults: list[str],
         col2_hide_style: Dict[str, str],
     ) -> List[Component]:
         """Tail of tab_date sidebar: same rhythm as tab_group (HR → Show Group 1/2 → HR → bottom controls)."""
@@ -972,7 +1030,7 @@ class GameStatsDashboard:
                         [
                             dcc.Checklist(
                                 id=f"date-{panel_id}-log",
-                                options=cast(Any, [{"label": " Hybrid Log", "value": "ON"}]),
+                                options=_dropdown_option_rows([(" Hybrid Log", "ON")]),
                                 value=[],
                                 style=Styles.CHECKLIST_INLINE,
                             ),
@@ -1032,9 +1090,7 @@ class GameStatsDashboard:
                         ),
                         dcc.Dropdown(
                             id="date-granularity",
-                            options=cast(
-                                Any, [{"label": gran, "value": gran} for gran in list(self.date_files_config.keys())]
-                            ),
+                            options=_dropdown_options_from_strings(list(self.date_files_config.keys())),
                             value=list(self.date_files_config.keys())[0],
                             clearable=False,
                             style=Styles.DROPDOWN_NARROW,
@@ -1081,7 +1137,7 @@ class GameStatsDashboard:
                                             html.Label("Left Axis Metrics:", style=Styles.CONTROL_LABEL),
                                             dcc.Dropdown(
                                                 id=f"date-{group_id}-left-metrics",
-                                                options=cast(Any, self.plot_metrics[group_id]),
+                                                options=_dropdown_options_from_strings(self.plot_metrics[group_id]),
                                                 value=(
                                                     [self.plot_metrics[group_id][0]]
                                                     if self.plot_metrics[group_id] and group_id == "g1"
@@ -1098,7 +1154,7 @@ class GameStatsDashboard:
                                             html.Label("Right Axis Metrics:", style=Styles.CONTROL_LABEL),
                                             dcc.Dropdown(
                                                 id=f"date-{group_id}-right-metrics",
-                                                options=cast(Any, self.plot_metrics[group_id]),
+                                                options=_dropdown_options_from_strings(self.plot_metrics[group_id]),
                                                 value=[],
                                                 multi=True,
                                                 style=Styles.DROPDOWN_WIDE,
@@ -1231,7 +1287,7 @@ class GameStatsDashboard:
                                             html.Label("Metric:", style=Styles.CONTROL_LABEL),
                                             dcc.Dropdown(
                                                 id=f"group-{group_id}-metrics",
-                                                options=cast(Any, self.plot_metrics[group_id]),
+                                                options=_dropdown_options_from_strings(self.plot_metrics[group_id]),
                                                 value=(
                                                     self.plot_metrics[group_id][0]
                                                     if self.plot_metrics[group_id] and group_id == "g1"
@@ -1248,12 +1304,8 @@ class GameStatsDashboard:
                                             html.Label("Display Mode:", style=Styles.CONTROL_LABEL),
                                             dcc.RadioItems(
                                                 id=f"group-{group_id}-display",
-                                                options=cast(
-                                                    Any,
-                                                    [
-                                                        {"label": "Box Plot", "value": "box"},
-                                                        {"label": "Bar (Mean)", "value": "bar"},
-                                                    ],
+                                                options=_dropdown_option_rows(
+                                                    [("Box Plot", "box"), ("Bar (Mean)", "bar")]
                                                 ),
                                                 value="box",
                                                 labelStyle={"display": "inline-block", "marginRight": "15px"},
@@ -1267,19 +1319,19 @@ class GameStatsDashboard:
                                             html.Label("Show Date Range(s):", style=Styles.CONTROL_LABEL),
                                             dcc.Checklist(
                                                 id=f"group-{group_id}-show-r1",
-                                                options=cast(Any, [{"label": "Range 1", "value": "ON"}]),
+                                                options=_dropdown_option_rows([("Range 1", "ON")]),
                                                 value=["ON"],
                                                 style=Styles.CHECKLIST_INLINE,
                                             ),
                                             dcc.Checklist(
                                                 id=f"group-{group_id}-show-r2",
-                                                options=cast(Any, [{"label": "Range 2", "value": "ON"}]),
+                                                options=_dropdown_option_rows([("Range 2", "ON")]),
                                                 value=["ON"],
                                                 style=Styles.CHECKLIST_INLINE,
                                             ),
                                             dcc.Checklist(
                                                 id=f"group-{group_id}-show-r3",
-                                                options=cast(Any, [{"label": "Range 3", "value": "ON"}]),
+                                                options=_dropdown_option_rows([("Range 3", "ON")]),
                                                 value=["ON"],
                                                 style=Styles.CHECKLIST_INLINE,
                                             ),
@@ -1302,7 +1354,7 @@ class GameStatsDashboard:
                                                 [
                                                     dcc.Checklist(
                                                         id=f"group-{group_id}-clip-enable",
-                                                        options=cast(Any, [{"label": "Enable", "value": "ON"}]),
+                                                        options=_dropdown_option_rows([("Enable", "ON")]),
                                                         value=[],
                                                         style=Styles.CHECKLIST_INLINE,
                                                     ),
@@ -1350,14 +1402,486 @@ class GameStatsDashboard:
             ]
         )
 
+    def _viz_derived_metric_options(self) -> list[dcc.Dropdown.Options]:
+        """Derived metric options — all ``DataMetrics.METRICS`` (computed aggregates)."""
+        return _dropdown_options_from_strings(sorted(DataMetrics.METRICS))
+
+    def _viz_user_metric_options(self) -> list[dcc.Dropdown.Options]:
+        """User-level raw metric options — every ``user_*`` column actually present in the loaded parquet.
+
+        Derived from the dataframe schema (not a hardcoded list) so any ``user_*`` column produced
+        by the per-game ETL — e.g. ``user_avg_delta_t_seconds``, ``user_fg_ratio``,
+        ``user_mathtable_change``, ``user_hit_rate`` — automatically appears here without a code
+        change.  Two types of columns are excluded:
+
+        - Columns computed by ``DataMetrics`` (``user_rtp_median``, ``user_rtp_ultilization_ratio``)
+          — they belong in the Derived panel even if the ETL pre-materialises them.
+        - Columns listed in ``stats_by_date.user_group_cols`` (e.g. ``ai_group``, ``user_group``,
+          ``user_group2``) — they are group-by keys, not metrics to plot.
+
+        Falls back to ``ENRICH_USER_ROW_INPUT_COLUMNS`` (with the same exclusions) if no data is
+        loaded yet.
+        """
+        excluded_group_cols = set(self.df_user_group_cols or [])
+        gran = next(iter(self.date_files_config.keys()), None)
+        lf = self.lfs_by_date.get(gran) if gran else None
+        if lf is not None and lf.collect_schema().len() > 0:
+            names = lf.collect_schema().names()
+            cols = sorted(
+                c
+                for c in names
+                if c.startswith("user_")
+                and c != "user_id"
+                and c not in DataMetrics.METRICS
+                and c not in excluded_group_cols
+            )
+            if cols:
+                return _dropdown_options_from_strings(cols)
+        fallback = ENRICH_USER_ROW_INPUT_COLUMNS - {"user_id"} - DataMetrics.METRICS - excluded_group_cols
+        return _dropdown_options_from_strings(sorted(fallback))
+
+    _VIZ_DISPLAY_MODES: List[Tuple[str, str]] = [
+        ("Histogram", "histogram"),
+        ("Heatmap", "heatmap"),
+        ("Scatter Plot", "scatter"),
+    ]
+    # Metric-selector rows: MAX_ROWS slots are pre-rendered with fixed IDs.  The first
+    # ``DEFAULT_FILLED`` rows are pre-populated with default metrics; the row immediately
+    # after the last filled row is always shown empty (so the user can add one more).
+    # Visibility is data-driven — no explicit "Add metrics" button needed.
+    _VIZ_MS_MAX_ROWS: int = 16
+    _VIZ_HM_DEFAULT_FILLED: int = 3
+    _VIZ_SM_DEFAULT_FILLED: int = 2
+
+    def _layout_stats_visualization(self) -> html.Div:
+        """Layout for the 'Stats Deepdive' tab.
+
+        Header mirrors ``stats_by_group`` (3 date pickers + 2 group-column selectors).
+        Two plotting panels — DataMetrics-derived and user-level raw — share the same
+        controls (metrics multi-select, display mode, range/group toggles, clipping).
+        """
+        ranges = self._loaded_group_date_ranges or self._compute_group_date_ranges()
+
+        col1 = self.df_user_group_cols[0] if self.df_user_group_cols else None
+        col2 = self.df_user_group_cols[1] if len(self.df_user_group_cols) > 1 else None
+        has_col2 = col2 is not None
+
+        ug1_opts, ug1_defaults = self._col_opts_and_default(col1)
+        ug2_opts, ug2_defaults = self._col_opts_and_default(col2)
+
+        col1_init_opts = self.df_user_group_col_options
+        col2_init_opts = self.df_user_group_col_options
+
+        _col2_hide = {"display": "none"} if not has_col2 else {}
+
+        def range_block(label: str, idx: int, start: Any, end: Any, init_month: Any) -> html.Div:
+            return html.Div(
+                [
+                    html.Label(label, style=Styles.CONTROL_LABEL),
+                    dcc.DatePickerRange(
+                        id=f"viz-date-picker-range{idx}",
+                        min_date_allowed=ranges[0],
+                        max_date_allowed=ranges[1],
+                        initial_visible_month=init_month or ranges[0],
+                        start_date=start or ranges[0],
+                        end_date=end or start,
+                        display_format="YYYY-MM-DD",
+                        style={"width": "100%"},
+                    ),
+                ],
+                style={"marginRight": "20px"},
+            )
+
+        date_group_picker = html.Div(
+            [
+                html.Div(
+                    [
+                        range_block("Range 1 (Oldest)", 1, ranges[2], ranges[3], ranges[2]),
+                        range_block("Range 2", 2, ranges[4], ranges[5], ranges[4]),
+                        range_block("Range 3 (Newest)", 3, ranges[6], ranges[7], ranges[6]),
+                        self._layout_inline_group_column_dropdown(
+                            "Group Column 1:",
+                            "viz-ug-col-1",
+                            col1_init_opts,
+                            col1,
+                            clearable=False,
+                            margin_left="8px",
+                        ),
+                        self._layout_inline_group_column_dropdown(
+                            "Group Column 2:",
+                            "viz-ug-col-2",
+                            col2_init_opts,
+                            col2,
+                            clearable=True,
+                            margin_left="8px",
+                            extra_style=_col2_hide,
+                        ),
+                    ],
+                    style={**Styles.FLEX_ROW_CENTER, "alignItems": "flex-start", "flexWrap": "wrap"},
+                ),
+            ],
+            style=Styles.SECTION_GROUP,
+        )
+
+        download_config: Dict[str, Any] = dict(
+            toImageButtonOptions=dict(format="png", height=700, width=1200, scale=3),
+            displaylogo=False,
+            # Plotly installs a ResizeObserver when responsive is True; without this the
+            # plot measures its container only at creation (0px while display:none) and
+            # keeps that stale width, then stretches on the first real resize event.
+            responsive=True,
+        )
+
+        def create_panel(panel_id: str, label: str, metric_options: list[dcc.Dropdown.Options]) -> html.Div:
+            dl_id = f"viz-{panel_id}-plot"
+
+            def build_metric_rows(prefix: str, default_filled: int) -> List[Component]:
+                """Build MAX_ROWS per-metric rows for heatmap (prefix='hm') / scatter (prefix='sm').
+
+                The first ``default_filled`` rows are pre-populated with the first alphabetical
+                metrics (so the panel is useful immediately) plus one trailing empty row so the
+                user can "add more" simply by picking a value.  Extra rows are rendered but
+                hidden — a visibility callback driven by current row values shows/hides them
+                dynamically: ``show rows 0..max_filled+1``.
+                """
+                default_metrics: List[Optional[str]] = [
+                    (str(opt["value"]) if i < len(metric_options) else None)
+                    for i, opt in enumerate(metric_options[: self._VIZ_MS_MAX_ROWS])
+                ]
+                while len(default_metrics) < self._VIZ_MS_MAX_ROWS:
+                    default_metrics.append(None)
+                rows: List[Component] = []
+                # ``default_filled`` rows filled + 1 trailing empty = ``default_filled + 1`` visible initially.
+                initial_visible_until = min(default_filled, self._VIZ_MS_MAX_ROWS - 1)
+                for i in range(self._VIZ_MS_MAX_ROWS):
+                    default_val = default_metrics[i] if i < default_filled else None
+                    row_visible = i <= initial_visible_until
+                    rows.append(
+                        html.Div(
+                            [
+                                html.Label(
+                                    f"Metric {i + 1}:",
+                                    style={
+                                        **Styles.CONTROL_LABEL,
+                                        "marginBottom": "0",
+                                        "marginRight": "6px",
+                                        "minWidth": "72px",
+                                        "whiteSpace": "nowrap",
+                                    },
+                                ),
+                                dcc.Dropdown(
+                                    id=f"viz-{panel_id}-{prefix}-metric-{i}",
+                                    options=metric_options,
+                                    value=default_val,
+                                    clearable=True,
+                                    style={"flex": "1", "minWidth": "120px"},
+                                ),
+                                dcc.Checklist(
+                                    id=f"viz-{panel_id}-{prefix}-log-{i}",
+                                    options=_dropdown_option_rows([(" Log", "ON")]),
+                                    value=[],
+                                    style={
+                                        **Styles.CHECKLIST_INLINE,
+                                        "marginBottom": "0",
+                                        "marginLeft": "6px",
+                                        "whiteSpace": "nowrap",
+                                    },
+                                ),
+                            ],
+                            id=f"viz-{panel_id}-{prefix}-row-{i}",
+                            style={
+                                **Styles.FLEX_ROW_CENTER,
+                                "marginBottom": "4px",
+                                "display": "flex" if row_visible else "none",
+                            },
+                        )
+                    )
+                return rows
+
+            hm_rows = build_metric_rows("hm", self._VIZ_HM_DEFAULT_FILLED)
+            sm_rows = build_metric_rows("sm", self._VIZ_SM_DEFAULT_FILLED)
+            return html.Div(
+                [
+                    html.H4(label, style=Styles.PANEL_HEADER),
+                    html.Div(
+                        [
+                            html.Div(
+                                [
+                                    html.Div(
+                                        [
+                                            html.Label("Display Mode:", style=Styles.CONTROL_LABEL),
+                                            dcc.RadioItems(
+                                                id=f"viz-{panel_id}-display",
+                                                options=_dropdown_option_rows(self._VIZ_DISPLAY_MODES),
+                                                value="histogram",
+                                                labelStyle={"display": "inline-block", "marginRight": "15px"},
+                                            ),
+                                        ],
+                                        style=Styles.CONTROL_GROUP,
+                                    ),
+                                    # General Metrics multi-select — visible for histogram / scatter.
+                                    html.Div(
+                                        [
+                                            html.Label("Metrics:", style=Styles.CONTROL_LABEL),
+                                            dcc.Dropdown(
+                                                id=f"viz-{panel_id}-metrics",
+                                                options=metric_options,
+                                                value=[],
+                                                multi=True,
+                                                style=Styles.DROPDOWN_WIDE,
+                                            ),
+                                        ],
+                                        id=f"viz-{panel_id}-metrics-container",
+                                        style=Styles.CONTROL_GROUP,
+                                    ),
+                                    # Heatmap metrics — visible only for heatmap mode.  Each row is a
+                                    # single-column dropdown plus an optional "Log" (Yeo-Johnson) flag.
+                                    # Rows auto-add: always shows one trailing empty row; filling it reveals
+                                    # the next; clearing the last filled row collapses the trailing empty.
+                                    html.Div(
+                                        hm_rows,
+                                        id=f"viz-{panel_id}-hm-container",
+                                        style={**Styles.CONTROL_GROUP, "display": "none"},
+                                    ),
+                                    # Scatter metrics — same dynamic-row logic as heatmap, default 2 filled.
+                                    html.Div(
+                                        sm_rows,
+                                        id=f"viz-{panel_id}-sm-container",
+                                        style={**Styles.CONTROL_GROUP, "display": "none"},
+                                    ),
+                                    # Histogram-only controls — live inside the fixed-width sidebar so
+                                    # showing/hiding them never changes the graph container's size.
+                                    html.Div(
+                                        [
+                                            html.Div(
+                                                [
+                                                    html.Label(
+                                                        "Bins:",
+                                                        style={
+                                                            **Styles.CONTROL_LABEL,
+                                                            "marginBottom": "0",
+                                                            "marginRight": "6px",
+                                                            "whiteSpace": "nowrap",
+                                                        },
+                                                    ),
+                                                    dcc.Dropdown(
+                                                        id=f"viz-{panel_id}-nbins",
+                                                        options=_dropdown_option_rows(
+                                                            [
+                                                                ("50", "50"),
+                                                                ("100", "100"),
+                                                                ("200", "200"),
+                                                                ("500", "500"),
+                                                            ]
+                                                        ),
+                                                        value="50",
+                                                        clearable=False,
+                                                        style={"width": "80px", "marginRight": "10px"},
+                                                    ),
+                                                    dcc.Checklist(
+                                                        id=f"viz-{panel_id}-log-y",
+                                                        options=_dropdown_option_rows([(" Log Y", "ON")]),
+                                                        value=[],
+                                                        style={**Styles.CHECKLIST_INLINE, "marginBottom": "0"},
+                                                    ),
+                                                    dcc.Checklist(
+                                                        id=f"viz-{panel_id}-normalize",
+                                                        options=_dropdown_option_rows([(" Normalize", "ON")]),
+                                                        value=[],
+                                                        style={**Styles.CHECKLIST_INLINE, "marginBottom": "0"},
+                                                    ),
+                                                ],
+                                                style={
+                                                    **Styles.FLEX_ROW_CENTER,
+                                                    "flexWrap": "wrap",
+                                                    "gap": "4px",
+                                                },
+                                            ),
+                                        ],
+                                        id=f"viz-{panel_id}-hist-controls",
+                                        style=Styles.CONTROL_GROUP,
+                                    ),
+                                    # Scatter-only controls — shown only when Display Mode == "scatter".
+                                    # Lives inside the fixed-width sidebar so toggling does not reflow the graph.
+                                    html.Div(
+                                        [
+                                            html.Div(
+                                                [
+                                                    dcc.Checklist(
+                                                        id=f"viz-{panel_id}-scatter-log-x",
+                                                        options=_dropdown_option_rows([(" Log X", "ON")]),
+                                                        value=[],
+                                                        style={**Styles.CHECKLIST_INLINE, "marginBottom": "0"},
+                                                    ),
+                                                    dcc.Checklist(
+                                                        id=f"viz-{panel_id}-scatter-symlog-x",
+                                                        options=_dropdown_option_rows([(" Sym Log X", "ON")]),
+                                                        value=[],
+                                                        style={**Styles.CHECKLIST_INLINE, "marginBottom": "0"},
+                                                    ),
+                                                    dcc.Checklist(
+                                                        id=f"viz-{panel_id}-scatter-log-y",
+                                                        options=_dropdown_option_rows([(" Log Y", "ON")]),
+                                                        value=[],
+                                                        style={**Styles.CHECKLIST_INLINE, "marginBottom": "0"},
+                                                    ),
+                                                    dcc.Checklist(
+                                                        id=f"viz-{panel_id}-scatter-symlog-y",
+                                                        options=_dropdown_option_rows([(" Sym Log Y", "ON")]),
+                                                        value=[],
+                                                        style={**Styles.CHECKLIST_INLINE, "marginBottom": "0"},
+                                                    ),
+                                                ],
+                                                style={**Styles.FLEX_ROW_CENTER, "flexWrap": "wrap", "gap": "4px"},
+                                            ),
+                                            html.Div(
+                                                [
+                                                    dcc.Checklist(
+                                                        id=f"viz-{panel_id}-outliers-enable",
+                                                        options=_dropdown_option_rows([(" Remove outliers", "ON")]),
+                                                        value=[],
+                                                        style={**Styles.CHECKLIST_INLINE, "marginBottom": "0"},
+                                                    ),
+                                                    html.Label(
+                                                        "σ:",
+                                                        style={
+                                                            **Styles.CONTROL_LABEL,
+                                                            "marginBottom": "0",
+                                                            "marginLeft": "6px",
+                                                            "marginRight": "4px",
+                                                        },
+                                                    ),
+                                                    dcc.Dropdown(
+                                                        id=f"viz-{panel_id}-outliers-std",
+                                                        options=_dropdown_option_rows(
+                                                            [
+                                                                ("2", "2"),
+                                                                ("2.5", "2.5"),
+                                                                ("3", "3"),
+                                                                ("3.5", "3.5"),
+                                                                ("4", "4"),
+                                                            ]
+                                                        ),
+                                                        value="3",
+                                                        clearable=False,
+                                                        style={"width": "70px"},
+                                                    ),
+                                                ],
+                                                style={
+                                                    **Styles.FLEX_ROW_CENTER,
+                                                    "flexWrap": "wrap",
+                                                    "gap": "4px",
+                                                    "marginTop": "6px",
+                                                },
+                                            ),
+                                        ],
+                                        id=f"viz-{panel_id}-scatter-controls",
+                                        style=Styles.CONTROL_GROUP,
+                                    ),
+                                    html.Hr(style=Styles.HR),
+                                    html.Div(
+                                        [
+                                            html.Label("Show Date Range(s):", style=Styles.CONTROL_LABEL),
+                                            dcc.Checklist(
+                                                id=f"viz-{panel_id}-show-r1",
+                                                options=_dropdown_option_rows([("Range 1", "ON")]),
+                                                value=["ON"],
+                                                style=Styles.CHECKLIST_INLINE,
+                                            ),
+                                            dcc.Checklist(
+                                                id=f"viz-{panel_id}-show-r2",
+                                                options=_dropdown_option_rows([("Range 2", "ON")]),
+                                                value=["ON"],
+                                                style=Styles.CHECKLIST_INLINE,
+                                            ),
+                                            dcc.Checklist(
+                                                id=f"viz-{panel_id}-show-r3",
+                                                options=_dropdown_option_rows([("Range 3", "ON")]),
+                                                value=["ON"],
+                                                style=Styles.CHECKLIST_INLINE,
+                                            ),
+                                        ],
+                                        style=Styles.CONTROL_GROUP,
+                                    ),
+                                    html.Hr(style=Styles.HR),
+                                    *self._layout_show_group_checklist_sections(
+                                        f"viz-{panel_id}",
+                                        ug1_opts,
+                                        ug1_defaults,
+                                        ug2_opts,
+                                        ug2_defaults,
+                                        _col2_hide,
+                                    ),
+                                    html.Div(
+                                        [
+                                            html.Label("Clip Data:", style=Styles.CONTROL_LABEL),
+                                            html.Div(
+                                                [
+                                                    dcc.Checklist(
+                                                        id=f"viz-{panel_id}-clip-enable",
+                                                        options=_dropdown_option_rows([("Enable", "ON")]),
+                                                        value=[],
+                                                        style=Styles.CHECKLIST_INLINE,
+                                                    ),
+                                                    html.Label("Min:", style={"marginLeft": "5px"}),
+                                                    dcc.Input(
+                                                        id=f"viz-{panel_id}-clip-min",
+                                                        type="number",
+                                                        placeholder="min",
+                                                        style=Styles.INPUT_SMALL,
+                                                    ),
+                                                    html.Label("Max:", style={"marginLeft": "5px"}),
+                                                    dcc.Input(
+                                                        id=f"viz-{panel_id}-clip-max",
+                                                        type="number",
+                                                        placeholder="max",
+                                                        style=Styles.INPUT_SMALL,
+                                                    ),
+                                                ],
+                                                style=Styles.FLEX_ROW_CENTER,
+                                            ),
+                                        ],
+                                        style=Styles.CONTROL_GROUP,
+                                    ),
+                                ],
+                                style=Styles.CONTROL_PANEL_CONTAINER,
+                            ),
+                            html.Div(
+                                [dcc.Graph(id=dl_id, style={"height": "900px"}, config=cast(Any, download_config))],
+                                style=Styles.GRAPH_CONTAINER,
+                            ),
+                        ],
+                        style=Styles.FLEX_ROW,
+                    ),
+                ],
+                style=Styles.BOX,
+            )
+
+        return html.Div(
+            [
+                date_group_picker,
+                create_panel("p1", "Derived Metrics (DataMetrics)", self._viz_derived_metric_options()),
+                create_panel("p2", "User-Level Metrics", self._viz_user_metric_options()),
+            ]
+        )
+
     def _layout_weekly_report(self) -> html.Div:
         wr = self.config.get("weekly_report") or {}
         game_id = wr.get("game_id")
         if not game_id:
             return html.Div(
                 html.P(
-                    "Weekly report is not configured for this dashboard. Add a weekly_report section "
-                    "(game_id, files, currency_type) to the YAML.",
+                    [
+                        "Weekly report is not configured for this dashboard. Add a weekly_report section "
+                        "(game_id, files, currency_type) to the YAML. Also make sure the weekly-report "
+                        "parquet data has been uploaded to S3 at ",
+                        html.Code(
+                            "s3://bituslabs-team-ai/etl-results/jobs/output_weekly_report_all_games/ops_daily_report"
+                        ),
+                        " (produced by ",
+                        html.Code("jobs/operation_daily_report/etl_weekly_report_all_games.py"),
+                        ").",
+                    ],
                     style={"color": "#64748b"},
                 ),
                 style=Styles.PAGE_CONTENT,
@@ -1443,7 +1967,7 @@ class GameStatsDashboard:
                                         html.Label("Select Session:", style=Styles.CONTROL_LABEL),
                                         dcc.Dropdown(
                                             id="session-dropdown",
-                                            options=cast(Any, [{"label": s, "value": s} for s in self.sessions]),
+                                            options=_dropdown_options_from_strings(self.sessions),
                                             value=self.sessions[0] if self.sessions else None,
                                             clearable=False,
                                             style=Styles.DROPDOWN_WIDE,
@@ -1457,7 +1981,7 @@ class GameStatsDashboard:
                                         html.Label("Compare Strategies:", style=Styles.CONTROL_LABEL),
                                         dcc.Checklist(
                                             id="strategy-checklist",
-                                            options=cast(Any, [{"label": s, "value": s} for s in self.df_bet_groups]),
+                                            options=_dropdown_options_from_strings(self.df_bet_groups),
                                             value=self.df_bet_groups[: self.DEFAULT_VISIBLE_GROUPS],
                                             labelStyle=Styles.CHECKLIST_BLOCK,
                                         ),
@@ -1475,7 +1999,7 @@ class GameStatsDashboard:
                                         html.Label("Metrics (Left Axis):", style=Styles.CONTROL_LABEL),
                                         dcc.Dropdown(
                                             id="metric-checklist",
-                                            options=cast(Any, [{"label": m, "value": m} for m in self.bet_metrics]),
+                                            options=_dropdown_options_from_strings(self.bet_metrics),
                                             value=[self.bet_metrics[0]] if self.bet_metrics else [],
                                             multi=True,
                                             style=Styles.DROPDOWN_WIDE,
@@ -1488,7 +2012,7 @@ class GameStatsDashboard:
                                         html.Label("Metrics (Right Axis):", style=Styles.CONTROL_LABEL),
                                         dcc.Dropdown(
                                             id="right-axis-checklist",
-                                            options=cast(Any, [{"label": m, "value": m} for m in self.bet_metrics]),
+                                            options=_dropdown_options_from_strings(self.bet_metrics),
                                             value=[],
                                             multi=True,
                                             style=Styles.DROPDOWN_WIDE,
@@ -1506,13 +2030,13 @@ class GameStatsDashboard:
                                     [
                                         dcc.Checklist(
                                             id="share-left-yscale-check",
-                                            options=cast(Any, [{"label": " Share Left Scale", "value": "ON"}]),
+                                            options=_dropdown_option_rows([(" Share Left Scale", "ON")]),
                                             value=[],
                                             style=Styles.CHECKLIST_BLOCK,
                                         ),
                                         dcc.Checklist(
                                             id="share-right-yscale-check",
-                                            options=cast(Any, [{"label": " Share Right Scale", "value": "ON"}]),
+                                            options=_dropdown_option_rows([(" Share Right Scale", "ON")]),
                                             value=[],
                                             style=Styles.CHECKLIST_BLOCK,
                                         ),
@@ -1524,7 +2048,7 @@ class GameStatsDashboard:
                                     [
                                         dcc.Checklist(
                                             id="log-check",
-                                            options=cast(Any, [{"label": " Hybrid Log Scale", "value": "ON"}]),
+                                            options=_dropdown_option_rows([(" Hybrid Log Scale", "ON")]),
                                             value=[],
                                             style=Styles.CHECKLIST_BLOCK,
                                         ),
@@ -1542,7 +2066,7 @@ class GameStatsDashboard:
                                     [
                                         dcc.Checklist(
                                             id="filter-check",
-                                            options=cast(Any, [{"label": "Max Number of Bets", "value": "ON"}]),
+                                            options=_dropdown_option_rows([("Max Number of Bets", "ON")]),
                                             value=["ON"],
                                             style=Styles.CHECKLIST_BLOCK,
                                         ),
@@ -1572,6 +2096,7 @@ class GameStatsDashboard:
         @self.app.callback(
             Output("tab-date-content", "children"),
             Output("tab-group-content", "children"),
+            Output("tab-viz-content", "children"),
             Output("tab-weekly-content", "children"),
             Output("tab-bet-content", "children"),
             Input("config-dropdown", "value"),
@@ -1584,6 +2109,7 @@ class GameStatsDashboard:
             return (
                 self._layout_stats_by_date(),
                 self._layout_stats_by_group(),
+                self._layout_stats_visualization(),
                 self._layout_weekly_report(),
                 self._layout_stats_by_bet(),
             )
@@ -1591,6 +2117,7 @@ class GameStatsDashboard:
         @self.app.callback(
             Output("tab-date-content", "style"),
             Output("tab-group-content", "style"),
+            Output("tab-viz-content", "style"),
             Output("tab-weekly-content", "style"),
             Output("tab-bet-content", "style"),
             Input("navigator-tabs", "value"),
@@ -1599,9 +2126,10 @@ class GameStatsDashboard:
         def render_content(tab: str) -> Any:
             date_style = {**Styles.PAGE_CONTENT, "display": "block" if tab == "tab-date" else "none"}
             group_style = {**Styles.PAGE_CONTENT, "display": "block" if tab == "tab-group" else "none"}
+            viz_style = {**Styles.PAGE_CONTENT, "display": "block" if tab == "tab-viz" else "none"}
             weekly_style = {**Styles.PAGE_CONTENT, "display": "block" if tab == "tab-weekly" else "none"}
             bet_style = {**Styles.PAGE_CONTENT, "display": "block" if tab == "tab-bet" else "none"}
-            return date_style, group_style, weekly_style, bet_style
+            return date_style, group_style, viz_style, weekly_style, bet_style
 
         @self.app.callback(
             Output("weekly-report-chart", "figure"),
@@ -1981,6 +2509,249 @@ class GameStatsDashboard:
                 ],
             )(_group_plot_with_state_factory(f"g{i}"))
 
+        # ── Stats Deepdive tab ─────────────────────────────────────────
+        @self.app.callback(
+            [Output("viz-ug-col-2", "value")] + [Output(f"viz-{pid}-show-ug-1", "options") for pid in ("p1", "p2")],
+            Input("viz-ug-col-1", "value"),
+            State("viz-ug-col-2", "value"),
+            prevent_initial_call=True,
+        )
+        def on_viz_ug_col_1_change(col1_val: Any, current_col2: Any):
+            new_col2 = current_col2 if current_col2 != col1_val else self._next_col(col1_val)
+            opts = self._make_ug_opts(col1_val)
+            return [new_col2] + [opts] * 2
+
+        @self.app.callback(
+            [Output(f"viz-{pid}-show-ug-2", "options") for pid in ("p1", "p2")],
+            Input("viz-ug-col-2", "value"),
+            prevent_initial_call=True,
+        )
+        def on_viz_ug_col_2_change(col2_val: Any):
+            opts = self._make_ug_opts(col2_val)
+            return [opts] * 2
+
+        # Show/hide the per-mode controls (histogram-only vs scatter-only) per panel based
+        # on Display Mode.  The controls live inside the fixed-width sidebar, so toggling
+        # their display does NOT reflow the graph container — the plot keeps its stable
+        # width across mode switches.
+        def _make_toggle_mode_controls(pid: str, mode_key: str) -> Callable[..., Any]:
+            visible_style: Dict[str, Any] = dict(Styles.CONTROL_GROUP)
+            hidden_style: Dict[str, Any] = {"display": "none"}
+
+            def _inner(mode: Any) -> Any:
+                return visible_style if str(mode or "") == mode_key else hidden_style
+
+            _inner.__name__ = f"toggle_viz_{mode_key}_controls_{pid}"
+            return _inner
+
+        for _pid in ("p1", "p2"):
+            self.app.callback(
+                Output(f"viz-{_pid}-hist-controls", "style"),
+                Input(f"viz-{_pid}-display", "value"),
+            )(_make_toggle_mode_controls(_pid, "histogram"))
+            self.app.callback(
+                Output(f"viz-{_pid}-scatter-controls", "style"),
+                Input(f"viz-{_pid}-display", "value"),
+            )(_make_toggle_mode_controls(_pid, "scatter"))
+
+        # General Metrics multi-select is shown ONLY for histogram (heatmap and scatter both
+        # use the per-row metric selector container instead).
+        def _make_toggle_metrics_general(pid: str) -> Callable[..., Any]:
+            visible: Dict[str, Any] = dict(Styles.CONTROL_GROUP)
+            hidden: Dict[str, Any] = {"display": "none"}
+
+            def _inner(mode: Any) -> Any:
+                return visible if str(mode or "") == "histogram" else hidden
+
+            _inner.__name__ = f"toggle_viz_metrics_general_{pid}"
+            return _inner
+
+        for _pid in ("p1", "p2"):
+            self.app.callback(
+                Output(f"viz-{_pid}-metrics-container", "style"),
+                Input(f"viz-{_pid}-display", "value"),
+            )(_make_toggle_metrics_general(_pid))
+            self.app.callback(
+                Output(f"viz-{_pid}-hm-container", "style"),
+                Input(f"viz-{_pid}-display", "value"),
+            )(_make_toggle_mode_controls(_pid, "heatmap"))
+            self.app.callback(
+                Output(f"viz-{_pid}-sm-container", "style"),
+                Input(f"viz-{_pid}-display", "value"),
+            )(_make_toggle_mode_controls(_pid, "scatter"))
+
+        # Metric-row visibility is purely data-driven: show rows 0..max_filled+1 (always one
+        # trailing empty slot so the user can add a new metric simply by picking a value; clearing
+        # the last filled row collapses the empty slot, effectively removing that metric).
+        def _make_ms_rows_visibility(pid: str, prefix: str) -> Callable[..., Any]:
+            visible_style: Dict[str, Any] = {**Styles.FLEX_ROW_CENTER, "marginBottom": "4px", "display": "flex"}
+            hidden_style: Dict[str, Any] = {**Styles.FLEX_ROW_CENTER, "marginBottom": "4px", "display": "none"}
+            max_rows = self._VIZ_MS_MAX_ROWS
+
+            def _inner(*values: Any) -> Any:
+                filled_idx = [i for i, v in enumerate(values) if v not in (None, "", [])]
+                max_filled = max(filled_idx) if filled_idx else -1
+                visible_until = min(max_rows - 1, max_filled + 1)
+                return [visible_style if i <= visible_until else hidden_style for i in range(max_rows)]
+
+            _inner.__name__ = f"viz_{prefix}_rows_visibility_{pid}"
+            return _inner
+
+        for _pid in ("p1", "p2"):
+            for _prefix in ("hm", "sm"):
+                self.app.callback(
+                    [Output(f"viz-{_pid}-{_prefix}-row-{i}", "style") for i in range(self._VIZ_MS_MAX_ROWS)],
+                    [Input(f"viz-{_pid}-{_prefix}-metric-{i}", "value") for i in range(self._VIZ_MS_MAX_ROWS)],
+                )(_make_ms_rows_visibility(_pid, _prefix))
+
+        def _viz_plot_with_state_factory(pid: str) -> Callable[..., Any]:
+            base = self.update_viz_plot_factory(pid)
+
+            def _inner(
+                metrics: Any,
+                display: Any,
+                r1_s: Any,
+                r1_e: Any,
+                r2_s: Any,
+                r2_e: Any,
+                r3_s: Any,
+                r3_e: Any,
+                show_r1: Any,
+                show_r2: Any,
+                show_r3: Any,
+                clip_en: Any,
+                clip_min: Any,
+                clip_max: Any,
+                ug_col_1: Any,
+                ug_col_2: Any,
+                show_ug_1: Any,
+                show_ug_2: Any,
+                nbins: Any,
+                log_y: Any,
+                normalize: Any,
+                scatter_log_x: Any,
+                scatter_log_y: Any,
+                scatter_symlog_x: Any,
+                scatter_symlog_y: Any,
+                outliers_enable: Any,
+                outliers_std: Any,
+                *ms_rows: Any,
+            ):
+                # ms_rows flattened: [hm_m0..hm_m7, hm_l0..hm_l7, sm_m0..sm_m7, sm_l0..sm_l7]
+                max_rows = self._VIZ_MS_MAX_ROWS
+                hm_metrics = list(ms_rows[:max_rows])
+                hm_logs = list(ms_rows[max_rows : 2 * max_rows])
+                sm_metrics = list(ms_rows[2 * max_rows : 3 * max_rows])
+                sm_logs = list(ms_rows[3 * max_rows : 4 * max_rows])
+                fig = base(
+                    metrics,
+                    display,
+                    r1_s,
+                    r1_e,
+                    r2_s,
+                    r2_e,
+                    r3_s,
+                    r3_e,
+                    show_r1,
+                    show_r2,
+                    show_r3,
+                    clip_en,
+                    clip_min,
+                    clip_max,
+                    ug_col_1,
+                    ug_col_2,
+                    show_ug_1,
+                    show_ug_2,
+                    nbins,
+                    log_y,
+                    normalize,
+                    scatter_log_x,
+                    scatter_log_y,
+                    scatter_symlog_x,
+                    scatter_symlog_y,
+                    outliers_enable,
+                    outliers_std,
+                    hm_metrics,
+                    hm_logs,
+                    sm_metrics,
+                    sm_logs,
+                )
+                state = {
+                    "metrics": metrics,
+                    "display": display,
+                    "date_range1_start": r1_s,
+                    "date_range1_end": r1_e,
+                    "date_range2_start": r2_s,
+                    "date_range2_end": r2_e,
+                    "date_range3_start": r3_s,
+                    "date_range3_end": r3_e,
+                    "show_r1": show_r1,
+                    "show_r2": show_r2,
+                    "show_r3": show_r3,
+                    "clip_enable": clip_en,
+                    "clip_min": clip_min,
+                    "clip_max": clip_max,
+                    "ug_col_1": ug_col_1,
+                    "ug_col_2": ug_col_2,
+                    "show_ug_1": show_ug_1,
+                    "show_ug_2": show_ug_2,
+                    "nbins": nbins,
+                    "log_y": log_y,
+                    "normalize": normalize,
+                    "scatter_log_x": scatter_log_x,
+                    "scatter_log_y": scatter_log_y,
+                    "scatter_symlog_x": scatter_symlog_x,
+                    "scatter_symlog_y": scatter_symlog_y,
+                    "outliers_enable": outliers_enable,
+                    "outliers_std": outliers_std,
+                    "hm_metrics": hm_metrics,
+                    "hm_logs": hm_logs,
+                    "sm_metrics": sm_metrics,
+                    "sm_logs": sm_logs,
+                }
+                return fig, state
+
+            return _inner
+
+        for pid in ("p1", "p2"):
+            self.app.callback(
+                Output(f"viz-{pid}-plot", "figure"),
+                Output(f"tab-viz-{pid}-state", "data"),
+                [
+                    Input(f"viz-{pid}-metrics", "value"),
+                    Input(f"viz-{pid}-display", "value"),
+                    Input("viz-date-picker-range1", "start_date"),
+                    Input("viz-date-picker-range1", "end_date"),
+                    Input("viz-date-picker-range2", "start_date"),
+                    Input("viz-date-picker-range2", "end_date"),
+                    Input("viz-date-picker-range3", "start_date"),
+                    Input("viz-date-picker-range3", "end_date"),
+                    Input(f"viz-{pid}-show-r1", "value"),
+                    Input(f"viz-{pid}-show-r2", "value"),
+                    Input(f"viz-{pid}-show-r3", "value"),
+                    Input(f"viz-{pid}-clip-enable", "value"),
+                    Input(f"viz-{pid}-clip-min", "value"),
+                    Input(f"viz-{pid}-clip-max", "value"),
+                    Input("viz-ug-col-1", "value"),
+                    Input("viz-ug-col-2", "value"),
+                    Input(f"viz-{pid}-show-ug-1", "value"),
+                    Input(f"viz-{pid}-show-ug-2", "value"),
+                    Input(f"viz-{pid}-nbins", "value"),
+                    Input(f"viz-{pid}-log-y", "value"),
+                    Input(f"viz-{pid}-normalize", "value"),
+                    Input(f"viz-{pid}-scatter-log-x", "value"),
+                    Input(f"viz-{pid}-scatter-log-y", "value"),
+                    Input(f"viz-{pid}-scatter-symlog-x", "value"),
+                    Input(f"viz-{pid}-scatter-symlog-y", "value"),
+                    Input(f"viz-{pid}-outliers-enable", "value"),
+                    Input(f"viz-{pid}-outliers-std", "value"),
+                    *[Input(f"viz-{pid}-hm-metric-{i}", "value") for i in range(self._VIZ_MS_MAX_ROWS)],
+                    *[Input(f"viz-{pid}-hm-log-{i}", "value") for i in range(self._VIZ_MS_MAX_ROWS)],
+                    *[Input(f"viz-{pid}-sm-metric-{i}", "value") for i in range(self._VIZ_MS_MAX_ROWS)],
+                    *[Input(f"viz-{pid}-sm-log-{i}", "value") for i in range(self._VIZ_MS_MAX_ROWS)],
+                ],
+            )(_viz_plot_with_state_factory(pid))
+
         # Save config: open modal and fetch existing configs
         # NOTE: Output("save-config-overwrite", "value") is included so the dropdown is
         # always reset to None when the modal opens.  Without this, a value selected in a
@@ -2069,6 +2840,10 @@ class GameStatsDashboard:
             State("tab-group-g1-state", "data"),
             State("tab-group-g2-state", "data"),
             State("tab-group-g3-state", "data"),
+            State("tab-viz-p1-state", "data"),
+            State("tab-viz-p2-state", "data"),
+            State("viz-ug-col-1", "value"),
+            State("viz-ug-col-2", "value"),
             State("date-granularity", "value"),
             State("date-picker-range", "start_date"),
             State("date-picker-range", "end_date"),
@@ -2103,6 +2878,10 @@ class GameStatsDashboard:
             group_tab_g1_state: Optional[Dict],
             group_tab_g2_state: Optional[Dict],
             group_tab_g3_state: Optional[Dict],
+            viz_tab_p1_state: Optional[Dict],
+            viz_tab_p2_state: Optional[Dict],
+            viz_ug_col_1: Any,
+            viz_ug_col_2: Any,
             date_granularity: Optional[str],
             date_picker_start_date: Any,
             date_picker_end_date: Any,
@@ -2232,6 +3011,17 @@ class GameStatsDashboard:
                     "g2": _group_tab_panel_for_config(group_tab_g2_state),
                     "g3": _group_tab_panel_for_config(group_tab_g3_state),
                 },
+                "tab_viz": {
+                    "date_ranges": (
+                        {k: viz_tab_p1_state.get(k) for k in date_range_keys if viz_tab_p1_state.get(k) is not None}
+                        if viz_tab_p1_state
+                        else {}
+                    ),
+                    "ug_col_1": viz_ug_col_1,
+                    "ug_col_2": viz_ug_col_2,
+                    "p1": _group_tab_panel_for_config(viz_tab_p1_state),
+                    "p2": _group_tab_panel_for_config(viz_tab_p2_state),
+                },
                 "tab_bet": bet,
             }
             normalized = _normalize_dates_in_state(payload)
@@ -2275,52 +3065,33 @@ class GameStatsDashboard:
             Output("tab-group-g1-state", "data", allow_duplicate=True),
             Output("tab-group-g2-state", "data", allow_duplicate=True),
             Output("tab-group-g3-state", "data", allow_duplicate=True),
+            Output("tab-viz-p1-state", "data", allow_duplicate=True),
+            Output("tab-viz-p2-state", "data", allow_duplicate=True),
             Output("tab-bet-state", "data", allow_duplicate=True),
             Output("dashboard-load-trigger", "data", allow_duplicate=True),
             Input("load-config-dropdown", "value"),
             prevent_initial_call=True,
         )
         def load_config_select(s3_uri: Optional[str]):
+            nothing = (no_update,) * 13
             if not s3_uri:
-                return (
-                    no_update,
-                    no_update,
-                    no_update,
-                    no_update,
-                    no_update,
-                    no_update,
-                    no_update,
-                    no_update,
-                    no_update,
-                    no_update,
-                    no_update,
-                )
+                return nothing
             try:
                 data = read_json_from_s3(s3_uri)
                 config_file = data.get("config_file")
                 current_tab = data.get("current_tab", "tab-date")
                 tab_date = data.get("tab_date", {})
                 tab_group = data.get("tab_group", {})
+                tab_viz = data.get("tab_viz", {}) or {}
                 tab_bet = data.get("tab_bet")
                 if not config_file:
-                    return (
-                        no_update,
-                        no_update,
-                        no_update,
-                        no_update,
-                        no_update,
-                        no_update,
-                        no_update,
-                        no_update,
-                        no_update,
-                        no_update,
-                        no_update,
-                    )
+                    return nothing
                 # Ensure config_file matches an option (path may differ by machine)
                 saved_basename = Path(config_file).name
-                if not any(opt["value"] == config_file for opt in self.config_files):
+                if not any(str(opt["value"]) == config_file for opt in self.config_files):
                     match = next(
-                        (opt["value"] for opt in self.config_files if Path(opt["value"]).name == saved_basename), None
+                        (opt["value"] for opt in self.config_files if Path(str(opt["value"])).name == saved_basename),
+                        None,
                     )
                     if match:
                         config_file = match
@@ -2406,6 +3177,26 @@ class GameStatsDashboard:
                 g1_out = _g_with_dates("g1")
                 g2_out = _g_with_dates("g2")
                 g3_out = _g_with_dates("g3")
+
+                # tab_viz: mirror tab_group's shape — date_ranges + ug_col_1/2 + per-panel state
+                viz_date_ranges = tab_viz.get("date_ranges") or {}
+                viz_ug_col_1 = tab_viz.get("ug_col_1", self.df_user_group_cols[0] if self.df_user_group_cols else None)
+                viz_ug_col_2 = tab_viz.get(
+                    "ug_col_2", self.df_user_group_cols[1] if len(self.df_user_group_cols) > 1 else None
+                )
+
+                def _p_with_dates(pi: str) -> Optional[Dict]:
+                    p = tab_viz.get(pi)
+                    if not p:
+                        return p
+                    merged_p: Dict[str, Any] = {**viz_date_ranges, **p}
+                    merged_p["ug_col_1"] = viz_ug_col_1
+                    merged_p["ug_col_2"] = viz_ug_col_2
+                    return merged_p
+
+                p1_out = _p_with_dates("p1")
+                p2_out = _p_with_dates("p2")
+
                 return (
                     config_file,
                     current_tab,
@@ -2416,24 +3207,14 @@ class GameStatsDashboard:
                     g1_out,
                     g2_out,
                     g3_out,
+                    p1_out,
+                    p2_out,
                     tab_bet,
                     datetime.now().isoformat(),
                 )
             except Exception as e:
                 logger.error(f"Failed to load config: {e}")
-            return (
-                no_update,
-                no_update,
-                no_update,
-                no_update,
-                no_update,
-                no_update,
-                no_update,
-                no_update,
-                no_update,
-                no_update,
-                no_update,
-            )
+            return (no_update,) * 13
 
         # Restore: apply loaded state to all UI components when load-trigger fires
         @self.app.callback(
@@ -2499,6 +3280,60 @@ class GameStatsDashboard:
             Output("group-g3-clip-max", "value", allow_duplicate=True),
             Output("group-g3-show-ug-1", "value", allow_duplicate=True),
             Output("group-g3-show-ug-2", "value", allow_duplicate=True),
+            Output("viz-date-picker-range1", "start_date", allow_duplicate=True),
+            Output("viz-date-picker-range1", "end_date", allow_duplicate=True),
+            Output("viz-date-picker-range2", "start_date", allow_duplicate=True),
+            Output("viz-date-picker-range2", "end_date", allow_duplicate=True),
+            Output("viz-date-picker-range3", "start_date", allow_duplicate=True),
+            Output("viz-date-picker-range3", "end_date", allow_duplicate=True),
+            Output("viz-ug-col-1", "value", allow_duplicate=True),
+            Output("viz-ug-col-2", "value", allow_duplicate=True),
+            Output("viz-p1-metrics", "value", allow_duplicate=True),
+            Output("viz-p1-display", "value", allow_duplicate=True),
+            Output("viz-p1-show-r1", "value", allow_duplicate=True),
+            Output("viz-p1-show-r2", "value", allow_duplicate=True),
+            Output("viz-p1-show-r3", "value", allow_duplicate=True),
+            Output("viz-p1-clip-enable", "value", allow_duplicate=True),
+            Output("viz-p1-clip-min", "value", allow_duplicate=True),
+            Output("viz-p1-clip-max", "value", allow_duplicate=True),
+            Output("viz-p1-show-ug-1", "value", allow_duplicate=True),
+            Output("viz-p1-show-ug-2", "value", allow_duplicate=True),
+            Output("viz-p1-nbins", "value", allow_duplicate=True),
+            Output("viz-p1-log-y", "value", allow_duplicate=True),
+            Output("viz-p1-normalize", "value", allow_duplicate=True),
+            Output("viz-p1-scatter-log-x", "value", allow_duplicate=True),
+            Output("viz-p1-scatter-log-y", "value", allow_duplicate=True),
+            Output("viz-p1-scatter-symlog-x", "value", allow_duplicate=True),
+            Output("viz-p1-scatter-symlog-y", "value", allow_duplicate=True),
+            Output("viz-p1-outliers-enable", "value", allow_duplicate=True),
+            Output("viz-p1-outliers-std", "value", allow_duplicate=True),
+            *[Output(f"viz-p1-hm-metric-{i}", "value", allow_duplicate=True) for i in range(self._VIZ_MS_MAX_ROWS)],
+            *[Output(f"viz-p1-hm-log-{i}", "value", allow_duplicate=True) for i in range(self._VIZ_MS_MAX_ROWS)],
+            *[Output(f"viz-p1-sm-metric-{i}", "value", allow_duplicate=True) for i in range(self._VIZ_MS_MAX_ROWS)],
+            *[Output(f"viz-p1-sm-log-{i}", "value", allow_duplicate=True) for i in range(self._VIZ_MS_MAX_ROWS)],
+            Output("viz-p2-metrics", "value", allow_duplicate=True),
+            Output("viz-p2-display", "value", allow_duplicate=True),
+            Output("viz-p2-show-r1", "value", allow_duplicate=True),
+            Output("viz-p2-show-r2", "value", allow_duplicate=True),
+            Output("viz-p2-show-r3", "value", allow_duplicate=True),
+            Output("viz-p2-clip-enable", "value", allow_duplicate=True),
+            Output("viz-p2-clip-min", "value", allow_duplicate=True),
+            Output("viz-p2-clip-max", "value", allow_duplicate=True),
+            Output("viz-p2-show-ug-1", "value", allow_duplicate=True),
+            Output("viz-p2-show-ug-2", "value", allow_duplicate=True),
+            Output("viz-p2-nbins", "value", allow_duplicate=True),
+            Output("viz-p2-log-y", "value", allow_duplicate=True),
+            Output("viz-p2-normalize", "value", allow_duplicate=True),
+            Output("viz-p2-scatter-log-x", "value", allow_duplicate=True),
+            Output("viz-p2-scatter-log-y", "value", allow_duplicate=True),
+            Output("viz-p2-scatter-symlog-x", "value", allow_duplicate=True),
+            Output("viz-p2-scatter-symlog-y", "value", allow_duplicate=True),
+            Output("viz-p2-outliers-enable", "value", allow_duplicate=True),
+            Output("viz-p2-outliers-std", "value", allow_duplicate=True),
+            *[Output(f"viz-p2-hm-metric-{i}", "value", allow_duplicate=True) for i in range(self._VIZ_MS_MAX_ROWS)],
+            *[Output(f"viz-p2-hm-log-{i}", "value", allow_duplicate=True) for i in range(self._VIZ_MS_MAX_ROWS)],
+            *[Output(f"viz-p2-sm-metric-{i}", "value", allow_duplicate=True) for i in range(self._VIZ_MS_MAX_ROWS)],
+            *[Output(f"viz-p2-sm-log-{i}", "value", allow_duplicate=True) for i in range(self._VIZ_MS_MAX_ROWS)],
             Output("session-dropdown", "value", allow_duplicate=True),
             Output("strategy-checklist", "value", allow_duplicate=True),
             Output("metric-checklist", "value", allow_duplicate=True),
@@ -2517,6 +3352,8 @@ class GameStatsDashboard:
             State("tab-group-g1-state", "data"),
             State("tab-group-g2-state", "data"),
             State("tab-group-g3-state", "data"),
+            State("tab-viz-p1-state", "data"),
+            State("tab-viz-p2-state", "data"),
             State("tab-bet-state", "data"),
             prevent_initial_call=True,
         )
@@ -2529,10 +3366,12 @@ class GameStatsDashboard:
             g1: Optional[Dict],
             g2: Optional[Dict],
             g3: Optional[Dict],
+            v1: Optional[Dict],
+            v2: Optional[Dict],
             bet: Optional[Dict],
         ):
             if trigger is None:
-                return (no_update,) * 72
+                return (no_update,) * 246
             # Keep the load trigger token so default-picker callbacks don't recompute
             # and clamp restored DatePickerRange values.
             out: List[Any] = [trigger]
@@ -2587,6 +3426,77 @@ class GameStatsDashboard:
                         sg.get("show_ug_2", no_update),
                     ]
                 )
+
+            # Viz tab: shared date ranges + ug cols (from v1), then per-panel fields.
+            # Use `no_update` as the fallback so loading a legacy config (no tab_viz section)
+            # does not overwrite the viz DatePickerRange / dropdown / checklist values with
+            # nulls — which otherwise surfaces as "Cannot read properties of null
+            # (reading 'indexOf')" from the date picker JS when start_date/end_date is None.
+            def _viz_or_skip(d: Optional[Dict], key: str) -> Any:
+                if not d or key not in d or d.get(key) is None:
+                    return no_update
+                return d[key]
+
+            def _viz_date_or_skip(d: Optional[Dict], key: str) -> Any:
+                val = _viz_or_skip(d, key)
+                return _normalize_date_value(val) if val is not no_update else no_update
+
+            def _viz_hm_list_or_skip(d: Optional[Dict], key: str, n: int) -> List[Any]:
+                """Expand a saved list-valued heatmap field (hm_metrics / hm_logs) to n slots.
+
+                Missing or short lists get ``no_update`` for the uncovered slots so untouched
+                rows aren't overwritten on config load.
+                """
+                if not d or key not in d or d.get(key) is None:
+                    return [no_update] * n
+                raw = d[key]
+                if not isinstance(raw, list):
+                    return [no_update] * n
+                out_list: List[Any] = []
+                for i in range(n):
+                    out_list.append(raw[i] if i < len(raw) else no_update)
+                return out_list
+
+            out.extend(
+                [
+                    _viz_date_or_skip(v1, "date_range1_start"),
+                    _viz_date_or_skip(v1, "date_range1_end"),
+                    _viz_date_or_skip(v1, "date_range2_start"),
+                    _viz_date_or_skip(v1, "date_range2_end"),
+                    _viz_date_or_skip(v1, "date_range3_start"),
+                    _viz_date_or_skip(v1, "date_range3_end"),
+                    _viz_or_skip(v1, "ug_col_1"),
+                    _viz_or_skip(v1, "ug_col_2"),
+                ]
+            )
+            for s in [v1, v2]:
+                out.extend(
+                    [
+                        _viz_or_skip(s, "metrics"),
+                        _viz_or_skip(s, "display"),
+                        _viz_or_skip(s, "show_r1"),
+                        _viz_or_skip(s, "show_r2"),
+                        _viz_or_skip(s, "show_r3"),
+                        _viz_or_skip(s, "clip_enable"),
+                        _viz_or_skip(s, "clip_min"),
+                        _viz_or_skip(s, "clip_max"),
+                        _viz_or_skip(s, "show_ug_1"),
+                        _viz_or_skip(s, "show_ug_2"),
+                        _viz_or_skip(s, "nbins"),
+                        _viz_or_skip(s, "log_y"),
+                        _viz_or_skip(s, "normalize"),
+                        _viz_or_skip(s, "scatter_log_x"),
+                        _viz_or_skip(s, "scatter_log_y"),
+                        _viz_or_skip(s, "scatter_symlog_x"),
+                        _viz_or_skip(s, "scatter_symlog_y"),
+                        _viz_or_skip(s, "outliers_enable"),
+                        _viz_or_skip(s, "outliers_std"),
+                        *_viz_hm_list_or_skip(s, "hm_metrics", self._VIZ_MS_MAX_ROWS),
+                        *_viz_hm_list_or_skip(s, "hm_logs", self._VIZ_MS_MAX_ROWS),
+                        *_viz_hm_list_or_skip(s, "sm_metrics", self._VIZ_MS_MAX_ROWS),
+                        *_viz_hm_list_or_skip(s, "sm_logs", self._VIZ_MS_MAX_ROWS),
+                    ]
+                )
             sb = bet or {}
             out.extend(
                 [
@@ -2638,18 +3548,18 @@ class GameStatsDashboard:
         self.df_user_group_col_options = [{"label": c, "value": c} for c in cols]
 
         if not self.df_user_group_col:
-            self.df_user_group_dropdown_options = [{"label": "all", "value": "all"}]
+            self.df_user_group_dropdown_options = _dropdown_options_from_strings(["all"])
             return
         default_gran = list(self.date_files_config.keys())[0]
         lf = self.lfs_by_date.get(default_gran, pl.DataFrame().lazy())
         col = self.df_user_group_col
         if lf.collect_schema().len() == 0 or col not in lf.collect_schema().names():
-            self.df_user_group_dropdown_options = [{"label": "all", "value": "all"}]
+            self.df_user_group_dropdown_options = _dropdown_options_from_strings(["all"])
             return
         uniq = self._get_plot_groups(lf, col)
-        self.df_user_group_dropdown_options = [{"label": "all", "value": "all"}] + [
-            {"label": str(u), "value": str(u)} for u in uniq
-        ]
+        self.df_user_group_dropdown_options = _dropdown_options_from_strings(["all"]) + _dropdown_options_from_strings(
+            [str(u) for u in uniq]
+        )
 
     def _apply_user_group_filter(
         self, df: pl.DataFrame, user_group_val: Any, col: Optional[str] = None
@@ -2704,7 +3614,7 @@ class GameStatsDashboard:
             out = self._apply_ug_filter_list(out, clean_2, col=effective_col2)
         return out, effective_col2, clean_1, clean_2
 
-    def _make_ug_opts(self, col: Any) -> list:
+    def _make_ug_opts(self, col: Any) -> list[dcc.Dropdown.Options]:
         """Return dropdown/checklist options for a user-group column (includes 'all' first)."""
         if not col:
             return []
@@ -2712,18 +3622,18 @@ class GameStatsDashboard:
         lf = self.lfs_by_date.get(gran, pl.DataFrame().lazy())
         schema = lf.collect_schema()
         if schema.len() == 0 or col not in schema.names():
-            return [{"label": "all", "value": "all"}]
+            return _dropdown_options_from_strings(["all"])
         uniq = self._get_plot_groups(lf, col)
-        return [{"label": "all", "value": "all"}] + [{"label": str(u), "value": str(u)} for u in uniq]
+        return _dropdown_options_from_strings(["all"]) + _dropdown_options_from_strings([str(u) for u in uniq])
 
-    def _col_opts_and_default(self, col: Optional[str]):
+    def _col_opts_and_default(self, col: Optional[str]) -> tuple[list[dcc.Dropdown.Options], list[str]]:
         """Return (options, [first_value]) for a user-group column checklist/dropdown."""
         if not col:
             return [], []
         opts = self._make_ug_opts(col)
         if not opts:
             return [], []
-        return opts, [opts[0]["value"]]
+        return opts, [str(opts[0]["value"])]
 
     def _next_col(self, chosen: Any) -> Optional[str]:
         """Return the first configured user-group column that is not ``chosen``."""
@@ -2812,6 +3722,9 @@ class GameStatsDashboard:
         elif current_tab == "tab-group":
             self._ensure_tab_data_loaded()
             return self._layout_stats_by_group()
+        elif current_tab == "tab-viz":
+            self._ensure_tab_data_loaded()
+            return self._layout_stats_visualization()
         elif current_tab == "tab-weekly":
             return self._layout_weekly_report()
         elif current_tab == "tab-bet":
@@ -2825,12 +3738,14 @@ class GameStatsDashboard:
         self._ensure_tab_data_loaded()
         date_visible = "block" if current_tab == "tab-date" else "none"
         group_visible = "block" if current_tab == "tab-group" else "none"
+        viz_visible = "block" if current_tab == "tab-viz" else "none"
         weekly_visible = "block" if current_tab == "tab-weekly" else "none"
         bet_visible = "block" if current_tab == "tab-bet" else "none"
         return html.Div(
             [
                 html.Div(self._layout_stats_by_date(), id="tab-date-content", style={"display": date_visible}),
                 html.Div(self._layout_stats_by_group(), id="tab-group-content", style={"display": group_visible}),
+                html.Div(self._layout_stats_visualization(), id="tab-viz-content", style={"display": viz_visible}),
                 html.Div(self._layout_weekly_report(), id="tab-weekly-content", style={"display": weekly_visible}),
                 html.Div(self._layout_stats_by_bet(), id="tab-bet-content", style={"display": bet_visible}),
             ]
@@ -3492,6 +4407,1255 @@ class GameStatsDashboard:
 
         return callback
 
+    # ------------------------------------------------------------------
+    # Stats Deepdive (histogram / heatmap / scatter)
+    # ------------------------------------------------------------------
+
+    def _viz_collect_panel_data(
+        self,
+        panel_id: str,
+        metrics: List[str],
+        r1_start: Any,
+        r1_end: Any,
+        r2_start: Any,
+        r2_end: Any,
+        r3_start: Any,
+        r3_end: Any,
+        show_r1: Any,
+        show_r2: Any,
+        show_r3: Any,
+        clip_enable: Any,
+        clip_min: Any,
+        clip_max: Any,
+        ug_col_1: Any,
+        ug_col_2: Any,
+        show_ug_1: Any,
+        show_ug_2: Any,
+    ) -> List[Tuple[str, pl.DataFrame]]:
+        """Collect one DataFrame per (range × g1 × g2) combo with the selected metric columns.
+
+        For ``panel_id == "p1"`` (derived metrics) rows are at (date, date_group_col) granularity,
+        joined from ``DataMetrics[metric]`` for each selected metric.  For ``panel_id == "p2"``
+        (user-level metrics) rows are kept at the per-user granularity.
+        """
+        if not metrics:
+            return []
+        granularity = list(self.date_files_config.keys())[0]
+        lf = self.lfs_by_date.get(granularity, pl.DataFrame().lazy())
+        if lf.collect_schema().len() == 0:
+            return []
+
+        data_ranges = [
+            {
+                "label": "R1",
+                "start": self._parse_date(r1_start),
+                "end": self._parse_date(r1_end),
+                "show": "ON" in (show_r1 or []),
+            },
+            {
+                "label": "R2",
+                "start": self._parse_date(r2_start),
+                "end": self._parse_date(r2_end),
+                "show": "ON" in (show_r2 or []),
+            },
+            {
+                "label": "R3",
+                "start": self._parse_date(r3_start),
+                "end": self._parse_date(r3_end),
+                "show": "ON" in (show_r3 or []),
+            },
+        ]
+        active_ranges = [r for r in data_ranges if r["show"] and r["start"] is not None and r["end"] is not None]
+        if not active_ranges:
+            return []
+
+        min_d = min(cast(datetime, r["start"]) for r in active_ranges)
+        max_d = max(cast(datetime, r["end"]) for r in active_ranges)
+        load_end = (
+            max_d + timedelta(days=RETENTION_LOAD_EXTRA_DAYS)
+            if self._aggregate_stats_from_user_rows_enabled()
+            else max_d
+        )
+        df_loaded = lf.filter((pl.col(self.date_col) >= min_d) & (pl.col(self.date_col) <= load_end)).collect()
+        if df_loaded.is_empty():
+            return []
+
+        selected_g1 = self._normalize_ug_selection(show_ug_1)
+        effective_col2 = self._effective_ug_col2(ug_col_1, ug_col_2)
+        selected_g2 = self._normalize_ug_selection(show_ug_2) if effective_col2 else []
+        g1_vals: List[Any] = sorted(selected_g1, key=str) if selected_g1 else ["all"]
+        g2_vals: List[Any] = (sorted(selected_g2, key=str) if selected_g2 else ["all"]) if effective_col2 else ["all"]
+
+        enable_clip = clip_enable is not None and "ON" in (clip_enable or [])
+        cmin = float(clip_min) if enable_clip and clip_min is not None else None
+        cmax = float(clip_max) if enable_clip and clip_max is not None else None
+
+        out: List[Tuple[str, pl.DataFrame]] = []
+        for g1 in g1_vals:
+            for g2 in g2_vals:
+                g1_sel: List[Any] = [g1] if str(g1) != "all" else []
+                g2_sel: List[Any] = [g2] if (effective_col2 and str(g2) != "all") else []
+                df_ug, _, _, _ = self._filter_df_for_ug_selection(
+                    df_loaded,
+                    ug_col_1,
+                    effective_col2,
+                    g1_sel,
+                    g2_sel,
+                )
+                if df_ug.is_empty():
+                    continue
+
+                if panel_id == "p1":
+                    dm = self._make_data_metrics(df_ug, min_d, max_d, granularity)
+                    combined: Optional[pl.DataFrame] = None
+                    combined_keys: List[str] = []
+                    for m in metrics:
+                        if m not in dm:
+                            continue
+                        mdf = dm[str(m)]
+                        if mdf is None or mdf.is_empty():
+                            continue
+                        if combined is None:
+                            combined = mdf
+                            combined_keys = [c for c in mdf.columns if c != m]
+                        else:
+                            join_on = [c for c in combined_keys if c in mdf.columns]
+                            if not join_on:
+                                continue
+                            combined = combined.join(mdf, on=join_on, how="inner")
+                    if combined is None or combined.is_empty():
+                        continue
+                    source_df = combined
+                    date_col_name = combined_keys[0] if combined_keys else self.date_col
+                else:
+                    keep_cols = [c for c in metrics if c in df_ug.columns]
+                    if not keep_cols:
+                        continue
+                    source_df = df_ug.select([self.date_col] + keep_cols)
+                    date_col_name = self.date_col
+
+                for r in active_ranges:
+                    r_start = cast(datetime, r["start"])
+                    r_end = cast(datetime, r["end"])
+                    rdf = source_df.filter((pl.col(date_col_name) >= r_start) & (pl.col(date_col_name) <= r_end))
+                    if rdf.is_empty():
+                        continue
+                    rdf = rdf.drop(date_col_name) if date_col_name in rdf.columns else rdf
+                    keep_metric_cols = [c for c in metrics if c in rdf.columns]
+                    if not keep_metric_cols:
+                        continue
+                    rdf = rdf.select(keep_metric_cols)
+                    if enable_clip and (cmin is not None or cmax is not None):
+                        lo = cmin if cmin is not None else -float("inf")
+                        hi = cmax if cmax is not None else float("inf")
+                        rdf = rdf.with_columns(
+                            [
+                                pl.col(c).cast(pl.Float64).clip(lower_bound=lo, upper_bound=hi).alias(c)
+                                for c in keep_metric_cols
+                            ]
+                        )
+                    parts: List[str] = []
+                    if str(g1) != "all":
+                        parts.append(str(g1))
+                    if effective_col2 and str(g2) != "all":
+                        parts.append(str(g2))
+                    parts.append(f"{cast(str, r['label'])}: {r_start.strftime('%m/%d')}-{r_end.strftime('%m/%d')}")
+                    label = " | ".join(parts) if parts else cast(str, r["label"])
+                    out.append((label, rdf))
+
+        return out
+
+    def update_viz_plot_factory(self, panel_id: str) -> Callable[..., Any]:
+        """Callback factory for the Stats Deepdive tab.
+
+        Dispatches to histogram / heatmap / pairplot based on ``display_mode`` and the number
+        of selected metrics.
+        """
+
+        def callback(
+            metrics: Any,
+            display_mode: Any,
+            r1_start: Any,
+            r1_end: Any,
+            r2_start: Any,
+            r2_end: Any,
+            r3_start: Any,
+            r3_end: Any,
+            show_r1: Any,
+            show_r2: Any,
+            show_r3: Any,
+            clip_enable: Any,
+            clip_min: Any,
+            clip_max: Any,
+            ug_col_1: Any,
+            ug_col_2: Any,
+            show_ug_1: Any,
+            show_ug_2: Any,
+            nbins: Any = 50,
+            log_y: Any = None,
+            normalize: Any = None,
+            scatter_log_x: Any = None,
+            scatter_log_y: Any = None,
+            scatter_symlog_x: Any = None,
+            scatter_symlog_y: Any = None,
+            outliers_enable: Any = None,
+            outliers_std: Any = "3",
+            hm_metrics: Optional[List[Any]] = None,
+            hm_logs: Optional[List[Any]] = None,
+            sm_metrics: Optional[List[Any]] = None,
+            sm_logs: Optional[List[Any]] = None,
+        ) -> go.Figure:
+            mode = str(display_mode or "histogram")
+
+            # Heatmap / scatter both use per-row metric selectors with an optional Yeo-Johnson
+            # log flag.  Histogram uses the shared multi-select "Metrics".
+            def _collect_rows(
+                raw_metrics: Optional[List[Any]], raw_logs: Optional[List[Any]]
+            ) -> List[Tuple[str, bool]]:
+                pairs: List[Tuple[str, bool]] = []
+                metrics_raw = raw_metrics or []
+                logs_raw = raw_logs or []
+                seen: set[str] = set()
+                for i in range(self._VIZ_MS_MAX_ROWS):
+                    m = metrics_raw[i] if i < len(metrics_raw) else None
+                    if not m:
+                        continue
+                    m_str = str(m)
+                    if m_str in seen:
+                        continue
+                    seen.add(m_str)
+                    log_flag = "ON" in (logs_raw[i] if i < len(logs_raw) and logs_raw[i] else [])
+                    pairs.append((m_str, log_flag))
+                return pairs
+
+            mode_pairs: List[Tuple[str, bool]] = []
+            if mode == "heatmap":
+                mode_pairs = _collect_rows(hm_metrics, hm_logs)
+                metrics_list: List[str] = [m for m, _ in mode_pairs]
+            elif mode == "scatter":
+                mode_pairs = _collect_rows(sm_metrics, sm_logs)
+                metrics_list = [m for m, _ in mode_pairs]
+            else:
+                metrics_list = [str(m) for m in (metrics or [])]
+            if not metrics_list:
+                return go.Figure()
+            if mode == "heatmap" and len(metrics_list) < 2:
+                fig = go.Figure()
+                fig.add_annotation(
+                    text="Select at least two metrics to show a correlation heatmap.",
+                    showarrow=False,
+                    x=0.5,
+                    y=0.5,
+                    xref="paper",
+                    yref="paper",
+                    font=dict(size=14),
+                )
+                return fig
+
+            combos = self._viz_collect_panel_data(
+                panel_id,
+                metrics_list,
+                r1_start,
+                r1_end,
+                r2_start,
+                r2_end,
+                r3_start,
+                r3_end,
+                show_r1,
+                show_r2,
+                show_r3,
+                clip_enable,
+                clip_min,
+                clip_max,
+                ug_col_1,
+                ug_col_2,
+                show_ug_1,
+                show_ug_2,
+            )
+            if not combos:
+                return go.Figure()
+
+            try:
+                nbins_int = int(nbins) if nbins is not None else 50
+            except (TypeError, ValueError):
+                nbins_int = 50
+            log_y_on = "ON" in (log_y or [])
+            normalize_on = "ON" in (normalize or [])
+            scatter_log_x_on = "ON" in (scatter_log_x or [])
+            scatter_log_y_on = "ON" in (scatter_log_y or [])
+            scatter_symlog_x_on = "ON" in (scatter_symlog_x or [])
+            scatter_symlog_y_on = "ON" in (scatter_symlog_y or [])
+            # Symlog wins if both are on (it's strictly more general and handles negatives).
+            if scatter_symlog_x_on:
+                scatter_log_x_on = False
+            if scatter_symlog_y_on:
+                scatter_log_y_on = False
+            outliers_on = "ON" in (outliers_enable or [])
+            try:
+                outliers_threshold = float(outliers_std) if outliers_std is not None else 3.0
+            except (TypeError, ValueError):
+                outliers_threshold = 3.0
+
+            active_outliers_threshold: Optional[float] = outliers_threshold if outliers_on else None
+
+            if mode == "histogram":
+                return self._viz_build_histogram(
+                    metrics_list, combos, nbins=nbins_int, log_y=log_y_on, normalize=normalize_on
+                )
+            if mode == "heatmap":
+                log_flags = {m: flag for m, flag in mode_pairs}
+                return self._viz_build_heatmap(metrics_list, combos, log_flags=log_flags)
+            if mode == "scatter":
+                scatter_log_flags = {m: flag for m, flag in mode_pairs}
+                if len(metrics_list) == 1:
+                    return self._viz_build_histogram(
+                        metrics_list, combos, nbins=nbins_int, log_y=log_y_on, normalize=normalize_on
+                    )
+                if len(metrics_list) == 2:
+                    return self._viz_build_scatter_pair(
+                        metrics_list,
+                        combos,
+                        log_x=scatter_log_x_on,
+                        log_y=scatter_log_y_on,
+                        symlog_x=scatter_symlog_x_on,
+                        symlog_y=scatter_symlog_y_on,
+                        outliers_threshold=active_outliers_threshold,
+                        log_flags=scatter_log_flags,
+                    )
+                return self._viz_build_scatter_grid(
+                    metrics_list,
+                    combos,
+                    log_x=scatter_log_x_on,
+                    log_y=scatter_log_y_on,
+                    symlog_x=scatter_symlog_x_on,
+                    symlog_y=scatter_symlog_y_on,
+                    outliers_threshold=active_outliers_threshold,
+                    log_flags=scatter_log_flags,
+                )
+            return go.Figure()
+
+        return callback
+
+    @staticmethod
+    def _viz_values(df: pl.DataFrame, metric: str) -> np.ndarray:
+        if metric not in df.columns:
+            return np.array([])
+        return df.get_column(metric).cast(pl.Float64).drop_nulls().to_numpy()
+
+    @staticmethod
+    def _viz_symlog(arr: np.ndarray) -> np.ndarray:
+        """Symmetric log transform: ``sign(x) * log10(|x| + 1)``.
+
+        Preserves sign, passes through 0 unchanged, and stays roughly linear near 0 while
+        compressing large magnitudes — so negative and positive values can share the axis.
+        """
+        a = np.asarray(arr, dtype=float)
+        return np.sign(a) * np.log10(np.abs(a) + 1.0)
+
+    @staticmethod
+    def _viz_symlog_ticks(vmin: float, vmax: float) -> Tuple[List[float], List[str]]:
+        """Return (tickvals, ticktext) for a symlog-transformed axis spanning [vmin, vmax]
+        in original (untransformed) units.  Places ticks at 0 and ±10^k out to the data extent.
+        """
+        if not np.isfinite(vmin) or not np.isfinite(vmax):
+            return [0.0], ["0"]
+        lo = min(vmin, 0.0)
+        hi = max(vmax, 0.0)
+        max_mag = max(abs(lo), abs(hi), 1.0)
+        max_exp = int(np.ceil(np.log10(max_mag)))
+        originals: List[float] = [0.0]
+        for exp in range(0, max_exp + 1):
+            v = 10.0**exp
+            if v <= hi:
+                originals.append(v)
+            if -v >= lo:
+                originals.append(-v)
+        originals = sorted(set(originals))
+        tickvals = [float(np.sign(t) * np.log10(abs(t) + 1.0)) for t in originals]
+        ticktext = [f"{t:g}" for t in originals]
+        return tickvals, ticktext
+
+    @staticmethod
+    def _viz_drop_outliers(pdf: pd.DataFrame, threshold: Optional[float]) -> pd.DataFrame:
+        """Drop rows where any column's absolute z-score exceeds ``threshold``.
+
+        Operates per-column: a row is kept only when every selected metric stays within
+        ``threshold`` standard deviations of that metric's mean.  A column with zero / NaN
+        std is ignored (no rows removed on its account).  ``threshold is None`` returns ``pdf``
+        unchanged.
+        """
+        if threshold is None or pdf.empty:
+            return pdf
+        mask = pd.Series(True, index=pdf.index)
+        for col in pdf.columns:
+            s = pdf[col]
+            std = s.std()
+            if std is None or not np.isfinite(std) or std == 0:
+                continue
+            mask &= (s - s.mean()).abs() / std <= threshold
+        return pdf.loc[mask]
+
+    def _viz_build_histogram(
+        self,
+        metrics: List[str],
+        combos: List[Tuple[str, pl.DataFrame]],
+        nbins: int = 50,
+        log_y: bool = False,
+        normalize: bool = False,
+    ) -> go.Figure:
+        n = len(metrics)
+        cols = min(2, n)
+        rows = int(np.ceil(n / cols))
+        fig = make_subplots(rows=rows, cols=cols, subplot_titles=metrics)
+        base_colors = Styles.COLORS
+        shown_labels: set[str] = set()
+        # When normalize is on, each trace's bars show the relative frequency (fraction of
+        # the combo's samples per bin).  Using "probability" here normalises per-trace, so
+        # overlayed histograms with different sample sizes remain visually comparable.
+        histnorm = "probability" if normalize else ""
+        for i, metric in enumerate(metrics):
+            r = i // cols + 1
+            c = i % cols + 1
+            for ci, (label, df) in enumerate(combos):
+                vals = self._viz_values(df, metric)
+                if len(vals) == 0:
+                    continue
+                color = base_colors[ci % len(base_colors)]
+                fig.add_trace(
+                    go.Histogram(
+                        x=vals,
+                        name=label,
+                        marker=dict(color=color),
+                        opacity=0.55,
+                        legendgroup=label,
+                        showlegend=label not in shown_labels,
+                        nbinsx=int(nbins),
+                        histnorm=histnorm,
+                    ),
+                    row=r,
+                    col=c,
+                )
+                shown_labels.add(label)
+        fig.update_layout(
+            barmode="overlay",
+            template="plotly_white",
+            autosize=True,
+            margin=dict(l=70, r=20, t=70, b=60),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0, font=dict(size=16)),
+            font=dict(size=18),
+        )
+        y_title = "Frequency" if normalize else "Count"
+        fig.update_xaxes(title_font=dict(size=18), tickfont=dict(size=16))
+        fig.update_yaxes(title_text=y_title, title_font=dict(size=18), tickfont=dict(size=16))
+        for ann in fig.layout.annotations or []:
+            ann.font = dict(size=20)
+        if log_y:
+            fig.update_yaxes(type="log")
+        return fig
+
+    def _viz_build_heatmap(
+        self,
+        metrics: List[str],
+        combos: List[Tuple[str, pl.DataFrame]],
+        log_flags: Optional[Dict[str, bool]] = None,
+    ) -> go.Figure:
+        log_flags = log_flags or {}
+        n_combos = len(combos)
+        cols = min(2, n_combos) if n_combos > 0 else 1
+        rows = int(np.ceil(n_combos / cols)) if n_combos > 0 else 1
+        titles = [label for label, _ in combos] or [""]
+        fig = make_subplots(rows=rows, cols=cols, subplot_titles=titles)
+        # Lazy import sklearn so the rest of the dashboard keeps working if it's not installed.
+        power_transformer = None
+        if any(log_flags.values()):
+            try:
+                from sklearn.preprocessing import PowerTransformer  # type: ignore[import-not-found]
+
+                power_transformer = PowerTransformer(method="yeo-johnson", standardize=False)
+            except ImportError:
+                logger.warning("Heatmap log-transform requested but sklearn is not installed; skipping Yeo-Johnson.")
+                power_transformer = None
+        axis_labels = [f"{m}*" if log_flags.get(m) and power_transformer is not None else m for m in metrics]
+        for idx, (_label, df) in enumerate(combos):
+            r = idx // cols + 1
+            c = idx % cols + 1
+            available = [m for m in metrics if m in df.columns]
+            if len(available) < 2:
+                continue
+            pdf = cast(pd.DataFrame, df.select(available).to_pandas().apply(pd.to_numeric, errors="coerce"))
+            # Apply Yeo-Johnson to each flagged column independently (per-combo fit).
+            if power_transformer is not None:
+                for m in available:
+                    if not log_flags.get(m):
+                        continue
+                    col = np.asarray(pdf[m].to_numpy(), dtype=float).reshape(-1, 1)
+                    try:
+                        transformed = np.asarray(power_transformer.fit_transform(col)).ravel()
+                        pdf[m] = transformed
+                    except Exception as exc:
+                        logger.warning("Yeo-Johnson failed for %r: %s", m, exc)
+            corr_values, text_matrix = self._viz_corr_with_significance(pdf)
+            # Re-label axes to show which columns were transformed.
+            x_labels = [f"{m}†" if log_flags.get(m) and power_transformer is not None else m for m in available]
+            fig.add_trace(
+                go.Heatmap(
+                    z=corr_values,
+                    x=x_labels,
+                    y=x_labels,
+                    colorscale="RdBu",
+                    zmid=0,
+                    zmin=-1,
+                    zmax=1,
+                    colorbar=dict(title="corr"),
+                    text=text_matrix,
+                    texttemplate="%{text}",
+                    hovertemplate="%{x} vs %{y}: %{z:.3f}<extra></extra>",
+                ),
+                row=r,
+                col=c,
+            )
+        fig.update_layout(
+            template="plotly_white",
+            autosize=True,
+            # Top margin a little larger to leave room for the significance legend above the
+            # subplot titles; bottom margin stays minimal now that the legend moved up.
+            margin=dict(l=80, r=40, t=90, b=60),
+            font=dict(size=14),
+        )
+        # Legend for * / ** significance stars and (if any) the Yeo-Johnson † axis marker.
+        # Placed at the top of the figure (above subplot titles) so it never overlaps with
+        # x-tick labels at the bottom.
+        legend_text = "* p < 0.05    ** p < 0.01"
+        if any(log_flags.get(m) and power_transformer is not None for m in metrics):
+            legend_text += "    † Yeo-Johnson transformed before correlation"
+        fig.add_annotation(
+            text=legend_text,
+            showarrow=False,
+            xref="paper",
+            yref="paper",
+            x=0,
+            y=1.08,
+            xanchor="left",
+            yanchor="bottom",
+            font=dict(size=14, color="#64748b"),
+        )
+        # Silence the unused-variable warning about axis_labels if not referenced.
+        _ = axis_labels
+        return fig
+
+    @staticmethod
+    def _viz_corr_with_significance(pdf: pd.DataFrame, decimals: int = 2) -> Tuple[np.ndarray, List[List[str]]]:
+        """Pearson correlation matrix + a parallel text matrix with significance stars.
+
+        Returns ``(r_matrix, text_matrix)`` where ``text_matrix[i][j]`` is formatted as
+        ``f"{r:.2f}"`` with a trailing ``*`` when p < 0.05 and ``**`` when p < 0.01.  P-values
+        are computed via the standard Pearson t-statistic ``t = r * sqrt((n-2)/(1-r²))`` and
+        scipy's Student-t survival function.  If scipy isn't installed, the stars are
+        silently omitted (and a warning is logged once per call).
+
+        Edge cases:
+          - Diagonal (r=1, i==j) is never starred.
+          - Cells where fewer than 3 non-null pairs contributed get no stars (test is invalid).
+          - NaN correlations render as ``"nan"`` with no stars.
+        """
+        corr_values = np.asarray(pdf.corr().values, dtype=float)
+        K = corr_values.shape[0]
+        text: List[List[str]] = [[""] * K for _ in range(K)]
+        # Pairwise non-null sample sizes: (K x K) matrix where entry (i,j) = # rows where
+        # both column i and column j are non-null.
+        notna = pdf.notna().astype(int).to_numpy()  # shape (N, K)
+        n_matrix = notna.T @ notna
+
+        p_matrix: Optional[np.ndarray] = None
+        try:
+            from scipy.stats import t as scipy_t  # type: ignore[import-not-found]
+
+            with np.errstate(divide="ignore", invalid="ignore"):
+                dof = np.maximum(n_matrix - 2, 0)
+                denom = 1.0 - corr_values**2
+                denom = np.where(np.abs(denom) < 1e-12, np.nan, denom)
+                t_stat = corr_values * np.sqrt(dof / denom)
+                p_matrix = 2.0 * scipy_t.sf(np.abs(t_stat), df=dof)
+        except ImportError:
+            logger.warning(
+                "Heatmap significance stars requested but scipy is not installed; skipping p-value annotations."
+            )
+        for i in range(K):
+            for j in range(K):
+                r = corr_values[i, j]
+                if not np.isfinite(r):
+                    text[i][j] = "nan"
+                    continue
+                base = f"{r:.{decimals}f}"
+                if i == j or p_matrix is None or n_matrix[i, j] < 3:
+                    text[i][j] = base
+                    continue
+                p = p_matrix[i, j]
+                if not np.isfinite(p):
+                    text[i][j] = base
+                elif p < 0.01:
+                    text[i][j] = f"{base}**"
+                elif p < 0.05:
+                    text[i][j] = f"{base}*"
+                else:
+                    text[i][j] = base
+        return corr_values, text
+
+    @staticmethod
+    def _viz_yeo_johnson_columns(pdf: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
+        """Apply Yeo-Johnson to each named column in ``pdf`` (in-place on a copy).
+
+        Lazy-imports sklearn.  If sklearn is not installed, logs a warning and returns
+        ``pdf`` unchanged so the rest of the plot still renders.
+        """
+        if not cols:
+            return pdf
+        try:
+            from sklearn.preprocessing import PowerTransformer  # type: ignore[import-not-found]
+        except ImportError:
+            logger.warning("Per-metric log-transform requested but sklearn is not installed; skipping Yeo-Johnson.")
+            return pdf
+        pt = PowerTransformer(method="yeo-johnson", standardize=False)
+        out = pdf.copy()
+        for col in cols:
+            if col not in out.columns:
+                continue
+            arr = np.asarray(out[col].to_numpy(), dtype=float).reshape(-1, 1)
+            try:
+                out[col] = np.asarray(pt.fit_transform(arr)).ravel()
+            except Exception as exc:
+                logger.warning("Yeo-Johnson failed for %r: %s", col, exc)
+        return out
+
+    def _viz_build_scatter_pair(
+        self,
+        metrics: List[str],
+        combos: List[Tuple[str, pl.DataFrame]],
+        log_x: bool = False,
+        log_y: bool = False,
+        symlog_x: bool = False,
+        symlog_y: bool = False,
+        outliers_threshold: Optional[float] = None,
+        log_flags: Optional[Dict[str, bool]] = None,
+    ) -> go.Figure:
+        log_flags = log_flags or {}
+        cols_to_log = [m for m in metrics if log_flags.get(m)]
+        mx, my = metrics[0], metrics[1]
+        mx_label = f"{mx}*" if log_flags.get(mx) else mx
+        my_label = f"{my}*" if log_flags.get(my) else my
+        fig = go.Figure()
+        base_colors = Styles.COLORS
+        all_x_raw: List[float] = []
+        all_y_raw: List[float] = []
+        for ci, (label, df) in enumerate(combos):
+            if mx not in df.columns or my not in df.columns:
+                continue
+            pdf = cast(pd.DataFrame, df.select([mx, my]).to_pandas().apply(pd.to_numeric, errors="coerce")).dropna()
+            pdf = self._viz_drop_outliers(pdf, outliers_threshold)
+            if pdf.empty:
+                continue
+            pdf = self._viz_yeo_johnson_columns(pdf, cols_to_log)
+            xs = np.asarray(pdf[mx].values, dtype=float)
+            ys = np.asarray(pdf[my].values, dtype=float)
+            if symlog_x:
+                all_x_raw.extend(xs.tolist())
+                xs = self._viz_symlog(xs)
+            if symlog_y:
+                all_y_raw.extend(ys.tolist())
+                ys = self._viz_symlog(ys)
+            fig.add_trace(
+                go.Scatter(
+                    x=xs,
+                    y=ys,
+                    mode="markers",
+                    name=label,
+                    marker=dict(color=base_colors[ci % len(base_colors)], size=6, opacity=0.6),
+                )
+            )
+        fig.update_layout(
+            template="plotly_white",
+            xaxis_title=mx_label + (" (symlog)" if symlog_x else ""),
+            yaxis_title=my_label + (" (symlog)" if symlog_y else ""),
+            autosize=True,
+            margin=dict(l=70, r=20, t=40, b=60),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0),
+            font=dict(size=14),
+        )
+        if symlog_x and all_x_raw:
+            tv, tt = self._viz_symlog_ticks(min(all_x_raw), max(all_x_raw))
+            fig.update_xaxes(tickvals=tv, ticktext=tt)
+        elif log_x:
+            fig.update_xaxes(type="log")
+        if symlog_y and all_y_raw:
+            tv, tt = self._viz_symlog_ticks(min(all_y_raw), max(all_y_raw))
+            fig.update_yaxes(tickvals=tv, ticktext=tt)
+        elif log_y:
+            fig.update_yaxes(type="log")
+        return fig
+
+    def _viz_build_scatter_grid(
+        self,
+        metrics: List[str],
+        combos: List[Tuple[str, pl.DataFrame]],
+        log_x: bool = False,
+        log_y: bool = False,
+        symlog_x: bool = False,
+        symlog_y: bool = False,
+        outliers_threshold: Optional[float] = None,
+        log_flags: Optional[Dict[str, bool]] = None,
+    ) -> go.Figure:
+        log_flags = log_flags or {}
+        cols_to_log = [m for m in metrics if log_flags.get(m)]
+        metric_labels = [f"{m}*" if log_flags.get(m) else m for m in metrics]
+        n = len(metrics)
+        fig = make_subplots(
+            rows=n, cols=n, shared_xaxes=False, shared_yaxes=False, horizontal_spacing=0.03, vertical_spacing=0.03
+        )
+        base_colors = Styles.COLORS
+        shown_labels: set[str] = set()
+        # Pre-filter each combo to drop outliers across *all* selected metrics once, so the
+        # same row mask is applied on the diagonal (histogram) and off-diagonal (scatter).
+        filtered_combos: List[Tuple[str, pd.DataFrame]] = []
+        for label, df in combos:
+            available = [m for m in metrics if m in df.columns]
+            if not available:
+                continue
+            pdf = cast(pd.DataFrame, df.select(available).to_pandas().apply(pd.to_numeric, errors="coerce")).dropna()
+            pdf = self._viz_drop_outliers(pdf, outliers_threshold)
+            # Apply Yeo-Johnson to flagged columns *before* computing symlog ranges so ticks
+            # reflect the transformed distribution.
+            pdf = self._viz_yeo_johnson_columns(pdf, cols_to_log)
+            filtered_combos.append((label, pdf))
+        # Per-metric raw-value ranges (untransformed) — needed for symlog tick generation.
+        metric_ranges: Dict[str, Tuple[float, float]] = {}
+        for m in metrics:
+            vals: List[float] = []
+            for _, pdf in filtered_combos:
+                if m in pdf.columns:
+                    vals.extend(pdf[m].dropna().tolist())
+            if vals:
+                metric_ranges[m] = (float(min(vals)), float(max(vals)))
+        for i, m_row in enumerate(metrics):
+            for j, m_col in enumerate(metrics):
+                r, c = i + 1, j + 1
+                for ci, (label, pdf) in enumerate(filtered_combos):
+                    color = base_colors[ci % len(base_colors)]
+                    show_legend = (i == 0 and j == 0) and (label not in shown_labels)
+                    if i == j:
+                        # Diagonal: histogram of raw values (no log/symlog transform applied —
+                        # histogram Y axis is counts, and transforming X would distort the bins).
+                        if m_row not in pdf.columns:
+                            continue
+                        h_vals = np.asarray(pdf[m_row].values)
+                        if len(h_vals) == 0:
+                            continue
+                        fig.add_trace(
+                            go.Histogram(
+                                x=h_vals,
+                                name=label,
+                                marker=dict(color=color),
+                                opacity=0.55,
+                                legendgroup=label,
+                                showlegend=show_legend,
+                                nbinsx=30,
+                            ),
+                            row=r,
+                            col=c,
+                        )
+                    else:
+                        if m_col not in pdf.columns or m_row not in pdf.columns:
+                            continue
+                        if pdf.empty:
+                            continue
+                        xs = np.asarray(pdf[m_col].values, dtype=float)
+                        ys = np.asarray(pdf[m_row].values, dtype=float)
+                        if symlog_x:
+                            xs = self._viz_symlog(xs)
+                        if symlog_y:
+                            ys = self._viz_symlog(ys)
+                        fig.add_trace(
+                            go.Scatter(
+                                x=xs,
+                                y=ys,
+                                mode="markers",
+                                name=label,
+                                marker=dict(color=color, size=4, opacity=0.55),
+                                legendgroup=label,
+                                showlegend=show_legend,
+                            ),
+                            row=r,
+                            col=c,
+                        )
+                    shown_labels.add(label)
+                if j == 0:
+                    fig.update_yaxes(title_text=metric_labels[i], row=r, col=c)
+                if i == n - 1:
+                    fig.update_xaxes(title_text=metric_labels[j], row=r, col=c)
+                # Apply log / symlog scales only to non-diagonal cells.
+                if i != j:
+                    if symlog_x and m_col in metric_ranges:
+                        tv, tt = self._viz_symlog_ticks(*metric_ranges[m_col])
+                        fig.update_xaxes(tickvals=tv, ticktext=tt, row=r, col=c)
+                    elif log_x:
+                        fig.update_xaxes(type="log", row=r, col=c)
+                    if symlog_y and m_row in metric_ranges:
+                        tv, tt = self._viz_symlog_ticks(*metric_ranges[m_row])
+                        fig.update_yaxes(tickvals=tv, ticktext=tt, row=r, col=c)
+                    elif log_y:
+                        fig.update_yaxes(type="log", row=r, col=c)
+        fig.update_layout(
+            barmode="overlay",
+            template="plotly_white",
+            autosize=True,
+            margin=dict(l=70, r=20, t=40, b=60),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1.0),
+            font=dict(size=12),
+        )
+        return fig
+
+    # ------------------------------------------------------------------
+    # AI Chat — floating dialog
+    # ------------------------------------------------------------------
+
+    def _layout_chat_dialog(self) -> html.Div:
+        """Build the floating, draggable, resizable AI chat dialog."""
+        return html.Div(
+            id="chat-dialog",
+            children=[
+                # ── Title bar (drag handle) ──
+                html.Div(
+                    [
+                        html.Span(
+                            "AI Assistant",
+                            style={"fontWeight": "bold", "fontSize": "14px", "color": "white"},
+                        ),
+                        html.Div(
+                            [
+                                html.Button(
+                                    "\u2014",
+                                    id="chat-minimize-btn",
+                                    n_clicks=0,
+                                    title="Minimize",
+                                    style={
+                                        "background": "none",
+                                        "border": "none",
+                                        "color": "white",
+                                        "fontSize": "16px",
+                                        "cursor": "pointer",
+                                        "padding": "0 6px",
+                                        "lineHeight": "1",
+                                    },
+                                ),
+                                html.Button(
+                                    "\u2716",
+                                    id="chat-close-btn",
+                                    n_clicks=0,
+                                    title="Close",
+                                    style={
+                                        "background": "none",
+                                        "border": "none",
+                                        "color": "white",
+                                        "fontSize": "14px",
+                                        "cursor": "pointer",
+                                        "padding": "0 6px",
+                                        "lineHeight": "1",
+                                    },
+                                ),
+                            ],
+                            style={"display": "flex", "alignItems": "center"},
+                        ),
+                    ],
+                    id="chat-titlebar",
+                    style={
+                        "display": "flex",
+                        "justifyContent": "space-between",
+                        "alignItems": "center",
+                        "padding": "8px 14px",
+                        "backgroundColor": "#FF7F00",
+                        "borderRadius": "10px 10px 0 0",
+                        "cursor": "move",
+                        "userSelect": "none",
+                    },
+                ),
+                # ── Body (collapsible) ──
+                html.Div(
+                    id="chat-body",
+                    children=[
+                        # Provider selector + hints
+                        html.Div(
+                            [
+                                html.Div(
+                                    [
+                                        html.Span(
+                                            "Model: ",
+                                            style={"fontWeight": "bold", "fontSize": "12px", "marginRight": "4px"},
+                                        ),
+                                        dcc.Dropdown(
+                                            id="chat-provider-select",
+                                            options=_CHAT_PROVIDER_DROPDOWN_OPTIONS,
+                                            value=os.environ.get("CHAT_MODEL_KEY", "gemini:gemini-2.5-flash"),
+                                            clearable=False,
+                                            style={"width": "200px", "fontSize": "12px"},
+                                        ),
+                                    ],
+                                    style={"display": "flex", "alignItems": "center"},
+                                ),
+                                html.Span(
+                                    "Try: column meaning \u2022 group definitions \u2022 rtp vs user_rtp",
+                                    style={"fontSize": "11px", "color": "#888", "marginLeft": "12px"},
+                                ),
+                            ],
+                            style={
+                                "padding": "6px 14px",
+                                "backgroundColor": "#fdf6ec",
+                                "borderBottom": "1px solid #eee",
+                                "display": "flex",
+                                "alignItems": "center",
+                                "flexWrap": "wrap",
+                                "gap": "4px",
+                            },
+                        ),
+                        # Messages area
+                        html.Div(
+                            id="chat-messages-container",
+                            children=[],
+                            style={
+                                "flex": "1",
+                                "overflowY": "auto",
+                                "padding": "12px 14px",
+                                "backgroundColor": "#ffffff",
+                            },
+                        ),
+                        # Status line
+                        html.Div(
+                            id="chat-status",
+                            style={"fontSize": "11px", "color": "#999", "padding": "0 14px 4px 14px"},
+                        ),
+                        # Input row
+                        html.Div(
+                            [
+                                dcc.Input(
+                                    id="chat-input",
+                                    type="text",
+                                    placeholder="Ask about a column, metric, or group...",
+                                    style={
+                                        "flex": "1",
+                                        "padding": "8px 12px",
+                                        "fontSize": "13px",
+                                        "border": "1px solid #d0d0d0",
+                                        "borderRadius": "6px",
+                                        "marginRight": "6px",
+                                        "outline": "none",
+                                    },
+                                    debounce=True,
+                                    n_submit=0,
+                                ),
+                                html.Button(
+                                    "Send",
+                                    id="chat-send-btn",
+                                    n_clicks=0,
+                                    style={
+                                        "padding": "8px 16px",
+                                        "backgroundColor": "#FF7F00",
+                                        "color": "white",
+                                        "border": "none",
+                                        "borderRadius": "6px",
+                                        "cursor": "pointer",
+                                        "fontSize": "13px",
+                                        "fontWeight": "bold",
+                                    },
+                                ),
+                                html.Button(
+                                    "Clear",
+                                    id="chat-clear-btn",
+                                    n_clicks=0,
+                                    style={
+                                        "padding": "8px 10px",
+                                        "backgroundColor": "#bbb",
+                                        "color": "white",
+                                        "border": "none",
+                                        "borderRadius": "6px",
+                                        "cursor": "pointer",
+                                        "fontSize": "13px",
+                                        "marginLeft": "4px",
+                                    },
+                                ),
+                            ],
+                            style={
+                                "display": "flex",
+                                "alignItems": "center",
+                                "padding": "8px 14px 10px 14px",
+                                "borderTop": "1px solid #eee",
+                            },
+                        ),
+                    ],
+                    style={
+                        "display": "flex",
+                        "flexDirection": "column",
+                        "overflow": "hidden",
+                    },
+                ),
+            ],
+            style={
+                "display": "none",
+                "position": "fixed",
+                "bottom": "80px",
+                "right": "40px",
+                "width": "480px",
+                "height": "550px",
+                "minWidth": "340px",
+                "minHeight": "250px",
+                "backgroundColor": "#ffffff",
+                "border": "1px solid #d0d0d0",
+                "borderRadius": "10px",
+                "boxShadow": "0 8px 32px rgba(0,0,0,0.18)",
+                "zIndex": "9999",
+                "flexDirection": "column",
+                "resize": "both",
+                "overflow": "hidden",
+            },
+        )
+
+    def _register_chat_callbacks(self) -> None:
+        """Register AI chat callbacks (only if dependencies are installed)."""
+
+        # Toggle / close / minimize work regardless of chat agent availability
+        @self.app.callback(
+            Output("chat-dialog", "style"),
+            Output("chat-body", "style"),
+            Input("chat-toggle-btn", "n_clicks"),
+            Input("chat-close-btn", "n_clicks"),
+            Input("chat-minimize-btn", "n_clicks"),
+            State("chat-dialog", "style"),
+            State("chat-body", "style"),
+            prevent_initial_call=True,
+        )
+        def toggle_chat_dialog(
+            toggle_clicks: int,
+            close_clicks: int,
+            minimize_clicks: int,
+            dialog_style: dict,
+            body_style: dict,
+        ) -> Any:
+            ctx = callback_context
+            if not ctx.triggered:
+                return no_update, no_update
+
+            triggered_id = ctx.triggered[0]["prop_id"].split(".")[0]
+            dialog_style = dict(dialog_style or {})
+            body_style = dict(body_style or {})
+
+            if triggered_id == "chat-close-btn":
+                dialog_style["display"] = "none"
+                return dialog_style, no_update
+
+            if triggered_id == "chat-minimize-btn":
+                is_minimized = body_style.get("display") == "none"
+                if is_minimized:
+                    body_style["display"] = "flex"
+                    dialog_style["height"] = dialog_style.get("_prevHeight", "550px")
+                else:
+                    dialog_style["_prevHeight"] = dialog_style.get("height", "550px")
+                    body_style["display"] = "none"
+                    dialog_style["height"] = "auto"
+                return dialog_style, body_style
+
+            if triggered_id == "chat-toggle-btn":
+                is_visible = dialog_style.get("display") != "none"
+                dialog_style["display"] = "none" if is_visible else "flex"
+                if not is_visible:
+                    body_style["display"] = "flex"
+                return dialog_style, body_style
+
+            return no_update, no_update
+
+        # Drag support via clientside callback
+        self.app.clientside_callback(
+            """
+            function() {
+                var titlebar = document.getElementById('chat-titlebar');
+                var dialog = document.getElementById('chat-dialog');
+                if (!titlebar || !dialog || titlebar._dragInit) return;
+                titlebar._dragInit = true;
+
+                var offsetX = 0, offsetY = 0, isDragging = false;
+
+                titlebar.addEventListener('mousedown', function(e) {
+                    if (e.target.tagName === 'BUTTON') return;
+                    isDragging = true;
+                    var rect = dialog.getBoundingClientRect();
+                    offsetX = e.clientX - rect.left;
+                    offsetY = e.clientY - rect.top;
+                    document.body.style.userSelect = 'none';
+                });
+
+                document.addEventListener('mousemove', function(e) {
+                    if (!isDragging) return;
+                    var newLeft = e.clientX - offsetX;
+                    var newTop = e.clientY - offsetY;
+                    newLeft = Math.max(0, Math.min(newLeft, window.innerWidth - 100));
+                    newTop = Math.max(0, Math.min(newTop, window.innerHeight - 50));
+                    dialog.style.left = newLeft + 'px';
+                    dialog.style.top = newTop + 'px';
+                    dialog.style.right = 'auto';
+                    dialog.style.bottom = 'auto';
+                });
+
+                document.addEventListener('mouseup', function() {
+                    isDragging = false;
+                    document.body.style.userSelect = '';
+                });
+
+                return window.dash_clientside.no_update;
+            }
+            """,
+            Output("chat-titlebar", "data-drag"),
+            Input("chat-dialog", "style"),
+        )
+
+        # Step 1: Show user message immediately + "Thinking..." indicator
+        @self.app.callback(
+            Output("chat-messages-container", "children", allow_duplicate=True),
+            Output("chat-history", "data", allow_duplicate=True),
+            Output("chat-input", "value", allow_duplicate=True),
+            Output("chat-status", "children", allow_duplicate=True),
+            Output("chat-pending-request", "data"),
+            Input("chat-send-btn", "n_clicks"),
+            Input("chat-input", "n_submit"),
+            Input("chat-clear-btn", "n_clicks"),
+            State("chat-input", "value"),
+            State("chat-history", "data"),
+            State("config-dropdown", "value"),
+            State("chat-provider-select", "value"),
+            prevent_initial_call=True,
+        )
+        def handle_chat_submit(
+            send_clicks: int,
+            n_submit: int,
+            clear_clicks: int,
+            user_input: Optional[str],
+            history: list,
+            config_path: str,
+            provider: str,
+        ) -> Any:
+            ctx = callback_context
+            if not ctx.triggered:
+                return no_update, no_update, no_update, no_update, no_update
+
+            triggered_id = ctx.triggered[0]["prop_id"].split(".")[0]
+
+            if triggered_id == "chat-clear-btn":
+                return [], [], "", "Chat cleared.", None
+
+            if not user_input or not user_input.strip():
+                return no_update, no_update, no_update, no_update, no_update
+
+            history = list(history or [])
+            history.append({"role": "user", "content": user_input.strip()})
+
+            thinking_history = history + [{"role": "assistant", "content": "Thinking..."}]
+            messages_ui = self._render_chat_messages(thinking_history)
+
+            model_label = provider.split(":")[-1] if ":" in provider else provider
+            pending = {
+                "message": user_input.strip(),
+                "history": [{"role": m["role"], "content": m["content"]} for m in history[:-1]],
+                "dashboard_config": config_path or "",
+                "model": provider,
+            }
+            return messages_ui, history, "", f"Waiting for response ({model_label})...", pending
+
+        # Step 2: Call the AI agent API and display the response
+        @self.app.callback(
+            Output("chat-messages-container", "children"),
+            Output("chat-history", "data"),
+            Output("chat-status", "children"),
+            Input("chat-pending-request", "data"),
+            prevent_initial_call=True,
+        )
+        def handle_chat_response(pending: Optional[dict]) -> Any:
+            import json as _json
+            import urllib.error
+            import urllib.request
+
+            if not pending:
+                return no_update, no_update, no_update
+
+            model_key = pending.get("model", "")
+            model_label = model_key.split(":")[-1] if ":" in model_key else model_key
+
+            try:
+                payload = _json.dumps(pending).encode()
+                req = urllib.request.Request(
+                    f"{_CHAT_API_URL}/api/chat",
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    body = _json.loads(resp.read().decode())
+                response = body.get("response", "No response received.")
+                elapsed = body.get("elapsed_ms", "")
+                status = f"({model_label}) {elapsed}ms" if elapsed else f"({model_label})"
+            except urllib.error.URLError as exc:
+                logger.exception("Chat agent unreachable at %s", _CHAT_API_URL)
+                response = (
+                    f"Cannot reach the AI Agent at `{_CHAT_API_URL}`.\n\n"
+                    "**Local dev:** start the agent first:\n"
+                    "```\nPYTHONPATH=src uvicorn dashboards.chat_api:app --port 8051\n```\n\n"
+                    "**ECS:** ensure the ai-chat-agent service is running and "
+                    "`CHAT_API_URL` is set to its ALB URL."
+                )
+                status = f"Agent unreachable at {_CHAT_API_URL}"
+            except Exception as exc:
+                logger.exception("Chat agent error")
+                response = f"Error: {exc}"
+                status = "An error occurred."
+
+            # Retrieve current history from the pending request context
+            history = pending.get("history", [])
+            history.append({"role": "user", "content": pending["message"]})
+            history.append({"role": "assistant", "content": response})
+
+            messages_ui = self._render_chat_messages(history)
+            return messages_ui, history, status
+
+    @staticmethod
+    def _render_chat_messages(history: list) -> List[Component]:
+        """Convert chat history to Dash HTML components."""
+        components: List[Component] = []
+        for msg in history:
+            is_user = msg.get("role") == "user"
+            components.append(
+                html.Div(
+                    [
+                        html.Div(
+                            "You" if is_user else "AI",
+                            style={
+                                "fontWeight": "bold",
+                                "fontSize": "12px",
+                                "color": "#377EB8" if is_user else "#4DAF4A",
+                                "marginBottom": "4px",
+                            },
+                        ),
+                        html.Div(
+                            dcc.Markdown(
+                                msg.get("content", ""),
+                                style={"fontSize": "13px", "lineHeight": "1.5"},
+                            ),
+                        ),
+                    ],
+                    style={
+                        "padding": "8px 12px",
+                        "marginBottom": "6px",
+                        "borderRadius": "8px",
+                        "backgroundColor": "#e8f4fd" if is_user else "#f0f9f0",
+                        "borderLeft": f"3px solid {'#377EB8' if is_user else '#4DAF4A'}",
+                    },
+                )
+            )
+        return components
+
     def run(self, debug: bool = True) -> None:
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -3528,6 +5692,10 @@ _dashboard = GameStatsDashboard(_config_dir)
 #   gunicorn --workers 1 --worker-class gthread --threads 8 --timeout 300 \
 #            --bind 0.0.0.0:8050 dashboards.game_stats_monitor:server
 server = _dashboard.app.server
+
+# REST API (/api/chat, /api/metadata/*) is served by the standalone
+# AI Chat Agent service (FastAPI + Uvicorn) at CHAT_API_URL.
+# No Flask blueprint needed here — the dashboard calls the agent over HTTP.
 
 if __name__ == "__main__":
     debug = os.environ.get("DASHBOARD_DEBUG", "true").lower() in ("1", "true", "yes")

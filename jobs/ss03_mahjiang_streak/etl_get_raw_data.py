@@ -9,19 +9,21 @@ from textwrap import dedent
 import pandas as pd
 
 from bituslabs_ds.config import (
+    DATE_START_HOUR,
     DEFAULT_BASTION_IP,
     DEFAULT_ETL_OUTPUT,
+    ETL_CURRENCY_CODES,
+    ETL_EXCLUDED_OP_CODES,
     LOCAL_ROOT,
     REDSHIFT_HOST,
     REDSHIFT_PORT,
+    TIMEZONE_SHANGHAI,
     get_redshift_password,
     get_redshift_user,
     setup_logging,
 )
 from bituslabs_ds.etl import DataLoader, ETLScheduler, RedshiftBackend
 
-# Day boundary: 6 AM Shanghai time (same as fish_hunter)
-DATE_START_HOUR = 6
 GAME_ID = "SS03"
 
 
@@ -29,9 +31,9 @@ def generate_query(start_date: str):
     query = dedent(
         f"""
         SELECT
-            cast(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_date,
-            cast(DATE_TRUNC('week', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_week,
-            cast(DATE_TRUNC('month', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_month,
+            cast(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at))) AS DATE) AS activity_date,
+            cast(DATE_TRUNC('week', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at))) AS DATE) AS activity_week,
+            cast(DATE_TRUNC('month', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at))) AS DATE) AS activity_month,
             t.user_id,
             t.bet_type,
             -- t."snapshot",
@@ -48,9 +50,9 @@ def generate_query(start_date: str):
             t.credit 
         FROM public.fct_bet_orders t
         WHERE t.game_id = '{GAME_ID}'
-            AND t.currency_type = 'CNY'
+            AND t.currency_type IN {ETL_CURRENCY_CODES}
             AND t.status = 'COMPLETED'
-            AND t.op_code not in ('B26','TST','TSB','TSO')
+            AND t.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
             AND t.created_at >= '{start_date}'
         """
     )

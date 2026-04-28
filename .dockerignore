@@ -15,4 +15,5 @@
 **/*.parquet
 **/*.log
 **/*.tmp
-**/output_*/
+**/output*/
+jobs/log/

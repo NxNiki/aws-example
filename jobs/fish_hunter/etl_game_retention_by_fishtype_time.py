@@ -2,9 +2,13 @@ import os
 from textwrap import dedent
 
 from bituslabs_ds.config import (
+    DATE_START_HOUR,
+    ETL_CURRENCY_CODES,
+    ETL_EXCLUDED_OP_CODES,
     LOCAL_ROOT,
     REDSHIFT_HOST,
     REDSHIFT_PORT,
+    TIMEZONE_SHANGHAI,
     get_redshift_password,
     get_redshift_user,
     setup_logging,
@@ -25,7 +29,7 @@ def generate_query():
         WITH base_data AS (
             SELECT
                 b.user_id,
-                CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.event_timestamp) AS bet_time,
+                CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', b.event_timestamp) AS bet_time,
                 b.killed,
                 CASE
                     WHEN b.fish_value <= 10 THEN 'low'
@@ -34,22 +38,22 @@ def generate_query():
                     ELSE 'ultra'
                 END as fish_type,
                 DATEDIFF(second, LAG(b.event_timestamp) OVER (PARTITION BY b.user_id ORDER BY b.event_timestamp), b.event_timestamp) AS delta_bet_time,
-                DATE_TRUNC('day', DATEADD(hour, -6, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.event_timestamp))) AS activity_date,
-                DATE_TRUNC('week', DATEADD(hour, -6, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.event_timestamp))) AS activity_week,
-                DATE_TRUNC('month', DATEADD(hour, -6, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.event_timestamp))) AS activity_month
+                DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', b.event_timestamp))) AS activity_date,
+                DATE_TRUNC('week', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', b.event_timestamp))) AS activity_week,
+                DATE_TRUNC('month', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', b.event_timestamp))) AS activity_month
             FROM public.bullet b
             WHERE
-                b.currency_type = 'CNY'
-            AND b.op_code not in ('B26', 'TST','TSB','TSO')
+                b.currency_type IN {ETL_CURRENCY_CODES}
+            AND b.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
             -- ---------------------------------------------------------
             -- FAST FILTERING: Transform the INPUTS, not the COLUMN
             -- ---------------------------------------------------------
             -- Logic: We want events where (EventTime + UserDays) >= Start
             -- So: EventTime >= Start - UserDays
-            AND b.event_timestamp >= CONVERT_TIMEZONE('Asia/Shanghai', 'UTC', CAST('{DATE_START}' AS TIMESTAMP))
+            AND b.event_timestamp >= CONVERT_TIMEZONE('{TIMEZONE_SHANGHAI}', 'UTC', CAST('{DATE_START}' AS TIMESTAMP))
             -- Logic: We want events where (EventTime - RetentionDays) < End
             -- So: EventTime < End + RetentionDays
-            AND b.event_timestamp < CONVERT_TIMEZONE('Asia/Shanghai', 'UTC', DATEADD(day, {retention_days}, CAST('{DATE_END}' AS TIMESTAMP)))
+            AND b.event_timestamp < CONVERT_TIMEZONE('{TIMEZONE_SHANGHAI}', 'UTC', DATEADD(day, {retention_days}, CAST('{DATE_END}' AS TIMESTAMP)))
             AND b.strategy_name = 'DEFAULT_FALLBACK'
         ),
 

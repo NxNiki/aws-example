@@ -3,11 +3,15 @@ import os
 from textwrap import dedent
 
 from bituslabs_ds.config import (
+    DATE_START_HOUR,
     DEFAULT_BASTION_IP,
     DEFAULT_ETL_OUTPUT,
+    ETL_CURRENCY_CODES,
+    ETL_EXCLUDED_OP_CODES,
     LOCAL_ROOT,
     REDSHIFT_HOST,
     REDSHIFT_PORT,
+    TIMEZONE_SHANGHAI,
     get_redshift_password,
     get_redshift_user,
     setup_logging,
@@ -17,7 +21,6 @@ from bituslabs_ds.etl import AggCol, DataLoader, ETLScheduler, RedshiftBackend, 
 DEFAULT_DATE_START = "2025-10-20"
 RETURN_USER_DAYS = 30
 RETENTION_DAYS = 3
-DATE_START_HOUR = 6
 STREAK_SESSION_THRESH = 600
 STREAK_KILL_THRESH = 3  # nearly 10% of all killing intervals.
 
@@ -33,6 +36,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
             SELECT
                 b.user_id,
                 b.room_id,
+                b.bullet_id,
                 b.strategy_name, -- Keep Raw
                 b.partition_ab[0] as partition_val, -- Extract partition once here
                 b.event_timestamp AS bet_time,
@@ -47,14 +51,15 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
                 END as fish_type,
                 b.killed,
                 b.profit,
-                LAG(b.event_timestamp) OVER (PARTITION BY b.user_id ORDER BY b.event_timestamp) AS prev_bet_time,
-                CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at))) AS DATE) AS activity_date,
-                CAST(DATE_TRUNC('week', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at))) AS DATE) AS activity_week,
-                CAST(DATE_TRUNC('month', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', b.created_at))) AS DATE) AS activity_month
+                LAG(b.event_timestamp) OVER (PARTITION BY b.user_id ORDER BY b.bullet_id, b.event_timestamp) AS prev_bet_time,
+                LAG(b.bet) OVER (PARTITION BY b.user_id ORDER BY b.bullet_id, b.event_timestamp) AS prev_bet_amount,
+                CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', b.created_at))) AS DATE) AS activity_date,
+                CAST(DATE_TRUNC('week', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', b.created_at))) AS DATE) AS activity_week,
+                CAST(DATE_TRUNC('month', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', b.created_at))) AS DATE) AS activity_month
             FROM public.bullet b
             WHERE
-                b.currency_type = 'CNY'
-                AND b.op_code not in ('B26', 'TST','TSB','TSO')
+                b.currency_type IN {ETL_CURRENCY_CODES}
+                AND b.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
 
                 -- ---------------------------------------------------------
                 -- FAST FILTERING: Transform the INPUTS, not the COLUMN
@@ -63,7 +68,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
                 -- 1. Reverse the date math for START (use effective_start so monthly/weekly get full period)
                 -- Logic: We want events where (EventTime + UserDays) >= Start
                 -- So: EventTime >= Start - UserDays
-                AND b.created_at >= CONVERT_TIMEZONE('Asia/Shanghai', 'UTC',
+                AND b.created_at >= CONVERT_TIMEZONE('{TIMEZONE_SHANGHAI}', 'UTC',
                        DATEADD(day, -{RETURN_USER_DAYS}, CAST('{effective_start}' AS TIMESTAMP)))
 
         ),
@@ -94,6 +99,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
                 user_id, 
                 activity_date, 
                 fish_type, 
+                bullet_id,
                 bet_time
             FROM base_data 
             WHERE killed = 1
@@ -107,15 +113,15 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
                 bet_time,
                 -- GLOBAL: ignores fish_type. Checks if ANY fish was killed recently.
                 CASE 
-                    WHEN DATEDIFF(SECOND, LAG(bet_time) OVER(PARTITION BY user_id ORDER BY bet_time), bet_time) > {STREAK_KILL_THRESH} 
-                        OR LAG(bet_time) OVER(PARTITION BY user_id ORDER BY bet_time) IS NULL 
+                    WHEN DATEDIFF(SECOND, LAG(bet_time) OVER(PARTITION BY user_id ORDER BY bullet_id, bet_time), bet_time) > {STREAK_KILL_THRESH} 
+                        OR LAG(bet_time) OVER(PARTITION BY user_id ORDER BY bullet_id, bet_time) IS NULL 
                     THEN 1 ELSE 0 
                 END AS is_new_global_streak,
                 
                 -- TYPE-SPECIFIC: isolated by fish_type. Only checks previous kill of SAME type.
                 CASE 
-                    WHEN DATEDIFF(SECOND, LAG(bet_time) OVER(PARTITION BY user_id, fish_type ORDER BY bet_time), bet_time) > {STREAK_KILL_THRESH} 
-                        OR LAG(bet_time) OVER(PARTITION BY user_id, fish_type ORDER BY bet_time) IS NULL 
+                    WHEN DATEDIFF(SECOND, LAG(bet_time) OVER(PARTITION BY user_id, fish_type ORDER BY bullet_id, bet_time), bet_time) > {STREAK_KILL_THRESH} 
+                        OR LAG(bet_time) OVER(PARTITION BY user_id, fish_type ORDER BY bullet_id, bet_time) IS NULL 
                     THEN 1 ELSE 0 
                 END AS is_new_type_streak
             FROM base_kills
@@ -127,8 +133,8 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
                 activity_date,
                 fish_type,
                 bet_time,
-                SUM(is_new_global_streak) OVER(PARTITION BY user_id ORDER BY bet_time ROWS UNBOUNDED PRECEDING) AS global_streak_id,
-                SUM(is_new_type_streak) OVER(PARTITION BY user_id, fish_type ORDER BY bet_time ROWS UNBOUNDED PRECEDING) AS type_streak_id
+                SUM(is_new_global_streak) OVER(PARTITION BY user_id ORDER BY bullet_id, bet_time ROWS UNBOUNDED PRECEDING) AS global_streak_id,
+                SUM(is_new_type_streak) OVER(PARTITION BY user_id, fish_type ORDER BY bullet_id, bet_time ROWS UNBOUNDED PRECEDING) AS type_streak_id
             FROM calculate_islands
         ),
 
@@ -175,12 +181,12 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
                         ELSE 1 
                     END) OVER (
                         PARTITION BY t.activity_date, t.user_id 
-                        ORDER BY t.bet_time 
+                        ORDER BY t.bullet_id, t.bet_time 
                         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
                     ) AS session_id,
                 ROW_NUMBER() OVER (
                         PARTITION BY t.activity_date, t.user_id 
-                        ORDER BY t.bet_time 
+                        ORDER BY t.bullet_id, t.bet_time 
                     ) AS bet_index
                 
             FROM base_data t
@@ -316,7 +322,17 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
                 AVG(CASE WHEN b.killed = 1 THEN b.fish_value END)                     AS user_avg_killed_fish_value,
                 AVG(CASE WHEN b.fish_value > 19 AND b.fish_value < 201 AND b.killed = 1 THEN b.fish_value END)         AS user_avg_killed_fish_value_20_200,
                 AVG(b.profit)                                                          AS user_bullet_avg_profit,
-                AVG(CASE WHEN b.killed = 1 THEN b.profit END)                         AS user_bullet_kill_avg_profit
+                AVG(CASE WHEN b.killed = 1 THEN b.profit END)                         AS user_bullet_kill_avg_profit,
+
+                -- delta bet amount metrics:
+                SUM(CASE WHEN (b.bet - b.prev_bet_amount) > 0 THEN (b.bet - b.prev_bet_amount) END) AS user_accu_pos_delta_bet,
+                SUM(CASE WHEN (b.bet - b.prev_bet_amount) < 0 THEN (b.bet - b.prev_bet_amount) END) AS user_accu_neg_delta_bet,
+                AVG(CASE WHEN (b.bet - b.prev_bet_amount) > 0 THEN (b.bet - b.prev_bet_amount) END) AS user_accu_pos_delta_bet_avg,
+                AVG(CASE WHEN (b.bet - b.prev_bet_amount) < 0 THEN (b.bet - b.prev_bet_amount) END) AS user_accu_neg_delta_bet_avg,
+                SUM(b.bet - b.prev_bet_amount) AS user_accu_delta_bet,
+                AVG(b.bet - b.prev_bet_amount) AS user_accu_delta_bet_avg,
+                COUNT(CASE WHEN (b.bet - b.prev_bet_amount) > 0 THEN 1 END) AS user_pos_delta_bet_num,
+                COUNT(CASE WHEN (b.bet - b.prev_bet_amount) < 0 THEN 1 END) AS user_neg_delta_bet_num
             FROM base_data b
             JOIN user_daily_group u ON b.user_id = u.user_id AND b.activity_date = u.activity_date
             GROUP BY b.user_id, u.daily_group, b.{stats_agg_col}
@@ -326,10 +342,10 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
         user_first_bet AS (
             SELECT
                 user_id,
-                MIN(CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', created_at))) AS DATE)) AS first_bet_date
+                MIN(CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', created_at))) AS DATE)) AS first_bet_date
             FROM public.bullet
-            WHERE currency_type = 'CNY'
-              AND op_code NOT IN ('B26','TST','TSB','TSO')
+            WHERE currency_type IN {ETL_CURRENCY_CODES}
+              AND op_code NOT IN {ETL_EXCLUDED_OP_CODES}
             GROUP BY user_id
         )
 
@@ -386,6 +402,16 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
             t1.user_avg_killed_fish_value_20_200,
             t1.user_bullet_avg_profit,
             t1.user_bullet_kill_avg_profit,
+
+            -- delta bet amount metrics:
+            t1.user_accu_pos_delta_bet,
+            t1.user_accu_neg_delta_bet,
+            t1.user_accu_pos_delta_bet_avg,
+            t1.user_accu_neg_delta_bet_avg,
+            t1.user_accu_delta_bet,
+            t1.user_accu_delta_bet_avg,
+            t1.user_pos_delta_bet_num,
+            t1.user_neg_delta_bet_num,
 
             -- Session stats:
             t4.user_num_streak_sessions,

@@ -4,19 +4,21 @@ from ``dim_user_latest`` and write Parquet to S3.
 
 **Output columns**
 
-``event_timestamp``, ``data_date``, ``user_id``, ``user_name``, ``game_id``,
+``event_timestamp``, ``data_date``, ``user_id``, ``user_name``, ``risk_user_group``, ``game_id``,
 ``ip``, ``currency_type``, ``op_code``, ``strategy_name``, ``bullet_level``,
 ``killed``, ``bet``, ``payout``, ``profit``, ``curr_balance``, ``fish_value``,
 ``multiplier``, ``device_type``, then ``_processed_at`` (added in Python before
 upload).
 
-Filters: ``op_code`` not in B26/TST/TSB/TSO, ``currency_type = 'CNY'``,
+Filters: ``op_code`` / ``currency_type`` use ``ETL_EXCLUDED_OP_CODES`` and ``ETL_CURRENCY_CODES`` (SQL IN-list strings from config),
 ``event_timestamp > '2025-01-01'``.
 """
 
+import json
 import logging
 import os
 from datetime import datetime
+from pathlib import Path
 from textwrap import dedent
 
 import awswrangler as wr
@@ -25,9 +27,12 @@ import pandas as pd
 from bituslabs_ds.config import (
     DEFAULT_BASTION_IP,
     DEFAULT_ETL_OUTPUT,
+    ETL_CURRENCY_CODES,
+    ETL_EXCLUDED_OP_CODES,
     LOCAL_ROOT,
     REDSHIFT_HOST,
     REDSHIFT_PORT,
+    TIMEZONE_SHANGHAI,
     get_redshift_password,
     get_redshift_user,
     setup_logging,
@@ -38,133 +43,63 @@ logger = logging.getLogger(__name__)
 
 S3_OUTPUT_PREFIX = f"{DEFAULT_ETL_OUTPUT}/jobs/output_risk_control/risk_user_stats"
 
+RISK_USERS_JSON = Path(__file__).with_name("risk_users.json")
+
+
+def _load_risk_user_groups() -> list[tuple[str, str]]:
+    """Load username groups from JSON and return (user_name, group_label) rows."""
+    payload = json.loads(RISK_USERS_JSON.read_text(encoding="utf-8"))
+    group1 = list(dict.fromkeys([str(x) for x in payload.get("group1", [])]))
+    raw_group2 = list(dict.fromkeys([str(x) for x in payload.get("group2", [])]))
+    overlap = sorted(set(group1) & set(raw_group2))
+    if overlap:
+        logger.warning("Found %s overlapping usernames between group1/group2", len(overlap))
+    group2 = [name for name in raw_group2 if name not in set(group1)]
+    return [(name, "group1") for name in group1] + [(name, "group2") for name in group2]
+
+
 # Usernames resolved via ``dim_user_latest`` for the bullet aggregate below.
-RISK_USER_NAMES = [
-    "A5802j9xfrf0002",
-    "A5802j9ffg656565",
-    "A5802j9xdftgdrt988",
-    "A5802j9sftydry877",
-    "A5802j9kkk6666",
-    "A5802j9dsds223335",
-    "A5802j9fghfgfg6232",
-    "A5802j9xfghdfghd25",
-    "A5802j9dfgyrty88",
-    "A5802j904048259",
-    "A5802j9nhn6554695",
-    "A5802j9dfgg78948",
-    "A5802j9dwsd6896898",
-    "A5802paluke",
-    "A5802j9fghjftg0251",
-    "A5802j9ccc001011",
-    "A5802j9fef635656",
-    "A5802j9ssrer01215",
-    "A5802j9dffdg2142",
-    "A5802j9dfdf3223",
-    "A5802j9edwin",
-    "A5802j9fasegtr888",
-    "A5802j9sdtdrtet777",
-    "A5802pa1013091",
-    "A5802j9xfgdfg999",
-    "A5802pakenneyn8140",
-    "A5802pajake",
-    "A5802pamartham7",
-    "A5802pajohnnyk428",
-    "A5802j9xdfgdfg010",
-    "A5802pabidelachq22",
-    "A5802pa10142039",
-    "A5802j9jhywu010",
-    "A5802j9dsre5445454",
-    "A5802paasfsa321",
-    "A5802pamuirp183",
-    "A5802pasdrs0120",
-    "A5802j9xfgdfgf0110",
-    "A5802j904039841",
-    "A5802padsafe320",
-    "A5802padzfs3000",
-    "A5802pa1014625",
-    "A5802j9vcbvc564",
-    "A5802j9fxghdf9871",
-    "A5802parose",
-    "A5802pahill",
-    "A5802j9hggh526356",
-    "A5802j9tytyyy11121",
-    "A5802j9xcvhdfh887",
-    "A5802j9zxfgdfg012",
-    "A5802j9xfhfdty888",
-    "A5802j9sds3032",
-    "A5802pamcin",
-    "A5802j9fhgfg546546",
-    "A5802j9cxgufgy988",
-    "A5802pasdfs698",
-    "A5802j9cvvdf325656",
-    "A5802j9xfhdfgh88",
-    "A5802j9ds6898921",
-    "A5802pahint",
-    "A5802j9xfhdtgr888",
-    "A5802j9xhgdfh0120",
-    "A5802j9xzdgdrg889",
-    "A5802j9gfg232323",
-    "A5802j9fghjfghj89",
-    "A5802j9xcfhfgh321",
-    "A5802j9xchfgf888",
-    "A5802j9xcyhftg985",
-    "A5802j9xdfgdf988",
-    "A5802j9xfhfth2548",
-    "A5802j9mckenz",
-    "A5802j9dfgdfgdfg88",
-    "A5802j9dgdfgrd888",
-    "A5802j9xfgdfg6987",
-    "A5802pazdfs320",
-    "A5802pazdfsd47",
-    "A5802j9fgfg8889999",
-    "A5802j9xcgxfgd999",
-    "A5802pasdad0120",
-    "A5802j9xfdgdfg878",
-    "A5802pawiggi",
-    "A5802j9dfb4552",
-    "A5802pabressettf73",
-    "A5802pakyla",
-    "A5802j9xfhdgfhfdg6",
-    "A5802j9fghfgh999",
-    "A5802j904047776",
-    "A5802pamacldr622",
-    "A5802pa2510141473",
-    "A5802padevanw281",
-]
+RISK_USER_GROUPS = _load_risk_user_groups()
+RISK_USER_NAMES = [name for name, _ in RISK_USER_GROUPS]
 
 
-def _sql_in_string_literals(names: list[str]) -> str:
-    """Comma-separated ``'...'`` lines for a SQL ``IN`` list (Redshift string escape)."""
+def _sql_user_group_union(rows: list[tuple[str, str]]) -> str:
+    """Redshift-safe UNION ALL SELECT rows for (user_name, risk_user_group)."""
     lines: list[str] = []
-    for n in names:
-        escaped = n.replace("'", "''")
-        lines.append(f"                '{escaped}'")
-    return ",\n".join(lines)
+    for idx, (user_name, group_label) in enumerate(rows):
+        user_escaped = user_name.replace("'", "''")
+        group_escaped = group_label.replace("'", "''")
+        prefix = "SELECT" if idx == 0 else "UNION ALL SELECT"
+        lines.append(f"                {prefix} '{user_escaped}' AS user_name, '{group_escaped}' AS risk_user_group")
+    return "\n".join(lines)
 
 
 def build_query() -> str:
     """Return the Redshift SQL for raw risk-user bullet events."""
-    if not RISK_USER_NAMES:
-        raise ValueError("RISK_USER_NAMES must not be empty")
+    if not RISK_USER_GROUPS:
+        raise ValueError("RISK_USER_GROUPS must not be empty")
 
-    in_list = _sql_in_string_literals(RISK_USER_NAMES)
+    union_list = _sql_user_group_union(RISK_USER_GROUPS)
     return dedent(
         f"""
-        WITH user_id AS (
+        WITH risk_user_group_map AS (
+{union_list}
+        ),
+        user_id AS (
             SELECT
-                user_id,
-                user_name
-            FROM public.dim_user_latest
-            WHERE user_name IN (
-                {in_list}
-            )
+                d.user_id,
+                d.user_name,
+                m.risk_user_group
+            FROM public.dim_user_latest AS d
+            INNER JOIN risk_user_group_map AS m ON d.user_name = m.user_name
         )
 
         SELECT
             t.event_timestamp,
-            TRUNC(CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.event_timestamp)) AS data_date,
+            TRUNC(CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.event_timestamp)) AS data_date,
             t.user_id,
             t2.user_name,
+            t2.risk_user_group,
             t.game_id,
             t.ip,
             t.currency_type,
@@ -183,8 +118,8 @@ def build_query() -> str:
         FROM public.bullet AS t
         INNER JOIN user_id AS t2 ON t.user_id = t2.user_id
         WHERE
-            t.op_code NOT IN ('B26', 'TST', 'TSB', 'TSO')
-            AND t.currency_type = 'CNY'
+            t.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
+            AND t.currency_type IN {ETL_CURRENCY_CODES}
             AND t.event_timestamp > '2025-01-01'
         ORDER BY t2.user_name, t.event_timestamp
         """

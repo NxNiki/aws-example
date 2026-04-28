@@ -1,5 +1,5 @@
 # --- Stage 1: Builder ---
-FROM python:3.11-slim AS builder
+FROM public.ecr.aws/docker/library/python:3.11-slim AS builder
 
 ENV POETRY_NO_INTERACTION=1 \
     POETRY_VIRTUALENVS_IN_PROJECT=1 \
@@ -22,7 +22,7 @@ COPY pyproject.toml poetry.lock ./
 RUN poetry install --only main,dashboard --no-root --no-cache && rm -rf $POETRY_CACHE_DIR
 
 # --- Stage 2: Runtime ---
-FROM python:3.11-slim AS runtime
+FROM public.ecr.aws/docker/library/python:3.11-slim AS runtime
 
 ENV VIRTUAL_ENV=/app/.venv \
     PATH="/app/.venv/bin:$PATH" \

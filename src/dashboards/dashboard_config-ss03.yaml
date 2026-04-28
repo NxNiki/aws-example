@@ -53,8 +53,16 @@ stats_by_date:
     "user_hit_rate_bg",
     "user_hit_rate_fg",
     "user_fg_ratio",
-    "user_avg_delta_t_seconds",
+    "user_avg_delta_t_seconds_bg",
     "user_mathtable_change",
+    "user_accu_pos_delta_bet",
+    "user_accu_neg_delta_bet",
+    "user_accu_pos_delta_bet_avg",
+    "user_accu_neg_delta_bet_avg",
+    "user_accu_delta_bet",
+    "user_accu_delta_bet_avg",
+    "user_pos_delta_bet_num",
+    "user_neg_delta_bet_num",
   ]
 
   group3_label: "Total RTP and Profit"

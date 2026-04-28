@@ -41,6 +41,17 @@ IMAGE_URI_ETL = "338568447110.dkr.ecr.us-west-2.amazonaws.com/bituslabs-ds-etl:l
 DEFAULT_MAX_JOBS = 4
 DEFAULT_ATHENA_OUTPUT = f"s3://{S3_BUCKET}/athena-results"
 DEFAULT_ETL_OUTPUT = f"s3://{S3_BUCKET}/etl-results"
+
+# -------------------------------------------------------------------------
+# ETL defaults (shared across Redshift / Athena jobs)
+# -------------------------------------------------------------------------
+# Subtracted from timestamps in TIMEZONE_SHANGHAI before DATE_TRUNC in activity_date / week / month SQL.
+DATE_START_HOUR = 0
+TIMEZONE_SHANGHAI = "Asia/Shanghai"
+# SQL IN-list literals for query f-strings, e.g. ``WHERE col IN {ETL_CURRENCY_CODES}``.
+ETL_CURRENCY_CODES = "('CNY')"
+ETL_EXCLUDED_OP_CODES = "('B26', 'TST', 'TSB', 'TSO')"
+
 DASHBOARD_CONFIG_S3_PATH = f"s3://{S3_BUCKET}/dashboard-configs"
 DEFAULT_BASTION_IP = "13.215.212.244"  # for ssh tunnel connection to redshift
 LOCAL_ROOT = Path(os.environ.get("LOCAL_ROOT", str(Path(__file__).resolve().parent.parent.parent)))

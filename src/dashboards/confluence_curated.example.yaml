@@ -1,0 +1,16 @@
+# Curated Confluence index (optional, for the AI agent).
+#
+# Copy to ``confluence_curated.yaml`` and list pages you want the agent to know
+# about without running broad CQL search on every question. Refresh manually or
+# via a small script when docs change.
+#
+# Future use: tools can match user questions against ``tags`` / ``title`` first,
+# then call the API only for ``read_confluence_page`` by ``id``.
+
+pages:
+  - id: "718012441"
+    title: "AI 活动时间线"
+    space_key: "productsha"
+    url: "https://bituslabs.atlassian.net/wiki/x/GQDMKg"
+    summary: "Timeline of AI-related product changes (FM01, SS01, SS02, SS03): pools, RTP, clustering, launches."
+    tags: ["ai", "timeline", "rtp", "product"]

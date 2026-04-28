@@ -5,8 +5,8 @@ Deploy the Game Stats Dashboard to AWS ECS Fargate with a public Application Loa
 Prerequisites:
   1. Run `bash infra/docker_build_dashboard.sh` to build and push the image to ECR.
   2. Ensure ecsTaskExecutionRole exists (ECS console creates it, or use the default).
-  3. ecsTaskExecutionRole (or your task role) needs S3 read access for dashboard data:
-     Add policy: s3:GetObject, s3:ListBucket on s3://bituslabs-team-ai/*
+  3. ecsTaskExecutionRole (or your task role) needs S3 read/write access for dashboard data:
+     Add policy: s3:GetObject, s3:PutObject, s3:ListBucket on s3://bituslabs-team-ai/*
   4. Default: use existing cluster. Pass --create-cluster to create new (requires ecs:CreateCluster).
      IAM needs: ecs:*, elasticloadbalancing:*, ec2:*, logs:*, iam:PassRole/CreateRole/AttachRolePolicy/PutRolePolicy.
 
@@ -25,6 +25,7 @@ Options:
   --desired-count       Number of tasks (default: 0 with scale-to-zero, else 1)
   --no-scale-to-zero    Disable scale-to-zero; keep 1 task always running
   --public-url          DASHBOARD_PUBLIC_URL env (default: ALB URL)
+  --chat-api-url        CHAT_API_URL for the AI agent (auto-detected from ai-chat-agent ALB)
   --build-first         Run docker_build_dashboard.sh before deploying
   --dry-run             Print planned actions without executing
 """
@@ -52,11 +53,10 @@ S3_BUCKET = "bituslabs-team-ai"
 IMAGE_NAME = "bituslabs-ds-dashboard"
 DASHBOARD_PORT = 8050
 
-# Target group health check: use /health path (excluded from request counting for scale-in)
-# Max interval 300s to minimize health-check traffic so scale-to-zero can trigger
 HEALTH_CHECK_PATH = "/health"
-TG_HEALTH_CHECK_INTERVAL = 300
-TG_HEALTHY_THRESHOLD = 2
+TG_HEALTH_CHECK_INTERVAL = 30  # fast health checks so new tasks become healthy quickly
+TG_HEALTHY_THRESHOLD = 2  # 2 consecutive checks = ~60s to become healthy
+TG_DEREGISTRATION_DELAY = 30  # seconds to drain old task before removing from ALB
 SCALE_IN_IDLE_MINUTES = 180  # Scale to 0 after 3 hours with no user requests
 
 
@@ -107,13 +107,13 @@ ECS_TASK_EXECUTION_TRUST_POLICY = {
 ECS_TASK_EXECUTION_MANAGED_POLICY = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 
 S3_DASHBOARD_BUCKET = "bituslabs-team-ai"
-S3_DASHBOARD_POLICY_NAME = "ecsTaskExecutionRole-s3-dashboard-read"
+S3_DASHBOARD_POLICY_NAME = "ecsTaskExecutionRole-s3-dashboard-rw"
 S3_DASHBOARD_POLICY = {
     "Version": "2012-10-17",
     "Statement": [
         {
             "Effect": "Allow",
-            "Action": ["s3:GetObject", "s3:ListBucket"],
+            "Action": ["s3:GetObject", "s3:PutObject", "s3:ListBucket"],
             "Resource": [
                 f"arn:aws:s3:::{S3_DASHBOARD_BUCKET}",
                 f"arn:aws:s3:::{S3_DASHBOARD_BUCKET}/*",
@@ -223,6 +223,12 @@ def main() -> None:
         "--public-url",
         default=None,
         help="DASHBOARD_PUBLIC_URL env (default: ALB URL)",
+    )
+    parser.add_argument(
+        "--chat-api-url",
+        default=None,
+        help="CHAT_API_URL for the AI agent service (e.g. http://ai-chat-agent-alb-123.us-west-2.elb.amazonaws.com). "
+        "Auto-detected from the ai-chat-agent ALB if not provided.",
     )
     parser.add_argument(
         "--dry-run",
@@ -483,12 +489,17 @@ def main() -> None:
         tg_arn = tgs[0]["TargetGroupArn"]
         print(f"  Target group exists: {tg_arn}")
 
-    # Update target group health check (affects existing TGs too)
     elbv2.modify_target_group(
         TargetGroupArn=tg_arn,
         HealthCheckPath=HEALTH_CHECK_PATH,
         HealthCheckIntervalSeconds=TG_HEALTH_CHECK_INTERVAL,
         HealthyThresholdCount=TG_HEALTHY_THRESHOLD,
+    )
+    elbv2.modify_target_group_attributes(
+        TargetGroupArn=tg_arn,
+        Attributes=[
+            {"Key": "deregistration_delay.timeout_seconds", "Value": str(TG_DEREGISTRATION_DELAY)},
+        ],
     )
 
     # 7. Listener
@@ -527,6 +538,24 @@ def main() -> None:
     if public_url:
         env_vars.append({"name": "DASHBOARD_PUBLIC_URL", "value": public_url})
 
+    # Resolve AI chat agent URL so the dashboard can call it over HTTP
+    chat_api_url = args.chat_api_url
+    if not chat_api_url:
+        try:
+            agent_albs = elbv2.describe_load_balancers(Names=["ai-chat-agent-alb"])["LoadBalancers"]
+            if agent_albs:
+                chat_api_url = f"http://{agent_albs[0]['DNSName']}"
+                print(f"  Auto-detected AI agent ALB: {chat_api_url}")
+        except ClientError:
+            pass
+    if chat_api_url:
+        env_vars.append({"name": "CHAT_API_URL", "value": chat_api_url})
+    else:
+        print(
+            "  Warning: CHAT_API_URL not set. AI chat will not work until you "
+            "deploy the ai-chat-agent service and redeploy the dashboard with --chat-api-url."
+        )
+
     task_def = {
         "family": args.service_name,
         "networkMode": "awsvpc",
@@ -563,8 +592,17 @@ def main() -> None:
         ],
     }
 
-    ecs.register_task_definition(**task_def)
-    print(f"  Registered task definition: {args.service_name}")
+    resp_td = ecs.register_task_definition(**task_def)
+    new_revision = resp_td["taskDefinition"]["taskDefinitionArn"]
+    print(f"  Registered task definition: {args.service_name} (revision {resp_td['taskDefinition']['revision']})")
+
+    # Deregister old revisions (keep only the new one)
+    old_revisions = ecs.list_task_definitions(familyPrefix=args.service_name, status="ACTIVE")["taskDefinitionArns"]
+    for old_arn in old_revisions:
+        if old_arn != new_revision:
+            ecs.deregister_task_definition(taskDefinition=old_arn)
+            rev = old_arn.split(":")[-1]
+            print(f"  Deregistered old revision: {rev}")
 
     # 9. ECS service
     print("\n9. ECS service...")
@@ -575,6 +613,10 @@ def main() -> None:
             taskDefinition=args.service_name,
             desiredCount=args.desired_count,
             launchType="FARGATE",
+            deploymentConfiguration={
+                "minimumHealthyPercent": 100,
+                "maximumPercent": 200,
+            },
             networkConfiguration={
                 "awsvpcConfiguration": {
                     "subnets": subnet_ids,
@@ -604,6 +646,10 @@ def main() -> None:
                 service=args.service_name,
                 taskDefinition=args.service_name,
                 desiredCount=args.desired_count,
+                deploymentConfiguration={
+                    "minimumHealthyPercent": 100,
+                    "maximumPercent": 200,
+                },
                 forceNewDeployment=True,
             )
             print(f"  Updated existing service: {args.service_name}")
