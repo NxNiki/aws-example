@@ -310,6 +310,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
                 SUM(CASE WHEN b.fish_type = 'ultra'  THEN b.killed END)               AS user_num_killed_fish_ultra,
 
                 SUM(b.bet)                                                             AS user_total_bet,
+                AVG(b.bet)                                                             AS user_avg_bet_amount,
                 SUM(b.payout)                                                          AS user_total_payout,
                 SUM(b.profit)                                                          AS user_total_profit,
                 MAX(b.profit)                                                          AS user_max_profit,
@@ -388,6 +389,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
 
             -- Bet / payout / profit:
             t1.user_total_bet,
+            t1.user_avg_bet_amount,
             t1.user_total_payout,
             t1.user_total_profit,
             t1.user_max_profit,
