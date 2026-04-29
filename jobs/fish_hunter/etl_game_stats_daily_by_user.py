@@ -7,6 +7,8 @@ from bituslabs_ds.config import (
     DEFAULT_BASTION_IP,
     DEFAULT_ETL_OUTPUT,
     ETL_CURRENCY_CODES,
+    ETL_DELTA_T_MAX_SECONDS,
+    ETL_DELTA_T_MIN_SECONDS_FISH_HUNTER,
     ETL_EXCLUDED_OP_CODES,
     LOCAL_ROOT,
     REDSHIFT_HOST,
@@ -311,6 +313,8 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
 
                 SUM(b.bet)                                                             AS user_total_bet,
                 AVG(b.bet)                                                             AS user_avg_bet_amount,
+                AVG(CASE WHEN EXTRACT(EPOCH FROM (b.bet_time - b.prev_bet_time)) <= {ETL_DELTA_T_MAX_SECONDS} THEN GREATEST(EXTRACT(EPOCH FROM (b.bet_time - b.prev_bet_time)), {ETL_DELTA_T_MIN_SECONDS_FISH_HUNTER}) END)
+                                                                                       AS user_avg_delta_t_seconds,
                 SUM(b.payout)                                                          AS user_total_payout,
                 SUM(b.profit)                                                          AS user_total_profit,
                 MAX(b.profit)                                                          AS user_max_profit,
@@ -390,6 +394,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
             -- Bet / payout / profit:
             t1.user_total_bet,
             t1.user_avg_bet_amount,
+            t1.user_avg_delta_t_seconds,
             t1.user_total_payout,
             t1.user_total_profit,
             t1.user_max_profit,

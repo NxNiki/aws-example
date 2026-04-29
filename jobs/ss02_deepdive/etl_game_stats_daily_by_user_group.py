@@ -9,6 +9,8 @@ from bituslabs_ds.config import (
     DEFAULT_BASTION_IP,
     DEFAULT_ETL_OUTPUT,
     ETL_CURRENCY_CODES,
+    ETL_DELTA_T_MAX_SECONDS,
+    ETL_DELTA_T_MIN_SECONDS,
     ETL_EXCLUDED_OP_CODES,
     LOCAL_ROOT,
     REDSHIFT_HOST,
@@ -163,7 +165,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 COUNT(CASE WHEN t.bet_type = 'BASE' AND t.payout > 0 THEN 1 END) AS user_num_bets_bg_with_payout,
                 COUNT(CASE WHEN t.bet_type = 'FREE' AND t.payout > 0 THEN 1 END) AS user_num_bets_fg_with_payout,
 
-                AVG(CASE WHEN t.bet_type = 'BASE' AND t.prev_bet_type = 'BASE' AND EXTRACT(EPOCH FROM t.delta_t) BETWEEN 0 AND 86400 THEN EXTRACT(EPOCH FROM t.delta_t) END)
+                AVG(CASE WHEN t.bet_type = 'BASE' AND t.prev_bet_type = 'BASE' AND EXTRACT(EPOCH FROM t.delta_t) <= {ETL_DELTA_T_MAX_SECONDS} THEN GREATEST(EXTRACT(EPOCH FROM t.delta_t), {ETL_DELTA_T_MIN_SECONDS}) END)
                     AS user_avg_delta_t_seconds_bg,
 
                 SUM(t.mathtable_change) AS user_mathtable_change,
