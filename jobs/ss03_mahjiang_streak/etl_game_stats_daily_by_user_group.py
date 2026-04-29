@@ -102,15 +102,18 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
 
             UNION ALL
 
+            -- Per-mathtable variants. AB_TEST_A/B users are excluded so they don't
+            -- get double-counted into Default_<mathtable> alongside the Default cohort.
             SELECT
                 {_USER_BETS_GROUP_COLS}
                 CASE
-                    WHEN t.ab_group_id != '{AI_GROUP_ID}' THEN CONCAT('Default_', t.mathtable)
                     WHEN t.ab_group_id = '{AI_GROUP_ID}' THEN t.mathtable
+                    ELSE CONCAT('Default_', t.mathtable)
                 END AS ai_group
             FROM
                 user_bets AS t
-            WHERE t.ab_group_id IS NOT NULL
+            WHERE t.ab_group_id IS NULL
+               OR t.ab_group_id NOT IN ('{AB_TEST_GROUP_A}', '{AB_TEST_GROUP_B}')
         ),
 
         user_stats AS (
