@@ -52,7 +52,7 @@ TIMEZONE_SHANGHAI = "Asia/Shanghai"
 ETL_CURRENCY_CODES = "('CNY')"
 ETL_EXCLUDED_OP_CODES = "('B26', 'TST', 'TSB', 'TSO')"
 # Upper bound (seconds) on inter-bet delta_t before it's treated as a session break and excluded.
-ETL_DELTA_T_MAX_SECONDS = 86400
+ETL_DELTA_T_MAX_SECONDS = 1800
 # Lower bound (seconds) substituted for non-positive inter-bet delta_t. fish_hunter has
 # rapid-fire bullets so we use a sub-second floor; slot games use 1 second.
 ETL_DELTA_T_MIN_SECONDS = 1

@@ -38,7 +38,7 @@ _USER_BETS_GROUP_COLS = """
                 t.payout,
                 t.bet_type,
                 t.profit,
-                t.delta_t,
+                t.delta_t_seconds,
                 t.user_bet_count,
                 t.mathtable_change,
                 t.prev_bet_type,
@@ -69,7 +69,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             CAST(DATE_TRUNC('month', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at))) AS DATE) AS activity_month,
             t.partition_ab[0] AS ab_group_id,
             LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) AS prev_created_at,
-            t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) AS delta_t,
+            EXTRACT(EPOCH FROM (t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at))) AS delta_t_seconds,
             LAG(t.bet_type) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) AS prev_bet_type,
             LAG(t.bet_amount) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) AS prev_bet_amount,
             COUNT(t.user_id) OVER (PARTITION BY t.user_id) AS user_bet_count,
@@ -140,7 +140,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 COUNT(CASE WHEN t.bet_type = 'BASE' AND t.payout > 0 THEN 1 END) AS user_num_bets_bg_with_payout,
                 COUNT(CASE WHEN t.bet_type = 'FREE' AND t.payout > 0 THEN 1 END) AS user_num_bets_fg_with_payout,
 
-                AVG(CASE WHEN t.bet_type = 'BASE' AND t.prev_bet_type = 'BASE' AND EXTRACT(EPOCH FROM t.delta_t) <= {ETL_DELTA_T_MAX_SECONDS} THEN GREATEST(EXTRACT(EPOCH FROM t.delta_t), {ETL_DELTA_T_MIN_SECONDS}) END)
+                AVG(CASE WHEN t.bet_type = 'BASE' AND t.prev_bet_type = 'BASE' AND t.delta_t_seconds <= {ETL_DELTA_T_MAX_SECONDS} THEN GREATEST(t.delta_t_seconds, {ETL_DELTA_T_MIN_SECONDS}) END)
                     AS user_avg_delta_t_seconds_bg,
 
                 SUM(t.mathtable_change) AS user_mathtable_change,
