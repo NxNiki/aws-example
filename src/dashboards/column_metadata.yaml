@@ -229,10 +229,22 @@ columns:
   user_avg_delta_t_seconds_bg:
     category: user_metric
     description: >
-      Average time between consecutive BASE game bets by the user, in seconds.
-      Only BASE-to-BASE transitions are included; the first BASE bet after a free
-      game (or any non-BASE predecessor) is treated as a new session and excluded.
-      Intervals outside 0–86400 seconds are also excluded.
+      Average time between consecutive BASE game bets by the user, in seconds
+      (slot games SS01 / SS02 / SS03). Only BASE-to-BASE transitions are
+      included; the first BASE bet after a free game (or any non-BASE
+      predecessor) is treated as a new session and excluded.
+      Inter-bet intervals greater than `ETL_DELTA_T_MAX_SECONDS` are excluded
+      as session breaks. Non-positive intervals (timestamp ties / ordering
+      anomalies in the source data) are floored to `ETL_DELTA_T_MIN_SECONDS`
+      via `GREATEST(...)` so those rows still contribute to the average rather
+      than being dropped. Both the upper bound and the floor are read from
+      `bituslabs_ds.config` at ETL build time; for the current numeric values
+      consult that module rather than this description (the description is
+      intentionally value-free so it remains correct when the config changes).
+    formula: >
+      AVG(CASE WHEN bet_type='BASE' AND prev_bet_type='BASE' AND
+      EXTRACT(EPOCH FROM delta_t) <= ETL_DELTA_T_MAX_SECONDS
+      THEN GREATEST(EXTRACT(EPOCH FROM delta_t), ETL_DELTA_T_MIN_SECONDS) END)
 
   user_mathtable_change:
     category: user_metric
@@ -523,6 +535,23 @@ columns:
   user_min_streak_length:
     category: fish_hunter
     description: "Shortest streak session."
+
+  user_avg_delta_t_seconds:
+    category: fish_hunter
+    description: >
+      Fish Hunter (FM01) parity column for the slot games' `user_avg_delta_t_seconds_bg`.
+      Average time between consecutive bullets fired by the user, in seconds.
+      Inter-bullet intervals greater than `ETL_DELTA_T_MAX_SECONDS` are excluded
+      as session breaks. Non-positive intervals are floored to
+      `ETL_DELTA_T_MIN_SECONDS_FISH_HUNTER` (a sub-second floor, since bullets
+      fire much faster than a slot spin) so those rows still contribute to the
+      average. Both bounds are read from `bituslabs_ds.config` at ETL build
+      time; for the current numeric values consult that module rather than
+      this description (the description is intentionally value-free so it
+      remains correct when the config changes).
+    formula: >
+      AVG(CASE WHEN EXTRACT(EPOCH FROM (bet_time - prev_bet_time)) <= ETL_DELTA_T_MAX_SECONDS
+      THEN GREATEST(EXTRACT(EPOCH FROM (bet_time - prev_bet_time)), ETL_DELTA_T_MIN_SECONDS_FISH_HUNTER) END)
 
   user_seconds_to_kill_fish:
     category: fish_hunter
