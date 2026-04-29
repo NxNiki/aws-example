@@ -45,6 +45,7 @@ stats_by_date:
   group2_columns: [
     "user_num_bets",
     "user_total_bet",
+    "user_avg_bet_amount",
     "user_total_profit",
     "user_rtp",
     "user_rtp_bg",
