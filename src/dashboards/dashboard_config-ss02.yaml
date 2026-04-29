@@ -55,6 +55,7 @@ stats_by_date:
     "user_fg_ratio",
     "user_avg_delta_t_seconds_bg",
     "user_mathtable_change",
+    "user_avg_remaining_bet_amount",
     "user_accu_pos_delta_bet",
     "user_accu_neg_delta_bet",
     "user_accu_pos_delta_bet_avg",
