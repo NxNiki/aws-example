@@ -36,15 +36,9 @@
       <option value="num_bet_sessions">Number of Bet Sessions</option>
     </select>
     <label for="riskGroupSelect" style="margin-left: 12px;">Risk group:</label>
-    <select id="riskGroupSelect">
-      <option value="group1" selected>group1</option>
-      <option value="group2">group2</option>
-    </select>
+    <select id="riskGroupSelect"></select>
     <label for="controlGroupSelect" style="margin-left: 12px;">Control group:</label>
-    <select id="controlGroupSelect">
-      <option value="group1" selected>group1</option>
-      <option value="group2">group2</option>
-    </select>
+    <select id="controlGroupSelect"></select>
   </div>
   <div class="panel">
     <h2 id="riskTitle">Risk Group: group1</h2>
@@ -60,6 +54,41 @@
       const bootstrap = JSON.parse(document.getElementById('bootstrap-data').textContent);
       const riskPayload = bootstrap.risk_payload;
       const controlPayload = bootstrap.control_payload;
+
+      function naturalGroupSort(groups) {
+        return [...groups].sort((a, b) => {
+          const ma = String(a).match(/^group(\d+)$/);
+          const mb = String(b).match(/^group(\d+)$/);
+          if (ma && mb) return parseInt(ma[1], 10) - parseInt(mb[1], 10);
+          if (ma) return -1;
+          if (mb) return 1;
+          return String(a).localeCompare(String(b));
+        });
+      }
+
+      function populateGroupSelect(selectEl, groups) {
+        selectEl.innerHTML = '';
+        groups.forEach((g, i) => {
+          const opt = document.createElement('option');
+          opt.value = g;
+          opt.textContent = g;
+          if (i === 0) opt.selected = true;
+          selectEl.appendChild(opt);
+        });
+      }
+
+      const riskGroups = naturalGroupSort(
+        Array.isArray(bootstrap.risk_groups) && bootstrap.risk_groups.length
+          ? bootstrap.risk_groups
+          : Object.keys(riskPayload || {})
+      );
+      const controlGroups = naturalGroupSort(
+        Array.isArray(bootstrap.control_groups) && bootstrap.control_groups.length
+          ? bootstrap.control_groups
+          : Object.keys(controlPayload || {})
+      );
+      populateGroupSelect(document.getElementById('riskGroupSelect'), riskGroups);
+      populateGroupSelect(document.getElementById('controlGroupSelect'), controlGroups);
 
       function renderOne(sourcePayload, groupKey, chartId, metricKey, lineKey) {
         const info = sourcePayload[groupKey] || { payload: {}, line_payload: {}, user_names: [] };

@@ -47,15 +47,35 @@ RISK_USERS_JSON = Path(__file__).with_name("risk_users.json")
 
 
 def _load_risk_user_groups() -> list[tuple[str, str]]:
-    """Load username groups from JSON and return (user_name, group_label) rows."""
+    """Load username groups from JSON and return (user_name, group_label) rows.
+
+    Accepts any number of ``groupN`` keys (e.g. ``group1``, ``group2``, ``group3``).
+    Earlier groups take precedence: a username appearing in multiple groups is
+    only emitted under the first ``groupN`` it appears in (by ascending N).
+    """
     payload = json.loads(RISK_USERS_JSON.read_text(encoding="utf-8"))
-    group1 = list(dict.fromkeys([str(x) for x in payload.get("group1", [])]))
-    raw_group2 = list(dict.fromkeys([str(x) for x in payload.get("group2", [])]))
-    overlap = sorted(set(group1) & set(raw_group2))
-    if overlap:
-        logger.warning("Found %s overlapping usernames between group1/group2", len(overlap))
-    group2 = [name for name in raw_group2 if name not in set(group1)]
-    return [(name, "group1") for name in group1] + [(name, "group2") for name in group2]
+    group_keys = sorted(
+        (k for k in payload.keys() if k.startswith("group") and k[len("group") :].isdigit()),
+        key=lambda k: int(k[len("group") :]),
+    )
+    rows: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for group_key in group_keys:
+        names = list(dict.fromkeys([str(x) for x in payload.get(group_key, [])]))
+        overlap = sorted(set(names) & seen)
+        if overlap:
+            logger.warning(
+                "Found %s usernames in %s already assigned to an earlier group; skipping in %s",
+                len(overlap),
+                group_key,
+                group_key,
+            )
+        for name in names:
+            if name in seen:
+                continue
+            seen.add(name)
+            rows.append((name, group_key))
+    return rows
 
 
 # Usernames resolved via ``dim_user_latest`` for the bullet aggregate below.
