@@ -108,10 +108,11 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
         ),
 
         calculate_islands AS (
-            SELECT 
+            SELECT
                 user_id,
                 activity_date,
                 fish_type,
+                bullet_id,
                 bet_time,
                 -- GLOBAL: ignores fish_type. Checks if ANY fish was killed recently.
                 CASE 
