@@ -683,60 +683,53 @@ class GameStatsDashboard:
             [
                 html.Div(
                     [
-                        dcc.Dropdown(
-                            id="config-dropdown",
-                            options=self.config_files,
-                            value=self.config_files[0]["value"],
-                            clearable=False,
-                            style=dict(
-                                {
-                                    "width": "250px",
-                                    "marginRight": "50px",
-                                    "marginLeft": "8px",
-                                    "marginTop": "2px",
-                                    "marginBottom": "0px",
-                                }
-                            ),
-                        ),
-                        dcc.Tabs(
-                            id="navigator-tabs",
-                            value="tab-date",
-                            children=[
-                                dcc.Tab(
-                                    label="Stats by Date",
-                                    value="tab-date",
-                                    style=Styles.NAV_TAB,
-                                    selected_style=Styles.NAV_TAB_SELECTED,
-                                ),
-                                dcc.Tab(
-                                    label="Stats by Group",
-                                    value="tab-group",
-                                    style=Styles.NAV_TAB,
-                                    selected_style=Styles.NAV_TAB_SELECTED,
-                                ),
-                                dcc.Tab(
-                                    label="Stats Deepdive",
-                                    value="tab-viz",
-                                    style=Styles.NAV_TAB,
-                                    selected_style=Styles.NAV_TAB_SELECTED,
-                                ),
-                                dcc.Tab(
-                                    label="Weekly Report",
-                                    value="tab-weekly",
-                                    style=Styles.NAV_TAB,
-                                    selected_style=Styles.NAV_TAB_SELECTED,
-                                ),
-                                dcc.Tab(
-                                    label="Stats by Bet",
-                                    value="tab-bet",
-                                    style=Styles.NAV_TAB,
-                                    selected_style=Styles.NAV_TAB_SELECTED,
-                                ),
-                            ],
-                            style={"width": "1280px"},
-                        ),
                         html.Div(
                             [
+                                dcc.Dropdown(
+                                    id="config-dropdown",
+                                    options=self.config_files,
+                                    value=self.config_files[0]["value"],
+                                    clearable=False,
+                                    style={
+                                        "width": "220px",
+                                        "marginLeft": "8px",
+                                        "marginRight": "12px",
+                                    },
+                                ),
+                                dcc.Input(
+                                    id="confluence-doc-link",
+                                    type="url",
+                                    placeholder="Confluence doc URL",
+                                    debounce=True,
+                                    persistence=True,
+                                    persistence_type="session",
+                                    style={
+                                        "width": "320px",
+                                        "marginRight": "8px",
+                                        "padding": "6px 10px",
+                                        "border": "1px solid #ccc",
+                                        "borderRadius": "4px",
+                                        "fontSize": "13px",
+                                        "height": "32px",
+                                        "boxSizing": "border-box",
+                                    },
+                                ),
+                                html.Button(
+                                    "Update Doc",
+                                    id="update-doc-btn",
+                                    n_clicks=0,
+                                    style={
+                                        "marginRight": "12px",
+                                        "padding": "6px 14px",
+                                        "cursor": "pointer",
+                                        "backgroundColor": "#984EA3",
+                                        "color": "white",
+                                        "border": "none",
+                                        "borderRadius": "4px",
+                                        "fontSize": "13px",
+                                        "fontWeight": "bold",
+                                    },
+                                ),
                                 html.Button(
                                     "Save Config",
                                     id="save-config-btn",
@@ -875,11 +868,79 @@ class GameStatsDashboard:
                                         "fontWeight": "bold",
                                     },
                                 ),
+                                html.Div(
+                                    id="update-doc-status",
+                                    style={
+                                        "marginLeft": "12px",
+                                        "fontSize": "12px",
+                                        "color": "#666",
+                                    },
+                                ),
                             ],
-                            style={"display": "flex", "alignItems": "center", "marginLeft": "auto"},
+                            style={
+                                "display": "flex",
+                                "flexDirection": "row",
+                                "alignItems": "center",
+                                "width": "100%",
+                                "padding": "8px 0",
+                                "flexWrap": "wrap",
+                                "rowGap": "6px",
+                            },
+                        ),
+                        html.Div(
+                            [
+                                dcc.Tabs(
+                                    id="navigator-tabs",
+                                    value="tab-date",
+                                    children=[
+                                        dcc.Tab(
+                                            label="Stats by Date",
+                                            value="tab-date",
+                                            style=Styles.NAV_TAB,
+                                            selected_style=Styles.NAV_TAB_SELECTED,
+                                        ),
+                                        dcc.Tab(
+                                            label="Stats by Group",
+                                            value="tab-group",
+                                            style=Styles.NAV_TAB,
+                                            selected_style=Styles.NAV_TAB_SELECTED,
+                                        ),
+                                        dcc.Tab(
+                                            label="Stats Deepdive",
+                                            value="tab-viz",
+                                            style=Styles.NAV_TAB,
+                                            selected_style=Styles.NAV_TAB_SELECTED,
+                                        ),
+                                        dcc.Tab(
+                                            label="Weekly Report",
+                                            value="tab-weekly",
+                                            style=Styles.NAV_TAB,
+                                            selected_style=Styles.NAV_TAB_SELECTED,
+                                        ),
+                                        dcc.Tab(
+                                            label="Stats by Bet",
+                                            value="tab-bet",
+                                            style=Styles.NAV_TAB,
+                                            selected_style=Styles.NAV_TAB_SELECTED,
+                                        ),
+                                    ],
+                                    style={"width": "1280px"},
+                                ),
+                            ],
+                            style={
+                                "width": "100%",
+                                "padding": "0 8px",
+                            },
                         ),
                     ],
-                    style=Styles.NAV_CONTAINER,
+                    style={
+                        "width": "100%",
+                        "minWidth": "330px",
+                        "display": "flex",
+                        "flexDirection": "column",
+                        "borderBottom": "1px solid #eee",
+                        "marginBottom": "20px",
+                    },
                 ),
                 dcc.Store(id="tab-date-g1-state", data=None),
                 dcc.Store(id="tab-date-g2-state", data=None),
