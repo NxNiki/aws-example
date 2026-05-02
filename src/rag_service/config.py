@@ -15,12 +15,13 @@ Keep both knobs separate: the YAML lists *content*, env vars list
 from __future__ import annotations
 
 import os
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
 import yaml
+
+from dashboards.confluence_client import extract_page_ids_from_urls
 
 _THIS_DIR = Path(__file__).resolve().parent
 _DEFAULT_SOURCES_PATH = _THIS_DIR / "config" / "rag_sources.yaml"
@@ -67,14 +68,6 @@ class RagSettings:
     sources: List[ConfluenceSource]
 
 
-_PAGE_ID_RE = re.compile(r"/pages/(\d+)")
-
-
-def _parse_page_id_from_url(url: str) -> Optional[str]:
-    m = _PAGE_ID_RE.search(url)
-    return m.group(1) if m else None
-
-
 def load_sources(path: Optional[Path] = None) -> List[ConfluenceSource]:
     sources_path = path or Path(os.environ.get("RAG_SOURCES_PATH", _DEFAULT_SOURCES_PATH))
     if not sources_path.exists():
@@ -88,10 +81,7 @@ def load_sources(path: Optional[Path] = None) -> List[ConfluenceSource]:
     for entry in sources_raw:
         # Allow URLs to be specified instead of bare page_ids; extract the id.
         page_ids = list(entry.get("page_ids") or [])
-        for url in entry.get("page_urls") or []:
-            pid = _parse_page_id_from_url(url)
-            if pid:
-                page_ids.append(pid)
+        page_ids.extend(extract_page_ids_from_urls(entry.get("page_urls") or []))
         sources.append(
             ConfluenceSource(
                 name=entry["name"],

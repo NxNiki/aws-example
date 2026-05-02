@@ -166,6 +166,11 @@ exclude = '''
 # Resolve `from dashboards.*` / `from bituslabs_ds.*` without sys.path hacks
 extraPaths = ["src"]
 
+[tool.mypy]
+# Same purpose as pyright's extraPaths — let mypy find the src/ layout.
+mypy_path = "src"
+ignore_missing_imports = true
+
 [tool.isort]
 profile = "black"
 line_length = 120

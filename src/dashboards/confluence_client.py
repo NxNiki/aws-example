@@ -23,11 +23,68 @@ from __future__ import annotations
 import logging
 import re
 from html import unescape
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 logger = logging.getLogger(__name__)
 
 _page_cache: Dict[str, str] = {}
+
+_PAGE_ID_RE = re.compile(r"/pages/(\d+)")
+_TINYURL_RE = re.compile(r"/wiki/x/([A-Za-z0-9_\-]+)")
+
+
+def _decode_tinyurl_token(token: str) -> Optional[str]:
+    """Decode a Confluence tinyurl token (e.g. ``Z4AfOw``) to its numeric page ID.
+
+    Atlassian's encoding is: ``page_id`` → little-endian bytes → URL-safe
+    base64, padding stripped. Reversing that is offline and avoids the
+    JS-redirect / auth-page traps that defeat HTTP follow-the-redirect.
+    """
+    import base64
+
+    try:
+        padded = token + "=" * (-len(token) % 4)
+        raw = base64.urlsafe_b64decode(padded)
+        if not raw:
+            return None
+        return str(int.from_bytes(raw, "little"))
+    except Exception as exc:
+        logger.debug("Tinyurl token decode failed for %r: %s", token, exc)
+        return None
+
+
+def extract_page_id_from_url(url: str) -> Optional[str]:
+    """Pull a numeric page ID out of a Confluence URL.
+
+    Supports both the long form (``.../wiki/spaces/X/pages/12345/Title``)
+    and the tinyurl form (``.../wiki/x/<token>``). Tinyurl decoding is
+    purely local — no HTTP call required.
+    """
+    if not url:
+        return None
+    match = _PAGE_ID_RE.search(url)
+    if match:
+        return match.group(1)
+    tiny_match = _TINYURL_RE.search(url)
+    if tiny_match:
+        return _decode_tinyurl_token(tiny_match.group(1))
+    return None
+
+
+def extract_page_ids_from_urls(urls: Iterable[str]) -> List[str]:
+    """Resolve an iterable of Confluence URLs to deduplicated page IDs.
+
+    Order is preserved (first occurrence wins). URLs that don't yield a
+    page ID are silently skipped.
+    """
+    out: List[str] = []
+    seen: set = set()
+    for url in urls or []:
+        page_id = extract_page_id_from_url(url)
+        if page_id and page_id not in seen:
+            seen.add(page_id)
+            out.append(page_id)
+    return out
 
 
 def _strip_html(html: str) -> str:
@@ -154,3 +211,74 @@ def list_spaces() -> List[Dict[str, str]]:
     except Exception as exc:
         logger.exception("Confluence list spaces failed")
         raise RuntimeError(f"Failed to list Confluence spaces: {exc}") from exc
+
+
+def get_page_storage(page_id: str) -> Dict[str, Any]:
+    """Return the page's storage-format body, title, and current version number."""
+    confluence = _get_client()
+    page = confluence.get_page_by_id(page_id, expand="body.storage,version")
+    if not isinstance(page, dict):
+        raise RuntimeError(f"Unexpected page response type for id={page_id!r}")
+    body = (page.get("body") or {}).get("storage") or {}
+    version = (page.get("version") or {}).get("number")
+    return {
+        "id": str(page.get("id", "")),
+        "title": str(page.get("title", "Untitled")),
+        "storage": str(body.get("value", "") or ""),
+        "version": int(version) if version is not None else None,
+    }
+
+
+def attach_file(
+    page_id: str,
+    file_bytes: bytes,
+    filename: str,
+    *,
+    content_type: str = "image/png",
+    comment: str = "",
+) -> Dict[str, Any]:
+    """Upload an attachment to a page and return its metadata (download URL etc.)."""
+    confluence = _get_client()
+    import io
+
+    buffer = io.BytesIO(file_bytes)
+    buffer.name = filename
+    result = confluence.attach_content(
+        content=buffer,
+        name=filename,
+        content_type=content_type,
+        page_id=page_id,
+        comment=comment or f"Uploaded by report agent: {filename}",
+    )
+    if not isinstance(result, dict):
+        raise RuntimeError(f"Unexpected attachment response: {result!r}")
+    return result
+
+
+def update_page_storage(
+    page_id: str,
+    title: str,
+    new_storage: str,
+    *,
+    expected_version: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Replace a page's storage body. Refreshes the in-process page cache."""
+    confluence = _get_client()
+    result = confluence.update_page(
+        page_id=page_id,
+        title=title,
+        body=new_storage,
+        representation="storage",
+        version_comment="Updated by report agent",
+        minor_edit=True,
+    )
+    _page_cache.pop(page_id, None)
+    if expected_version is not None:
+        new_version = ((result or {}).get("version") or {}).get("number")
+        if new_version is not None and new_version <= expected_version:
+            logger.warning(
+                "Confluence update did not advance version (expected > %s, got %s)",
+                expected_version,
+                new_version,
+            )
+    return result if isinstance(result, dict) else {}

@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import polars as pl
-from dash import Dash, Input, Output, State, callback_context, dcc, html, no_update
+from dash import ALL, Dash, Input, Output, State, callback_context, dcc, html, no_update
 from dash.development.base_component import Component
 from flask import request
 from plotly.subplots import make_subplots
@@ -59,6 +59,21 @@ _CHAT_PROVIDER_DROPDOWN_OPTIONS: list[dcc.Dropdown.Options] = [
     {"label": "GPT-4.1-mini (balanced)", "value": "openai:gpt-4.1-mini"},
     {"label": "GPT-4.1 (powerful)", "value": "openai:gpt-4.1"},
 ]
+
+# Per-figure export dimensions for the report-agent "Add to doc" button.
+# Width is wider than the dashboard render so the PNG looks crisp at full
+# Confluence column width; height matches the on-screen graph.
+_FIGURE_EXPORT_DIMENSIONS: Dict[str, tuple[int, int]] = {
+    "date-g1-plot": (1200, 430),
+    "date-g2-plot": (1200, 430),
+    "date-g3-plot": (1200, 430),
+    "group-g1-plot": (1200, 430),
+    "group-g2-plot": (1200, 430),
+    "group-g3-plot": (1200, 430),
+    "viz-p1-plot": (1400, 900),
+    "viz-p2-plot": (1400, 900),
+    "combined-plot": (1400, 950),
+}
 
 
 def _dropdown_options_from_strings(items: Sequence[str]) -> list[dcc.Dropdown.Options]:
@@ -344,6 +359,7 @@ class GameStatsDashboard:
         self._build_main_layout()
         self._register_callbacks()
         self._register_chat_callbacks()
+        self._register_report_agent_callbacks()
 
     @property
     def date_col(self) -> str:
@@ -1018,6 +1034,55 @@ class GameStatsDashboard:
             style=style,
         )
 
+    def _layout_add_to_doc_panel(self, graph_id: str) -> html.Div:
+        """Caption input + 'Add to doc' button + status row, sitting just under one figure."""
+        return html.Div(
+            [
+                dcc.Input(
+                    id={"type": "add-to-doc-caption", "graph_id": graph_id},
+                    type="text",
+                    placeholder="Caption (optional)",
+                    debounce=False,
+                    style={
+                        "flex": "1",
+                        "minWidth": "200px",
+                        "marginRight": "8px",
+                        "padding": "5px 8px",
+                        "border": "1px solid #ccc",
+                        "borderRadius": "4px",
+                        "fontSize": "12px",
+                    },
+                ),
+                html.Button(
+                    "Add to doc",
+                    id={"type": "add-to-doc-btn", "graph_id": graph_id},
+                    n_clicks=0,
+                    style={
+                        "marginRight": "8px",
+                        "padding": "5px 12px",
+                        "cursor": "pointer",
+                        "backgroundColor": "#984EA3",
+                        "color": "white",
+                        "border": "none",
+                        "borderRadius": "4px",
+                        "fontSize": "12px",
+                        "fontWeight": "bold",
+                    },
+                ),
+                html.Div(
+                    id={"type": "add-to-doc-status", "graph_id": graph_id},
+                    style={"fontSize": "11px", "color": "#666"},
+                ),
+            ],
+            style={
+                "display": "flex",
+                "alignItems": "center",
+                "padding": "6px 8px",
+                "borderTop": "1px solid #eee",
+                "backgroundColor": "#fafafa",
+            },
+        )
+
     def _layout_show_group_checklist_sections(
         self,
         checklist_id_prefix: str,
@@ -1242,7 +1307,8 @@ class GameStatsDashboard:
                                         id=f"date-{group_id}-plot",
                                         style={"height": "430px"},
                                         config=cast(Any, download_config),
-                                    )
+                                    ),
+                                    self._layout_add_to_doc_panel(f"date-{group_id}-plot"),
                                 ],
                                 style=Styles.GRAPH_CONTAINER,
                             ),
@@ -1445,7 +1511,10 @@ class GameStatsDashboard:
                             ),
                             # --- GRAPH PANEL ---
                             html.Div(
-                                [dcc.Graph(id=dl_id, style={"height": "430px"}, config=cast(Any, download_config))],
+                                [
+                                    dcc.Graph(id=dl_id, style={"height": "430px"}, config=cast(Any, download_config)),
+                                    self._layout_add_to_doc_panel(dl_id),
+                                ],
                                 style=Styles.GRAPH_CONTAINER,
                             ),
                         ],
@@ -1923,7 +1992,10 @@ class GameStatsDashboard:
                                 style=Styles.CONTROL_PANEL_CONTAINER,
                             ),
                             html.Div(
-                                [dcc.Graph(id=dl_id, style={"height": "900px"}, config=cast(Any, download_config))],
+                                [
+                                    dcc.Graph(id=dl_id, style={"height": "900px"}, config=cast(Any, download_config)),
+                                    self._layout_add_to_doc_panel(dl_id),
+                                ],
                                 style=Styles.GRAPH_CONTAINER,
                             ),
                         ],
@@ -2159,7 +2231,13 @@ class GameStatsDashboard:
                     style=Styles.CONTROL_PANEL_CONTAINER,
                 ),
                 # --- MAIN PLOT ---
-                html.Div([dcc.Graph(id="combined-plot", style={"height": "950px"})], style=Styles.GRAPH_CONTAINER),
+                html.Div(
+                    [
+                        dcc.Graph(id="combined-plot", style={"height": "950px"}),
+                        self._layout_add_to_doc_panel("combined-plot"),
+                    ],
+                    style=Styles.GRAPH_CONTAINER,
+                ),
             ],
             style=Styles.FLEX_ROW,
         )
@@ -5723,6 +5801,125 @@ class GameStatsDashboard:
 
             messages_ui = self._render_chat_messages(history)
             return messages_ui, history, status
+
+    def _register_report_agent_callbacks(self) -> None:
+        """Wire 'Add to doc' buttons next to each figure to the Confluence writer."""
+        figure_states = [
+            State("date-g1-plot", "figure"),
+            State("date-g2-plot", "figure"),
+            State("date-g3-plot", "figure"),
+            State("group-g1-plot", "figure"),
+            State("group-g2-plot", "figure"),
+            State("group-g3-plot", "figure"),
+            State("viz-p1-plot", "figure"),
+            State("viz-p2-plot", "figure"),
+            State("combined-plot", "figure"),
+        ]
+
+        @self.app.callback(
+            Output({"type": "add-to-doc-status", "graph_id": ALL}, "children"),
+            Input({"type": "add-to-doc-btn", "graph_id": ALL}, "n_clicks"),
+            State({"type": "add-to-doc-btn", "graph_id": ALL}, "id"),
+            State({"type": "add-to-doc-caption", "graph_id": ALL}, "value"),
+            State("confluence-doc-link", "value"),
+            State("config-dropdown", "value"),
+            State("navigator-tabs", "value"),
+            *figure_states,
+            prevent_initial_call=True,
+        )
+        def add_figure_to_doc(
+            click_counts: List[Optional[int]],
+            button_ids: List[Dict[str, str]],
+            captions: List[Optional[str]],
+            doc_url: Optional[str],
+            config_name: Optional[str],
+            tab_value: Optional[str],
+            *figures: Optional[Dict[str, Any]],
+        ) -> List[Any]:
+            n = len(button_ids)
+            triggered = callback_context.triggered_id
+            if not isinstance(triggered, dict) or triggered.get("type") != "add-to-doc-btn":
+                return [no_update] * n
+
+            target_graph_id = triggered.get("graph_id")
+            if not isinstance(target_graph_id, str):
+                return [no_update] * n
+            try:
+                idx = next(i for i, bid in enumerate(button_ids) if bid.get("graph_id") == target_graph_id)
+            except StopIteration:
+                return [no_update] * n
+
+            statuses: List[Any] = [no_update] * n
+
+            if not (click_counts[idx] or 0):
+                return statuses
+
+            if not doc_url:
+                statuses[idx] = html.Span("Set the Confluence doc URL first.", style={"color": "#c00"})
+                return statuses
+
+            figure_dict = figures[idx] if idx < len(figures) else None
+            if not figure_dict or not figure_dict.get("data"):
+                statuses[idx] = html.Span("Figure is empty — render it first.", style={"color": "#c00"})
+                return statuses
+
+            try:
+                import plotly.graph_objects as go
+
+                from dashboards import confluence_writer  # lazy: optional dep
+            except ImportError as exc:
+                statuses[idx] = html.Span(f"Missing dependency: {exc}", style={"color": "#c00"})
+                return statuses
+
+            width, height = _FIGURE_EXPORT_DIMENSIONS.get(target_graph_id, (1200, 600))
+            caption = (captions[idx] or "").strip()
+            filter_context = {
+                "graph_id": target_graph_id,
+                "tab": tab_value,
+                "config_name": config_name,
+            }
+            try:
+                figure = go.Figure(figure_dict)
+                result = confluence_writer.add_figure_to_page(
+                    doc_url,
+                    figure,
+                    caption=caption,
+                    filter_context=filter_context,
+                    width=width,
+                    height=height,
+                )
+                statuses[idx] = html.Span(
+                    f"Added ({result['filename']}).",
+                    style={"color": "#2a7a2a"},
+                )
+            except Exception as exc:
+                logger.exception("Add to doc failed for graph_id=%s", target_graph_id)
+                statuses[idx] = html.Span(f"Failed: {exc}", style={"color": "#c00"})
+
+            return statuses
+
+        @self.app.callback(
+            Output("update-doc-status", "children"),
+            Input("update-doc-btn", "n_clicks"),
+            State("confluence-doc-link", "value"),
+            prevent_initial_call=True,
+        )
+        def update_doc_click(n_clicks: int, doc_url: Optional[str]) -> Any:
+            if not (n_clicks or 0):
+                return no_update
+            if not doc_url:
+                return html.Span("Set the Confluence doc URL first.", style={"color": "#c00"})
+            try:
+                from dashboards.report_agent import agent as report_agent
+            except ImportError as exc:
+                return html.Span(f"Report agent unavailable: {exc}", style={"color": "#c00"})
+            try:
+                result = report_agent.update_doc(doc_url)
+            except Exception as exc:
+                logger.exception("Update doc failed")
+                return html.Span(f"Failed: {exc}", style={"color": "#c00"})
+            color = {"ok": "#2a7a2a", "noop": "#666", "error": "#c00"}.get(result.status, "#666")
+            return html.Span(result.message, style={"color": color})
 
     @staticmethod
     def _render_chat_messages(history: list) -> List[Component]:
