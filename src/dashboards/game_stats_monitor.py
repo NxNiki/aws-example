@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import socket
+import uuid
 from datetime import datetime, timedelta
 from math import inf
 from pathlib import Path
@@ -61,18 +62,20 @@ _CHAT_PROVIDER_DROPDOWN_OPTIONS: list[dcc.Dropdown.Options] = [
 ]
 
 # Per-figure export dimensions for the report-agent "Add to doc" button.
-# Width is wider than the dashboard render so the PNG looks crisp at full
-# Confluence column width; height matches the on-screen graph.
+# Widths are wider than the on-screen render so axis ticks and category
+# labels (especially the bar plots in Stats by Group) stay legible after
+# Confluence scales the image to its column width. Heights match the
+# dashboard so aspect ratios are preserved.
 _FIGURE_EXPORT_DIMENSIONS: Dict[str, tuple[int, int]] = {
-    "date-g1-plot": (1200, 430),
-    "date-g2-plot": (1200, 430),
-    "date-g3-plot": (1200, 430),
-    "group-g1-plot": (1200, 430),
-    "group-g2-plot": (1200, 430),
-    "group-g3-plot": (1200, 430),
-    "viz-p1-plot": (1400, 900),
-    "viz-p2-plot": (1400, 900),
-    "combined-plot": (1400, 950),
+    "date-g1-plot": (1800, 430),
+    "date-g2-plot": (1800, 430),
+    "date-g3-plot": (1800, 430),
+    "group-g1-plot": (1800, 430),
+    "group-g2-plot": (1800, 430),
+    "group-g3-plot": (1800, 430),
+    "viz-p1-plot": (1800, 900),
+    "viz-p2-plot": (1800, 900),
+    "combined-plot": (1800, 950),
 }
 
 
@@ -359,7 +362,7 @@ class GameStatsDashboard:
         self._build_main_layout()
         self._register_callbacks()
         self._register_chat_callbacks()
-        self._register_report_agent_callbacks()
+        self._register_report_tab_callbacks()
 
     @property
     def date_col(self) -> str:
@@ -712,40 +715,6 @@ class GameStatsDashboard:
                                         "marginRight": "12px",
                                     },
                                 ),
-                                dcc.Input(
-                                    id="confluence-doc-link",
-                                    type="url",
-                                    placeholder="Confluence doc URL",
-                                    debounce=True,
-                                    persistence=True,
-                                    persistence_type="session",
-                                    style={
-                                        "width": "320px",
-                                        "marginRight": "8px",
-                                        "padding": "6px 10px",
-                                        "border": "1px solid #ccc",
-                                        "borderRadius": "4px",
-                                        "fontSize": "13px",
-                                        "height": "32px",
-                                        "boxSizing": "border-box",
-                                    },
-                                ),
-                                html.Button(
-                                    "Update Doc",
-                                    id="update-doc-btn",
-                                    n_clicks=0,
-                                    style={
-                                        "marginRight": "12px",
-                                        "padding": "6px 14px",
-                                        "cursor": "pointer",
-                                        "backgroundColor": "#984EA3",
-                                        "color": "white",
-                                        "border": "none",
-                                        "borderRadius": "4px",
-                                        "fontSize": "13px",
-                                        "fontWeight": "bold",
-                                    },
-                                ),
                                 html.Button(
                                     "Save Config",
                                     id="save-config-btn",
@@ -884,14 +853,6 @@ class GameStatsDashboard:
                                         "fontWeight": "bold",
                                     },
                                 ),
-                                html.Div(
-                                    id="update-doc-status",
-                                    style={
-                                        "marginLeft": "12px",
-                                        "fontSize": "12px",
-                                        "color": "#666",
-                                    },
-                                ),
                             ],
                             style={
                                 "display": "flex",
@@ -936,6 +897,12 @@ class GameStatsDashboard:
                                         dcc.Tab(
                                             label="Stats by Bet",
                                             value="tab-bet",
+                                            style=Styles.NAV_TAB,
+                                            selected_style=Styles.NAV_TAB_SELECTED,
+                                        ),
+                                        dcc.Tab(
+                                            label="Report",
+                                            value="tab-report",
                                             style=Styles.NAV_TAB,
                                             selected_style=Styles.NAV_TAB_SELECTED,
                                         ),
@@ -995,8 +962,130 @@ class GameStatsDashboard:
                     id="tab-bet-content",
                     style={**Styles.PAGE_CONTENT, "display": "none"},
                 ),
+                html.Div(
+                    self._layout_report_tab(),
+                    id="tab-report-content",
+                    style={**Styles.PAGE_CONTENT, "display": "none"},
+                ),
                 self._layout_chat_dialog(),
             ]
+        )
+
+    def _layout_report_tab(self) -> html.Div:
+        """Report tab: collects figures, generates descriptions/summary, exports to Confluence."""
+        return html.Div(
+            [
+                dcc.Store(id="report-figures", data=[]),
+                dcc.Store(id="report-summary", data=""),
+                # Top bar: Confluence URL + language + export button
+                html.Div(
+                    [
+                        dcc.Input(
+                            id="report-doc-link",
+                            type="url",
+                            placeholder="Confluence doc URL",
+                            debounce=True,
+                            persistence=True,
+                            persistence_type="session",
+                            style={
+                                "flex": "1",
+                                "minWidth": "320px",
+                                "marginRight": "8px",
+                                "padding": "6px 10px",
+                                "border": "1px solid #ccc",
+                                "borderRadius": "4px",
+                                "fontSize": "13px",
+                                "height": "32px",
+                                "boxSizing": "border-box",
+                            },
+                        ),
+                        dcc.Dropdown(
+                            id="report-language",
+                            options=_dropdown_option_rows(
+                                [
+                                    ("English", "en"),
+                                    ("Chinese (Simplified)", "zh-Hans"),
+                                    ("Chinese (Traditional)", "zh-Hant"),
+                                ]
+                            ),
+                            value="en",
+                            clearable=False,
+                            persistence=True,
+                            persistence_type="session",
+                            style={"width": "200px", "marginRight": "8px"},
+                        ),
+                        html.Button(
+                            "Export to Doc",
+                            id="report-export-btn",
+                            n_clicks=0,
+                            style={
+                                "padding": "6px 14px",
+                                "cursor": "pointer",
+                                "backgroundColor": "#984EA3",
+                                "color": "white",
+                                "border": "none",
+                                "borderRadius": "4px",
+                                "fontSize": "13px",
+                                "fontWeight": "bold",
+                            },
+                        ),
+                        html.Div(
+                            id="report-export-status",
+                            style={"marginLeft": "12px", "fontSize": "12px", "color": "#666"},
+                        ),
+                    ],
+                    style={
+                        "display": "flex",
+                        "alignItems": "center",
+                        "marginBottom": "16px",
+                    },
+                ),
+                # Summary panel
+                html.Div(
+                    [
+                        html.Div(
+                            [
+                                html.H4("Summary", style={**Styles.PANEL_HEADER, "display": "inline-block"}),
+                                html.Button(
+                                    "Generate summary",
+                                    id="report-generate-summary-btn",
+                                    n_clicks=0,
+                                    style={
+                                        "marginLeft": "12px",
+                                        "padding": "4px 10px",
+                                        "cursor": "pointer",
+                                        "backgroundColor": "#377EB8",
+                                        "color": "white",
+                                        "border": "none",
+                                        "borderRadius": "4px",
+                                        "fontSize": "12px",
+                                    },
+                                ),
+                                html.Span(
+                                    id="report-summary-status",
+                                    style={"marginLeft": "10px", "fontSize": "11px", "color": "#666"},
+                                ),
+                            ],
+                            style={"display": "flex", "alignItems": "center"},
+                        ),
+                        html.Div(
+                            id="report-summary-display",
+                            style={
+                                "marginTop": "10px",
+                                "fontSize": "13px",
+                                "lineHeight": "1.6",
+                                "color": "#333",
+                                "whiteSpace": "pre-wrap",
+                                "minHeight": "40px",
+                            },
+                        ),
+                    ],
+                    style=Styles.SECTION,
+                ),
+                # Per-figure panels container, rendered from report-figures store
+                html.Div(id="report-figures-container"),
+            ],
+            style={"padding": "8px"},
         )
 
     def _layout_inline_group_column_dropdown(
@@ -1034,28 +1123,13 @@ class GameStatsDashboard:
             style=style,
         )
 
-    def _layout_add_to_doc_panel(self, graph_id: str) -> html.Div:
-        """Caption input + 'Add to doc' button + status row, sitting just under one figure."""
+    def _layout_add_to_report_panel(self, graph_id: str) -> html.Div:
+        """'Add to report' button + status row, sitting just under one figure."""
         return html.Div(
             [
-                dcc.Input(
-                    id={"type": "add-to-doc-caption", "graph_id": graph_id},
-                    type="text",
-                    placeholder="Caption (optional)",
-                    debounce=False,
-                    style={
-                        "flex": "1",
-                        "minWidth": "200px",
-                        "marginRight": "8px",
-                        "padding": "5px 8px",
-                        "border": "1px solid #ccc",
-                        "borderRadius": "4px",
-                        "fontSize": "12px",
-                    },
-                ),
                 html.Button(
-                    "Add to doc",
-                    id={"type": "add-to-doc-btn", "graph_id": graph_id},
+                    "Add to report",
+                    id={"type": "add-to-report-btn", "graph_id": graph_id},
                     n_clicks=0,
                     style={
                         "marginRight": "8px",
@@ -1070,7 +1144,7 @@ class GameStatsDashboard:
                     },
                 ),
                 html.Div(
-                    id={"type": "add-to-doc-status", "graph_id": graph_id},
+                    id={"type": "add-to-report-status", "graph_id": graph_id},
                     style={"fontSize": "11px", "color": "#666"},
                 ),
             ],
@@ -1308,7 +1382,7 @@ class GameStatsDashboard:
                                         style={"height": "430px"},
                                         config=cast(Any, download_config),
                                     ),
-                                    self._layout_add_to_doc_panel(f"date-{group_id}-plot"),
+                                    self._layout_add_to_report_panel(f"date-{group_id}-plot"),
                                 ],
                                 style=Styles.GRAPH_CONTAINER,
                             ),
@@ -1513,7 +1587,7 @@ class GameStatsDashboard:
                             html.Div(
                                 [
                                     dcc.Graph(id=dl_id, style={"height": "430px"}, config=cast(Any, download_config)),
-                                    self._layout_add_to_doc_panel(dl_id),
+                                    self._layout_add_to_report_panel(dl_id),
                                 ],
                                 style=Styles.GRAPH_CONTAINER,
                             ),
@@ -1994,7 +2068,7 @@ class GameStatsDashboard:
                             html.Div(
                                 [
                                     dcc.Graph(id=dl_id, style={"height": "900px"}, config=cast(Any, download_config)),
-                                    self._layout_add_to_doc_panel(dl_id),
+                                    self._layout_add_to_report_panel(dl_id),
                                 ],
                                 style=Styles.GRAPH_CONTAINER,
                             ),
@@ -2234,7 +2308,7 @@ class GameStatsDashboard:
                 html.Div(
                     [
                         dcc.Graph(id="combined-plot", style={"height": "950px"}),
-                        self._layout_add_to_doc_panel("combined-plot"),
+                        self._layout_add_to_report_panel("combined-plot"),
                     ],
                     style=Styles.GRAPH_CONTAINER,
                 ),
@@ -2302,6 +2376,7 @@ class GameStatsDashboard:
             Output("tab-viz-content", "style"),
             Output("tab-weekly-content", "style"),
             Output("tab-bet-content", "style"),
+            Output("tab-report-content", "style"),
             Input("navigator-tabs", "value"),
             prevent_initial_call=False,
         )
@@ -2311,7 +2386,8 @@ class GameStatsDashboard:
             viz_style = {**Styles.PAGE_CONTENT, "display": "block" if tab == "tab-viz" else "none"}
             weekly_style = {**Styles.PAGE_CONTENT, "display": "block" if tab == "tab-weekly" else "none"}
             bet_style = {**Styles.PAGE_CONTENT, "display": "block" if tab == "tab-bet" else "none"}
-            return date_style, group_style, viz_style, weekly_style, bet_style
+            report_style = {**Styles.PAGE_CONTENT, "display": "block" if tab == "tab-report" else "none"}
+            return date_style, group_style, viz_style, weekly_style, bet_style, report_style
 
         @self.app.callback(
             Output("weekly-report-chart", "figure"),
@@ -5802,8 +5878,8 @@ class GameStatsDashboard:
             messages_ui = self._render_chat_messages(history)
             return messages_ui, history, status
 
-    def _register_report_agent_callbacks(self) -> None:
-        """Wire 'Add to doc' buttons next to each figure to the Confluence writer."""
+    def _register_report_tab_callbacks(self) -> None:
+        """Wire 'Add to report' buttons + Report tab interactions (description, summary, export)."""
         figure_states = [
             State("date-g1-plot", "figure"),
             State("date-g2-plot", "figure"),
@@ -5815,111 +5891,337 @@ class GameStatsDashboard:
             State("viz-p2-plot", "figure"),
             State("combined-plot", "figure"),
         ]
+        figure_state_graph_ids = [
+            "date-g1-plot",
+            "date-g2-plot",
+            "date-g3-plot",
+            "group-g1-plot",
+            "group-g2-plot",
+            "group-g3-plot",
+            "viz-p1-plot",
+            "viz-p2-plot",
+            "combined-plot",
+        ]
 
         @self.app.callback(
-            Output({"type": "add-to-doc-status", "graph_id": ALL}, "children"),
-            Input({"type": "add-to-doc-btn", "graph_id": ALL}, "n_clicks"),
-            State({"type": "add-to-doc-btn", "graph_id": ALL}, "id"),
-            State({"type": "add-to-doc-caption", "graph_id": ALL}, "value"),
-            State("confluence-doc-link", "value"),
+            Output("report-figures", "data", allow_duplicate=True),
+            Output({"type": "add-to-report-status", "graph_id": ALL}, "children"),
+            Input({"type": "add-to-report-btn", "graph_id": ALL}, "n_clicks"),
+            State({"type": "add-to-report-btn", "graph_id": ALL}, "id"),
+            State("report-figures", "data"),
             State("config-dropdown", "value"),
             State("navigator-tabs", "value"),
             *figure_states,
             prevent_initial_call=True,
         )
-        def add_figure_to_doc(
+        def add_to_report(
             click_counts: List[Optional[int]],
             button_ids: List[Dict[str, str]],
-            captions: List[Optional[str]],
-            doc_url: Optional[str],
+            current_figures: Optional[List[Dict[str, Any]]],
             config_name: Optional[str],
             tab_value: Optional[str],
             *figures: Optional[Dict[str, Any]],
-        ) -> List[Any]:
+        ) -> Any:
             n = len(button_ids)
             triggered = callback_context.triggered_id
-            if not isinstance(triggered, dict) or triggered.get("type") != "add-to-doc-btn":
-                return [no_update] * n
+            if not isinstance(triggered, dict) or triggered.get("type") != "add-to-report-btn":
+                return no_update, [no_update] * n
 
             target_graph_id = triggered.get("graph_id")
             if not isinstance(target_graph_id, str):
-                return [no_update] * n
+                return no_update, [no_update] * n
+
             try:
-                idx = next(i for i, bid in enumerate(button_ids) if bid.get("graph_id") == target_graph_id)
+                btn_idx = next(i for i, bid in enumerate(button_ids) if bid.get("graph_id") == target_graph_id)
             except StopIteration:
-                return [no_update] * n
+                return no_update, [no_update] * n
 
             statuses: List[Any] = [no_update] * n
-
-            if not (click_counts[idx] or 0):
-                return statuses
-
-            if not doc_url:
-                statuses[idx] = html.Span("Set the Confluence doc URL first.", style={"color": "#c00"})
-                return statuses
-
-            figure_dict = figures[idx] if idx < len(figures) else None
-            if not figure_dict or not figure_dict.get("data"):
-                statuses[idx] = html.Span("Figure is empty — render it first.", style={"color": "#c00"})
-                return statuses
+            if not (click_counts[btn_idx] or 0):
+                return no_update, statuses
 
             try:
-                import plotly.graph_objects as go
+                fig_idx = figure_state_graph_ids.index(target_graph_id)
+            except ValueError:
+                statuses[btn_idx] = html.Span("Unknown figure id.", style={"color": "#c00"})
+                return no_update, statuses
 
-                from dashboards import confluence_writer  # lazy: optional dep
+            figure_dict = figures[fig_idx] if fig_idx < len(figures) else None
+            if not figure_dict or not figure_dict.get("data"):
+                statuses[btn_idx] = html.Span("Figure is empty — render it first.", style={"color": "#c00"})
+                return no_update, statuses
+
+            try:
+                from dashboards.report_agent.data_summary import extract_data_summary
             except ImportError as exc:
-                statuses[idx] = html.Span(f"Missing dependency: {exc}", style={"color": "#c00"})
-                return statuses
+                statuses[btn_idx] = html.Span(f"Missing dep: {exc}", style={"color": "#c00"})
+                return no_update, statuses
 
             width, height = _FIGURE_EXPORT_DIMENSIONS.get(target_graph_id, (1200, 600))
-            caption = (captions[idx] or "").strip()
-            filter_context = {
+            entry = {
+                "id": uuid.uuid4().hex,
                 "graph_id": target_graph_id,
                 "tab": tab_value,
                 "config_name": config_name,
+                "fig_dict": figure_dict,
+                "data_summary": extract_data_summary(figure_dict),
+                "description": "",
+                "export_width": width,
+                "export_height": height,
             }
-            try:
-                figure = go.Figure(figure_dict)
-                result = confluence_writer.add_figure_to_page(
-                    doc_url,
-                    figure,
-                    caption=caption,
-                    filter_context=filter_context,
-                    width=width,
-                    height=height,
-                )
-                statuses[idx] = html.Span(
-                    f"Added ({result['filename']}).",
-                    style={"color": "#2a7a2a"},
-                )
-            except Exception as exc:
-                logger.exception("Add to doc failed for graph_id=%s", target_graph_id)
-                statuses[idx] = html.Span(f"Failed: {exc}", style={"color": "#c00"})
-
-            return statuses
+            new_figures = list(current_figures or []) + [entry]
+            statuses[btn_idx] = html.Span(
+                f"Added to report (now {len(new_figures)}).",
+                style={"color": "#2a7a2a"},
+            )
+            return new_figures, statuses
 
         @self.app.callback(
-            Output("update-doc-status", "children"),
-            Input("update-doc-btn", "n_clicks"),
-            State("confluence-doc-link", "value"),
+            Output("report-figures-container", "children"),
+            Input("report-figures", "data"),
+        )
+        def render_report_panels(figures: Optional[List[Dict[str, Any]]]) -> Any:
+            figures = figures or []
+            if not figures:
+                return html.Div(
+                    "No figures yet — click 'Add to report' under any chart to start.",
+                    style={"color": "#888", "fontStyle": "italic", "padding": "16px"},
+                )
+            panels: List[Component] = []
+            for idx, fig in enumerate(figures, start=1):
+                fig_id = fig.get("id", "")
+                description = fig.get("description") or ""
+                graph_id = fig.get("graph_id", "")
+                panels.append(
+                    html.Div(
+                        [
+                            html.Div(
+                                [
+                                    html.H4(
+                                        f"Figure {idx}",
+                                        style={**Styles.PANEL_HEADER, "display": "inline-block"},
+                                    ),
+                                    html.Span(
+                                        f"  ({graph_id})",
+                                        style={"color": "#888", "fontSize": "12px", "marginLeft": "8px"},
+                                    ),
+                                    html.Button(
+                                        "Generate description",
+                                        id={"type": "report-generate-desc-btn", "fig_id": fig_id},
+                                        n_clicks=0,
+                                        style={
+                                            "marginLeft": "12px",
+                                            "padding": "4px 10px",
+                                            "cursor": "pointer",
+                                            "backgroundColor": "#377EB8",
+                                            "color": "white",
+                                            "border": "none",
+                                            "borderRadius": "4px",
+                                            "fontSize": "12px",
+                                        },
+                                    ),
+                                    html.Button(
+                                        "Remove figure",
+                                        id={"type": "report-remove-btn", "fig_id": fig_id},
+                                        n_clicks=0,
+                                        style={
+                                            "marginLeft": "8px",
+                                            "padding": "4px 10px",
+                                            "cursor": "pointer",
+                                            "backgroundColor": "#E41A1C",
+                                            "color": "white",
+                                            "border": "none",
+                                            "borderRadius": "4px",
+                                            "fontSize": "12px",
+                                        },
+                                    ),
+                                    html.Span(
+                                        id={"type": "report-desc-status", "fig_id": fig_id},
+                                        style={"marginLeft": "10px", "fontSize": "11px", "color": "#666"},
+                                    ),
+                                ],
+                                style={"display": "flex", "alignItems": "center"},
+                            ),
+                            dcc.Graph(
+                                figure=fig.get("fig_dict") or {},
+                                config={"displayModeBar": False},
+                                style={"marginTop": "10px"},
+                            ),
+                            html.Div(
+                                description,
+                                style={
+                                    "marginTop": "10px",
+                                    "fontSize": "13px",
+                                    "lineHeight": "1.6",
+                                    "color": "#333",
+                                    "whiteSpace": "pre-wrap",
+                                    "minHeight": "40px",
+                                },
+                            ),
+                        ],
+                        style=Styles.SECTION,
+                    )
+                )
+            return panels
+
+        @self.app.callback(
+            Output("report-figures", "data", allow_duplicate=True),
+            Output({"type": "report-desc-status", "fig_id": ALL}, "children"),
+            Input({"type": "report-generate-desc-btn", "fig_id": ALL}, "n_clicks"),
+            State({"type": "report-generate-desc-btn", "fig_id": ALL}, "id"),
+            State("report-figures", "data"),
+            State("report-language", "value"),
             prevent_initial_call=True,
         )
-        def update_doc_click(n_clicks: int, doc_url: Optional[str]) -> Any:
+        def generate_description_callback(
+            click_counts: List[Optional[int]],
+            button_ids: List[Dict[str, str]],
+            current_figures: Optional[List[Dict[str, Any]]],
+            language: Optional[str],
+        ) -> Any:
+            n = len(button_ids)
+            triggered = callback_context.triggered_id
+            if not isinstance(triggered, dict) or triggered.get("type") != "report-generate-desc-btn":
+                return no_update, [no_update] * n
+
+            target_fig_id = triggered.get("fig_id")
+            try:
+                btn_idx = next(i for i, bid in enumerate(button_ids) if bid.get("fig_id") == target_fig_id)
+            except StopIteration:
+                return no_update, [no_update] * n
+
+            statuses: List[Any] = [no_update] * n
+            if not (click_counts[btn_idx] or 0):
+                return no_update, statuses
+
+            figures = list(current_figures or [])
+            try:
+                fig_idx = next(i for i, f in enumerate(figures) if f.get("id") == target_fig_id)
+            except StopIteration:
+                statuses[btn_idx] = html.Span("Figure not found.", style={"color": "#c00"})
+                return no_update, statuses
+
+            try:
+                from dashboards.report_agent.description import generate_description
+            except ImportError as exc:
+                statuses[btn_idx] = html.Span(f"Missing dep: {exc}", style={"color": "#c00"})
+                return no_update, statuses
+
+            try:
+                text = generate_description(
+                    data_summary=figures[fig_idx].get("data_summary") or {},
+                    language=language or "en",
+                    existing_description=figures[fig_idx].get("description") or None,
+                )
+            except Exception as exc:
+                logger.exception("Generate description failed for fig_id=%s", target_fig_id)
+                statuses[btn_idx] = html.Span(f"Failed: {exc}", style={"color": "#c00"})
+                return no_update, statuses
+
+            updated = dict(figures[fig_idx])
+            updated["description"] = text
+            figures[fig_idx] = updated
+            statuses[btn_idx] = html.Span("Updated.", style={"color": "#2a7a2a"})
+            return figures, statuses
+
+        @self.app.callback(
+            Output("report-figures", "data", allow_duplicate=True),
+            Input({"type": "report-remove-btn", "fig_id": ALL}, "n_clicks"),
+            State({"type": "report-remove-btn", "fig_id": ALL}, "id"),
+            State("report-figures", "data"),
+            prevent_initial_call=True,
+        )
+        def remove_figure_callback(
+            click_counts: List[Optional[int]],
+            button_ids: List[Dict[str, str]],
+            current_figures: Optional[List[Dict[str, Any]]],
+        ) -> Any:
+            triggered = callback_context.triggered_id
+            if not isinstance(triggered, dict) or triggered.get("type") != "report-remove-btn":
+                return no_update
+            target_fig_id = triggered.get("fig_id")
+            try:
+                btn_idx = next(i for i, bid in enumerate(button_ids) if bid.get("fig_id") == target_fig_id)
+            except StopIteration:
+                return no_update
+            if not (click_counts[btn_idx] or 0):
+                return no_update
+            figures = [f for f in (current_figures or []) if f.get("id") != target_fig_id]
+            return figures
+
+        @self.app.callback(
+            Output("report-summary", "data"),
+            Output("report-summary-status", "children"),
+            Input("report-generate-summary-btn", "n_clicks"),
+            State("report-figures", "data"),
+            State("report-language", "value"),
+            prevent_initial_call=True,
+        )
+        def generate_summary_callback(
+            n_clicks: int,
+            figures: Optional[List[Dict[str, Any]]],
+            language: Optional[str],
+        ) -> Any:
+            if not (n_clicks or 0):
+                return no_update, no_update
+            figures = figures or []
+            if not figures:
+                return no_update, html.Span("Add figures first.", style={"color": "#c00"})
+            try:
+                from dashboards.report_agent.description import generate_summary
+            except ImportError as exc:
+                return no_update, html.Span(f"Missing dep: {exc}", style={"color": "#c00"})
+            try:
+                text = generate_summary(figures=figures, language=language or "en")
+            except Exception as exc:
+                logger.exception("Generate summary failed")
+                return no_update, html.Span(f"Failed: {exc}", style={"color": "#c00"})
+            return text, html.Span("Updated.", style={"color": "#2a7a2a"})
+
+        @self.app.callback(
+            Output("report-summary-display", "children"),
+            Input("report-summary", "data"),
+        )
+        def render_summary(text: Optional[str]) -> Any:
+            return text or html.Span(
+                "(No summary yet — click 'Generate summary'.)",
+                style={"color": "#888", "fontStyle": "italic"},
+            )
+
+        @self.app.callback(
+            Output("report-export-status", "children"),
+            Input("report-export-btn", "n_clicks"),
+            State("report-doc-link", "value"),
+            State("report-figures", "data"),
+            State("report-summary", "data"),
+            prevent_initial_call=True,
+        )
+        def export_report_callback(
+            n_clicks: int,
+            doc_url: Optional[str],
+            figures: Optional[List[Dict[str, Any]]],
+            summary: Optional[str],
+        ) -> Any:
             if not (n_clicks or 0):
                 return no_update
             if not doc_url:
                 return html.Span("Set the Confluence doc URL first.", style={"color": "#c00"})
+            figures = figures or []
+            if not figures:
+                return html.Span("No figures to export.", style={"color": "#c00"})
             try:
-                from dashboards.report_agent import agent as report_agent
+                from dashboards.report_agent.exporter import export_report
             except ImportError as exc:
-                return html.Span(f"Report agent unavailable: {exc}", style={"color": "#c00"})
+                return html.Span(f"Missing dep: {exc}", style={"color": "#c00"})
             try:
-                result = report_agent.update_doc(doc_url)
+                result = export_report(page_url=doc_url, summary=summary or "", figures=figures)
             except Exception as exc:
-                logger.exception("Update doc failed")
+                logger.exception("Export report failed")
                 return html.Span(f"Failed: {exc}", style={"color": "#c00"})
-            color = {"ok": "#2a7a2a", "noop": "#666", "error": "#c00"}.get(result.status, "#666")
-            return html.Span(result.message, style={"color": color})
+            return html.Span(
+                f"Exported {result.figures_uploaded} figure(s) to page {result.page_id} (v{result.page_version}).",
+                style={"color": "#2a7a2a"},
+            )
 
     @staticmethod
     def _render_chat_messages(history: list) -> List[Component]:
