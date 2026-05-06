@@ -72,8 +72,9 @@ from bituslabs_ds.config import (
 )
 from bituslabs_ds.etl import DataLoader, RedshiftBackend
 
+# select a short period (2 months) as ss03 has large number of users, and calculating percentiles is time-consuming.
 DATE_START = "2026-03-01 00:00:00"
-DATE_END = "2026-11-24 00:00:00"
+DATE_END = "2026-05-01 00:00:00"
 
 MAX_SESSION_INTERVAL = 60 * 60 * 24 * 7
 STREAK_THRESHOLD = 200
