@@ -44,6 +44,8 @@ stats_by_date:
   group2_label: "User RTP and Profit"
   group2_columns: [
     "user_num_bets",
+    "user_num_bets_bg",
+    "user_num_bets_fg",
     "user_total_bet",
     "user_avg_bet_amount",
     "user_total_profit",
