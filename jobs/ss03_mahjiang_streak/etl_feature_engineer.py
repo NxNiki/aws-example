@@ -110,7 +110,6 @@ def generate_query():
                 AND t.game_id = 'SS03'
                 AND t.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
                 AND t.partition_ab[0] NOT IN ('{AI_GROUP_ID}', '{AB_TEST_GROUP_A}', '{AB_TEST_GROUP_B}') -- select default group, excluding AI and A/B test groups
-                AND t.script_id = 'giftShop'
         ),
 
         free_game_group AS (
