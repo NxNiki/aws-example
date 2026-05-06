@@ -29,8 +29,8 @@
 -- deposit: the deposit into balance before current bet. (current balance before bet - previous balance after payout)
 -- withdraw: -deposit if it is negative.
 
--- aggregate 40 consecutive raw bet rounds in the same session_group (free game aggregated into the previous base game
--- so won't be counted). agg_group = ROUND((row_number - 1) / 40), so the last group in a session may have < 40 rows.
+-- aggregate 100 consecutive raw bet rounds in the same session_group (free game aggregated into the previous base game
+-- so won't be counted). agg_group = ROUND((row_number - 1) / 100), so the last group in a session may have < 100 rows.
 -- and get statistics such as mean, median, std, and:
 -- accumulative positive delta bet amount
 -- accumulative negative delta bet amount
@@ -56,9 +56,9 @@ import argparse
 import os
 from textwrap import dedent
 
-import pandas as pd
-
 from bituslabs_ds.config import (
+    AB_TEST_GROUP_A,
+    AB_TEST_GROUP_B,
     AI_GROUP_ID,
     DEFAULT_BASTION_IP,
     ETL_CURRENCY_CODES,
@@ -72,13 +72,13 @@ from bituslabs_ds.config import (
 )
 from bituslabs_ds.etl import DataLoader, RedshiftBackend
 
-DATE_START = "2025-11-24 00:00:00"
+DATE_START = "2026-03-01 00:00:00"
 DATE_END = "2026-11-24 00:00:00"
 
 MAX_SESSION_INTERVAL = 60 * 60 * 24 * 7
 STREAK_THRESHOLD = 200
 MAX_SESSION_GAP = 60 * 60  # 1 hour
-SESSION_LENGTH = 40  # number of consecutive bets in the same session
+SESSION_LENGTH = 100  # number of consecutive bets in the same session
 
 
 def generate_query():
@@ -107,9 +107,9 @@ def generate_query():
                 AND t.created_at < '{DATE_END}'
                 AND t.currency_type IN {ETL_CURRENCY_CODES}
                 AND t.status = 'COMPLETED'
-                AND t.game_id = 'SS01'
+                AND t.game_id = 'SS03'
                 AND t.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
-                AND t.partition_ab[0] != '{AI_GROUP_ID}' -- select default group
+                AND t.partition_ab[0] NOT IN ('{AI_GROUP_ID}', '{AB_TEST_GROUP_A}', '{AB_TEST_GROUP_B}') -- select default group, excluding AI and A/B test groups
                 AND t.script_id = 'giftShop'
         ),
 
@@ -446,8 +446,8 @@ def generate_query():
                 t.user_id,
                 t.session_group,
                 t.agg_group
-            -- Only keep groups with exactly SESSION_LENGTH (40) rows. Incomplete "tail" groups are dropped,
-            -- so unique (user_id, session_group, agg_group) in ss01_features_grouped <= ss01_features_enriched.
+            -- Only keep groups with exactly SESSION_LENGTH (100) rows. Incomplete "tail" groups are dropped,
+            -- so unique (user_id, session_group, agg_group) in ss03_features_grouped <= ss03_features_enriched.
             HAVING COUNT(t.user_id) = {SESSION_LENGTH}
         )
 
@@ -652,7 +652,7 @@ def generate_query():
 
 def execute_query(redshift_loader, output_file, query) -> None:
 
-    file_path = f"{LOCAL_ROOT}/jobs/output_ss01_wucaishen/{output_file}.parquet"
+    file_path = f"{LOCAL_ROOT}/jobs/output_ss03_mahjiang_streak/{output_file}.parquet"
     df_rs = redshift_loader.query_to_df(query=query, local_cache=file_path, reload=True)
 
     print(df_rs.head(5))
@@ -662,7 +662,7 @@ if __name__ == "__main__":
 
     setup_logging(f"{LOCAL_ROOT}/jobs/log", log_filename=os.path.splitext(os.path.basename(__file__))[0] + ".log")
 
-    parser = argparse.ArgumentParser(description="ETL Feature Engineer for SS01 Wucaishen")
+    parser = argparse.ArgumentParser(description="ETL Feature Engineer for SS03 Mahjiang Streak")
     parser.add_argument(
         "--bastion-ip",
         type=str,
@@ -683,7 +683,7 @@ if __name__ == "__main__":
     )
 
     query_raw_stats, query_grouped_stats = generate_query()
-    execute_query(redshift_loader, "ss01_features_enriched", query_raw_stats)
-    execute_query(redshift_loader, "ss01_features_grouped", query_grouped_stats)
+    execute_query(redshift_loader, "ss03_features_enriched", query_raw_stats)
+    execute_query(redshift_loader, "ss03_features_grouped", query_grouped_stats)
 
     redshift_loader.close()
