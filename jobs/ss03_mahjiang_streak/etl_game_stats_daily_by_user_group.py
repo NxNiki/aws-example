@@ -5,6 +5,9 @@ from textwrap import dedent
 import pandas as pd
 
 from bituslabs_ds.config import (
+    AB_TEST_GROUP_A,
+    AB_TEST_GROUP_B,
+    AI_GROUP_ID,
     DATE_START_HOUR,
     DEFAULT_BASTION_IP,
     DEFAULT_ETL_OUTPUT,
@@ -23,9 +26,6 @@ from bituslabs_ds.config import (
 from bituslabs_ds.etl import AggCol, DataLoader, ETLScheduler, RedshiftBackend, effective_start_date
 
 GAME_ID = "SS03"
-AI_GROUP_ID = "jojpin-9mokha-rexQug"
-AB_TEST_GROUP_A = "4a04df21-c749-4808-8e55-3a0b74c084d2"
-AB_TEST_GROUP_B = "4f1a46ca-7baa-4452-9a40-ef21d9b33b57"
 
 # Shared column list for user_bets_group UNION (reused across group variants)
 _USER_BETS_GROUP_COLS = """
