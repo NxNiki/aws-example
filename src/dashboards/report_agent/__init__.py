@@ -1,1 +1,1 @@
-"""Report agent package — see ``docs/report_agent.md``."""
+"""Report-tab helpers: figure data extraction, LLM description/summary, and Confluence export."""
