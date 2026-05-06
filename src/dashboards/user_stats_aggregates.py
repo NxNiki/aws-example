@@ -367,7 +367,52 @@ class DataMetrics:
     def _user_rows(self) -> pl.DataFrame:
         """User rows in [start_dt, end_dt] for all user groups."""
         in_window = (pl.col(self.date_col) >= self.start_dt) & (pl.col(self.date_col) <= self.end_dt)
-        return self._df.filter(in_window)
+        rows = self._df.filter(in_window)
+        self._warn_on_missing_source_values(rows)
+        return rows
+
+    @staticmethod
+    def _warn_on_missing_source_values(rows: pl.DataFrame) -> None:
+        """Warn when metric source columns contain null / NaN values.
+
+        These usually indicate stale or partially-written upstream ETL output (e.g. an
+        ETL rerun that appended onto existing parquet instead of overwriting).  Such
+        nulls silently flow into derived metrics and produce missing cells in heatmaps
+        and gaps in line plots.  Re-run the upstream ETL job with ``--overwrite`` to
+        regenerate the source parquet cleanly.
+        """
+        if rows.is_empty():
+            return
+        cols_to_check = [c for c in ENRICH_USER_ROW_INPUT_COLUMNS if c in rows.columns]
+        if not cols_to_check:
+            return
+
+        null_counts = rows.select(cols_to_check).null_count().row(0, named=True)
+        null_cols = {c: int(n) for c, n in null_counts.items() if n}
+
+        nan_cols: Dict[str, int] = {}
+        schema = rows.schema
+        for c in cols_to_check:
+            if schema[c].is_float():
+                n = rows.select(pl.col(c).is_nan().sum()).item()
+                if n:
+                    nan_cols[c] = int(n)
+
+        if not null_cols and not nan_cols:
+            return
+
+        parts: List[str] = []
+        if null_cols:
+            parts.append(f"null counts: {dict(sorted(null_cols.items()))}")
+        if nan_cols:
+            parts.append(f"NaN counts: {dict(sorted(nan_cols.items()))}")
+        logger.warning(
+            "DataMetrics source data has missing values (%s). This typically indicates a "
+            "stale or partially-written upstream ETL output and can produce empty cells in "
+            "downstream plots / heatmaps. Re-run the upstream ETL job with --overwrite to "
+            "regenerate the source parquet cleanly.",
+            "; ".join(parts),
+        )
 
     @cached_property
     def _presence_map(self) -> Dict[Tuple, Set]:
