@@ -570,13 +570,29 @@ def _build_llm(model_key: Optional[str] = None) -> BaseChatModel:
     Args:
         model_key: A catalog key like ``"openai:gpt-4.1"`` or ``"gemini:gemini-2.5-pro"``.
                    Falls back to ``CHAT_PROVIDER`` / ``CHAT_MODEL`` env vars.
+
+    ``CHAT_PROVIDER`` defaults to ``"auto"``: prefer OpenAI if its key is set,
+    otherwise fall back to Gemini if its key is set. Mirrors the
+    rag_service embedder's auto-mode so a single ``GOOGLE_API_KEY`` (or
+    ``OPENAI_API_KEY``) is enough to bring up both surfaces.
     """
     if model_key and model_key in MODEL_CATALOG:
         entry = MODEL_CATALOG[model_key]
         provider = entry["provider"]
         model = entry["model"]
     else:
-        provider = os.environ.get("CHAT_PROVIDER", "openai").lower()
+        provider = os.environ.get("CHAT_PROVIDER", "auto").lower()
+        if provider == "auto":
+            if _get_secret("OPENAI_API_KEY"):
+                provider = "openai"
+            elif _get_secret("GOOGLE_API_KEY") or _get_secret("GEMINI_API_KEY"):
+                provider = "gemini"
+            else:
+                raise ValueError(
+                    "No LLM credentials found. Set OPENAI_API_KEY or "
+                    "GOOGLE_API_KEY/GEMINI_API_KEY in .env, your shell, or "
+                    "Secrets Manager. Or pin CHAT_PROVIDER to a specific provider."
+                )
         model = os.environ.get("CHAT_MODEL", _DEFAULT_MODELS.get(provider, "gpt-4o-mini"))
 
     if provider == "gemini":
