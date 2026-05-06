@@ -34,11 +34,11 @@ _TINYURL_RE = re.compile(r"/wiki/x/([A-Za-z0-9_\-]+)")
 
 
 def _decode_tinyurl_token(token: str) -> Optional[str]:
-    """Decode a Confluence tinyurl token (e.g. ``Z4AfOw``) to its numeric page ID.
+    """Decode a legacy Confluence tinyurl token (e.g. ``Z4AfOw``) to its numeric page ID.
 
-    Atlassian's encoding is: ``page_id`` → little-endian bytes → URL-safe
-    base64, padding stripped. Reversing that is offline and avoids the
-    JS-redirect / auth-page traps that defeat HTTP follow-the-redirect.
+    Works for the older base64-of-little-endian-page-id encoding. Newer
+    Confluence Cloud short codes (random-looking 4-5 char tokens) are NOT
+    decodable offline — those go through ``_resolve_tinyurl_via_http``.
     """
     import base64
 
@@ -53,12 +53,60 @@ def _decode_tinyurl_token(token: str) -> Optional[str]:
         return None
 
 
+def _resolve_tinyurl_via_http(url: str) -> Optional[str]:
+    """Authenticated HTTP fallback for tokens the offline decoder can't crack.
+
+    Confluence Cloud responds either with a 302 to ``.../pages/<id>/...``
+    or with a 200 HTML page that embeds the page ID in meta tags / JS
+    variables. We check the redirect chain first, then scrape the body
+    as a last resort.
+    """
+    try:
+        import requests
+
+        from dashboards.chat_agent import _get_secret
+    except ImportError:
+        return None
+
+    email = _get_secret("CONFLUENCE_EMAIL")
+    token = _get_secret("CONFLUENCE_TOKEN")
+    auth = (email, token) if (email and token) else None
+    try:
+        resp = requests.get(
+            url,
+            auth=auth,
+            allow_redirects=True,
+            timeout=10,
+            headers={"Accept": "text/html,application/xhtml+xml"},
+        )
+    except Exception as exc:
+        logger.warning("Tinyurl HTTP resolve failed for %s: %s", url, exc)
+        return None
+
+    candidates = [resp.url] + [h.url for h in (resp.history or [])]
+    for candidate in candidates:
+        if candidate:
+            match = _PAGE_ID_RE.search(candidate)
+            if match:
+                return match.group(1)
+
+    body = resp.text or ""
+    meta_match = re.search(r'name="ajs-page-id"[^>]*content="(\d+)"', body, re.IGNORECASE)
+    if meta_match:
+        return meta_match.group(1)
+    pid_match = re.search(r'pageId["\s:=]+(\d{6,})', body)
+    if pid_match:
+        return pid_match.group(1)
+    return None
+
+
 def extract_page_id_from_url(url: str) -> Optional[str]:
     """Pull a numeric page ID out of a Confluence URL.
 
-    Supports both the long form (``.../wiki/spaces/X/pages/12345/Title``)
-    and the tinyurl form (``.../wiki/x/<token>``). Tinyurl decoding is
-    purely local — no HTTP call required.
+    Resolution order:
+      1. Long-form ``.../wiki/spaces/X/pages/12345/Title`` (regex match).
+      2. Legacy tinyurl ``.../wiki/x/<token>`` decoded offline.
+      3. New-style tinyurl resolved via authenticated HTTP redirect chain.
     """
     if not url:
         return None
@@ -67,7 +115,10 @@ def extract_page_id_from_url(url: str) -> Optional[str]:
         return match.group(1)
     tiny_match = _TINYURL_RE.search(url)
     if tiny_match:
-        return _decode_tinyurl_token(tiny_match.group(1))
+        offline = _decode_tinyurl_token(tiny_match.group(1))
+        if offline:
+            return offline
+        return _resolve_tinyurl_via_http(url)
     return None
 
 
