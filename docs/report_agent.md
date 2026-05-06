@@ -1,395 +1,172 @@
 # Report Agent — Design Spec
 
-This document specifies how the AI agent reads, augments, and updates a
-shared document (initially Confluence; Google Docs later) to produce
-analytical reports about game metrics. The flow is collaborative: a human
-seeds the doc with intent and figures from the dashboard, and the agent
-fills in interpretation, comparison, and prose on demand.
+The dashboard's Report tab lets a user assemble an analytical report
+from rendered figures, attach LLM-generated descriptions and an overall
+summary, and publish a snapshot to a Confluence page.
 
-The doc itself is the spec, the artifact, and the version history. There is
-no separate state store.
-
-
-## Goals
-
-- Let a user produce a polished analytical report by combining
-  dashboard-rendered figures with agent-written interpretation, without
-  leaving Confluence.
-- Make agent contributions reviewable, idempotent, and easy to roll back.
-- Keep the agent's writes scoped so it can never silently overwrite
-  user-authored prose.
-- Stay backend-agnostic so we can swap Confluence for Google Docs later
-  with minimal logic changes.
-
-
-## Glossary
-
-| Term | Meaning |
-| --- | --- |
-| **Request** | Anything in the doc the agent should respond to. Two kinds: a `figure block` (interpret this figure) and a `/prompt:` tag (answer this question). |
-| **Response fence** | A `<!-- AI-RESPONSE:START id=... -->` ... `END` block written immediately below a request. Agent owns the contents. |
-| **Pending request** | A request with no response fence below it (or a `/prompt:` whose `done` marker is missing). |
-| **Done request** | A request whose response fence is present and (for `/prompt:`) whose `done` marker is set. |
-| **Reference** | A Confluence page link in the doc's `References` section. Read-only context for the agent. |
-| **Update doc** | The dashboard button that triggers the agent to process all pending requests in one pass. |
+The interaction is one-way: the dashboard owns the report, and the
+Confluence doc is a pushed snapshot. Nothing reads the doc back.
 
 
 ## End-to-end workflow
 
-1. **User creates a Confluence page** with a brief intro paragraph
-   describing what the report should cover, and a `References` heading at
-   the bottom listing related Confluence pages.
-2. **User adds the page link to the dashboard.** The dashboard now knows
-   which doc this session is editing.
-3. **User configures and renders figures** in the dashboard (game,
-   metrics, date range, group, etc.) and clicks **Add to doc** for each
-   one they want included. The dashboard appends a figure block (image +
-   caption + filter context JSON) to the doc.
-4. **User clicks Update doc.** The agent scans the page, processes every
-   pending request in document order, and writes a response fence below
-   each one. References are loaded once for context.
-5. **User reviews the doc.** To refine, they:
-   - Add `/prompt: <question>` anywhere in the body, or
-   - Change a finished `/prompt: done` back to `/prompt:` to force a
-     regenerate, or
-   - Delete a figure's response fence to force a re-interpretation.
-6. **User clicks Update doc again.** Only pending requests get processed.
-   Steps 5–6 repeat until satisfied.
+1. **Render figures** in any of the dashboard's stats tabs.
+2. **Add to report.** A button under each figure stages the figure in
+   the Report tab — captures the Plotly figure dict, extracts a JSON
+   data summary for the LLM, and pushes an entry into an in-memory
+   store. No network call yet.
+3. **Open the Report tab.** Top row: Confluence doc URL input,
+   language dropdown, **Export to Doc** button. Below: a summary
+   panel and one panel per staged figure with its image, description
+   text, **Generate description** and **Remove figure** buttons.
+4. **Generate descriptions.** Per-figure button calls the LLM with the
+   figure's data summary and returns 2–3 paragraphs in the selected
+   language. Re-clicking regenerates.
+5. **Generate summary.** Top-level button calls the LLM with every
+   staged figure's description + data summary and returns a
+   2–3-paragraph overview.
+6. **Export to Doc.** Renders each figure to PNG, attaches the PNGs to
+   the target Confluence page, and writes a `Dashboard Report` region
+   into the page body. Subsequent exports replace the region in place.
+
+Steps 2–5 are local to the dashboard; only step 6 hits Confluence.
 
 
-## Document grammar
+## Report tab state
 
-The doc has three regions, top to bottom. The agent parses on this layout.
+Two `dcc.Store` values in the tab:
 
-```
-1. User intro              (read-only for agent)
-2. Body                    (interleaved request blocks + user prose)
-3. References              (read-only; agent uses for context only)
-```
+- `report-figures`: list of staged-figure entries.
+- `report-summary`: most recently generated summary text.
 
-The body region contains a free-form sequence of these block types in any
-order:
+Each `report-figures` entry:
 
-- Figure block (request)
-- Inline `/prompt:` (request)
-- Response fence (agent-owned)
-- User prose (read-only for agent)
-
-
-### Figure block (request)
-
-Written by the dashboard's **Add to doc** button. The agent treats the
-figure as an implicit prompt: "Interpret this figure in the context of the
-report's intro and references."
-
-```html
-<!-- FIGURE:START id={figure_id} -->
-<p><strong>Figure {N}</strong></p>
-<ac:image>
-  <ri:attachment ri:filename="{filename}.png"/>
-</ac:image>
-<ac:structured-macro ac:name="info">
-  <ac:rich-text-body>
-    <p><strong>Caption:</strong> {user-typed caption}</p>
-    <p><strong>Context:</strong> <code>{filter_json}</code></p>
-  </ac:rich-text-body>
-</ac:structured-macro>
-<!-- FIGURE:END id={figure_id} -->
+```jsonc
+{
+  "id": "uuid4 hex",
+  "graph_id": "date-g1-plot",        // source figure id in the dashboard
+  "tab": "tab-date",                 // dashboard tab the figure came from
+  "config_name": "ss03",             // dashboard config in effect
+  "fig_dict": { ... },               // full Plotly figure dict
+  "data_summary": { ... },           // compact JSON for LLM prompts
+  "description": "...",              // LLM prose, may be empty
+  "export_width": 1800,              // PNG dimensions used at Export time
+  "export_height": 430
+}
 ```
 
-- `figure_id` is a stable opaque identifier (UUID4) generated by the
-  dashboard at button-press time. It is the join key between the figure
-  and its response fence.
-- `Figure {N}` is the visible label and the user's handle for referring
-  to the figure inside `/prompt:` lines (e.g. *"explain Figure 3 in more
-  detail"*). Indices are assigned at Add-to-doc time (`N = current count
-  of FIGURE blocks + 1`) and re-normalised on every Update Doc click; see
-  *Figure indexing and reordering* below.
-- `filter_json` is a single JSON object capturing the dashboard state used
-  to render the figure: `{"game": "...", "metric": "...", "date_range":
-  ["YYYY-MM-DD", "YYYY-MM-DD"], "group": "...", ...}`. The agent uses this
-  as ground truth — it must not infer the metric from the caption alone.
-- Caption is user-typed and may be empty. When empty, the agent relies
-  solely on `filter_json`.
+Removing a figure filters by `id`. Re-running Generate description
+rewrites that entry's `description`. Generate summary rewrites
+`report-summary`.
 
 
-### Inline prompt (request)
+## Data summary
 
-Written manually by the user. Goes anywhere in the body.
+The LLM never sees the rendered PNG — it sees a JSON data summary
+extracted from the Plotly figure dict by
+`report_agent/data_summary.py:extract_data_summary`. That's what lets
+descriptions quote exact values instead of guessing from a rendering.
 
-```
-/prompt: <question or instruction>
-```
+Each summary contains:
 
-After processing, the agent appends a response fence directly below and
-mutates the prompt line to `/prompt: done`. To regenerate, the user
-removes `done` (and may edit the prompt text). To force fresh content
-without changing the prompt, the user can also delete the response fence
-underneath.
+- One entry per trace: `name`, `type`, `mode` (when set), downsampled
+  `x` and `y`, `error_y.upper` / `error_y.lower` bounds when present,
+  and a non-default `yaxis` reference.
+- Layout title, x-axis title, primary and secondary y-axis titles, and
+  any explicit ranges.
 
-
-### Response fence (agent-owned)
-
-Written by the agent. One response fence sits immediately below each
-processed request.
-
-```html
-<!-- AI-RESPONSE:START id={request_id} hash={input_hash} -->
-{markdown / storage-format prose, possibly multiple paragraphs}
-<!-- AI-RESPONSE:END id={request_id} -->
-```
-
-- `request_id` matches the `figure_id` of the parent figure block, or a
-  fresh UUID assigned to the `/prompt:` line on first response.
-- `hash` is a SHA-256 of the input that produced this response (figure
-  filename + caption + `filter_json`, or `/prompt:` text). It is recorded
-  but **not consulted** by the v1 agent — staleness is user-driven (see
-  request lifecycle). The hash is forward-looking infrastructure for
-  automatic staleness detection later.
-- The agent owns the contents between the markers absolutely. It may
-  rewrite, shorten, or rearrange anything inside. It must not write
-  outside.
+Traces over 400 points are downsampled by uniform-stride sampling.
+Floats round to 4 decimals; NaN becomes `null`.
 
 
-### References section
+## Languages
 
-A heading literally named `References` (case-insensitive) followed by a
-list of links to other Confluence pages. The agent treats every link in
-this section as a context source.
+The language dropdown controls both Generate description and Generate
+summary. Codes:
 
-```
-## References
-- [Metric definitions](https://yourcompany.atlassian.net/wiki/.../pages/123/...)
-- [Last quarter's analysis](https://yourcompany.atlassian.net/wiki/.../pages/456/...)
-```
+| Code | Display |
+| --- | --- |
+| `en` | English |
+| `zh-Hans` | Chinese (Simplified) |
+| `zh-Hant` | Chinese (Traditional) |
 
-- The agent extracts page IDs from `/pages/<id>/...` segments (mirroring
-  `rag_service.config._parse_page_id_from_url`).
-- The agent loads these pages with **depth-2** link traversal: the
-  references themselves (depth 1) plus the pages they directly link to
-  (depth 2). Deeper links are ignored to bound cost and prevent cycles.
-- Deduplication is by `page_id`, never by URL string.
-- References are loaded fresh on every Update doc click (no per-session
-  caching across reloads); within a single update pass they are loaded
-  once and shared across all request handlers.
+The selected language is passed as a system-prompt hint. The model
+itself comes from `chat_agent._build_llm()` and respects the same
+`CHAT_PROVIDER` / `CHAT_MODEL` configuration as the AI Assistant chat
+panel.
 
 
-## Figure indexing and reordering
+## Export contract
 
-Each figure block carries a visible `**Figure N**` label that doubles as
-both a referencing handle (so the user can write *"compare Figure 1 and
-Figure 3"* in a `/prompt:`) and a reorder mechanism. The contract:
+`report_agent/exporter.py:export_report` produces an idempotent
+snapshot:
 
-**At Add-to-doc time.** The dashboard counts existing FIGURE blocks in the
-target page and stamps the new one with the next index. No re-numbering
-of older figures happens at this stage — that's deferred to Update Doc.
+1. Resolve the page URL to a Confluence page ID via
+   `confluence_client.extract_page_id_from_url`.
+2. For each figure in the store:
+   - Render the figure dict to PNG via kaleido at
+     `export_width` × `export_height`.
+   - Upload the PNG as an attachment with a fresh
+     `report_<ts>_<short uuid>.png` filename.
+   - Build a `<h2>Figure N</h2>` block followed by the image and the
+     description as `<p>` paragraphs.
+3. Assemble the full region:
 
-**At Update Doc time, before any LLM calls,** the agent normalises the
-figure layout exactly once:
+   ```html
+   <h1>Dashboard Report</h1>
+   <h2>Summary</h2>
+   <p>...summary paragraphs...</p>
+   <h2>Figure 1</h2>
+   <ac:image ac:width="800"><ri:attachment ri:filename="..."/></ac:image>
+   <p>...description...</p>
+   <h2>Figure 2</h2>
+   ...
+   ```
 
-1. Walk all FIGURE blocks in document order; collect their visible labels.
-2. Decide which mode applies:
-   - **Permutation reorder** — labels are a valid permutation of `1..N`
-     but don't match document order. The user has reordered by editing
-     labels. Each figure's full unit (the FIGURE block plus its
-     immediately following `AI-RESPONSE` block, if any) is swapped into
-     label-sorted positions. Surrounding prose is left in place.
-   - **Renumber-only** — any other case (cut-and-paste reorder, brand-new
-     figures with stale numbers, duplicate labels, gaps). Document order
-     is treated as the source of truth and labels are rewritten to
-     `1..N` consecutively.
-3. Both modes finish with the same invariant: **labels are exactly
-   `1..N`, in document order, and each figure's response (if any) sits
-   immediately after it.**
-4. The reordered storage is then used for pending-request detection and
-   LLM context, so figure indices the LLM sees are the ones the user will
-   see after save.
+4. Splice into the page body:
+   - If `<h1>Dashboard Report</h1>` already exists, replace everything
+     from that heading to the end of the page body.
+   - Otherwise, append the region to the end.
 
-**Two ways to reorder, both supported:**
+   Anything **above** the `Dashboard Report` heading is preserved
+   across exports. Anything below is owned by the exporter and
+   overwritten on each click.
 
-- **Cut and paste** the FIGURE block(s) in Confluence's editor to move
-  figures around physically. Labels go stale until next Update Doc, which
-  renumbers them. Easiest for moving one figure to a new position.
-- **Edit the label numbers** directly (e.g. change `Figure 4` → `Figure
-  1`). On the next Update Doc click, blocks are swapped to match. Easiest
-  for global re-orderings.
-
-**Anchored prose stays anchored.** A sentence like *"The chart above
-demonstrates X"* sitting between two FIGURE blocks won't follow either
-figure if they're swapped — only the figure unit moves. After a reorder,
-review surrounding prose for any references that no longer make sense.
-
-## Request lifecycle
-
-Each request transitions through:
-
-```
-PENDING ──processed──> DONE ──user edits──> PENDING (regenerate)
-```
-
-| Request type | PENDING when | DONE when | How user moves DONE → PENDING |
-| --- | --- | --- | --- |
-| Figure | No `AI-RESPONSE` block with matching `id` follows the `FIGURE:END` line | Matching response fence exists | Delete the response fence |
-| `/prompt:` | Line reads `/prompt:` (no `done` suffix) | Line reads `/prompt: done` | Remove ` done` from the prompt line |
-
-The agent does **not** automatically detect figure or prompt edits in v1.
-Staleness is always user-driven. The `hash` field on response fences is
-written for future automatic detection but not yet consulted.
-
-On Update doc:
-
-1. Load the page (storage format) and capture its `version.number`.
-2. Load all reference pages (depth-2 traversal) into an in-memory
-   context bundle.
-3. Walk the body top to bottom; collect every PENDING request.
-4. For each pending request, in document order:
-   - Build the prompt: shared system message + intro + references + this
-     request's specifics + already-completed responses above this point
-     in the doc (so later prompts can build on earlier interpretations).
-   - Call the LLM with the existing dashboard agent's toolbelt
-     (`lookup_column`, `search_columns_by_keyword`, `read_etl_source`,
-     `search_confluence_rag`, etc.).
-   - Insert or replace the response fence below the request.
-   - For `/prompt:` requests: append ` done` to the prompt line.
-5. Save the page back, passing the captured `version.number`. On 409
-   conflict (someone else saved while we were working), abort the entire
-   update and surface a banner: "The doc changed while the agent was
-   working. Please retry." Do not blind-retry — the doc may have new
-   prompts that need to be processed alongside ours.
-
-Idempotency is automatic: a second click with no new pending requests is
-a no-op (no LLM calls, no writes).
+5. Save the page via `confluence_client.update_page_storage` with the
+   captured `version.number`.
 
 
-## Agent read/write contract
+## Modules
 
-The agent is bound by these rules. They are enforced by parser, not by
-prompt — the writer never calls the storage-format update API outside the
-permitted regions.
-
-**MAY read:**
-- Anything in the doc.
-- Any reference page reachable within depth-2 of the References section.
-
-**MAY write:**
-- Inside `AI-RESPONSE:START` ... `AI-RESPONSE:END` blocks.
-- The `/prompt:` line, but only to append or remove the trailing ` done`
-  marker. Never to alter the prompt text itself.
-- New `AI-RESPONSE` blocks inserted directly below a pending request.
-
-**MUST NOT write:**
-- The user intro region.
-- Figure blocks (`FIGURE:START` ... `FIGURE:END`) or their contents.
-- The References section.
-- User prose anywhere in the body.
-- The page title.
-- Any other Confluence page (responses always go in the active doc).
+| Concern | Module |
+| --- | --- |
+| Plotly figure → JSON data summary for LLM prompts | `src/dashboards/report_agent/data_summary.py` |
+| LLM helpers for per-figure description and overall summary | `src/dashboards/report_agent/description.py` |
+| Render PNGs, attach, write the snapshot region | `src/dashboards/report_agent/exporter.py` |
+| Report tab layout + 7 callbacks (add, render, describe, remove, summarize, render summary, export) | `src/dashboards/game_stats_monitor.py` (`_layout_report_tab`, `_register_report_tab_callbacks`) |
+| Confluence read / attach / update API wrapper | `src/dashboards/confluence_client.py` |
+| LLM factory used by description/summary | `src/dashboards/chat_agent.py:_build_llm` |
 
 
-## Conflict handling
+## Authentication
 
-Confluence's REST update endpoint uses optimistic concurrency: callers
-pass the `version.number` they read, and the API rejects with 409 if
-someone else has saved a newer version since.
-
-Behavior:
-
-- The agent captures `version.number` on the initial read at the start of
-  the update pass.
-- It performs all LLM calls and assembles the new storage-format body in
-  memory.
-- It submits a single update with the captured version number.
-- On 409: abort, surface the banner above. The user retries Update doc;
-  the next pass re-reads the page (now containing whatever the other
-  editor saved) and processes any pending requests fresh.
-
-This means the agent's writes are always atomic from the doc's
-perspective — either every pending request gets processed and saved, or
-none do.
-
-
-## Authentication and identity
-
-The Confluence client currently runs read-only with a single API token
-provided via env var or AWS Secrets Manager (`dashboards.confluence_client`).
-For write capability, the token must have write scope on the target space.
-
-Open question, deferred: should writes use the **end user's** token (so
-audit logs attribute changes to the user who clicked Update doc) or a
-**service account** token (so they attribute to a single bot identity)?
-Both are operationally viable. The service-account path is simpler;
-end-user attribution is cleaner for governance. Pick before promoting to
-production.
-
-
-## Out of scope for v1
-
-These are intentionally deferred to keep the first build small.
-
-- **Automatic staleness detection** for figures or prompts via the
-  `hash` field. v1 relies on user action (delete fence / remove `done`).
-- **Cross-doc figure copying.** The agent may reference figures from
-  other docs in prose ("the spike in the retention chart from Q1 review")
-  but never copies the image itself.
-- **Streaming output.** Update doc is a single request/response cycle
-  with a final save. No partial writes.
-- **Google Docs support.** Grammar is designed to port — fences are HTML
-  comments which Google Docs preserves — but no implementation yet.
-- **Vision-based figure interpretation.** v1 reads `filter_json` and
-  `caption` as the figure's representation. Image-pixel understanding via
-  vision models is a future capability (see `docs/` future extensions).
-- **Multiple parallel agents on the same doc.** One Update doc click at a
-  time. Concurrent clicks are serialized by Confluence's version check
-  (the second one will 409).
+The Confluence client uses a single API token provided via env var or
+AWS Secrets Manager: `CONFLUENCE_URL`, `CONFLUENCE_EMAIL`,
+`CONFLUENCE_TOKEN`. The token must have write scope on the target
+space for Export to Doc to succeed.
 
 
 ## Future extensions
 
-- **UI screenshot interpretation.** A separate agent tool that takes an
-  image (screenshot of a dashboard panel) and returns a textual
-  description. Orthogonal to the report flow; would also be available to
-  the chatbot.
-- **Google Docs backend.** Re-implement the storage-format read/write
-  layer against the Google Docs API. The grammar (HTML-comment fences,
-  `/prompt:` syntax) was chosen to port cleanly.
-- **Auto-staleness via hashes.** Wire up the `hash` field on response
-  fences so editing a caption or filter automatically marks the
-  interpretation pending.
-- **Templates.** Provide canned "skeleton" docs (intro + figure
-  placeholders + reference list) so users don't start from blank.
-- **Per-prompt model selection.** Allow `/prompt: [model=opus] ...` to
-  route specific questions to a more capable model.
-
-
-## Implementation entry points
-
-Where the v1 build will land in the existing tree:
-
-| Concern | Module |
-| --- | --- |
-| Storage-format parser (find requests, response fences, references) | `src/dashboards/report_agent/parser.py` (new) |
-| Storage-format writer (insert/replace response fences, mutate `/prompt:`) | `src/dashboards/report_agent/writer.py` (new) |
-| Reference loader with depth-2 traversal | extend `src/rag_service/confluence_loader.py` (link extraction is shared with the RAG link-following feature) |
-| Update doc orchestrator (read → process → write → save) | `src/dashboards/report_agent/agent.py` (new) |
-| Dashboard buttons (Add to doc, Update doc) | extend the existing dashboard layouts |
-| Confluence write API wrapper (with version-conflict handling) | extend `src/dashboards/confluence_client.py` |
-
-The reference loader and link extractor are shared infrastructure with the
-RAG link-following feature discussed separately. Build them once.
-
-
-## Open questions to resolve before implementation
-
-1. **Write identity.** End-user token vs service-account token. (See
-   Authentication and identity.)
-2. **Figure attachment lifecycle.** When a user deletes a figure block
-   from the doc, do we also delete the underlying Confluence attachment
-   (cleanup) or leave it (avoid accidental data loss)? Default proposal:
-   leave it. Confluence has no quota pain at our scale.
-3. **References parsing strictness.** Must the section be literally named
-   `References`, or do we accept variants (`Refs`, `See also`, etc.)?
-   Default proposal: literal `References` only, case-insensitive. Looser
-   matching invites false positives.
-4. **Response language for non-English docs.** If the intro is written in
-   another language, should the agent respond in kind? Default proposal:
-   respond in the language of the intro paragraph.
+- **Vision-based figure interpretation** when the data summary alone
+  is insufficient (e.g. heatmaps with geometric structure lost in a
+  flat array). Pass the rendered PNG to a vision-capable model.
+- **Google Docs backend.** Re-implement the read/attach/update layer
+  against the Google Docs API; the heading-bracketed snapshot model
+  ports cleanly.
+- **Drag-to-reorder figure panels** in the Report tab.
+- **Templates.** Save a Report tab snapshot (figures + descriptions +
+  summary) to S3 so a recurring weekly report can be regenerated from
+  a saved skeleton.
+- **Per-figure language overrides.** Today the dropdown is global; one
+  figure in English and another in Chinese isn't supported.
