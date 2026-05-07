@@ -710,7 +710,7 @@ class GameStatsDashboard:
                                     value=self.config_files[0]["value"],
                                     clearable=False,
                                     style={
-                                        "width": "220px",
+                                        "width": "330px",
                                         "marginLeft": "8px",
                                         "marginRight": "12px",
                                     },
@@ -720,6 +720,7 @@ class GameStatsDashboard:
                                     id="save-config-btn",
                                     n_clicks=0,
                                     style={
+                                        "marginLeft": "auto",
                                         "marginRight": "8px",
                                         "padding": "6px 12px",
                                         "cursor": "pointer",
