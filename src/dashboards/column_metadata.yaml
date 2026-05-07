@@ -149,6 +149,11 @@ columns:
     description: "Total wagered amount on BASE spins only."
     formula: "SUM(CASE WHEN bet_type='BASE' THEN bet_amount)"
 
+  user_avg_bet_amount:
+    category: user_metric
+    description: "Average bet amount across all the user's bets in the period."
+    formula: "AVG(bet_amount)"
+
   user_total_payout:
     category: user_metric
     description: "Total payout received by the user."
@@ -232,6 +237,14 @@ columns:
     description: >
       Number of times the math table (script_id) changed between
       consecutive bets for this user. Indicates strategy switches by the AI system.
+
+  user_avg_remaining_bet_amount:
+    category: user_metric
+    description: >
+      Average bet amount on bets the user made AFTER their last bet on the
+      ai_group's math table. Only populated for AI per-mathtable ai_groups
+      (where ai_group equals the math_table_id); NULL for combined groups
+      (Default, AI, HG, AB_TEST_*) and Default_<mathtable> per-mathtable groups.
 
   user_accu_pos_delta_bet:
     category: user_metric

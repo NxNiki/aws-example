@@ -660,6 +660,17 @@ def _append_markdown_group_section(
         )
 
 
+def _discover_groups(df: pd.DataFrame, group_col: str) -> list[str]:
+    """Return ``groupN`` values present in ``group_col``, sorted by N ascending."""
+    if group_col not in df.columns or df.empty:
+        return []
+    unique = {str(g) for g in df[group_col].dropna().unique().tolist()}
+    return sorted(
+        unique,
+        key=lambda g: (0, int(g[len("group") :])) if g.startswith("group") and g[len("group") :].isdigit() else (1, g),
+    )
+
+
 def generate_risk_control_reports(*, refresh_cache: bool = False) -> list[dict[str, Any]]:
     risk_df = _load_events_df(
         s3_uri=S3_RISK_USER_STATS_URI,
@@ -681,13 +692,17 @@ def generate_risk_control_reports(*, refresh_cache: bool = False) -> list[dict[s
 
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
+    risk_groups = _discover_groups(risk_df, "risk_user_group")
+    control_groups = _discover_groups(control_df, "control_user_group")
+
     risk_group_payload: dict[str, dict[str, Any]] = {}
-    control_group_payload: dict[str, dict[str, Any]] = {}
-    for group in ("group1", "group2"):
+    for group in risk_groups:
         risk_group_df = cast(pd.DataFrame, risk_df.loc[risk_df["risk_user_group"] == group].copy())
         risk_group_names = _sort_names_by_profit(risk_group_df, _ordered_user_names(risk_group_df, None))
         risk_group_payload[group] = _build_group_plot_bundle(risk_group_df, risk_group_names)
 
+    control_group_payload: dict[str, dict[str, Any]] = {}
+    for group in control_groups:
         control_group_df = cast(pd.DataFrame, control_df.loc[control_df["control_user_group"] == group].copy())
         control_group_names = _sort_names_by_profit(control_group_df, _ordered_user_names(control_group_df, None))
         control_group_payload[group] = _build_group_plot_bundle(control_group_df, control_group_names)
@@ -695,49 +710,50 @@ def generate_risk_control_reports(*, refresh_cache: bool = False) -> list[dict[s
     html_path = REPORT_DIR / ALL_USERS_HTML_NAME
     md_path = REPORT_DIR / ALL_USERS_MD_NAME
 
-    bootstrap = {"risk_payload": risk_group_payload, "control_payload": control_group_payload}
+    bootstrap = {
+        "risk_payload": risk_group_payload,
+        "control_payload": control_group_payload,
+        "risk_groups": risk_groups,
+        "control_groups": control_groups,
+    }
     html = _render_html_from_template(
         "risk_vs_control_stats.html",
         {"__BOOTSTRAP_JSON__": _json_for_html_embed(bootstrap)},
     )
     html_path.write_text(html, encoding="utf-8")
 
-    risk_default_group = "group1"
-    control_default_group = "group1"
-    risk_default_df = cast(pd.DataFrame, risk_df.loc[risk_df["risk_user_group"] == risk_default_group].copy())
-    control_default_df = cast(
-        pd.DataFrame,
-        control_df.loc[control_df["control_user_group"] == control_default_group].copy(),
-    )
-    risk_default_names = _sort_names_by_profit(risk_default_df, _ordered_user_names(risk_default_df, None))
-    control_default_names = _sort_names_by_profit(control_default_df, _ordered_user_names(control_default_df, None))
-
     lines = [
         "# Risk vs Control User Report",
         "",
         "- note: group labels come from ETL parquet columns `risk_user_group` and `control_user_group`",
-        "- default markdown sections use risk group1 and control group1",
+        f"- risk_groups: `{', '.join(risk_groups) or '(none)'}`",
+        f"- control_groups: `{', '.join(control_groups) or '(none)'}`",
         f"- html_stats_report: `{html_path.name}`",
         "",
         f"[Open interactive chart report]({html_path.name})",
         "",
     ]
-    _append_markdown_group_section(lines, risk_default_df, risk_default_names, "Risk Group 1 (default)")
-    _append_markdown_group_section(lines, control_default_df, control_default_names, "Control Group 1 (default)")
+    for group in risk_groups:
+        group_df = cast(pd.DataFrame, risk_df.loc[risk_df["risk_user_group"] == group].copy())
+        group_names = _sort_names_by_profit(group_df, _ordered_user_names(group_df, None))
+        _append_markdown_group_section(lines, group_df, group_names, f"Risk {group}")
+    for group in control_groups:
+        group_df = cast(pd.DataFrame, control_df.loc[control_df["control_user_group"] == group].copy())
+        group_names = _sort_names_by_profit(group_df, _ordered_user_names(group_df, None))
+        _append_markdown_group_section(lines, group_df, group_names, f"Control {group}")
     md_path.write_text("\n".join(lines), encoding="utf-8")
 
     logger.info("Generated combined markdown report: %s", md_path)
     logger.info("Generated combined html report: %s", html_path)
-    return [
-        {
-            "markdown_report": str(md_path),
-            "html_report": str(html_path),
-            "risk_group1_users": len(risk_group_payload["group1"]["user_names"]),
-            "risk_group2_users": len(risk_group_payload["group2"]["user_names"]),
-            "control_group1_users": len(control_group_payload["group1"]["user_names"]),
-            "control_group2_users": len(control_group_payload["group2"]["user_names"]),
-        }
-    ]
+    summary: dict[str, Any] = {
+        "markdown_report": str(md_path),
+        "html_report": str(html_path),
+    }
+    for group in risk_groups:
+        summary[f"risk_{group}_users"] = len(risk_group_payload[group]["user_names"])
+    for group in control_groups:
+        summary[f"control_{group}_users"] = len(control_group_payload[group]["user_names"])
+    return [summary]
 
 
 def _parse_args() -> argparse.Namespace:

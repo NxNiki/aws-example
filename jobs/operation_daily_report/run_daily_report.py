@@ -11,7 +11,7 @@ Outputs: jobs/operation_daily_report/output/
 Final report is printed cleanly at the end (no logging mixed in).
 
 Usage:
-  poetry run python jobs/operation_daily_report/run_daily_report.py [--bastion-ip IP]
+  poetry run python jobs/operation_daily_report/run_daily_report.py
   poetry run python jobs/operation_daily_report/run_daily_report.py --send-slack  # send report to Slack
 
 Environment variables for Slack (when --send-slack):
@@ -35,10 +35,10 @@ OP_DIR = Path(__file__).resolve().parent
 LOG_DIR = Path(LOCAL_ROOT) / "jobs" / "log"
 
 
-def _send_report_to_slack(report_text: str, channel: str | None = None) -> bool:
+def _send_report_to_slack(report_text: str) -> bool:
     """Send report to Slack. Returns True on success. Uses SLACK_USER_TOKEN or SLACK_BOT_TOKEN."""
     token = os.environ.get("SLACK_USER_TOKEN") or os.environ.get("SLACK_BOT_TOKEN")
-    chan = channel or os.environ.get("SLACK_CHANNEL_ID")
+    chan = os.environ.get("SLACK_CHANNEL_ID")
     if not token:
         print("[WARN] SLACK_USER_TOKEN or SLACK_BOT_TOKEN not set; skipping Slack send")
         return False
@@ -94,11 +94,9 @@ def _get_daily_report(lookback_days: int) -> str:
     return mod.generate_daily_report(df_hg, df_pa, lookback_days=lookback_days)
 
 
-def _get_pid_report(bastion_ip: str | None, reload_athena: bool = False) -> str:
+def _get_pid_report(reload_athena: bool = False) -> str:
     """Call check_pid_difference and return report string."""
     import importlib.util
-
-    from bituslabs_ds.config import DEFAULT_BASTION_IP
 
     spec = importlib.util.spec_from_file_location(
         "check_pid_difference",
@@ -107,7 +105,7 @@ def _get_pid_report(bastion_ip: str | None, reload_athena: bool = False) -> str:
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    results = mod.main(bastion_ip=bastion_ip or DEFAULT_BASTION_IP, reload_athena=reload_athena)
+    results = mod.main(reload_athena=reload_athena)
     return mod.format_pid_report(results)
 
 
@@ -121,29 +119,10 @@ def main():
         description="Generate daily report: ETL stats, display report, and PID difference check"
     )
     parser.add_argument(
-        "--bastion-ip",
-        type=str,
-        default=None,
-        help="Bastion IP for Redshift tunnel (passed to ETL and check_pid_difference)",
-    )
-    parser.add_argument(
-        "--skip-hg-etl",
+        "--run-pa-etl",
         action="store_true",
-        help="Skip HG ETL (Redshift → stats_by_date)",
+        help="Run PA ETL (default: skip). PA data is static, used as year-ago comparison",
     )
-    parser.add_argument(
-        "--skip-pa-etl",
-        dest="skip_pa_etl",
-        action="store_true",
-        help="Skip PA ETL (default: skip). PA data is static, used as year-ago comparison",
-    )
-    parser.add_argument(
-        "--no-skip-pa-etl",
-        dest="skip_pa_etl",
-        action="store_false",
-        help="Run PA ETL (override default skip)",
-    )
-    parser.set_defaults(skip_pa_etl=True)
     parser.add_argument(
         "--skip-report",
         action="store_true",
@@ -170,23 +149,13 @@ def main():
         action="store_true",
         help="Send the final report to Slack (requires SLACK_USER_TOKEN or SLACK_BOT_TOKEN and SLACK_CHANNEL_ID)",
     )
-    parser.add_argument(
-        "--slack-channel",
-        type=str,
-        default=None,
-        help="Override Slack channel (default: use SLACK_CHANNEL_ID env)",
-    )
     args = parser.parse_args()
-
-    extra_args = []
-    if args.bastion_ip:
-        extra_args = ["--bastion-ip", args.bastion_ip]
 
     output_dir = OP_DIR / "output"
     stats_by_day_pa = output_dir / "stats_by_day_pa.parquet"
 
-    # Run PA ETL when: --reload-cached-etl, or not --skip-pa-etl, or file missing (and display needs it)
-    run_pa_etl = args.reload_cached_etl or not args.skip_pa_etl
+    # Run PA ETL when: --reload-cached-etl, --run-pa-etl, or file missing (and display needs it)
+    run_pa_etl = args.reload_cached_etl or args.run_pa_etl
     if not run_pa_etl and not args.skip_report and not stats_by_day_pa.exists():
         run_pa_etl = True  # Display needs stats_by_day_pa; run PA ETL if file missing
 
@@ -197,8 +166,8 @@ def main():
         (
             "ETL game stats daily by group (HG)",
             OP_DIR / "etl_game_stats_daily_by_group.py",
-            not args.skip_hg_etl,
-            extra_args,
+            True,
+            [],
         ),
         ("ETL game stats daily by group PA", OP_DIR / "etl_game_stats_daily_by_group_pa.py", run_pa_etl, pa_etl_args),
     ]
@@ -239,7 +208,7 @@ def main():
         pid_report = None
         try:
             sys.stdout = io.StringIO()  # Suppress DataFrame/logging prints from check_pid
-            pid_report = _get_pid_report(args.bastion_ip, reload_athena=args.reload_cached_etl)
+            pid_report = _get_pid_report(reload_athena=args.reload_cached_etl)
         except Exception as e:
             sys.stdout = _saved_stdout
             print(f"[ERROR] Check PID difference failed: {e}")
@@ -265,7 +234,7 @@ def main():
     # --- Send to Slack if requested ---
     if args.send_slack and full_report:
         print("\nSending report to Slack...")
-        _send_report_to_slack(full_report, channel=args.slack_channel)
+        _send_report_to_slack(full_report)
 
     if failed:
         print(f"\n[FAILED] {len(failed)} step(s): {', '.join(failed)}")

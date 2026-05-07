@@ -51,6 +51,16 @@ TIMEZONE_SHANGHAI = "Asia/Shanghai"
 # SQL IN-list literals for query f-strings, e.g. ``WHERE col IN {ETL_CURRENCY_CODES}``.
 ETL_CURRENCY_CODES = "('CNY')"
 ETL_EXCLUDED_OP_CODES = "('B26', 'TST', 'TSB', 'TSO')"
+# Upper bound (seconds) on inter-bet delta_t before it's treated as a session break and excluded.
+ETL_DELTA_T_MAX_SECONDS = 1800
+# Lower bound (seconds) substituted for non-positive inter-bet delta_t. fish_hunter has
+# rapid-fire bullets so we use a sub-second floor; slot games use 1 second.
+ETL_DELTA_T_MIN_SECONDS = 1
+ETL_DELTA_T_MIN_SECONDS_FISH_HUNTER = 0.25
+# partition_ab[0] group IDs in public.fct_bet_orders.
+AI_GROUP_ID = "jojpin-9mokha-rexQug"
+AB_TEST_GROUP_A = "4a04df21-c749-4808-8e55-3a0b74c084d2"
+AB_TEST_GROUP_B = "4f1a46ca-7baa-4452-9a40-ef21d9b33b57"
 
 DASHBOARD_CONFIG_S3_PATH = f"s3://{S3_BUCKET}/dashboard-configs"
 DEFAULT_BASTION_IP = "13.215.212.244"  # for ssh tunnel connection to redshift

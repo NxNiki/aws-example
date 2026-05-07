@@ -5,10 +5,15 @@ from textwrap import dedent
 import pandas as pd
 
 from bituslabs_ds.config import (
+    AB_TEST_GROUP_A,
+    AB_TEST_GROUP_B,
+    AI_GROUP_ID,
     DATE_START_HOUR,
     DEFAULT_BASTION_IP,
     DEFAULT_ETL_OUTPUT,
     ETL_CURRENCY_CODES,
+    ETL_DELTA_T_MAX_SECONDS,
+    ETL_DELTA_T_MIN_SECONDS,
     ETL_EXCLUDED_OP_CODES,
     LOCAL_ROOT,
     REDSHIFT_HOST,
@@ -21,9 +26,6 @@ from bituslabs_ds.config import (
 from bituslabs_ds.etl import AggCol, DataLoader, ETLScheduler, RedshiftBackend, effective_start_date
 
 GAME_ID = "SS03"
-AI_GROUP_ID = "jojpin-9mokha-rexQug"
-AB_TEST_GROUP_A = "4a04df21-c749-4808-8e55-3a0b74c084d2"
-AB_TEST_GROUP_B = "4f1a46ca-7baa-4452-9a40-ef21d9b33b57"
 
 # Shared column list for user_bets_group UNION (reused across group variants)
 _USER_BETS_GROUP_COLS = """
@@ -36,7 +38,7 @@ _USER_BETS_GROUP_COLS = """
                 t.payout,
                 t.bet_type,
                 t.profit,
-                t.delta_t,
+                t.delta_t_seconds,
                 t.user_bet_count,
                 t.mathtable_change,
                 t.prev_bet_type,
@@ -55,6 +57,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
         WITH user_bets AS (
         SELECT
             t.user_id,
+            t.spin_id,
             t.created_at,
             t.math_table_id AS mathtable,
             t.bet_amount,
@@ -66,7 +69,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             CAST(DATE_TRUNC('month', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at))) AS DATE) AS activity_month,
             t.partition_ab[0] AS ab_group_id,
             LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) AS prev_created_at,
-            t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) AS delta_t,
+            EXTRACT(EPOCH FROM (t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at))) AS delta_t_seconds,
             LAG(t.bet_type) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) AS prev_bet_type,
             LAG(t.bet_amount) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) AS prev_bet_amount,
             COUNT(t.user_id) OVER (PARTITION BY t.user_id) AS user_bet_count,
@@ -99,15 +102,18 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
 
             UNION ALL
 
+            -- Per-mathtable variants. AB_TEST_A/B users are excluded so they don't
+            -- get double-counted into Default_<mathtable> alongside the Default cohort.
             SELECT
                 {_USER_BETS_GROUP_COLS}
                 CASE
-                    WHEN t.ab_group_id != '{AI_GROUP_ID}' THEN CONCAT('Default_', t.mathtable)
                     WHEN t.ab_group_id = '{AI_GROUP_ID}' THEN t.mathtable
+                    ELSE CONCAT('Default_', t.mathtable)
                 END AS ai_group
             FROM
                 user_bets AS t
-            WHERE t.ab_group_id IS NOT NULL
+            WHERE t.ab_group_id IS NULL
+               OR t.ab_group_id NOT IN ('{AB_TEST_GROUP_A}', '{AB_TEST_GROUP_B}')
         ),
 
         user_stats AS (
@@ -124,6 +130,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 -- total bet amount:
                 SUM(t.bet_amount) AS user_total_bet,
                 SUM(CASE WHEN t.bet_type = 'BASE' THEN t.bet_amount END) AS user_total_bet_bg,
+                AVG(t.bet_amount) AS user_avg_bet_amount,
 
                 -- total payout amount:
                 SUM(t.payout) AS user_total_payout,
@@ -136,7 +143,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 COUNT(CASE WHEN t.bet_type = 'BASE' AND t.payout > 0 THEN 1 END) AS user_num_bets_bg_with_payout,
                 COUNT(CASE WHEN t.bet_type = 'FREE' AND t.payout > 0 THEN 1 END) AS user_num_bets_fg_with_payout,
 
-                AVG(CASE WHEN t.bet_type = 'BASE' AND t.prev_bet_type = 'BASE' AND EXTRACT(EPOCH FROM t.delta_t) BETWEEN 0 AND 86400 THEN EXTRACT(EPOCH FROM t.delta_t) END)
+                AVG(CASE WHEN t.bet_type = 'BASE' AND t.prev_bet_type = 'BASE' AND t.delta_t_seconds <= {ETL_DELTA_T_MAX_SECONDS} THEN GREATEST(t.delta_t_seconds, {ETL_DELTA_T_MIN_SECONDS}) END)
                     AS user_avg_delta_t_seconds_bg,
 
                 SUM(t.mathtable_change) AS user_mathtable_change,
@@ -153,6 +160,37 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
 
             FROM user_bets_group AS t
             GROUP BY t.{stats_agg_col}, t.ai_group, t.user_id
+        ),
+
+        user_mathtable_last_spin_ai AS (
+            -- Last spin per (period, AI user, mathtable). Restricted to AI bets so the
+            -- downstream metric only applies to AI per-mathtable ai_groups.
+            SELECT
+                t.{stats_agg_col},
+                t.user_id,
+                t.mathtable,
+                MAX(t.spin_id) AS mathtable_last_spin_id
+            FROM user_bets AS t
+            WHERE t.ab_group_id = '{AI_GROUP_ID}'
+            GROUP BY t.{stats_agg_col}, t.user_id, t.mathtable
+        ),
+
+        user_remaining_bet AS (
+            -- Avg bet on bets the AI user made AFTER their last bet on the math table,
+            -- keyed by ai_group (= mathtable for the AI per-mathtable variant). All
+            -- other ai_groups are absent here, so the LEFT JOIN below yields NULL.
+            SELECT
+                m.{stats_agg_col},
+                m.user_id,
+                m.mathtable AS ai_group,
+                AVG(b.bet_amount) AS user_avg_remaining_bet_amount
+            FROM user_mathtable_last_spin_ai AS m
+            LEFT JOIN user_bets AS b
+                ON b.user_id = m.user_id
+                AND b.{stats_agg_col} = m.{stats_agg_col}
+                AND b.spin_id > m.mathtable_last_spin_id
+                AND b.ab_group_id = '{AI_GROUP_ID}'
+            GROUP BY m.{stats_agg_col}, m.user_id, m.mathtable
         ),
 
         user_first_bet AS (
@@ -184,6 +222,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             us.user_num_bets_fg,
             us.user_total_bet,
             us.user_total_bet_bg,
+            us.user_avg_bet_amount,
             us.user_total_payout,
             us.user_total_payout_bg,
             us.user_total_payout_fg,
@@ -211,10 +250,18 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             us.user_accu_delta_bet,
             us.user_accu_delta_bet_avg,
             us.user_pos_delta_bet_num,
-            us.user_neg_delta_bet_num
+            us.user_neg_delta_bet_num,
+
+            -- average bet amount on bets after the user's last bet on the ai_group's math table
+            -- (only populated for AI per-mathtable ai_groups; NULL for combined / Default / AB_TEST groups)
+            rb.user_avg_remaining_bet_amount
 
         FROM user_stats AS us
         LEFT JOIN user_first_bet AS fb ON us.user_id = fb.user_id
+        LEFT JOIN user_remaining_bet AS rb
+            ON rb.user_id = us.user_id
+            AND rb.{stats_agg_col} = us.{stats_agg_col}
+            AND rb.ai_group = us.ai_group
         WHERE us.{stats_agg_col} >= '{effective_start}'
         ORDER BY us.{stats_agg_col} DESC, us.ai_group DESC, us.user_id DESC;
 
