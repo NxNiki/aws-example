@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Dashboard config switch leaked UI state between games.** Switching the YAML
+  config (e.g. ss02 → fish_hunter) used to leave the previous game's metric and
+  group selections in the freshly built dropdowns: `restore_dashboard_state`
+  fired on every layout rebuild and re-applied the persistent `dcc.Store`
+  payloads. Worst-case symptom was a `polars.exceptions.ColumnNotFoundError`
+  on slot-only columns like `user_num_bets_fg` when the Stats Deepdive heatmap
+  ran on fish_hunter data. `update_config` now also resets all per-tab Stores
+  and `dashboard-load-trigger` to `None`, short-circuiting the restore.
+- **Stats Deepdive offered metrics the loaded game can't compute.** The
+  `_viz_derived_metric_options` dropdown returned the union of
+  `DataMetrics.METRICS` regardless of which `user_*` columns were actually in
+  the parquet, so a fresh fish_hunter load could pre-fill heatmap rows with
+  slot-only metrics and crash. The list is now intersected with the columns
+  present in the schema, backed by a new
+  `DataMetrics.metric_user_col_deps` classmethod that introspects each
+  metric's body (and any helpers it transitively calls) for `pl.col("user_*")`
+  references.
+- `_reset_state` now also clears `self.sessions`, restoring symmetry with
+  `self.lf_bet` and tightening the early-return guard inside
+  `_load_bet_data`.
+
 ## [0.2.0] - 2026-05-06
 
 This release establishes the documented release process (see `CONTRIBUTING.md`) and bundles all work since `0.1.5`. Future releases will track changes incrementally in `[Unreleased]`.
