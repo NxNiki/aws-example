@@ -82,6 +82,17 @@ Redshift (prod) → SSH bastion tunnel → DataLoader (etl.py) → S3 parquet ca
 
 Never commit secrets. Copy `.env.example` → `.env` and set `REDSHIFT_USER`, `REDSHIFT_PASSWORD`, `BASTION_KEY_PATH`. On ECS, secrets come from environment variables / Secrets Manager.
 
+## Branch & Merge Workflow
+
+Full workflow rules live in `CONTRIBUTING.md`. Highlights:
+
+- **Never commit to `main` directly.** Releases flow `feature/* → dev → main`.
+- **`dev` accepts direct commits** for small fixes; non-trivial work goes through a feature branch + PR.
+- **Feature → dev**: rebase onto `dev` during development, **squash-merge** the PR. Feature branches are kept (not deleted) and reused after rebasing onto fresh `dev`.
+- **dev → main**: **`--no-ff` merge commit** (preserves history), then create an **annotated semver tag** (`MAJOR.MINOR.PATCH`, no `v` prefix) on the merge commit. Update `CHANGELOG.md` (Keep a Changelog format) before the merge.
+- **Pause for confirmation** before any push to `main`, any tag push, or any force-push.
+- When opening a PR, draft a structured description (Summary / Changes / Test plan / Breaking changes / Related). Template in `CONTRIBUTING.md`.
+
 ## Commit Guidelines
 
 ### Message format
