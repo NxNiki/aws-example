@@ -353,6 +353,7 @@ class GameStatsDashboard:
         self.config = {}
         self.lfs_by_date = {}
         self.lf_bet = pl.DataFrame().lazy()
+        self.sessions = []
         self.df_bet_groups = []
         self.df_date_group_col = ""
         self.df_bet_group_col = ""
@@ -1403,8 +1404,22 @@ class GameStatsDashboard:
         )
 
     def _viz_derived_metric_options(self) -> list[dcc.Dropdown.Options]:
-        """Derived metric options — all ``DataMetrics.METRICS`` (computed aggregates)."""
-        return _dropdown_options_from_strings(sorted(DataMetrics.METRICS))
+        """Derived metric options, filtered to those whose user-column dependencies are present.
+
+        ``DataMetrics.METRICS`` is the union across game families — slot-only
+        columns like ``user_num_bets_fg`` aren't in fishhunter's ETL output, and
+        offering metrics that depend on them produces ``ColumnNotFoundError``
+        when the user picks one. ``DataMetrics.metric_user_col_deps`` does the
+        introspection so this list is always a subset of what's computable on
+        the currently-loaded data.
+        """
+        gran = next(iter(self.date_files_config.keys()), None)
+        lf = self.lfs_by_date.get(gran) if gran else None
+        if lf is None or lf.collect_schema().len() == 0:
+            return _dropdown_options_from_strings(sorted(DataMetrics.METRICS))
+        schema_cols = set(lf.collect_schema().names())
+        valid = sorted(m for m in DataMetrics.METRICS if DataMetrics.metric_user_col_deps(m).issubset(schema_cols))
+        return _dropdown_options_from_strings(valid)
 
     def _viz_user_metric_options(self) -> list[dcc.Dropdown.Options]:
         """User-level raw metric options — every ``user_*`` column actually present in the loaded parquet.
@@ -2099,6 +2114,24 @@ class GameStatsDashboard:
             Output("tab-viz-content", "children"),
             Output("tab-weekly-content", "children"),
             Output("tab-bet-content", "children"),
+            # Reset every persistent Store on a config switch so
+            # ``restore_dashboard_state`` (which fires on tab-content change)
+            # short-circuits at its trigger guard and can't re-apply the
+            # previous config's metric/group selections to the freshly built
+            # dropdowns. Without this, a user who has loaded any saved S3
+            # config in the session leaks ss02 metric picks (e.g.
+            # ``active_user_no_fg_ratio``) into a fishhunter layout and
+            # crashes the viz callback on a missing column.
+            Output("dashboard-load-trigger", "data", allow_duplicate=True),
+            Output("tab-date-g1-state", "data", allow_duplicate=True),
+            Output("tab-date-g2-state", "data", allow_duplicate=True),
+            Output("tab-date-g3-state", "data", allow_duplicate=True),
+            Output("tab-group-g1-state", "data", allow_duplicate=True),
+            Output("tab-group-g2-state", "data", allow_duplicate=True),
+            Output("tab-group-g3-state", "data", allow_duplicate=True),
+            Output("tab-viz-p1-state", "data", allow_duplicate=True),
+            Output("tab-viz-p2-state", "data", allow_duplicate=True),
+            Output("tab-bet-state", "data", allow_duplicate=True),
             Input("config-dropdown", "value"),
             prevent_initial_call=True,
         )
@@ -2112,6 +2145,16 @@ class GameStatsDashboard:
                 self._layout_stats_visualization(),
                 self._layout_weekly_report(),
                 self._layout_stats_by_bet(),
+                None,  # dashboard-load-trigger
+                None,  # tab-date-g1-state
+                None,  # tab-date-g2-state
+                None,  # tab-date-g3-state
+                None,  # tab-group-g1-state
+                None,  # tab-group-g2-state
+                None,  # tab-group-g3-state
+                None,  # tab-viz-p1-state
+                None,  # tab-viz-p2-state
+                None,  # tab-bet-state
             )
 
         @self.app.callback(
