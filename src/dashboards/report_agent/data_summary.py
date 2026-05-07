@@ -10,12 +10,44 @@ that the description references exact values rather than guessing.
 
 from __future__ import annotations
 
+import base64
+import binascii
 from typing import Any, Dict, List, Optional, Sequence
+
+import numpy as np
 
 # Hard cap on how many points per trace land in the summary. Large enough
 # to keep daily series for a year intact, small enough that a multi-trace
 # figure stays under typical LLM context budgets.
 _MAX_POINTS_PER_TRACE = 400
+
+
+def _decode_plotly_array(value: Any) -> Any:
+    """Materialise Plotly 6.x's binary array dict back into a Python list.
+
+    When a Figure containing numpy arrays travels through ``dcc.Store`` or a
+    callback ``State``, Plotly serialises arrays as
+    ``{"dtype": <np dtype>, "bdata": <base64 bytes>, "shape": "n[, m]"}`` to
+    save bandwidth. Without decoding we end up iterating that dict's *keys*
+    and the LLM sees the literal strings "dtype", "bdata", "shape" as values.
+
+    Returns the input unchanged if it's not in the binary-array shape.
+    """
+    if not isinstance(value, dict):
+        return value
+    if "bdata" not in value or "dtype" not in value:
+        return value
+    try:
+        raw = base64.b64decode(value["bdata"])
+        arr = np.frombuffer(raw, dtype=np.dtype(value["dtype"]))
+        shape_str = str(value.get("shape") or "")
+        if shape_str:
+            shape = tuple(int(s.strip()) for s in shape_str.split(",") if s.strip())
+            if shape:
+                arr = arr.reshape(shape)
+        return arr.tolist()
+    except (ValueError, TypeError, binascii.Error):
+        return value
 
 
 def _round_value(value: Any) -> Any:
@@ -29,12 +61,30 @@ def _round_value(value: Any) -> Any:
 def _downsample(values: Optional[Sequence[Any]], cap: int = _MAX_POINTS_PER_TRACE) -> Optional[List[Any]]:
     if values is None:
         return None
-    items = list(values)
+    items = _decode_plotly_array(values)
+    if not isinstance(items, list):
+        items = list(items)
     if len(items) <= cap:
         return [_round_value(v) for v in items]
     step = len(items) / cap
     sampled = [items[min(int(i * step), len(items) - 1)] for i in range(cap)]
     return [_round_value(v) for v in sampled]
+
+
+def _round_matrix(matrix: Any) -> List[List[Any]]:
+    rows = _decode_plotly_array(matrix)
+    if not isinstance(rows, list):
+        try:
+            rows = list(rows)
+        except TypeError:
+            return []
+    out: List[List[Any]] = []
+    for row in rows:
+        if hasattr(row, "__iter__") and not isinstance(row, (str, bytes)):
+            out.append([_round_value(c) for c in row])
+        else:
+            out.append([_round_value(row)])
+    return out
 
 
 def _trace_summary(trace: Dict[str, Any]) -> Dict[str, Any]:
@@ -51,6 +101,13 @@ def _trace_summary(trace: Dict[str, Any]) -> Dict[str, Any]:
         out["x"] = x
     if y is not None:
         out["y"] = y
+
+    # Heatmap-style traces carry their values in ``z`` (a 2-D array). Without
+    # this the LLM only sees axis labels and has to guess at the cells —
+    # which produced the "lacks Z-values" bug on the correlation matrix.
+    z = trace.get("z")
+    if z is not None:
+        out["z"] = _round_matrix(z)
 
     err_y = trace.get("error_y") or {}
     if err_y.get("array") is not None or err_y.get("arrayminus") is not None:
