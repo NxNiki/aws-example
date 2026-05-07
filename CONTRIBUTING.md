@@ -10,13 +10,24 @@ feature/* ──► dev ──► main (tagged release)
 
 - **`main`** — release branch. Tagged with semver. Never receive direct commits.
 - **`dev`** — integration branch. Direct commits allowed for small fixes; feature branches merge here first.
-- **`feature/*`** — topic branches. Branch off `dev`, rebase onto `dev` during development, merge back to `dev` via PR.
+- **`feature/*`** — short-lived, per-topic branches. Branch off `dev`, rebase onto `dev` during development, merge back to `dev` via squash-merge PR, then delete. One topic → one branch → one PR.
 
 ## Three workflows
 
 ### 1. Small change → commit directly to `dev`
 
 For typos, config tweaks, single-file fixes, log-level changes, etc.
+
+```text
+    main (tag: 0.1.5)
+        v
+    o---o
+         \
+          B---C    <- dev
+          ^   ^
+          |   [tweak] log level
+          [fix] typo
+```
 
 ```bash
 git checkout dev
@@ -30,10 +41,38 @@ git push origin dev
 
 For anything non-trivial: new ETL, new dashboard, refactor, multi-file change.
 
+```text
+                     W---W---P    <- feature/new-metric (delete after merge)
+                    /
+    o---o------o---S              <- dev
+        ^      ^   ^
+        |      |   [feat] new metric (squash-merge: W+W+P collapsed into 1)
+        |      [fix] log level
+        feature branched here
+```
+
+While the feature branch is in progress, `dev` may receive new commits (like `[fix] log level` above). Before pushing or opening a PR, **rebase the feature branch onto current `dev`** so it stays based on the latest tip:
+
+```text
+Before  `git rebase origin/dev`:
+
+    A---B---C        <- dev (advanced while you were working)
+         \
+          D---E      <- feature/new-metric (still based on B)
+
+After:
+
+    A---B---C            <- dev
+             \
+              D'---E'    <- feature/new-metric (rewritten on top of C)
+```
+
+The original `D` and `E` are discarded; `D'` and `E'` are new commits with the same diffs but new SHAs. This is why the next push needs `--force-with-lease` — the remote feature branch's old commits are no longer in the history.
+
 ```bash
 # start
 git checkout dev && git pull --ff-only origin dev
-git checkout -b feature/my-thing       # or reuse an existing personal branch
+git checkout -b feature/my-thing
 
 # develop, committing as you go
 git add ... && git commit -m "[feat] ..."
@@ -48,21 +87,41 @@ git push --force-with-lease origin feature/my-thing
 gh pr create --base dev --title "[feat] ..." --body "..."
 ```
 
-**Merge to `dev`: squash-merge.** Each feature becomes one clean commit on `dev`.
+**Merge to `dev`: always squash-merge.** Each feature becomes one clean commit on `dev`. This keeps `dev`'s history readable (one commit per feature), makes reverts trivial, and decouples your local wip granularity from the public history.
 
-- GitHub UI: pick "Squash and merge" on the PR.
-- Terminal: `gh pr merge <num> --squash --delete-branch=false`
+- GitHub UI: pick "Squash and merge" on the PR; check the "Delete branch" option.
+- Terminal: `gh pr merge <num> --squash --delete-branch`
 
-Feature branches are **not deleted**. After merge, before starting new work on the same branch, rebase it onto fresh `dev`:
+**Always delete the feature branch after the squash-merge.** Then start the next piece of work from a fresh branch off `dev`. Reusing a squash-merged branch is *not supported* by this workflow — the branch's commits are already represented in `dev` as the squash commit, so any further work on the same branch creates divergent history that's painful to clean up.
+
 ```bash
-git checkout feature/my-thing
-git fetch origin
-git reset --hard origin/dev    # if no in-flight work; otherwise rebase
+# delete locally if not already done by gh
+git checkout dev && git pull --ff-only origin dev
+git branch -D feature/my-thing
+
+# next piece of work: branch off fresh dev
+git checkout -b feature/next-thing
 ```
+
+If your branch naming scheme has been per-developer (e.g. `nx/dashboard-work`) rather than per-topic, switch to per-topic names (`feat/dashboard-num-bets`, `fix/etl-time-range`). Per-topic names map cleanly to one PR → one squash → delete.
 
 ### 3. Release: `dev` → `main` with tag
 
 Done after a meaningful batch of work has accumulated on `dev`.
+
+```text
+    main (tag: 0.1.5)                  main (tag: 0.1.6)
+        v                                  v
+    o---o-----------------M    <- after Step B & C: M is the --no-ff merge commit
+         \               /
+          F1---F2---C            <- dev (F1, F2 = features; C = [docs] changelog 0.1.6)
+
+    After Step D (fast-forward dev to match main):
+
+    o---o-----------------M    <- main, dev (both at 0.1.6)
+         \               /
+          F1---F2---C
+```
 
 **Step A — update `CHANGELOG.md` on `dev`**
 
