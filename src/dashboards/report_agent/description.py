@@ -54,12 +54,15 @@ _DESCRIPTION_SYSTEM_PROMPT = (
     "You are a data analyst writing a section of an analytical report. "
     "You will receive a JSON summary of one figure (traces, axes, values, "
     "error bars). You may also receive (a) a prior draft to refine, "
-    "preserving the user's edits, and (b) explicit user instructions to "
-    "follow on top of the draft. Interpret the figure in 2-3 short "
-    "paragraphs of plain prose. Quote specific numbers from the data. Do "
-    "not invent metrics or dates that are not in the summary. No headings, "
-    "markdown fences, bullet lists, or HTML — only paragraphs separated "
-    "by blank lines. Never echo back ``/prompt:`` lines."
+    "preserving the user's edits, (b) explicit user instructions to "
+    "follow on top of the draft, and (c) reference materials the user "
+    "has linked for context. Interpret the figure in 2-3 short paragraphs "
+    "of plain prose. Quote specific numbers from the data. Use the "
+    "reference materials to ground definitions or contextual claims; do "
+    "not invent metrics or dates that are not in the summary or "
+    "references. No headings, markdown fences, bullet lists, or HTML — "
+    "only paragraphs separated by blank lines. Never echo back "
+    "``/prompt:`` lines."
 )
 
 
@@ -67,11 +70,12 @@ _SUMMARY_SYSTEM_PROMPT = (
     "You are a data analyst writing the overall summary section of an "
     "analytical report. You will receive descriptions and data summaries "
     "for every figure in the report, and may receive (a) a prior draft "
-    "to refine, preserving the user's edits, and (b) explicit user "
-    "instructions to follow. Synthesize a 2-3 paragraph overview that "
-    "ties the figures together: highlight the main findings, contrasts, "
-    "and any trend that appears across multiple figures. Stay grounded "
-    "in the provided material — do not invent metrics. No headings, "
+    "to refine, preserving the user's edits, (b) explicit user "
+    "instructions to follow, and (c) reference materials the user has "
+    "linked for context. Synthesize a 2-3 paragraph overview that ties "
+    "the figures together: highlight the main findings, contrasts, and "
+    "any trend that appears across multiple figures. Stay grounded in "
+    "the provided material — do not invent metrics. No headings, "
     "markdown fences, bullets, or HTML — only paragraphs separated by "
     "blank lines. Never echo back ``/prompt:`` lines."
 )
@@ -93,13 +97,19 @@ def generate_description(
     language: str = "en",
     model_key: Optional[str] = None,
     existing_description: Optional[str] = None,
+    references: Optional[List[Dict[str, str]]] = None,
 ) -> str:
     """Generate a 2-3 paragraph interpretation of one figure.
 
     ``existing_description`` may contain prior LLM prose mixed with user
     edits and ``/prompt: ...`` instruction lines. Prose is sent to the LLM
     as a draft to preserve, prompts as explicit instructions to follow.
+    ``references`` is a list of fetched reference docs (output of
+    ``references.load_references``); their bodies are inlined in the
+    prompt for context.
     """
+    from dashboards.report_agent.references import format_for_prompt
+
     language_name = _language_name(language)
     summary_json = json.dumps(data_summary, ensure_ascii=False, default=str)
     prior_prose, prompts = _split_prompts(existing_description)
@@ -107,6 +117,9 @@ def generate_description(
         f"# Output language\nWrite the response in {language_name}.",
         f"# Figure data\n{summary_json}",
     ]
+    refs_block = format_for_prompt(references or [])
+    if refs_block:
+        parts.append(f"# Reference materials\n{refs_block}")
     if prior_prose:
         parts.append(f"# Prior draft (refine, preserving any user edits)\n{prior_prose}")
     if prompts:
@@ -121,6 +134,7 @@ def generate_summary(
     language: str = "en",
     model_key: Optional[str] = None,
     existing_summary: Optional[str] = None,
+    references: Optional[List[Dict[str, str]]] = None,
 ) -> str:
     """Generate an overall report summary across all figures.
 
@@ -128,7 +142,11 @@ def generate_summary(
     store: each item must have ``data_summary`` and may have ``description``.
     ``existing_summary`` works the same way as ``existing_description`` —
     prose to preserve, plus optional ``/prompt:`` instruction lines.
+    ``references`` is the same per-call list of fetched reference docs
+    used by ``generate_description``.
     """
+    from dashboards.report_agent.references import format_for_prompt
+
     language_name = _language_name(language)
     blocks: List[str] = []
     for idx, fig in enumerate(figures, start=1):
@@ -141,6 +159,9 @@ def generate_summary(
         f"# Output language\nWrite the response in {language_name}.",
         "# Figures\n" + "\n\n".join(blocks),
     ]
+    refs_block = format_for_prompt(references or [])
+    if refs_block:
+        parts.append(f"# Reference materials\n{refs_block}")
     prior_prose, prompts = _split_prompts(existing_summary)
     if prior_prose:
         parts.append(f"# Prior draft (refine, preserving any user edits)\n{prior_prose}")

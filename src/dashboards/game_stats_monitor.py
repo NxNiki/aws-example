@@ -978,6 +978,9 @@ class GameStatsDashboard:
             [
                 dcc.Store(id="report-figures", data=[]),
                 dcc.Store(id="report-summary", data=""),
+                # Each entry: {"id": uuid_hex, "url": str}. URLs are fetched
+                # lazily at generate / export time via report_agent.references.
+                dcc.Store(id="report-references", data=[]),
                 # Top bar: Confluence URL + language + export button
                 html.Div(
                     [
@@ -1040,6 +1043,48 @@ class GameStatsDashboard:
                         "alignItems": "center",
                         "marginBottom": "16px",
                     },
+                ),
+                # References panel — user-curated context the agent reads
+                # at generate-time and lists in the exported doc footer.
+                html.Div(
+                    [
+                        html.Div(
+                            [
+                                html.H4(
+                                    "References",
+                                    style={**Styles.PANEL_HEADER, "display": "inline-block"},
+                                ),
+                                html.Button(
+                                    "Add reference",
+                                    id="report-add-reference-btn",
+                                    n_clicks=0,
+                                    style={
+                                        "marginLeft": "12px",
+                                        "padding": "4px 10px",
+                                        "cursor": "pointer",
+                                        "backgroundColor": "#377EB8",
+                                        "color": "white",
+                                        "border": "none",
+                                        "borderRadius": "4px",
+                                        "fontSize": "12px",
+                                    },
+                                ),
+                                html.Span(
+                                    "Confluence URLs are fetched (title + body) and given to "
+                                    "the LLM as 'Reference materials'. External URLs are still "
+                                    "listed in the exported References section.",
+                                    style={
+                                        "marginLeft": "12px",
+                                        "fontSize": "11px",
+                                        "color": "#888",
+                                    },
+                                ),
+                            ],
+                            style={"display": "flex", "alignItems": "center"},
+                        ),
+                        html.Div(id="report-references-container", style={"marginTop": "8px"}),
+                    ],
+                    style=Styles.SECTION,
                 ),
                 # Summary panel
                 html.Div(
@@ -6100,6 +6145,7 @@ class GameStatsDashboard:
             State({"type": "report-figure-desc-text", "fig_id": ALL}, "value"),
             State("report-figures", "data"),
             State("report-language", "value"),
+            State("report-references", "data"),
             prevent_initial_call=True,
         )
         def generate_description_callback(
@@ -6109,6 +6155,7 @@ class GameStatsDashboard:
             textarea_values: List[Optional[str]],
             current_figures: Optional[List[Dict[str, Any]]],
             language: Optional[str],
+            references: Optional[List[Dict[str, str]]],
         ) -> Any:
             n = len(button_ids)
             triggered = callback_context.triggered_id
@@ -6143,15 +6190,25 @@ class GameStatsDashboard:
 
             try:
                 from dashboards.report_agent.description import generate_description
+                from dashboards.report_agent.references import load_references
             except ImportError as exc:
                 statuses[btn_idx] = html.Span(f"Missing dep: {exc}", style={"color": "#c00"})
                 return no_update, statuses
+
+            ref_urls = [(e or {}).get("url") or "" for e in (references or [])]
+            ref_urls = [u for u in ref_urls if u.strip()]
+            try:
+                fetched_refs = load_references(ref_urls)
+            except Exception:
+                logger.exception("Reference load failed; continuing without refs")
+                fetched_refs = []
 
             try:
                 text = generate_description(
                     data_summary=figures[fig_idx].get("data_summary") or {},
                     language=language or "en",
                     existing_description=latest_description,
+                    references=fetched_refs,
                 )
             except Exception as exc:
                 logger.exception("Generate description failed for fig_id=%s", target_fig_id)
@@ -6198,6 +6255,7 @@ class GameStatsDashboard:
             # Live summary textarea value too, for the same unblurred-edits
             # reason as generate_description_callback.
             State("report-summary-display", "value"),
+            State("report-references", "data"),
             prevent_initial_call=True,
         )
         def generate_summary_callback(
@@ -6205,6 +6263,7 @@ class GameStatsDashboard:
             figures: Optional[List[Dict[str, Any]]],
             language: Optional[str],
             current_summary_text: Optional[str],
+            references: Optional[List[Dict[str, str]]],
         ) -> Any:
             if not (n_clicks or 0):
                 return no_update, no_update
@@ -6213,13 +6272,22 @@ class GameStatsDashboard:
                 return no_update, html.Span("Add figures first.", style={"color": "#c00"})
             try:
                 from dashboards.report_agent.description import generate_summary
+                from dashboards.report_agent.references import load_references
             except ImportError as exc:
                 return no_update, html.Span(f"Missing dep: {exc}", style={"color": "#c00"})
+            ref_urls = [(e or {}).get("url") or "" for e in (references or [])]
+            ref_urls = [u for u in ref_urls if u.strip()]
+            try:
+                fetched_refs = load_references(ref_urls)
+            except Exception:
+                logger.exception("Reference load failed; continuing without refs")
+                fetched_refs = []
             try:
                 text = generate_summary(
                     figures=figures,
                     language=language or "en",
                     existing_summary=current_summary_text or None,
+                    references=fetched_refs,
                 )
             except Exception as exc:
                 logger.exception("Generate summary failed")
@@ -6289,12 +6357,140 @@ class GameStatsDashboard:
                 return no_update
             return cleaned
 
+        # References tab — Add / Remove / Persist URL / Render rows.
+        @self.app.callback(
+            Output("report-references", "data", allow_duplicate=True),
+            Input("report-add-reference-btn", "n_clicks"),
+            State("report-references", "data"),
+            prevent_initial_call=True,
+        )
+        def add_reference(n_clicks: int, current: Optional[List[Dict[str, str]]]) -> Any:
+            if not (n_clicks or 0):
+                return no_update
+            entries = list(current or [])
+            entries.append({"id": uuid.uuid4().hex, "url": ""})
+            return entries
+
+        @self.app.callback(
+            Output("report-references", "data", allow_duplicate=True),
+            Input({"type": "report-ref-remove", "ref_id": ALL}, "n_clicks"),
+            State({"type": "report-ref-remove", "ref_id": ALL}, "id"),
+            State("report-references", "data"),
+            prevent_initial_call=True,
+        )
+        def remove_reference(
+            click_counts: List[Optional[int]],
+            button_ids: List[Dict[str, str]],
+            current: Optional[List[Dict[str, str]]],
+        ) -> Any:
+            triggered = callback_context.triggered_id
+            if not isinstance(triggered, dict) or triggered.get("type") != "report-ref-remove":
+                return no_update
+            target_id = triggered.get("ref_id")
+            try:
+                btn_idx = next(i for i, bid in enumerate(button_ids) if bid.get("ref_id") == target_id)
+            except StopIteration:
+                return no_update
+            if not (click_counts[btn_idx] or 0):
+                return no_update
+            return [r for r in (current or []) if r.get("id") != target_id]
+
+        @self.app.callback(
+            Output("report-references", "data", allow_duplicate=True),
+            Input({"type": "report-ref-url", "ref_id": ALL}, "n_blur"),
+            State({"type": "report-ref-url", "ref_id": ALL}, "id"),
+            State({"type": "report-ref-url", "ref_id": ALL}, "value"),
+            State("report-references", "data"),
+            prevent_initial_call=True,
+        )
+        def persist_reference_url(
+            blurs: List[Optional[int]],
+            ids: List[Dict[str, str]],
+            values: List[Optional[str]],
+            current: Optional[List[Dict[str, str]]],
+        ) -> Any:
+            triggered = callback_context.triggered_id
+            if not isinstance(triggered, dict) or triggered.get("type") != "report-ref-url":
+                return no_update
+            target_id = triggered.get("ref_id")
+            try:
+                idx = next(i for i, tid in enumerate(ids) if tid.get("ref_id") == target_id)
+            except StopIteration:
+                return no_update
+            new_url = (values[idx] or "").strip()
+            entries = list(current or [])
+            try:
+                e_idx = next(i for i, e in enumerate(entries) if e.get("id") == target_id)
+            except StopIteration:
+                return no_update
+            if (entries[e_idx].get("url") or "").strip() == new_url:
+                return no_update
+            updated = dict(entries[e_idx])
+            updated["url"] = new_url
+            entries[e_idx] = updated
+            return entries
+
+        @self.app.callback(
+            Output("report-references-container", "children"),
+            Input("report-references", "data"),
+        )
+        def render_reference_rows(entries: Optional[List[Dict[str, str]]]) -> Any:
+            entries = entries or []
+            if not entries:
+                return html.Div(
+                    "No references yet — click 'Add reference' to attach a Confluence or external URL.",
+                    style={"color": "#888", "fontStyle": "italic", "padding": "8px 4px"},
+                )
+            rows: List[Component] = []
+            for entry in entries:
+                ref_id = entry.get("id", "")
+                url = entry.get("url", "") or ""
+                rows.append(
+                    html.Div(
+                        [
+                            dcc.Input(
+                                id={"type": "report-ref-url", "ref_id": ref_id},
+                                type="url",
+                                value=url,
+                                placeholder="https://yourcompany.atlassian.net/wiki/...",
+                                debounce=True,
+                                style={
+                                    "flex": "1",
+                                    "marginRight": "8px",
+                                    "padding": "5px 8px",
+                                    "border": "1px solid #ccc",
+                                    "borderRadius": "4px",
+                                    "fontSize": "12px",
+                                    "boxSizing": "border-box",
+                                },
+                            ),
+                            html.Button(
+                                "Remove",
+                                id={"type": "report-ref-remove", "ref_id": ref_id},
+                                n_clicks=0,
+                                style={
+                                    "padding": "4px 10px",
+                                    "cursor": "pointer",
+                                    "backgroundColor": "#E41A1C",
+                                    "color": "white",
+                                    "border": "none",
+                                    "borderRadius": "4px",
+                                    "fontSize": "12px",
+                                },
+                            ),
+                        ],
+                        style={"display": "flex", "alignItems": "center", "marginBottom": "6px"},
+                    )
+                )
+            return rows
+
         @self.app.callback(
             Output("report-export-status", "children"),
             Input("report-export-btn", "n_clicks"),
             State("report-doc-link", "value"),
             State("report-figures", "data"),
             State("report-summary", "data"),
+            State("report-references", "data"),
             prevent_initial_call=True,
         )
         def export_report_callback(
@@ -6302,6 +6498,7 @@ class GameStatsDashboard:
             doc_url: Optional[str],
             figures: Optional[List[Dict[str, Any]]],
             summary: Optional[str],
+            references: Optional[List[Dict[str, str]]],
         ) -> Any:
             if not (n_clicks or 0):
                 return no_update
@@ -6312,15 +6509,31 @@ class GameStatsDashboard:
                 return html.Span("No figures to export.", style={"color": "#c00"})
             try:
                 from dashboards.report_agent.exporter import export_report
+                from dashboards.report_agent.references import load_references
             except ImportError as exc:
                 return html.Span(f"Missing dep: {exc}", style={"color": "#c00"})
+            ref_urls = [(e or {}).get("url") or "" for e in (references or [])]
+            ref_urls = [u for u in ref_urls if u.strip()]
             try:
-                result = export_report(page_url=doc_url, summary=summary or "", figures=figures)
+                fetched_refs = load_references(ref_urls)
+            except Exception as exc:
+                logger.exception("Reference load failed")
+                fetched_refs = []
+            try:
+                result = export_report(
+                    page_url=doc_url,
+                    summary=summary or "",
+                    figures=figures,
+                    references=fetched_refs,
+                )
             except Exception as exc:
                 logger.exception("Export report failed")
                 return html.Span(f"Failed: {exc}", style={"color": "#c00"})
+            ref_count = result.references_listed
+            ref_suffix = f", {ref_count} reference(s)" if ref_count else ""
             return html.Span(
-                f"Exported {result.figures_uploaded} figure(s) to page {result.page_id} (v{result.page_version}).",
+                f"Exported {result.figures_uploaded} figure(s){ref_suffix} to page {result.page_id} "
+                f"(v{result.page_version}).",
                 style={"color": "#2a7a2a"},
             )
 

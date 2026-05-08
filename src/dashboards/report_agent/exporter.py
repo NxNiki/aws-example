@@ -45,6 +45,7 @@ class ExportResult:
     page_id: str
     figures_uploaded: int
     page_version: Optional[int]
+    references_listed: int = 0
 
 
 def _escape_html(text: str) -> str:
@@ -73,13 +74,39 @@ def _figure_block_html(*, index: int, filename: str, description: str) -> str:
     )
 
 
-def _build_report_section(summary: str, figure_blocks: List[str]) -> str:
-    """Assemble the full bracketed region: heading + summary + per-figure blocks."""
+def _build_references_block(references: List[Dict[str, str]]) -> str:
+    """``<h2>References</h2>`` followed by a bulleted list of titled links.
+
+    Empty list → empty string (caller skips the section). External URLs
+    that didn't fetch are still listed so the reader can follow up.
+    """
+    if not references:
+        return ""
+    items: List[str] = []
+    for ref in references:
+        url = (ref.get("url") or "").strip()
+        if not url:
+            continue
+        title = (ref.get("title") or url).strip()
+        items.append(f'<li><a href="{_escape_html(url)}">{_escape_html(title)}</a></li>')
+    if not items:
+        return ""
+    return "<h2>References</h2><ul>" + "".join(items) + "</ul>"
+
+
+def _build_report_section(
+    summary: str,
+    figure_blocks: List[str],
+    references_block: str = "",
+) -> str:
+    """Assemble the full bracketed region: heading + summary + per-figure blocks + references."""
     parts: List[str] = [f"<h1>{REPORT_HEADING_TEXT}</h1>"]
     if summary and summary.strip():
         parts.append("<h2>Summary</h2>")
         parts.append(_wrap_paragraphs(summary))
     parts.extend(figure_blocks)
+    if references_block:
+        parts.append(references_block)
     return "".join(parts)
 
 
@@ -107,6 +134,7 @@ def export_report(
     page_url: str,
     summary: str,
     figures: List[Dict[str, Any]],
+    references: Optional[List[Dict[str, str]]] = None,
 ) -> ExportResult:
     """Render figures, attach to the page, and write the report region.
 
@@ -115,6 +143,10 @@ def export_report(
       - ``fig_dict``: full Plotly figure dict (data + layout)
       - ``description``: prose to render below the image
       - ``export_width`` / ``export_height``: PNG dimensions
+
+    ``references`` items are the output of
+    ``report_agent.references.load_references``: ``{url, title, text?}``.
+    They render as a trailing ``<h2>References</h2>`` block; deduped by URL.
     """
     page_id = confluence_client.extract_page_id_from_url(page_url)
     if not page_id:
@@ -141,7 +173,8 @@ def export_report(
             )
         )
 
-    report_html = _build_report_section(summary or "", figure_blocks)
+    references_block = _build_references_block(references or [])
+    report_html = _build_report_section(summary or "", figure_blocks, references_block)
     new_storage = _splice_report_into_storage(page["storage"], report_html)
 
     result = confluence_client.update_page_storage(
@@ -155,4 +188,5 @@ def export_report(
         page_id=page_id,
         figures_uploaded=len(figure_blocks),
         page_version=int(new_version) if new_version is not None else None,
+        references_listed=len([r for r in (references or []) if r.get("url")]),
     )
