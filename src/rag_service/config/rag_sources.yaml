@@ -19,25 +19,47 @@
 #
 # Replace the placeholders below with your real Confluence content. Page IDs
 # are the numbers that appear in the URL after `/pages/`.
+
+# ---------------------------------------------------------------------------
+# sources:
+# - name: data_team_handbook
+  #   space_key: DATA
+  #   page_ids: []
+  #   include_children: false
+  #   exclude_page_ids: []
+
+  # - name: dashboard_runbooks
+  #   page_urls:
+  #     - https://yourcompany.atlassian.net/wiki/spaces/DATA/pages/123456789/Dashboard+Runbook
+  #     - https://yourcompany.atlassian.net/wiki/spaces/DATA/pages/123456790/Metric+Definitions
+  #   include_children: true
+
+  # - name: etl_design_docs
+  #   space_key: ENG
+  #   page_ids:
+  #     - "987654321"
+  #   include_children: true
+  #   exclude_page_ids:
+  #     - "111111111"   # Archived: old ETL design v1
 # ---------------------------------------------------------------------------
 
 sources:
-  - name: data_team_handbook
-    space_key: DATA
-    page_ids: []
-    include_children: false
-    exclude_page_ids: []
-
-  - name: dashboard_runbooks
+  - name: data_slot_games
     page_urls:
-      - https://yourcompany.atlassian.net/wiki/spaces/DATA/pages/123456789/Dashboard+Runbook
-      - https://yourcompany.atlassian.net/wiki/spaces/DATA/pages/123456790/Metric+Definitions
+      - https://bituslabs.atlassian.net/wiki/spaces/hub/folder/122421319?atlOrigin=eyJpIjoiNGZjNzY4MmZlNTAzNDRhZmE4NDkyZWU4MGY4MTYyODIiLCJwIjoiYyJ9
     include_children: true
 
-  - name: etl_design_docs
-    space_key: ENG
-    page_ids:
-      - "987654321"
+  - name: data_fish_hunter
+    page_urls:
+      - https://bituslabs.atlassian.net/wiki/spaces/hub/folder/122421321?atlOrigin=eyJpIjoiYWZlODE3ODU0MDM5NDk4YmI2M2E5MDg2ODI3OGFlYmUiLCJwIjoiYyJ9
     include_children: true
-    exclude_page_ids:
-      - "111111111"   # Archived: old ETL design v1
+
+  - name: model_slot_games
+    page_urls:
+      - https://bituslabs.atlassian.net/wiki/spaces/hub/folder/91619342?atlOrigin=eyJpIjoiMTQ2ZTZkY2MxZDhjNGQ5NTg4YTcyNTgzMTNjNTFlMGEiLCJwIjoiYyJ9
+    include_children: true
+
+  - name: model_fish_hunter
+    page_urls:
+      - []
+    include_children: true

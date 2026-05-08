@@ -31,6 +31,7 @@ _page_cache: Dict[str, str] = {}
 
 _PAGE_ID_RE = re.compile(r"/pages/(\d+)")
 _TINYURL_RE = re.compile(r"/wiki/x/([A-Za-z0-9_\-]+)")
+_FOLDER_ID_RE = re.compile(r"/folder/(\d+)")
 
 
 def _decode_tinyurl_token(token: str) -> Optional[str]:
@@ -138,6 +139,30 @@ def extract_page_ids_from_urls(urls: Iterable[str]) -> List[str]:
     return out
 
 
+def extract_folder_id_from_url(url: str) -> Optional[str]:
+    """Pull a numeric folder ID out of a Confluence ``/folder/<id>`` URL."""
+    if not url:
+        return None
+    match = _FOLDER_ID_RE.search(url)
+    return match.group(1) if match else None
+
+
+def extract_folder_ids_from_urls(urls: Iterable[str]) -> List[str]:
+    """Resolve an iterable of Confluence URLs to deduplicated folder IDs.
+
+    URLs that aren't ``/folder/<id>`` shaped (e.g. plain page URLs) are
+    silently skipped.
+    """
+    out: List[str] = []
+    seen: set = set()
+    for url in urls or []:
+        folder_id = extract_folder_id_from_url(url)
+        if folder_id and folder_id not in seen:
+            seen.add(folder_id)
+            out.append(folder_id)
+    return out
+
+
 def _strip_html(html: str) -> str:
     """Convert Confluence storage-format HTML to readable plain text."""
     text = re.sub(r"<br\s*/?>", "\n", html)
@@ -178,6 +203,94 @@ def _get_client():
         )
 
     return Confluence(url=url, username=email, password=token, cloud=True)
+
+
+def _v2_session():
+    """Return ``(requests.Session, base_url)`` for Confluence Cloud REST v2 calls.
+
+    The v1 client wrapped by ``atlassian-python-api`` doesn't expose folder
+    endpoints, so v2 is reached directly via authenticated HTTP.
+    """
+    try:
+        import requests
+    except ImportError as exc:
+        raise ImportError("The 'requests' package is required for Confluence v2 API calls.") from exc
+
+    from dashboards.chat_agent import _get_secret
+
+    url = _get_secret("CONFLUENCE_URL")
+    email = _get_secret("CONFLUENCE_EMAIL")
+    token = _get_secret("CONFLUENCE_TOKEN")
+    if not all([url, email, token]):
+        missing = [
+            k for k, v in {"CONFLUENCE_URL": url, "CONFLUENCE_EMAIL": email, "CONFLUENCE_TOKEN": token}.items() if not v
+        ]
+        raise ValueError(f"Confluence credentials missing: {', '.join(missing)}.")
+
+    session = requests.Session()
+    session.auth = (str(email), str(token))
+    session.headers.update({"Accept": "application/json"})
+    base = str(url).rstrip("/") + "/wiki/api/v2"
+    return session, base
+
+
+def list_pages_in_folder(folder_id: str, *, recurse_subfolders: bool = True) -> List[str]:
+    """Return page IDs that live (transitively) under a Confluence folder.
+
+    Uses the Cloud REST v2 ``folders/{id}/direct-children`` endpoint and
+    walks any nested subfolders when ``recurse_subfolders`` is true. Other
+    content types (whiteboards, blog posts, databases) are ignored.
+    """
+    import urllib.parse
+
+    session, base = _v2_session()
+    seen_folders: set = set()
+    seen_pages: set = set()
+    page_ids: List[str] = []
+    stack: List[str] = [str(folder_id)]
+
+    while stack:
+        fid = stack.pop()
+        if fid in seen_folders:
+            continue
+        seen_folders.add(fid)
+
+        cursor: Optional[str] = None
+        while True:
+            params: Dict[str, Any] = {"limit": 100}
+            if cursor:
+                params["cursor"] = cursor
+            try:
+                resp = session.get(f"{base}/folders/{fid}/direct-children", params=params, timeout=15)
+                resp.raise_for_status()
+            except Exception as exc:
+                logger.warning("Failed to list children of folder %s: %s", fid, exc)
+                break
+
+            data = resp.json()
+            if not isinstance(data, dict):
+                break
+            for child in data.get("results") or []:
+                child_id = str(child.get("id") or "")
+                child_type = child.get("type")
+                if not child_id:
+                    continue
+                if child_type == "page":
+                    if child_id not in seen_pages:
+                        seen_pages.add(child_id)
+                        page_ids.append(child_id)
+                elif child_type == "folder" and recurse_subfolders:
+                    stack.append(child_id)
+
+            next_link = (data.get("_links") or {}).get("next")
+            if not next_link:
+                break
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(next_link).query)
+            cursor = (qs.get("cursor") or [None])[0]
+            if not cursor:
+                break
+
+    return page_ids
 
 
 def search_pages(query: str, space_key: Optional[str] = None, max_results: int = 5) -> List[Dict[str, Any]]:

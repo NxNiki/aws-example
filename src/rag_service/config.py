@@ -21,7 +21,7 @@ from typing import List, Optional
 
 import yaml
 
-from dashboards.confluence_client import extract_page_ids_from_urls
+from dashboards.confluence_client import extract_folder_ids_from_urls, extract_page_ids_from_urls
 
 _THIS_DIR = Path(__file__).resolve().parent
 _DEFAULT_SOURCES_PATH = _THIS_DIR / "config" / "rag_sources.yaml"
@@ -35,6 +35,8 @@ class ConfluenceSource:
     space_key: Optional[str] = None
     page_ids: List[str] = field(default_factory=list)
     page_urls: List[str] = field(default_factory=list)
+    folder_ids: List[str] = field(default_factory=list)
+    folder_urls: List[str] = field(default_factory=list)
     include_children: bool = False
     labels: List[str] = field(default_factory=list)
     exclude_page_ids: List[str] = field(default_factory=list)
@@ -79,15 +81,28 @@ def load_sources(path: Optional[Path] = None) -> List[ConfluenceSource]:
     sources_raw = raw.get("sources") or []
     sources: List[ConfluenceSource] = []
     for entry in sources_raw:
-        # Allow URLs to be specified instead of bare page_ids; extract the id.
+        # Auto-classify URLs into pages vs folders so users don't need to know
+        # the difference — they can just paste anything from the Confluence
+        # browser into ``page_urls``. ``folder_urls`` is also accepted for
+        # explicitness.
+        page_urls_raw = list(entry.get("page_urls") or [])
+        folder_urls_raw = list(entry.get("folder_urls") or [])
+
         page_ids = list(entry.get("page_ids") or [])
-        page_ids.extend(extract_page_ids_from_urls(entry.get("page_urls") or []))
+        page_ids.extend(extract_page_ids_from_urls(page_urls_raw))
+
+        folder_ids = [str(f) for f in (entry.get("folder_ids") or [])]
+        folder_ids.extend(extract_folder_ids_from_urls(page_urls_raw))
+        folder_ids.extend(extract_folder_ids_from_urls(folder_urls_raw))
+
         sources.append(
             ConfluenceSource(
                 name=entry["name"],
                 space_key=entry.get("space_key"),
                 page_ids=sorted(set(page_ids)),
-                page_urls=list(entry.get("page_urls") or []),
+                page_urls=page_urls_raw,
+                folder_ids=sorted(set(folder_ids)),
+                folder_urls=folder_urls_raw,
                 include_children=bool(entry.get("include_children", False)),
                 labels=list(entry.get("labels") or []),
                 exclude_page_ids=[str(p) for p in (entry.get("exclude_page_ids") or [])],

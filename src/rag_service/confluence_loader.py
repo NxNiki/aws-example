@@ -80,13 +80,25 @@ def _to_record(page: Dict, source_name: str) -> PageRecord:
 
 def iter_source_pages(source: ConfluenceSource) -> Iterable[PageRecord]:
     """Yield page records for a single source entry, deduplicated by page_id."""
+    from dashboards.confluence_client import list_pages_in_folder
+
     confluence = _client()
     seen: set = set(source.exclude_page_ids)
 
     pages: List[Dict] = []
 
-    # Explicit page IDs (and URL-derived IDs)
-    for pid in source.page_ids:
+    # Expand folder IDs (Confluence Cloud "folder" content type) to page IDs
+    # via the v2 API, then treat them like explicit page_ids.
+    folder_page_ids: List[str] = []
+    for folder_id in source.folder_ids:
+        try:
+            folder_page_ids.extend(list_pages_in_folder(folder_id, recurse_subfolders=True))
+        except Exception as exc:
+            logger.warning("Failed to expand folder %s: %s", folder_id, exc)
+    all_page_ids = list(dict.fromkeys(list(source.page_ids) + folder_page_ids))
+
+    # Explicit page IDs (and URL-derived IDs, and folder-expanded IDs)
+    for pid in all_page_ids:
         if pid in seen:
             continue
         try:
@@ -96,7 +108,7 @@ def iter_source_pages(source: ConfluenceSource) -> Iterable[PageRecord]:
 
     # Children of any explicit page IDs (one level deep — recurse if needed)
     if source.include_children:
-        to_walk = list(source.page_ids)
+        to_walk = list(all_page_ids)
         while to_walk:
             parent = to_walk.pop()
             try:
