@@ -972,6 +972,35 @@ class GameStatsDashboard:
             ]
         )
 
+    @staticmethod
+    def _reference_status_pill(entry: Dict[str, Any]) -> html.Span:
+        """Inline ✓/✗/↗ indicator next to a reference URL row.
+
+        Status values come from ``persist_reference_url``:
+          * ``ok`` — Confluence fetch returned a body; show green ✓ + page title.
+          * ``error`` — fetch failed (bad URL, no permission); show red ✗ + msg.
+          * ``external`` — non-Confluence URL; show grey ↗ "external link".
+          * absent — empty / not yet checked; show nothing.
+        """
+        status = entry.get("status")
+        title = entry.get("title") or entry.get("url") or ""
+        err = entry.get("error") or ""
+        base = {
+            "marginLeft": "8px",
+            "fontSize": "11px",
+            "maxWidth": "260px",
+            "overflow": "hidden",
+            "textOverflow": "ellipsis",
+            "whiteSpace": "nowrap",
+        }
+        if status == "ok":
+            return html.Span(f"✓ {title}", title=title, style={**base, "color": "#2a7a2a"})
+        if status == "error":
+            return html.Span(f"✗ {err}", title=err, style={**base, "color": "#c00"})
+        if status == "external":
+            return html.Span("↗ external link", style={**base, "color": "#888"})
+        return html.Span("", style=base)
+
     def _layout_report_tab(self) -> html.Div:
         """Report tab: collects figures, generates descriptions/summary, exports to Confluence."""
         return html.Div(
@@ -6409,6 +6438,12 @@ class GameStatsDashboard:
             values: List[Optional[str]],
             current: Optional[List[Dict[str, str]]],
         ) -> Any:
+            """Persist URL on blur AND eagerly fetch so the row shows ✓ title or ✗ error.
+
+            The fetch runs synchronously through ``load_references`` (which
+            uses its module-level cache, so re-blurring the same URL is a
+            no-op). Generate / Export later read the same cache.
+            """
             triggered = callback_context.triggered_id
             if not isinstance(triggered, dict) or triggered.get("type") != "report-ref-url":
                 return no_update
@@ -6425,8 +6460,33 @@ class GameStatsDashboard:
                 return no_update
             if (entries[e_idx].get("url") or "").strip() == new_url:
                 return no_update
+
             updated = dict(entries[e_idx])
             updated["url"] = new_url
+            for stale_field in ("title", "error", "status"):
+                updated.pop(stale_field, None)
+
+            if new_url:
+                try:
+                    from dashboards.report_agent.references import load_references
+
+                    fetched = load_references([new_url])
+                except Exception as exc:
+                    logger.exception("Reference fetch failed for %s", new_url)
+                    updated["status"] = "error"
+                    updated["error"] = str(exc)
+                else:
+                    if fetched:
+                        ref = fetched[0]
+                        updated["title"] = ref.get("title") or new_url
+                        if ref.get("error"):
+                            updated["status"] = "error"
+                            updated["error"] = ref["error"]
+                        elif ref.get("text"):
+                            updated["status"] = "ok"
+                        else:
+                            updated["status"] = "external"
+
             entries[e_idx] = updated
             return entries
 
@@ -6464,11 +6524,13 @@ class GameStatsDashboard:
                                     "boxSizing": "border-box",
                                 },
                             ),
+                            self._reference_status_pill(entry),
                             html.Button(
                                 "Remove",
                                 id={"type": "report-ref-remove", "ref_id": ref_id},
                                 n_clicks=0,
                                 style={
+                                    "marginLeft": "8px",
                                     "padding": "4px 10px",
                                     "cursor": "pointer",
                                     "backgroundColor": "#E41A1C",
