@@ -1069,15 +1069,26 @@ class GameStatsDashboard:
                             ],
                             style={"display": "flex", "alignItems": "center"},
                         ),
-                        html.Div(
+                        dcc.Textarea(
                             id="report-summary-display",
+                            placeholder=(
+                                "(No summary yet — click 'Generate summary'. You can edit "
+                                "the result, or add lines like  /prompt: tighten the second "
+                                "paragraph  to instruct the next regenerate.)"
+                            ),
                             style={
+                                "width": "100%",
                                 "marginTop": "10px",
+                                "padding": "8px",
                                 "fontSize": "13px",
                                 "lineHeight": "1.6",
                                 "color": "#333",
-                                "whiteSpace": "pre-wrap",
-                                "minHeight": "40px",
+                                "border": "1px solid #ddd",
+                                "borderRadius": "4px",
+                                "minHeight": "120px",
+                                "fontFamily": "inherit",
+                                "resize": "vertical",
+                                "boxSizing": "border-box",
                             },
                         ),
                     ],
@@ -6048,15 +6059,27 @@ class GameStatsDashboard:
                                 config={"displayModeBar": False},
                                 style={"marginTop": "10px"},
                             ),
-                            html.Div(
-                                description,
+                            dcc.Textarea(
+                                id={"type": "report-figure-desc-text", "fig_id": fig_id},
+                                value=description,
+                                placeholder=(
+                                    "Click 'Generate description' to draft. You can edit "
+                                    "the response, or add lines like  /prompt: focus on "
+                                    "the spike on Apr 15  to instruct the next regenerate."
+                                ),
                                 style={
+                                    "width": "100%",
                                     "marginTop": "10px",
+                                    "padding": "8px",
                                     "fontSize": "13px",
                                     "lineHeight": "1.6",
                                     "color": "#333",
-                                    "whiteSpace": "pre-wrap",
-                                    "minHeight": "40px",
+                                    "border": "1px solid #ddd",
+                                    "borderRadius": "4px",
+                                    "minHeight": "120px",
+                                    "fontFamily": "inherit",
+                                    "resize": "vertical",
+                                    "boxSizing": "border-box",
                                 },
                             ),
                         ],
@@ -6070,6 +6093,11 @@ class GameStatsDashboard:
             Output({"type": "report-desc-status", "fig_id": ALL}, "children"),
             Input({"type": "report-generate-desc-btn", "fig_id": ALL}, "n_clicks"),
             State({"type": "report-generate-desc-btn", "fig_id": ALL}, "id"),
+            # Textarea state, so unblurred edits and any /prompt: lines the
+            # user just typed reach the LLM even if the blur-time persist
+            # callback runs out of order with this one.
+            State({"type": "report-figure-desc-text", "fig_id": ALL}, "id"),
+            State({"type": "report-figure-desc-text", "fig_id": ALL}, "value"),
             State("report-figures", "data"),
             State("report-language", "value"),
             prevent_initial_call=True,
@@ -6077,6 +6105,8 @@ class GameStatsDashboard:
         def generate_description_callback(
             click_counts: List[Optional[int]],
             button_ids: List[Dict[str, str]],
+            textarea_ids: List[Dict[str, str]],
+            textarea_values: List[Optional[str]],
             current_figures: Optional[List[Dict[str, Any]]],
             language: Optional[str],
         ) -> Any:
@@ -6102,6 +6132,15 @@ class GameStatsDashboard:
                 statuses[btn_idx] = html.Span("Figure not found.", style={"color": "#c00"})
                 return no_update, statuses
 
+            # Prefer the live textarea value over the Store (the user may
+            # have typed without blurring).
+            latest_description: Optional[str] = figures[fig_idx].get("description") or None
+            try:
+                tx_idx = next(i for i, tid in enumerate(textarea_ids) if tid.get("fig_id") == target_fig_id)
+                latest_description = textarea_values[tx_idx] or latest_description
+            except StopIteration:
+                pass
+
             try:
                 from dashboards.report_agent.description import generate_description
             except ImportError as exc:
@@ -6112,7 +6151,7 @@ class GameStatsDashboard:
                 text = generate_description(
                     data_summary=figures[fig_idx].get("data_summary") or {},
                     language=language or "en",
-                    existing_description=figures[fig_idx].get("description") or None,
+                    existing_description=latest_description,
                 )
             except Exception as exc:
                 logger.exception("Generate description failed for fig_id=%s", target_fig_id)
@@ -6156,12 +6195,16 @@ class GameStatsDashboard:
             Input("report-generate-summary-btn", "n_clicks"),
             State("report-figures", "data"),
             State("report-language", "value"),
+            # Live summary textarea value too, for the same unblurred-edits
+            # reason as generate_description_callback.
+            State("report-summary-display", "value"),
             prevent_initial_call=True,
         )
         def generate_summary_callback(
             n_clicks: int,
             figures: Optional[List[Dict[str, Any]]],
             language: Optional[str],
+            current_summary_text: Optional[str],
         ) -> Any:
             if not (n_clicks or 0):
                 return no_update, no_update
@@ -6173,21 +6216,78 @@ class GameStatsDashboard:
             except ImportError as exc:
                 return no_update, html.Span(f"Missing dep: {exc}", style={"color": "#c00"})
             try:
-                text = generate_summary(figures=figures, language=language or "en")
+                text = generate_summary(
+                    figures=figures,
+                    language=language or "en",
+                    existing_summary=current_summary_text or None,
+                )
             except Exception as exc:
                 logger.exception("Generate summary failed")
                 return no_update, html.Span(f"Failed: {exc}", style={"color": "#c00"})
             return text, html.Span("Updated.", style={"color": "#2a7a2a"})
 
         @self.app.callback(
-            Output("report-summary-display", "children"),
+            Output("report-summary-display", "value"),
             Input("report-summary", "data"),
         )
         def render_summary(text: Optional[str]) -> Any:
-            return text or html.Span(
-                "(No summary yet — click 'Generate summary'.)",
-                style={"color": "#888", "fontStyle": "italic"},
-            )
+            return text or ""
+
+        # Persist textarea edits (description + summary) into the underlying
+        # Stores on blur. Without this, render_report_panels would resync the
+        # textareas from the Store on the next re-render and the user's
+        # edits would be lost. Equality short-circuit avoids spurious writes.
+        @self.app.callback(
+            Output("report-figures", "data", allow_duplicate=True),
+            Input({"type": "report-figure-desc-text", "fig_id": ALL}, "n_blur"),
+            State({"type": "report-figure-desc-text", "fig_id": ALL}, "id"),
+            State({"type": "report-figure-desc-text", "fig_id": ALL}, "value"),
+            State("report-figures", "data"),
+            prevent_initial_call=True,
+        )
+        def persist_description_edits(
+            blurs: List[Optional[int]],
+            ids: List[Dict[str, str]],
+            values: List[Optional[str]],
+            current_figures: Optional[List[Dict[str, Any]]],
+        ) -> Any:
+            triggered = callback_context.triggered_id
+            if not isinstance(triggered, dict) or triggered.get("type") != "report-figure-desc-text":
+                return no_update
+            target_fig_id = triggered.get("fig_id")
+            try:
+                tx_idx = next(i for i, tid in enumerate(ids) if tid.get("fig_id") == target_fig_id)
+            except StopIteration:
+                return no_update
+            new_value = values[tx_idx] or ""
+            figures = list(current_figures or [])
+            try:
+                f_idx = next(i for i, f in enumerate(figures) if f.get("id") == target_fig_id)
+            except StopIteration:
+                return no_update
+            if (figures[f_idx].get("description") or "") == new_value:
+                return no_update
+            updated = dict(figures[f_idx])
+            updated["description"] = new_value
+            figures[f_idx] = updated
+            return figures
+
+        @self.app.callback(
+            Output("report-summary", "data", allow_duplicate=True),
+            Input("report-summary-display", "n_blur"),
+            State("report-summary-display", "value"),
+            State("report-summary", "data"),
+            prevent_initial_call=True,
+        )
+        def persist_summary_edits(
+            n_blur: Optional[int],
+            new_value: Optional[str],
+            current_value: Optional[str],
+        ) -> Any:
+            cleaned = new_value or ""
+            if cleaned == (current_value or ""):
+                return no_update
+            return cleaned
 
         @self.app.callback(
             Output("report-export-status", "children"),
