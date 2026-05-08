@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Report tab in the dashboard.** New tab that turns rendered figures
+  into a Confluence-published analytical report. Workflow: click
+  *Add to report* under any chart to stage it; open the Report tab to
+  generate per-figure descriptions and an overall summary via the LLM;
+  click *Export to Doc* to push the snapshot to a Confluence page.
+  Subsequent exports replace the `Dashboard Report` region in place.
+  See `docs/report_agent.md` for the full contract.
+  - **Editable descriptions and summary.** Both render as textareas;
+    edits persist on blur and are sent to the LLM as a "prior draft to
+    refine, preserving any user edits" on the next regenerate.
+  - **`/prompt:` instruction syntax.** Lines starting with `/prompt:`
+    anywhere in a textarea are extracted as explicit instructions to
+    the next LLM call (routed into a separate prompt section) and
+    stripped from the regenerated output. Lets users iterate without
+    rewriting prose by hand.
+  - **Per-figure data summary.** The LLM receives a JSON summary of
+    each figure's traces, axes, error bars, and heatmap z-matrix —
+    not the rendered PNG — so descriptions cite exact values instead
+    of guessing. Plotly 6.x binary array dicts (`{dtype, bdata,
+    shape}`) are decoded back to Python lists transparently.
+  - **User-curated references.** *Add reference* button attaches
+    Confluence URLs (or external URLs) that ground the LLM prompts.
+    Each row eagerly fetches on URL blur and shows a green ✓ + page
+    title, red ✗ + error, or grey ↗ for external links. Reference
+    bodies are inlined in subsequent Generate prompts; every URL is
+    listed under `<h2>References</h2>` at the bottom of the exported
+    Confluence doc.
+  - **Languages.** Description and summary generation accept English,
+    Simplified Chinese, or Traditional Chinese via a top-bar dropdown.
+- **`Add to doc` button under each chart in the existing tabs**, which
+  stages the figure into the Report tab in one click.
+
+### Changed
+
+- `chat_agent._build_llm` defaults `CHAT_PROVIDER` to `auto`, picking
+  OpenAI if `OPENAI_API_KEY` is set or Gemini if
+  `GOOGLE_API_KEY` / `GEMINI_API_KEY` is. Previously the default
+  `openai` raised `ValueError` whenever only Gemini credentials were
+  available. Backwards-compatible: explicit `CHAT_PROVIDER=openai`
+  keeps prior behavior.
+- `confluence_client.extract_page_id_from_url` now resolves both the
+  legacy 6-char base64 tinyurl format (`/wiki/x/Z4AfOw`) offline and
+  newer Cloud short codes via authenticated HTTP redirect, with a
+  graceful fallback when neither path matches.
+- Bumped `kaleido` constraint to `>=1.0` (was `^0.2.1`) so Apple
+  Silicon / Python 3.12 environments can install a wheel —
+  `0.2.1.post1` had no `arm64` build.
+- `_viz_derived_metric_options` is now schema-aware (see Fixed below);
+  this changes the **Stats Deepdive** dropdown contents per-game.
+
 ### Fixed
 
 - **Dashboard config switch leaked UI state between games.** Switching the YAML
