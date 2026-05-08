@@ -24,8 +24,7 @@ from pydantic import BaseModel, Field
 from rag_service.config import RagSettings, load_settings
 from rag_service.embeddings import resolved_embedding_dim
 from rag_service.indexer import build_index
-from rag_service.opensearch_client import ensure_index, get_client
-from rag_service.retriever import Passage, retrieve
+from rag_service.retriever import Passage, reload_faiss_store, retrieve
 
 logger = logging.getLogger(__name__)
 
@@ -94,23 +93,63 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def _lifespan(application: FastAPI) -> AsyncIterator[None]:
-        try:
-            client = get_client(settings)
-            ensure_index(client, settings.index_name, resolved_embedding_dim(settings))
-            logger.info("RAG service ready: index=%s", settings.index_name)
-        except Exception:
-            logger.warning("Index ensure failed at startup", exc_info=True)
+        if settings.backend == "faiss":
+            try:
+                from rag_service.faiss_store import FaissStore
+
+                store = FaissStore.load(settings.index_uri)
+                logger.info(
+                    "RAG service ready: backend=faiss uri=%s vectors=%d",
+                    settings.index_uri,
+                    store.ntotal,
+                )
+            except Exception:
+                logger.warning(
+                    "FaissStore load failed at startup (uri=%s) — run build_rag_index.py",
+                    settings.index_uri,
+                    exc_info=True,
+                )
+        else:
+            try:
+                from rag_service.opensearch_client import ensure_index, get_client
+
+                client = get_client(settings)
+                ensure_index(client, settings.index_name, resolved_embedding_dim(settings))
+                logger.info("RAG service ready: backend=opensearch index=%s", settings.index_name)
+            except Exception:
+                logger.warning("Index ensure failed at startup", exc_info=True)
         yield
 
     app = FastAPI(
         title="Confluence RAG Service",
-        description="Hybrid (BM25 + vector) retrieval over Confluence documentation",
+        description="Vector retrieval over Confluence documentation (Faiss / OpenSearch)",
         version="0.1.0",
         lifespan=_lifespan,
     )
 
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
+        if settings.backend == "faiss":
+            from rag_service.faiss_store import FaissStore
+
+            try:
+                store = FaissStore.load(settings.index_uri)
+                return HealthResponse(
+                    status="ok",
+                    index=settings.index_uri,
+                    index_exists=True,
+                    doc_count=store.ntotal,
+                )
+            except Exception:
+                return HealthResponse(
+                    status="ok",
+                    index=settings.index_uri,
+                    index_exists=False,
+                    doc_count=None,
+                )
+
+        from rag_service.opensearch_client import get_client
+
         client = get_client(settings)
         exists = client.indices.exists(settings.index_name)
         count: Optional[int] = None
@@ -168,6 +207,10 @@ def create_app() -> FastAPI:
         except Exception as exc:
             logger.exception("Reindex failed")
             raise HTTPException(status_code=500, detail=str(exc))
+        if settings.backend == "faiss":
+            # Drop the cached store so the next /retrieve picks up the
+            # freshly written artifact instead of the old in-memory copy.
+            reload_faiss_store(settings)
         elapsed = int((time.monotonic() - t0) * 1000)
         return ReindexResponse(status="ok", **counts, elapsed_ms=elapsed)
 

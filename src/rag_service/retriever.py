@@ -1,20 +1,22 @@
 """
-Query-time retrieval.
+Query-time retrieval, dispatched by ``RagSettings.backend``.
 
-Performs BM25 + vector kNN searches against the same index and merges with
-Reciprocal Rank Fusion (RRF). RRF works on every OpenSearch flavor including
-Serverless, where the ``hybrid`` query plugin may not be available.
+- ``faiss`` (Phase 1): pure dense similarity over the in-memory Faiss
+  store loaded once from local disk or S3 and cached at module level.
+- ``opensearch`` (Phase 2): BM25 + vector kNN merged with Reciprocal
+  Rank Fusion (RRF). RRF works on every OpenSearch flavor including
+  Serverless, where the ``hybrid`` query plugin may not be available.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 from rag_service.config import RagSettings, load_settings
 from rag_service.embeddings import Embedder
-from rag_service.opensearch_client import get_client
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,34 @@ class Passage:
 
 
 _RRF_K = 60  # standard RRF dampening constant
+
+# Module-level Faiss store cache. Loaded lazily on first retrieve and
+# refreshed via reload_faiss_store() after a rebuild.
+_faiss_store: Optional[object] = None
+_faiss_store_uri: Optional[str] = None
+_faiss_lock = threading.Lock()
+
+
+def reload_faiss_store(settings: Optional[RagSettings] = None) -> None:
+    """Force a reload of the cached Faiss store (call after a rebuild)."""
+    global _faiss_store, _faiss_store_uri
+    cfg = settings or load_settings()
+    with _faiss_lock:
+        _faiss_store = None
+        _faiss_store_uri = cfg.index_uri
+
+
+def _get_faiss_store(uri: str):
+    global _faiss_store, _faiss_store_uri
+    if _faiss_store is not None and _faiss_store_uri == uri:
+        return _faiss_store
+    with _faiss_lock:
+        if _faiss_store is None or _faiss_store_uri != uri:
+            from rag_service.faiss_store import FaissStore
+
+            _faiss_store = FaissStore.load(uri)
+            _faiss_store_uri = uri
+    return _faiss_store
 
 
 def _bm25_search(client, index: str, query: str, k: int) -> List[Dict]:
@@ -75,6 +105,34 @@ def retrieve(
     settings: Optional[RagSettings] = None,
 ) -> List[Passage]:
     cfg = settings or load_settings()
+    if cfg.backend == "faiss":
+        return _retrieve_faiss(cfg, query, top_k=top_k)
+    return _retrieve_opensearch(cfg, query, top_k=top_k, candidate_k=candidate_k)
+
+
+def _retrieve_faiss(cfg: RagSettings, query: str, *, top_k: int) -> List[Passage]:
+    embedder = Embedder(cfg)
+    qvec = embedder.embed_query(query)
+    store = _get_faiss_store(cfg.index_uri)
+    hits = store.search(qvec, top_k=top_k)  # type: ignore[union-attr]
+    return [
+        Passage(
+            page_id=c.page_id,
+            title=c.title,
+            text=c.text,
+            url=c.url,
+            space_key=c.space_key,
+            source_name=c.source_name,
+            chunk_index=c.chunk_index,
+            score=score,
+        )
+        for c, score in hits
+    ]
+
+
+def _retrieve_opensearch(cfg: RagSettings, query: str, *, top_k: int, candidate_k: int) -> List[Passage]:
+    from rag_service.opensearch_client import get_client
+
     client = get_client(cfg)
     embedder = Embedder(cfg)
 

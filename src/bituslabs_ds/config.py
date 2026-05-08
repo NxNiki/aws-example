@@ -41,6 +41,7 @@ IMAGE_URI_ETL = "338568447110.dkr.ecr.us-west-2.amazonaws.com/bituslabs-ds-etl:l
 DEFAULT_MAX_JOBS = 4
 DEFAULT_ATHENA_OUTPUT = f"s3://{S3_BUCKET}/athena-results"
 DEFAULT_ETL_OUTPUT = f"s3://{S3_BUCKET}/etl-results"
+DEFAULT_RAG_INDEX_URI = f"s3://{S3_BUCKET}/rag/confluence_rag"
 
 # -------------------------------------------------------------------------
 # ETL defaults (shared across Redshift / Athena jobs)

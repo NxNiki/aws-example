@@ -21,6 +21,7 @@ from typing import List, Optional
 
 import yaml
 
+from bituslabs_ds.config import DEFAULT_RAG_INDEX_URI
 from dashboards.confluence_client import extract_folder_ids_from_urls, extract_page_ids_from_urls
 
 _THIS_DIR = Path(__file__).resolve().parent
@@ -46,6 +47,10 @@ class ConfluenceSource:
 class RagSettings:
     """All runtime settings, derived from env vars + the sources YAML."""
 
+    # Backend selection
+    backend: str  # 'faiss' (default) | 'opensearch'
+    index_uri: str  # local dir or s3:// prefix for the Faiss artifact
+
     # Indexing
     index_name: str
     embedding_provider: str  # 'openai' | 'gemini' | 'auto'
@@ -55,7 +60,7 @@ class RagSettings:
     chunk_chars: int
     chunk_overlap: int
 
-    # OpenSearch connection
+    # OpenSearch connection (Phase 2 only — ignored when backend='faiss')
     opensearch_host: str
     opensearch_port: int
     opensearch_use_ssl: bool
@@ -122,11 +127,23 @@ def load_settings(sources_path: Optional[Path] = None) -> RagSettings:
     if explicit_dim_raw is not None:
         embedding_dim = int(explicit_dim_raw)
     elif provider == "gemini":
-        embedding_dim = 768  # text-embedding-004
+        embedding_dim = 768  # gemini-embedding-001 truncated via Matryoshka
+    elif provider == "openai":
+        embedding_dim = 1536  # text-embedding-3-small
     else:
-        embedding_dim = 1536  # text-embedding-3-small (also fine when provider=auto)
+        # Auto: mirror Embedder._resolve_provider's preference (OpenAI first,
+        # else Gemini) so the default dim matches the provider that will
+        # actually be used.
+        if os.environ.get("OPENAI_API_KEY"):
+            embedding_dim = 1536
+        elif os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY"):
+            embedding_dim = 768
+        else:
+            embedding_dim = 1536
 
     return RagSettings(
+        backend=(os.environ.get("RAG_BACKEND") or "faiss").lower(),
+        index_uri=DEFAULT_RAG_INDEX_URI,
         index_name=os.environ.get("OPENSEARCH_INDEX", "confluence_rag"),
         embedding_provider=provider,
         embedding_model=os.environ.get("RAG_EMBEDDING_MODEL"),

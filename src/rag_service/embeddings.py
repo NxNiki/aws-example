@@ -12,7 +12,7 @@ Two providers are supported and selected via env vars:
 
 Defaults per provider:
     openai → text-embedding-3-small (1536 dim)
-    gemini → text-embedding-004     (768 dim)
+    gemini → gemini-embedding-001   (768 dim via Matryoshka truncation)
 
 Auto-selection: if no provider is set, prefer OpenAI (broader ecosystem
 support) and fall back to Gemini when only ``GOOGLE_API_KEY`` /
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 _PROVIDER_DEFAULTS = {
     "openai": {"model": "text-embedding-3-small", "dim": 1536},
-    "gemini": {"model": "text-embedding-004", "dim": 768},
+    "gemini": {"model": "gemini-embedding-001", "dim": 768},
 }
 
 
@@ -98,7 +98,7 @@ class _GeminiEmbedder:
     consistency with the OpenAI path.
     """
 
-    def __init__(self, model: str) -> None:
+    def __init__(self, model: str, dim: int) -> None:
         from dashboards.chat_agent import _get_secret
 
         try:
@@ -115,6 +115,9 @@ class _GeminiEmbedder:
         genai.configure(api_key=api_key)
         # Gemini model names should be prefixed with "models/" if the caller forgot.
         self._model = model if model.startswith("models/") else f"models/{model}"
+        # gemini-embedding-001 returns 3072 dims by default; use Matryoshka
+        # truncation to match our pinned dimension.
+        self._dim = dim
         self._genai = genai
 
     def embed(self, texts: List[str], batch_size: int = 64) -> List[List[float]]:
@@ -126,6 +129,7 @@ class _GeminiEmbedder:
                 model=self._model,
                 content=text,
                 task_type="retrieval_document",
+                output_dimensionality=self._dim,
             )
             out.append(resp["embedding"])
         return out
@@ -135,6 +139,7 @@ class _GeminiEmbedder:
             model=self._model,
             content=text,
             task_type="retrieval_query",
+            output_dimensionality=self._dim,
         )
         return resp["embedding"]
 
@@ -179,7 +184,7 @@ class Embedder:
         if provider == "openai":
             self._impl = _OpenAIEmbedder(model)
         else:
-            self._impl = _GeminiEmbedder(model)
+            self._impl = _GeminiEmbedder(model, dim=self.settings.embedding_dim)
 
         self._provider = provider
         logger.info("Embedder ready: provider=%s model=%s dim=%d", provider, model, self.settings.embedding_dim)

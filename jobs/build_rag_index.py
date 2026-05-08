@@ -1,18 +1,16 @@
 """
-CLI entry point — build (or rebuild) the Confluence RAG OpenSearch index
-from src/rag_service/config/rag_sources.yaml.
+CLI entry point — build (or rebuild) the Confluence RAG index from
+src/rag_service/config/rag_sources.yaml.
 
-Local dev (Docker OpenSearch):
-    docker compose -f infra/docker-compose.opensearch.yml up -d
-    poetry run python jobs/build_rag_index.py
+Default backend is Faiss; the artifact is written to
+``bituslabs_ds.config.DEFAULT_RAG_INDEX_URI``. Set ``RAG_BACKEND=opensearch``
+to write to an OpenSearch cluster instead.
 
-Production (ECS / scheduled task):
-    OPENSEARCH_HOST=...aoss.amazonaws.com OPENSEARCH_AUTH=aws \\
     poetry run python jobs/build_rag_index.py
 
 Flags:
-    --drop          Delete the index before rebuilding (use when the schema
-                    has changed; otherwise re-runs upsert in place).
+    --drop          OpenSearch only: delete the index before rebuilding.
+                    Faiss rebuilds always replace the artifact in place.
     --sources PATH  Override RAG_SOURCES_PATH for one-off ad-hoc runs.
 """
 
@@ -43,12 +41,19 @@ def main() -> int:
     from rag_service.indexer import build_index, delete_index
 
     settings = load_settings()
-    logger.info(
-        "Indexing → host=%s index=%s sources=%d",
-        settings.opensearch_host,
-        settings.index_name,
-        len(settings.sources),
-    )
+    if settings.backend == "faiss":
+        logger.info(
+            "Indexing → backend=faiss uri=%s sources=%d",
+            settings.index_uri,
+            len(settings.sources),
+        )
+    else:
+        logger.info(
+            "Indexing → backend=opensearch host=%s index=%s sources=%d",
+            settings.opensearch_host,
+            settings.index_name,
+            len(settings.sources),
+        )
 
     if args.drop:
         delete_index(settings)

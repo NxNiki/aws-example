@@ -159,12 +159,16 @@ Two layers, kept separate so content edits don't churn infra:
 | Env var | Purpose |
 | --- | --- |
 | `RAG_BACKEND` | `faiss` (default) \| `opensearch` |
-| `RAG_INDEX_S3_URI` | S3 prefix for the Faiss artifact |
 | `RAG_CHUNK_CHARS` / `RAG_CHUNK_OVERLAP` | Override YAML build params |
 | `RAG_EMBEDDING_PROVIDER` | `auto` \| `openai` \| `gemini` |
 | `OPENAI_API_KEY` / `GOOGLE_API_KEY` | Provider auth |
 | `CONFLUENCE_URL` / `CONFLUENCE_EMAIL` / `CONFLUENCE_TOKEN` | Source auth |
 | `OPENSEARCH_*` | Phase 2 only |
+
+The Faiss artifact location is fixed in code at
+`bituslabs_ds.config.DEFAULT_RAG_INDEX_URI` — it isn't a secret and isn't
+expected to vary between environments, so it lives in config.py rather
+than `.env`.
 
 
 ## Open questions

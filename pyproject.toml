@@ -84,6 +84,7 @@ optional = true
 [tool.poetry.group.rag_service.dependencies]
 fastapi = ">=0.115.0"
 uvicorn = {extras = ["standard"], version = ">=0.30.0"}
+faiss-cpu = ">=1.8.0"
 opensearch-py = ">=2.6.0"
 # Embedding providers — at least one API key (OPENAI_API_KEY or
 # GOOGLE_API_KEY/GEMINI_API_KEY) must be set; both SDKs are installed so
