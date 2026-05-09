@@ -12,11 +12,13 @@ Prerequisites:
 
 Usage:
   python infra/deploy_dashboard_ecs.py
-  python infra/deploy_dashboard_ecs.py --region us-west-2 --cluster-name ai-team-dashboard-cluster
+  python infra/deploy_dashboard_ecs.py --region us-west-2
+
+The cluster name is fixed in ``infra/ecs_helpers.py`` so all three deploy
+scripts (dashboard, ai-agent, rag-service) target the same ECS cluster.
 
 Options:
   --region              AWS region (default: us-west-2)
-  --cluster-name        ECS cluster name (default: ai-team-dashboard-cluster)
   --service-name        ECS service name (default: game-stats-dashboard)
   --vpc-id              VPC ID (default: use default VPC)
   --subnet-ids          Comma-separated subnet IDs (default: public subnets of default VPC)
@@ -47,6 +49,16 @@ except ImportError:
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 
+from ecs_helpers import (  # noqa: E402  (sibling module on sys.path[0])
+    ECS_CLUSTER_NAME,
+    ECS_TASK_EXECUTION_ROLE_NAME,
+    ensure_ecr_repo,
+    ensure_ecs_task_execution_role,
+    get_account_id,
+    get_default_vpc_id,
+    get_default_vpc_subnets,
+)
+
 # Defaults from config
 DEFAULT_REGION = "us-west-2"
 S3_BUCKET = "bituslabs-team-ai"
@@ -59,52 +71,6 @@ TG_HEALTHY_THRESHOLD = 2  # 2 consecutive checks = ~60s to become healthy
 TG_DEREGISTRATION_DELAY = 30  # seconds to drain old task before removing from ALB
 SCALE_IN_IDLE_MINUTES = 180  # Scale to 0 after 3 hours with no user requests
 
-
-def get_account_id(sts_client) -> str:
-    return sts_client.get_caller_identity()["Account"]
-
-
-def get_default_vpc_subnets(ec2_client, vpc_id: str) -> list[str]:
-    """Return public subnets of the VPC (those with route to IGW)."""
-    subnets = ec2_client.describe_subnets(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])["Subnets"]
-    if not subnets:
-        raise RuntimeError(f"No subnets found in VPC {vpc_id}")
-
-    # Use all subnets; for default VPC they're typically public
-    # Prefer subnets with MapPublicIpOnLaunch
-    public = [s for s in subnets if s.get("MapPublicIpOnLaunch")]
-    return [s["SubnetId"] for s in (public if public else subnets)]
-
-
-def get_default_vpc_id(ec2_client) -> str:
-    vpcs = ec2_client.describe_vpcs(Filters=[{"Name": "isDefault", "Values": ["true"]}])["Vpcs"]
-    if not vpcs:
-        raise RuntimeError("No default VPC found. Set --vpc-id and --subnet-ids explicitly.")
-    return vpcs[0]["VpcId"]
-
-
-def ensure_ecr_repo(ecr_client, repo_name: str, region: str) -> None:
-    try:
-        ecr_client.create_repository(repositoryName=repo_name)
-        print(f"  Created ECR repository: {repo_name}")
-    except ClientError as e:
-        if e.response["Error"]["Code"] != "RepositoryAlreadyExistsException":
-            raise
-        print(f"  ECR repository exists: {repo_name}")
-
-
-ECS_TASK_EXECUTION_ROLE_NAME = "ecsTaskExecutionRole"
-ECS_TASK_EXECUTION_TRUST_POLICY = {
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Principal": {"Service": "ecs-tasks.amazonaws.com"},
-            "Action": "sts:AssumeRole",
-        }
-    ],
-}
-ECS_TASK_EXECUTION_MANAGED_POLICY = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 
 S3_DASHBOARD_BUCKET = "bituslabs-team-ai"
 S3_DASHBOARD_POLICY_NAME = "ecsTaskExecutionRole-s3-dashboard-rw"
@@ -129,76 +95,9 @@ S3_DASHBOARD_POLICY = {
 }
 
 
-def ensure_ecs_task_execution_role(iam_client, account_id: str) -> str:
-    """Create or fix ecsTaskExecutionRole with correct trust policy for ECS."""
-    role_name = ECS_TASK_EXECUTION_ROLE_NAME
-    role_arn = f"arn:aws:iam::{account_id}:role/{role_name}"
-    expected_trust = json.dumps(ECS_TASK_EXECUTION_TRUST_POLICY, sort_keys=True)
-
-    try:
-        resp = iam_client.get_role(RoleName=role_name)
-        current_doc = resp["Role"]["AssumeRolePolicyDocument"]
-        # Normalize for comparison (IAM returns policies as dicts)
-        current_str = json.dumps(current_doc, sort_keys=True) if isinstance(current_doc, dict) else current_doc
-        if current_str != expected_trust:
-            print(f"  Updating trust policy for {role_name} (was not ECS-tasks)...")
-            iam_client.update_assume_role_policy(
-                RoleName=role_name,
-                PolicyDocument=json.dumps(ECS_TASK_EXECUTION_TRUST_POLICY),
-            )
-            print(f"  Updated trust policy.")
-        else:
-            print(f"  Role exists with correct trust: {role_arn}")
-
-        # Ensure execution policy is attached
-        attached = iam_client.list_attached_role_policies(RoleName=role_name)["AttachedPolicies"]
-        if not any(p["PolicyArn"] == ECS_TASK_EXECUTION_MANAGED_POLICY for p in attached):
-            print(f"  Attaching {ECS_TASK_EXECUTION_MANAGED_POLICY}...")
-            iam_client.attach_role_policy(
-                RoleName=role_name,
-                PolicyArn=ECS_TASK_EXECUTION_MANAGED_POLICY,
-            )
-            print(f"  Attached.")
-
-        # S3 read for dashboard data
-        iam_client.put_role_policy(
-            RoleName=role_name,
-            PolicyName=S3_DASHBOARD_POLICY_NAME,
-            PolicyDocument=json.dumps(S3_DASHBOARD_POLICY),
-        )
-        print(f"  Attached S3 read policy for s3://{S3_DASHBOARD_BUCKET}/")
-        return role_arn
-    except ClientError as e:
-        if e.response["Error"]["Code"] != "NoSuchEntity":
-            raise
-
-    print(f"  Creating role {role_name}...")
-    iam_client.create_role(
-        RoleName=role_name,
-        AssumeRolePolicyDocument=json.dumps(ECS_TASK_EXECUTION_TRUST_POLICY),
-        Description="Allows ECS tasks to pull images and write logs",
-    )
-    iam_client.attach_role_policy(
-        RoleName=role_name,
-        PolicyArn=ECS_TASK_EXECUTION_MANAGED_POLICY,
-    )
-    iam_client.put_role_policy(
-        RoleName=role_name,
-        PolicyName=S3_DASHBOARD_POLICY_NAME,
-        PolicyDocument=json.dumps(S3_DASHBOARD_POLICY),
-    )
-    print(f"  Created role, attached execution + S3 read policy")
-    return role_arn
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Deploy Game Stats Dashboard to ECS Fargate with public ALB")
     parser.add_argument("--region", default=DEFAULT_REGION, help="AWS region")
-    parser.add_argument(
-        "--cluster-name",
-        default="ai-team-dashboard-cluster",
-        help="ECS cluster name (created if it doesn't exist, unless --use-existing-cluster)",
-    )
     parser.add_argument("--service-name", default="game-stats-dashboard", help="ECS service name")
     parser.add_argument("--vpc-id", default=None, help="VPC ID (default: default VPC)")
     parser.add_argument(
@@ -244,7 +143,7 @@ def main() -> None:
     parser.add_argument(
         "--create-cluster",
         action="store_true",
-        help="Create new cluster (default: use existing ai-team-dashboard-cluster)",
+        help=f"Create new cluster (default: use existing {ECS_CLUSTER_NAME})",
     )
     parser.add_argument(
         "--wait",
@@ -300,32 +199,31 @@ def main() -> None:
     # 1. Ensure ECR repo
     print("\n1. ECR repository...")
     ecr = session.client("ecr")
-    ensure_ecr_repo(ecr, IMAGE_NAME, region)
+    ensure_ecr_repo(ecr, IMAGE_NAME)
 
     # 2. ECS cluster
     print("\n2. ECS cluster...")
     if args.use_existing_cluster:
-        resp = ecs.describe_clusters(clusters=[args.cluster_name])
+        resp = ecs.describe_clusters(clusters=[ECS_CLUSTER_NAME])
         if resp.get("failures"):
             raise RuntimeError(
-                f"Cluster {args.cluster_name} not found. "
-                "Create it in the ECS console or use --cluster-name to specify an existing one."
+                f"Cluster {ECS_CLUSTER_NAME} not found. "
+                "Pass --create-cluster to create it, or update infra/ecs_helpers.py."
             )
         if not resp.get("clusters") or resp["clusters"][0].get("status") != "ACTIVE":
-            raise RuntimeError(f"Cluster {args.cluster_name} not found or not ACTIVE.")
-        print(f"  Using existing cluster: {args.cluster_name}")
+            raise RuntimeError(f"Cluster {ECS_CLUSTER_NAME} not found or not ACTIVE.")
+        print(f"  Using existing cluster: {ECS_CLUSTER_NAME}")
     else:
         try:
-            ecs.create_cluster(clusterName=args.cluster_name)
-            print(f"  Created cluster: {args.cluster_name}")
+            ecs.create_cluster(clusterName=ECS_CLUSTER_NAME)
+            print(f"  Created cluster: {ECS_CLUSTER_NAME}")
         except ClientError as e:
             if e.response["Error"]["Code"] == "ClusterAlreadyExistsException":
-                print(f"  Cluster exists: {args.cluster_name}")
+                print(f"  Cluster exists: {ECS_CLUSTER_NAME}")
             elif e.response["Error"]["Code"] == "AccessDeniedException":
                 print("\n  ! AccessDenied: You lack ecs:CreateCluster permission.")
-                print(f"  Use --use-existing-cluster if {args.cluster_name} (or another cluster) already exists, e.g.:")
-                print(f"     python infra/deploy_dashboard_ecs.py --use-existing-cluster --cluster-name etl-cluster")
-                print("  Or ask your admin to add ECS permissions (see script docstring for IAM policy).")
+                print(f"  Drop --create-cluster if {ECS_CLUSTER_NAME} already exists,")
+                print("  or ask your admin to add ECS permissions (see script docstring for IAM policy).")
                 sys.exit(1)
             else:
                 raise
@@ -522,9 +420,16 @@ def main() -> None:
             raise
         print("  Listener exists")
 
-    # 7b. Ensure ECS task execution role exists with correct trust policy
-    print("\n7b. ECS task execution role...")
+    # 7b. Ensure ECS task execution role exists with correct trust policy,
+    # then layer on dashboard-specific S3 read/write + CloudWatch metric access.
+    print("\n7b. ECS task execution role + inline policies...")
     exec_role_arn = ensure_ecs_task_execution_role(iam, account_id)
+    iam.put_role_policy(
+        RoleName=ECS_TASK_EXECUTION_ROLE_NAME,
+        PolicyName=S3_DASHBOARD_POLICY_NAME,
+        PolicyDocument=json.dumps(S3_DASHBOARD_POLICY),
+    )
+    print(f"  Attached S3 RW + CloudWatch policy: s3://{S3_DASHBOARD_BUCKET}/")
 
     # 8. Task definition
     print("\n8. Task definition...")
@@ -608,7 +513,7 @@ def main() -> None:
     print("\n9. ECS service...")
     try:
         ecs.create_service(
-            cluster=args.cluster_name,
+            cluster=ECS_CLUSTER_NAME,
             serviceName=args.service_name,
             taskDefinition=args.service_name,
             desiredCount=args.desired_count,
@@ -637,12 +542,12 @@ def main() -> None:
         err = e.response.get("Error", {})
         code, msg = err.get("Code", ""), err.get("Message", "")
         if "ClusterNotFoundException" in str(e):
-            raise RuntimeError(f"Cluster {args.cluster_name} not found") from e
+            raise RuntimeError(f"Cluster {ECS_CLUSTER_NAME} not found") from e
         if "ServiceAlreadyExists" in str(e) or (
             code == "InvalidParameterException" and "not idempotent" in (msg or "").lower()
         ):
             ecs.update_service(
-                cluster=args.cluster_name,
+                cluster=ECS_CLUSTER_NAME,
                 service=args.service_name,
                 taskDefinition=args.service_name,
                 desiredCount=args.desired_count,
@@ -659,7 +564,7 @@ def main() -> None:
     # 9b. Application Auto Scaling (scale to 0 when idle)
     if args.scale_to_zero:
         print("\n9b. Application Auto Scaling (scale to 0 when idle)...")
-        resource_id = f"service/{args.cluster_name}/{args.service_name}"
+        resource_id = f"service/{ECS_CLUSTER_NAME}/{args.service_name}"
         # Extract dimension values for ALB RequestCount metric
         tg_dim = tg_arn.split(":")[-1]  # targetgroup/name/id
         alb_dim = alb_arn.split(":")[-1].replace("loadbalancer/", "")  # app/name/id
@@ -765,7 +670,7 @@ def main() -> None:
         try:
             waiter = ecs.get_waiter("services_stable")
             waiter.wait(
-                cluster=args.cluster_name,
+                cluster=ECS_CLUSTER_NAME,
                 services=[args.service_name],
                 WaiterConfig={"Delay": 10, "MaxAttempts": 30},
             )

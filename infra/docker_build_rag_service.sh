@@ -1,31 +1,40 @@
-#!/usr/bin/env bash
-#
-# Build the rag_service Docker image.
-# Tag/push behavior matches the other docker_build_*.sh scripts.
-#
-# Usage:
-#   ./infra/docker_build_rag_service.sh                  # build only
-#   ./infra/docker_build_rag_service.sh push             # build + push to ECR
-set -euo pipefail
+#!/bin/bash
+set -e
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$REPO_ROOT"
+# Build and push the RAG service Docker image to ECR.
+# Run: bash infra/docker_build_rag_service.sh
+# From: project root directory (to ensure build context is correct).
 
-IMAGE_NAME="${RAG_IMAGE_NAME:-rag_service}"
-TAG="${RAG_IMAGE_TAG:-latest}"
+IMAGE_NAME="bituslabs-ds-rag-service"
+TAG="latest"
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+REGION="us-west-2"
+ECR_URL="$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$IMAGE_NAME"
 
-docker build \
-    -f infra/Dockerfile.rag_service \
-    -t "${IMAGE_NAME}:${TAG}" \
-    .
+echo "ECR_URL: $ECR_URL"
 
-if [[ "${1:-}" == "push" ]]; then
-    : "${AWS_ACCOUNT_ID:?AWS_ACCOUNT_ID must be set}"
-    : "${AWS_REGION:?AWS_REGION must be set}"
-    ECR_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${IMAGE_NAME}:${TAG}"
-    aws ecr get-login-password --region "${AWS_REGION}" | \
-        docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-    docker tag "${IMAGE_NAME}:${TAG}" "${ECR_URI}"
-    docker push "${ECR_URI}"
-    echo "Pushed: ${ECR_URI}"
+# 1. Ensure the repository exists in ECR
+if ! aws ecr describe-repositories --repository-names "$IMAGE_NAME" --region "$REGION" > /dev/null 2>&1; then
+    echo "Creating repository $IMAGE_NAME..."
+    aws ecr create-repository --repository-name "$IMAGE_NAME" --region "$REGION"
+else
+    echo "Repository $IMAGE_NAME already exists. Skipping creation."
 fi
+
+# 2. Login to ECR
+aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com"
+
+# 3. Build the Docker image (linux/amd64 for Fargate compatibility on Apple Silicon)
+docker build --platform linux/amd64 -t $IMAGE_NAME -f infra/Dockerfile.rag_service ./
+
+# 4. Tag and push to ECR
+docker tag $IMAGE_NAME "$ECR_URL:$TAG"
+docker push "$ECR_URL:$TAG"
+
+echo "Image pushed to: $ECR_URL:$TAG"
+echo ""
+echo "To run locally: docker run -p 8052:8052 -e GOOGLE_API_KEY $IMAGE_NAME"
+echo ""
+echo "To deploy to ECS:"
+echo "  python infra/deploy_rag_service_ecs.py --build-first"
+echo "  # Or: bash infra/docker_build_rag_service.sh && python infra/deploy_rag_service_ecs.py"

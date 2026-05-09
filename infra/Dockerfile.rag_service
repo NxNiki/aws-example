@@ -44,9 +44,18 @@ COPY src/dashboards/confluence_client.py  ./src/dashboards/confluence_client.py
 COPY src/dashboards/chat_agent.py      ./src/dashboards/chat_agent.py
 COPY src/bituslabs_ds ./src/bituslabs_ds
 
+# Index-rebuild script. Lets the same image be used by the scheduled
+# Fargate task (CMD overridden to run this script) so we don't maintain
+# two images.
+COPY jobs/build_rag_index.py ./jobs/build_rag_index.py
+
 EXPOSE 8052
 
-# --workers 1   so the OpenSearch client cache is shared.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD curl -f http://localhost:8052/health || exit 1
+
+# --workers 1 so the in-process FaissStore cache (loaded from S3 at
+# startup) is shared and not duplicated per worker.
 CMD ["uvicorn", \
      "rag_service.app:app", \
      "--host", "0.0.0.0", \
