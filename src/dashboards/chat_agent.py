@@ -535,33 +535,7 @@ MODEL_CATALOG = {
 }
 
 # Secrets Manager secret name (stores GOOGLE_API_KEY and OPENAI_API_KEY).
-_SECRETS_MANAGER_NAME = "ai-dashboard_ai_agent"
-_SECRETS_MANAGER_REGION = "us-west-2"
-_secrets_cache: Optional[Dict[str, str]] = None
-
-
-def _get_secret(key: str) -> Optional[str]:
-    """Return an API key from env var first, then AWS Secrets Manager."""
-    value = os.environ.get(key)
-    if value:
-        return value
-
-    global _secrets_cache
-    if _secrets_cache is None:
-        try:
-            import json as _json
-
-            import boto3  # type: ignore[import-untyped]
-
-            session = boto3.Session(region_name=_SECRETS_MANAGER_REGION)
-            client = session.client(service_name="secretsmanager")
-            resp = client.get_secret_value(SecretId=_SECRETS_MANAGER_NAME)
-            _secrets_cache = _json.loads(resp["SecretString"])
-        except Exception as exc:
-            logger.warning("Secrets Manager lookup failed: %s", exc)
-            _secrets_cache = {}
-
-    return (_secrets_cache or {}).get(key)
+from dashboards.secrets import get_secret as _get_secret  # noqa: F401  (re-export for callers)
 
 
 def _build_llm(model_key: Optional[str] = None) -> BaseChatModel:
