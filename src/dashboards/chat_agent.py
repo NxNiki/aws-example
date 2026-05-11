@@ -367,10 +367,19 @@ def list_etl_sources() -> str:
 
 @tool
 def search_confluence(query: str, space_key: str = "") -> str:
-    """Search Confluence documentation for pages matching a query.
+    """FALLBACK ONLY. Live keyword search against the Confluence API.
 
-    Use this when the user asks about processes, policies, documentation,
-    or anything not covered by the dashboard metadata tools.
+    DO NOT call this tool first. For any documentation question you must
+    call ``search_confluence_rag`` first. Only call ``search_confluence``
+    when ``search_confluence_rag`` has already been called for the same
+    question and returned one of:
+
+      - "No Confluence passages found for: ..."
+      - "RAG service unavailable (...)"
+
+    Otherwise this tool is the wrong choice — it's slower, hits the live
+    Confluence API per call, and returns keyword hits (not semantic
+    passages) so answers are noisier.
 
     Args:
         query: Search keywords (e.g. "RTP calculation", "user segmentation rules")
@@ -399,10 +408,12 @@ def search_confluence(query: str, space_key: str = "") -> str:
 
 @tool
 def read_confluence_page(page_id: str) -> str:
-    """Read the full content of a Confluence page by its ID.
+    """FALLBACK ONLY. Read the full content of a Confluence page by ID.
 
-    Use this after search_confluence returns page IDs to read the actual content
-    and answer the user's question based on the documentation.
+    DO NOT call this tool unless ``search_confluence`` (the fallback search
+    tool) has already returned a page id for the current question.
+    ``search_confluence_rag`` already returns full passage text, so you
+    almost never need to read the page on top of it.
 
     Args:
         page_id: The Confluence page ID (numeric string from search results)
@@ -419,15 +430,19 @@ def read_confluence_page(page_id: str) -> str:
 
 @tool
 def search_confluence_rag(query: str, top_k: int = 5) -> str:
-    """Semantically search the curated Confluence RAG index.
+    """PRIMARY documentation tool. ALWAYS call this first for any question
+    about processes, policies, internal docs, game design, math tables,
+    RTP, math/strategy/model details, or anything that might be in Confluence.
 
-    Prefer this over `search_confluence` for any documentation question — it
-    returns the most relevant passages (BM25 + vector hybrid) instead of just
-    keyword hits, and is much faster than live Confluence calls.
+    Returns ranked passages (dense vector search over a curated, pre-indexed
+    Confluence corpus). The passages already include the full chunk text and
+    page title, so you typically don't need any follow-up tool call — answer
+    directly from what this returns.
 
-    Falls back automatically with an explanatory message if the RAG service
-    is unreachable; in that case use `search_confluence` followed by
-    `read_confluence_page` as a backup.
+    Only fall back to ``search_confluence`` + ``read_confluence_page`` when
+    THIS tool's return value literally starts with "No Confluence passages
+    found" or "RAG service unavailable". In every other case, ignore those
+    fallback tools entirely.
 
     Args:
         query: A natural-language question or descriptive phrase.
@@ -484,13 +499,25 @@ Understanding the data pipeline:
   (how per-user data is computed) and the Python aggregation (how users are
   filtered and aggregated into the dashboard metric).
 
+Documentation lookup — STRICT ordering (this is not optional):
+- ANY question that might be answered by team documentation, Confluence
+  pages, internal design docs, math-table designs, RTP rules, game-specific
+  configurations, model notes, etc. MUST start with `search_confluence_rag`.
+  There is NO exception. Even if the question seems trivial. Even if you
+  think you already know the answer. Call `search_confluence_rag` first.
+- After `search_confluence_rag` returns, answer from its passages directly.
+  Do NOT then call `search_confluence` or `read_confluence_page`.
+- The ONLY situation where you may call `search_confluence` or
+  `read_confluence_page` is when `search_confluence_rag` returned a string
+  literally beginning with "No Confluence passages found" or "RAG service
+  unavailable". In that one case, treat them as a backup retrieval path.
+- If you find yourself about to call `search_confluence` without having
+  first called `search_confluence_rag` in this conversation turn, STOP
+  and call `search_confluence_rag` instead.
+
 Other guidelines:
 - When asked about user groups (new/old/beginner/AI/Default), use lookup_group.
 - For game-specific questions, use get_game_info.
-- For questions about processes, policies, or documentation, FIRST try
-  search_confluence_rag (the curated RAG index — fast, semantic). If it
-  returns nothing useful or reports the service is unavailable, fall back
-  to search_confluence + read_confluence_page (live Confluence API).
 - Be precise about formulas and SQL definitions.
 - If a column has both a hand-curated description and ETL-derived formula, include both.
 - Explain RTP (Return to Player) as total_payout / total_bet when relevant.

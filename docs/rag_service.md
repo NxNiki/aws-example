@@ -171,6 +171,53 @@ expected to vary between environments, so it lives in config.py rather
 than `.env`.
 
 
+## Smoke-test queries
+
+Use these to confirm the service is wired up after a deploy or index
+rebuild. Each query targets internal-only terminology that a generic
+LLM can't fabricate, so a sensible-looking response definitely came
+from the indexed corpus.
+
+```bash
+# Set this once
+ALB=http://rag-service-alb-1946335648.us-west-2.elb.amazonaws.com
+
+# 1. Health — should report doc_count > 0
+curl -s "$ALB/health" | jq
+
+# 2. Sources — should list data_slot_games, data_fish_hunter, model_slot_games, model_fish_hunter
+curl -s "$ALB/sources" | jq
+
+# 3. Slot-games retrieval — expect SS01 AI 组数学表对比 or 老虎机数学表优化方案
+curl -sX POST "$ALB/retrieve" -H 'Content-Type: application/json' \
+    -d '{"query": "How is RTP calculated for slot games?", "top_k": 3}' | jq
+```
+
+Suggested test questions, grouped by which `source_name` should
+dominate the top hits. The third column shows the kind of evidence
+that proves retrieval is real (vs. the model bluffing from prior
+knowledge).
+
+| # | Query | Expected `source_name` | What to look for in the top passage |
+| - | ----- | ---------------------- | ----------------------------------- |
+| 1 | `"rollerCoaster math table RTP"` | `data_slot_games` | mentions specific RTP percentages for `rollerCoaster` / `carousels` / `risky2` etc. |
+| 2 | `"giftShop free game trigger probability"` | `data_slot_games` | `giftShop` / `波动性` / `free game RTP` numbers |
+| 3 | `"定向奖池分配 RTP 组别"` | `data_fish_hunter` | RTP=105/115/120/125 cohort rules, Round-Robin filling |
+| 4 | `"fish hunter killing intervals streak"` | `data_fish_hunter` | mentions kill-streak thresholds, fish_type categories |
+| 5 | `"BOOST_POOL DYNAMIC_RTP strategy"` | `data_fish_hunter` | fish_hunter strategy names from the ETL `daily_group` |
+| 6 | `"动态规划求解老虎机 RTP"` | `model_slot_games` | DP[r][s1][s2] transition, three-reel combinations |
+
+Quick way to sanity-check that the chat agent (not just the raw
+service) is actually calling `/retrieve`: tail the rag-service log
+while issuing a chat-side question. If the chat reached the RAG, you'll
+see a `POST /retrieve HTTP/1.1 200 OK` entry within a second or two.
+
+```bash
+aws logs tail /ecs/rag-service --since 1m --region us-west-2 --follow \
+  | grep -E 'POST /retrieve'
+```
+
+
 ## Open questions
 
 - **Service restart vs. hot reload.** Whether `app.py` polls S3

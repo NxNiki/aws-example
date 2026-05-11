@@ -71,6 +71,12 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Print planned actions without executing")
     parser.add_argument("--build-first", action="store_true", help="Run docker_build_ai_agent.sh before deploying")
     parser.add_argument("--wait", action="store_true", help="Wait for service to stabilize")
+    parser.add_argument(
+        "--rag-service-url",
+        default=None,
+        help="RAG_SERVICE_URL the agent uses to call /retrieve. "
+        "Auto-detected from the rag-service ALB if not provided.",
+    )
     args = parser.parse_args()
 
     if args.build_first and not args.dry_run:
@@ -311,6 +317,26 @@ def main() -> None:
     env_vars = [
         {"name": "CHAT_PROVIDER", "value": CHAT_PROVIDER},
     ]
+
+    # Resolve the RAG service URL (auto-detect from its ALB if not provided)
+    # so the agent's rag_service.client can call /retrieve.
+    rag_service_url = args.rag_service_url
+    if not rag_service_url:
+        try:
+            rag_albs = elbv2.describe_load_balancers(Names=["rag-service-alb"])["LoadBalancers"]
+            if rag_albs:
+                rag_service_url = f"http://{rag_albs[0]['DNSName']}"
+                print(f"  Auto-detected RAG service ALB: {rag_service_url}")
+        except ClientError:
+            pass
+    if rag_service_url:
+        env_vars.append({"name": "RAG_SERVICE_URL", "value": rag_service_url})
+    else:
+        print(
+            "  Warning: RAG_SERVICE_URL not set. /retrieve will fall back to "
+            "localhost:8052 (which won't exist on Fargate). Deploy rag-service "
+            "first or pass --rag-service-url."
+        )
 
     container_def = {
         "name": "ai-agent",

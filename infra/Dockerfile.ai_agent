@@ -42,8 +42,14 @@ COPY src/bituslabs_ds ./src/bituslabs_ds
 COPY src/dashboards/chat_agent.py         ./src/dashboards/chat_agent.py
 COPY src/dashboards/chat_api.py           ./src/dashboards/chat_api.py
 COPY src/dashboards/metadata_builder.py   ./src/dashboards/metadata_builder.py
-COPY src/dashboards/confluence_client.py       ./src/dashboards/confluence_client.py
+COPY src/dashboards/confluence_client.py  ./src/dashboards/confluence_client.py
+COPY src/dashboards/secrets.py            ./src/dashboards/secrets.py
 COPY src/dashboards/user_stats_aggregates.py  ./src/dashboards/user_stats_aggregates.py
+# Thin HTTP client for the RAG service — only depends on requests, no
+# OpenSearch / Faiss / embeddings. Without these, search_confluence_rag
+# fails with "RAG service client is not installed".
+COPY src/rag_service/__init__.py          ./src/rag_service/__init__.py
+COPY src/rag_service/client.py            ./src/rag_service/client.py
 COPY src/dashboards/column_metadata.yaml       ./src/dashboards/column_metadata.yaml
 COPY src/dashboards/__init__.py           ./src/dashboards/__init__.py
 # Dashboard config YAMLs — the agent reads these to contextualize answers
