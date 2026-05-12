@@ -2,7 +2,7 @@
 Run scheduled ETL/report jobs in a fixed sequence.
 
 Intended usage:
-  poetry run python jobs/run_scheduled_etl_jobs.py [--skip-daily_report] [--overwrite]
+  poetry run python jobs/run_scheduled_etl_jobs.py [--skip-daily_report] [--overwrite] [--lookback-days N]
 
 This orchestrator is code-level job logic and should live under `jobs/`.
 Infrastructure tooling (EventBridge/ECS/Step Functions/Terraform/CDK) should call
@@ -59,6 +59,12 @@ def main() -> int:
         action="store_true",
         help="Pass --overwrite to ETL jobs that support it.",
     )
+    parser.add_argument(
+        "--lookback-days",
+        type=int,
+        default=3,
+        help="Lookback days passed to operation_daily_report (default: 3).",
+    )
     args = parser.parse_args()
 
     # Set args per script directly in this list, and mark whether --overwrite is supported.
@@ -66,7 +72,7 @@ def main() -> int:
         (
             "operation daily report",
             JOBS_DIR / "operation_daily_report" / "run_daily_report.py",
-            ["--lookback-days", "1", "--send-slack"],
+            ["--lookback-days", str(args.lookback_days), "--send-slack"],
             False,
         ),
         (
