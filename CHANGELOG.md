@@ -40,6 +40,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     Simplified Chinese, or Traditional Chinese via a top-bar dropdown.
 - **`Add to doc` button under each chart in the existing tabs**, which
   stages the figure into the Report tab in one click.
+- **RAG service.** New FastAPI microservice (`src/rag_service/`) that
+  indexes Confluence documentation declared in `rag_sources.yaml`,
+  embeds it with Gemini `gemini-embedding-001` (768-dim via Matryoshka
+  truncation), persists a Faiss + JSON metadata pair to S3, and serves
+  a `POST /retrieve` endpoint backed by an in-memory Faiss index. The
+  ai-chat-agent's `search_confluence_rag` tool is now wired to this
+  service; documentation questions are answered from the curated
+  corpus in ~3–10 s instead of via per-turn live Confluence calls.
+  See `docs/rag_service.md` for the full design spec (storage backend,
+  build cadence, env vars, and Phase 2 migration to managed
+  OpenSearch). Includes:
+  - Confluence **folder** URL support via the v2 API's
+    `direct-children` endpoint — paste a `/folder/<id>` URL in
+    `page_urls` and the loader recurses into nested subfolders.
+  - `RAG_BACKEND` env switch so a future migration to OpenSearch
+    requires only a config flip + one reindex.
+  - Daily-rebuild Fargate task using the same image with CMD
+    overridden to `python jobs/build_rag_index.py`.
+  - Smoke-test queries (`docs/rag_service.md`) and two pytest
+    modules (`tests/integration/test_rag_service.py` and
+    `test_chat_agent_rag.py`) — the latter inspects message
+    `tool_calls` so the "agent isn't actually calling the RAG" class
+    of bug fails the suite before it ships.
+- **Deploy script for the RAG service**
+  (`infra/deploy_rag_service_ecs.py`) — public ALB on the shared
+  ECS cluster, IAM scoped to S3 read of the Faiss artifact plus
+  Secrets Manager read of `GOOGLE_API_KEY`.
+- **`infra/ecs_helpers.py`** consolidates the helpers that were
+  duplicated across the three deploy scripts (account ID lookup,
+  default VPC/subnet discovery, ECR repo idempotent create, ECS task
+  execution role ensure) plus `ECS_CLUSTER_NAME`. Removes ≈210 lines
+  of duplication.
+- **`dashboards/secrets.py`** — small env → AWS Secrets Manager
+  lookup module extracted from `chat_agent.py`. Lets the slim
+  rag-service Docker image use `_get_secret` without dragging
+  `langchain_core` into its dependency closure.
 
 ### Changed
 
@@ -58,8 +94,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `0.2.1.post1` had no `arm64` build.
 - `_viz_derived_metric_options` is now schema-aware (see Fixed below);
   this changes the **Stats Deepdive** dropdown contents per-game.
+- `chat_agent` tool docstrings and `_SYSTEM_PROMPT` rewritten to make
+  `search_confluence_rag` clearly **PRIMARY** and `search_confluence` /
+  `read_confluence_page` clearly **FALLBACK ONLY**. The prompt now
+  forbids calling the live tools unless the RAG tool returned
+  literally "No Confluence passages found" or "RAG service
+  unavailable". Gemini 2.5 Flash was previously prone to picking the
+  live keyword tool first.
+- `infra/deploy_dashboard_ecs.py` drops the `--cluster-name`
+  CLI argument; cluster name comes from `infra/ecs_helpers.py` so
+  all three deploy scripts share one source of truth.
+- `infra/deploy_ai_agent_ecs.py` auto-detects the rag-service ALB at
+  deploy time and injects `RAG_SERVICE_URL` into the task environment
+  (mirrors how the dashboard deploy auto-detects the ai-chat-agent's
+  ALB for `CHAT_API_URL`).
 
 ### Fixed
+
+- **Chat agent silently fell back to live Confluence instead of RAG.**
+  `search_confluence_rag` raised `ImportError` inside the slim
+  ai-agent Docker image because `rag_service/client.py` wasn't copied
+  into it. The tool caught the import and returned its
+  "RAG service client is not installed" string; the LLM read that as
+  "no docs found" and switched to `search_confluence`. Symptom: chat
+  answers cited Confluence pages correctly but took 15–30 s, and the
+  rag-service log showed zero `POST /retrieve` entries. Fix is two
+  extra `COPY` lines in `Dockerfile.ai_agent`
+  (`rag_service/__init__.py` + `client.py` — no Faiss / OpenSearch /
+  embeddings deps pulled in). Verified end-to-end: production chat
+  call now produces a `POST /retrieve` and the answer cites the
+  indexed passage in ≈5–10 s. (The new
+  `tests/integration/test_chat_agent_rag.py` would have caught this
+  before deploy — it inspects message `tool_calls` for the
+  `search_confluence_rag` invocation.)
+
 
 - **Dashboard config switch leaked UI state between games.** Switching the YAML
   config (e.g. ss02 → fish_hunter) used to leave the previous game's metric and
