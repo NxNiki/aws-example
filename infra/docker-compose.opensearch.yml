@@ -1,0 +1,61 @@
+# Local OpenSearch for RAG service development.
+#
+# Start:    docker compose -f infra/docker-compose.opensearch.yml up -d
+# Stop:     docker compose -f infra/docker-compose.opensearch.yml down
+# Reset:    docker compose -f infra/docker-compose.opensearch.yml down -v
+#
+# Once running:
+#   curl -k -u admin:Admin@1234 https://localhost:9200
+#
+# Match these credentials in your .env:
+#   OPENSEARCH_HOST=localhost
+#   OPENSEARCH_PORT=9200
+#   OPENSEARCH_AUTH=basic
+#   OPENSEARCH_USER=admin
+#   OPENSEARCH_PASSWORD=Admin@1234
+#   OPENSEARCH_SSL=true
+#   RAG_SERVICE_PORT=8052
+#   RAG_SERVICE_URL=http://localhost:8052
+
+services:
+  opensearch:
+    image: opensearchproject/opensearch:2.15.0
+    container_name: opensearch-rag-local
+    environment:
+      - cluster.name=rag-local
+      - node.name=rag-local-node
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
+      - "OPENSEARCH_INITIAL_ADMIN_PASSWORD=Admin@1234"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "9200:9200"
+      - "9600:9600"      # performance analyzer
+    volumes:
+      - opensearch-rag-data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fk -u admin:$$OPENSEARCH_INITIAL_ADMIN_PASSWORD https://localhost:9200 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  # Optional UI — handy for inspecting the index during development.
+  dashboards:
+    image: opensearchproject/opensearch-dashboards:2.15.0
+    container_name: opensearch-rag-dashboards
+    depends_on:
+      - opensearch
+    environment:
+      - 'OPENSEARCH_HOSTS=["https://opensearch:9200"]'
+    ports:
+      - "5601:5601"
+
+volumes:
+  opensearch-rag-data:

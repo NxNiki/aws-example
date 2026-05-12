@@ -23,11 +23,144 @@ from __future__ import annotations
 import logging
 import re
 from html import unescape
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 logger = logging.getLogger(__name__)
 
 _page_cache: Dict[str, str] = {}
+
+_PAGE_ID_RE = re.compile(r"/pages/(\d+)")
+_TINYURL_RE = re.compile(r"/wiki/x/([A-Za-z0-9_\-]+)")
+_FOLDER_ID_RE = re.compile(r"/folder/(\d+)")
+
+
+def _decode_tinyurl_token(token: str) -> Optional[str]:
+    """Decode a legacy Confluence tinyurl token (e.g. ``Z4AfOw``) to its numeric page ID.
+
+    Works for the older base64-of-little-endian-page-id encoding. Newer
+    Confluence Cloud short codes (random-looking 4-5 char tokens) are NOT
+    decodable offline — those go through ``_resolve_tinyurl_via_http``.
+    """
+    import base64
+
+    try:
+        padded = token + "=" * (-len(token) % 4)
+        raw = base64.urlsafe_b64decode(padded)
+        if not raw:
+            return None
+        return str(int.from_bytes(raw, "little"))
+    except Exception as exc:
+        logger.debug("Tinyurl token decode failed for %r: %s", token, exc)
+        return None
+
+
+def _resolve_tinyurl_via_http(url: str) -> Optional[str]:
+    """Authenticated HTTP fallback for tokens the offline decoder can't crack.
+
+    Confluence Cloud responds either with a 302 to ``.../pages/<id>/...``
+    or with a 200 HTML page that embeds the page ID in meta tags / JS
+    variables. We check the redirect chain first, then scrape the body
+    as a last resort.
+    """
+    try:
+        import requests
+
+        from dashboards.secrets import get_secret as _get_secret
+    except ImportError:
+        return None
+
+    email = _get_secret("CONFLUENCE_EMAIL")
+    token = _get_secret("CONFLUENCE_TOKEN")
+    auth = (email, token) if (email and token) else None
+    try:
+        resp = requests.get(
+            url,
+            auth=auth,
+            allow_redirects=True,
+            timeout=10,
+            headers={"Accept": "text/html,application/xhtml+xml"},
+        )
+    except Exception as exc:
+        logger.warning("Tinyurl HTTP resolve failed for %s: %s", url, exc)
+        return None
+
+    candidates = [resp.url] + [h.url for h in (resp.history or [])]
+    for candidate in candidates:
+        if candidate:
+            match = _PAGE_ID_RE.search(candidate)
+            if match:
+                return match.group(1)
+
+    body = resp.text or ""
+    meta_match = re.search(r'name="ajs-page-id"[^>]*content="(\d+)"', body, re.IGNORECASE)
+    if meta_match:
+        return meta_match.group(1)
+    pid_match = re.search(r'pageId["\s:=]+(\d{6,})', body)
+    if pid_match:
+        return pid_match.group(1)
+    return None
+
+
+def extract_page_id_from_url(url: str) -> Optional[str]:
+    """Pull a numeric page ID out of a Confluence URL.
+
+    Resolution order:
+      1. Long-form ``.../wiki/spaces/X/pages/12345/Title`` (regex match).
+      2. Legacy tinyurl ``.../wiki/x/<token>`` decoded offline.
+      3. New-style tinyurl resolved via authenticated HTTP redirect chain.
+    """
+    if not url:
+        return None
+    match = _PAGE_ID_RE.search(url)
+    if match:
+        return match.group(1)
+    tiny_match = _TINYURL_RE.search(url)
+    if tiny_match:
+        offline = _decode_tinyurl_token(tiny_match.group(1))
+        if offline:
+            return offline
+        return _resolve_tinyurl_via_http(url)
+    return None
+
+
+def extract_page_ids_from_urls(urls: Iterable[str]) -> List[str]:
+    """Resolve an iterable of Confluence URLs to deduplicated page IDs.
+
+    Order is preserved (first occurrence wins). URLs that don't yield a
+    page ID are silently skipped.
+    """
+    out: List[str] = []
+    seen: set = set()
+    for url in urls or []:
+        page_id = extract_page_id_from_url(url)
+        if page_id and page_id not in seen:
+            seen.add(page_id)
+            out.append(page_id)
+    return out
+
+
+def extract_folder_id_from_url(url: str) -> Optional[str]:
+    """Pull a numeric folder ID out of a Confluence ``/folder/<id>`` URL."""
+    if not url:
+        return None
+    match = _FOLDER_ID_RE.search(url)
+    return match.group(1) if match else None
+
+
+def extract_folder_ids_from_urls(urls: Iterable[str]) -> List[str]:
+    """Resolve an iterable of Confluence URLs to deduplicated folder IDs.
+
+    URLs that aren't ``/folder/<id>`` shaped (e.g. plain page URLs) are
+    silently skipped.
+    """
+    out: List[str] = []
+    seen: set = set()
+    for url in urls or []:
+        folder_id = extract_folder_id_from_url(url)
+        if folder_id and folder_id not in seen:
+            seen.add(folder_id)
+            out.append(folder_id)
+    return out
 
 
 def _strip_html(html: str) -> str:
@@ -55,7 +188,7 @@ def _get_client():
             "Install with:  poetry add atlassian-python-api"
         )
 
-    from dashboards.chat_agent import _get_secret
+    from dashboards.secrets import get_secret as _get_secret
 
     url = _get_secret("CONFLUENCE_URL")
     email = _get_secret("CONFLUENCE_EMAIL")
@@ -70,6 +203,94 @@ def _get_client():
         )
 
     return Confluence(url=url, username=email, password=token, cloud=True)
+
+
+def _v2_session():
+    """Return ``(requests.Session, base_url)`` for Confluence Cloud REST v2 calls.
+
+    The v1 client wrapped by ``atlassian-python-api`` doesn't expose folder
+    endpoints, so v2 is reached directly via authenticated HTTP.
+    """
+    try:
+        import requests
+    except ImportError as exc:
+        raise ImportError("The 'requests' package is required for Confluence v2 API calls.") from exc
+
+    from dashboards.secrets import get_secret as _get_secret
+
+    url = _get_secret("CONFLUENCE_URL")
+    email = _get_secret("CONFLUENCE_EMAIL")
+    token = _get_secret("CONFLUENCE_TOKEN")
+    if not all([url, email, token]):
+        missing = [
+            k for k, v in {"CONFLUENCE_URL": url, "CONFLUENCE_EMAIL": email, "CONFLUENCE_TOKEN": token}.items() if not v
+        ]
+        raise ValueError(f"Confluence credentials missing: {', '.join(missing)}.")
+
+    session = requests.Session()
+    session.auth = (str(email), str(token))
+    session.headers.update({"Accept": "application/json"})
+    base = str(url).rstrip("/") + "/wiki/api/v2"
+    return session, base
+
+
+def list_pages_in_folder(folder_id: str, *, recurse_subfolders: bool = True) -> List[str]:
+    """Return page IDs that live (transitively) under a Confluence folder.
+
+    Uses the Cloud REST v2 ``folders/{id}/direct-children`` endpoint and
+    walks any nested subfolders when ``recurse_subfolders`` is true. Other
+    content types (whiteboards, blog posts, databases) are ignored.
+    """
+    import urllib.parse
+
+    session, base = _v2_session()
+    seen_folders: set = set()
+    seen_pages: set = set()
+    page_ids: List[str] = []
+    stack: List[str] = [str(folder_id)]
+
+    while stack:
+        fid = stack.pop()
+        if fid in seen_folders:
+            continue
+        seen_folders.add(fid)
+
+        cursor: Optional[str] = None
+        while True:
+            params: Dict[str, Any] = {"limit": 100}
+            if cursor:
+                params["cursor"] = cursor
+            try:
+                resp = session.get(f"{base}/folders/{fid}/direct-children", params=params, timeout=15)
+                resp.raise_for_status()
+            except Exception as exc:
+                logger.warning("Failed to list children of folder %s: %s", fid, exc)
+                break
+
+            data = resp.json()
+            if not isinstance(data, dict):
+                break
+            for child in data.get("results") or []:
+                child_id = str(child.get("id") or "")
+                child_type = child.get("type")
+                if not child_id:
+                    continue
+                if child_type == "page":
+                    if child_id not in seen_pages:
+                        seen_pages.add(child_id)
+                        page_ids.append(child_id)
+                elif child_type == "folder" and recurse_subfolders:
+                    stack.append(child_id)
+
+            next_link = (data.get("_links") or {}).get("next")
+            if not next_link:
+                break
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(next_link).query)
+            cursor = (qs.get("cursor") or [None])[0]
+            if not cursor:
+                break
+
+    return page_ids
 
 
 def search_pages(query: str, space_key: Optional[str] = None, max_results: int = 5) -> List[Dict[str, Any]]:
@@ -154,3 +375,74 @@ def list_spaces() -> List[Dict[str, str]]:
     except Exception as exc:
         logger.exception("Confluence list spaces failed")
         raise RuntimeError(f"Failed to list Confluence spaces: {exc}") from exc
+
+
+def get_page_storage(page_id: str) -> Dict[str, Any]:
+    """Return the page's storage-format body, title, and current version number."""
+    confluence = _get_client()
+    page = confluence.get_page_by_id(page_id, expand="body.storage,version")
+    if not isinstance(page, dict):
+        raise RuntimeError(f"Unexpected page response type for id={page_id!r}")
+    body = (page.get("body") or {}).get("storage") or {}
+    version = (page.get("version") or {}).get("number")
+    return {
+        "id": str(page.get("id", "")),
+        "title": str(page.get("title", "Untitled")),
+        "storage": str(body.get("value", "") or ""),
+        "version": int(version) if version is not None else None,
+    }
+
+
+def attach_file(
+    page_id: str,
+    file_bytes: bytes,
+    filename: str,
+    *,
+    content_type: str = "image/png",
+    comment: str = "",
+) -> Dict[str, Any]:
+    """Upload an attachment to a page and return its metadata (download URL etc.)."""
+    confluence = _get_client()
+    import io
+
+    buffer = io.BytesIO(file_bytes)
+    buffer.name = filename
+    result = confluence.attach_content(
+        content=buffer,
+        name=filename,
+        content_type=content_type,
+        page_id=page_id,
+        comment=comment or f"Uploaded by report agent: {filename}",
+    )
+    if not isinstance(result, dict):
+        raise RuntimeError(f"Unexpected attachment response: {result!r}")
+    return result
+
+
+def update_page_storage(
+    page_id: str,
+    title: str,
+    new_storage: str,
+    *,
+    expected_version: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Replace a page's storage body. Refreshes the in-process page cache."""
+    confluence = _get_client()
+    result = confluence.update_page(
+        page_id=page_id,
+        title=title,
+        body=new_storage,
+        representation="storage",
+        version_comment="Updated by report agent",
+        minor_edit=True,
+    )
+    _page_cache.pop(page_id, None)
+    if expected_version is not None:
+        new_version = ((result or {}).get("version") or {}).get("number")
+        if new_version is not None and new_version <= expected_version:
+            logger.warning(
+                "Confluence update did not advance version (expected > %s, got %s)",
+                expected_version,
+                new_version,
+            )
+    return result if isinstance(result, dict) else {}

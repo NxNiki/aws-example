@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
 """
-Deploy the AI Chat Agent to AWS ECS Fargate with a public Application Load Balancer.
+Deploy the RAG service to AWS ECS Fargate with a public Application Load Balancer.
 
-The agent runs as a standalone service, separate from the dashboard.
-This gives fault-isolation: a chat agent crash or slow LLM call never
-blocks the dashboard.
+Mirrors infra/deploy_ai_agent_ecs.py — same VPC / cluster / execution
+role patterns. The RAG service is its own ECS service so its lifecycle
+(daily index reload, FastAPI serving) is independent of the chat agent
+or dashboard.
+
+The Faiss artifact lives in S3 at bituslabs_ds.config.DEFAULT_RAG_INDEX_URI;
+the task role gets read access to that prefix.
 
 Prerequisites:
-  1. Run `bash infra/docker_build_ai_agent.sh` to build and push the image to ECR.
-  2. Ensure ecsTaskExecutionRole exists (shared with the dashboard).
-  3. Store your LLM API key(s) in AWS Secrets Manager (or pass via env vars).
+  1. Run `bash infra/docker_build_rag_service.sh` to build/push the image.
+  2. ECS cluster (infra/ecs_helpers.ECS_CLUSTER_NAME) must already exist —
+     it's created by the dashboard deploy script.
+  3. AWS Secrets Manager entry "ai-dashboard_ai_agent" must contain
+     GOOGLE_API_KEY (the embedder reads it via dashboards.chat_agent._get_secret).
 
 Usage:
-  python infra/deploy_ai_agent_ecs.py
-  python infra/deploy_ai_agent_ecs.py --build-first
-  python infra/deploy_ai_agent_ecs.py --dry-run
+  python infra/deploy_rag_service_ecs.py
+  python infra/deploy_rag_service_ecs.py --build-first
+  python infra/deploy_rag_service_ecs.py --dry-run
 """
 
 import argparse
@@ -45,19 +51,23 @@ from ecs_helpers import (  # noqa: E402  (sibling module on sys.path[0])
 
 # ---- Configuration (edit these directly) ------------------------------------
 REGION = "us-west-2"
-SERVICE_NAME = "ai-chat-agent"
-IMAGE_NAME = "bituslabs-ds-ai-agent"
-AGENT_PORT = 8051
+SERVICE_NAME = "rag-service"
+IMAGE_NAME = "bituslabs-ds-rag-service"
+SERVICE_PORT = 8052
 TASK_CPU = 512  # 0.5 vCPU
-TASK_MEMORY = 1024  # 1 GB
-DESIRED_COUNT = 1  # always keep 1 task running
-CHAT_PROVIDER = "gemini"
+TASK_MEMORY = 1024  # 1 GB — Faiss index is ~5 MB; headroom for embed-query tensors.
+DESIRED_COUNT = 1
 
-# API keys are fetched at runtime by the app from AWS Secrets Manager
-# (secret name: "ai-dashboard_ai_agent"). No need to inject them here.
+# S3 prefix where build_rag_index.py writes the Faiss artifact.
+# Must match bituslabs_ds.config.DEFAULT_RAG_INDEX_URI.
+S3_BUCKET = "bituslabs-team-ai"
+RAG_INDEX_PREFIX = "rag"
+
+# Same Secrets Manager entry the AI agent uses (contains GOOGLE_API_KEY).
+SECRETS_MANAGER_NAME = "ai-dashboard_ai_agent"
 
 HEALTH_CHECK_PATH = "/health"
-TG_HEALTH_CHECK_INTERVAL = 300
+TG_HEALTH_CHECK_INTERVAL = 30
 TG_HEALTHY_THRESHOLD = 2
 
 
@@ -67,22 +77,16 @@ TG_HEALTHY_THRESHOLD = 2
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Deploy AI Chat Agent to ECS Fargate")
+    parser = argparse.ArgumentParser(description="Deploy RAG service to ECS Fargate")
     parser.add_argument("--dry-run", action="store_true", help="Print planned actions without executing")
-    parser.add_argument("--build-first", action="store_true", help="Run docker_build_ai_agent.sh before deploying")
+    parser.add_argument("--build-first", action="store_true", help="Run docker_build_rag_service.sh before deploying")
     parser.add_argument("--wait", action="store_true", help="Wait for service to stabilize")
-    parser.add_argument(
-        "--rag-service-url",
-        default=None,
-        help="RAG_SERVICE_URL the agent uses to call /retrieve. "
-        "Auto-detected from the rag-service ALB if not provided.",
-    )
     args = parser.parse_args()
 
     if args.build_first and not args.dry_run:
-        print("Building and pushing AI Agent Docker image...")
+        print("Building and pushing RAG service Docker image...")
         subprocess.run(
-            ["bash", str(SCRIPT_DIR / "docker_build_ai_agent.sh")],
+            ["bash", str(SCRIPT_DIR / "docker_build_rag_service.sh")],
             check=True,
             cwd=PROJECT_ROOT,
         )
@@ -110,6 +114,8 @@ def main() -> None:
         print("  - Log group, security groups")
         print("  - ALB, target group, listener")
         print(f"  - Task definition ({SERVICE_NAME}), ECS service")
+        print(f"  - S3 read policy on s3://{S3_BUCKET}/{RAG_INDEX_PREFIX}/*")
+        print(f"  - Secrets Manager read policy on {SECRETS_MANAGER_NAME}")
         return
 
     # 1. ECR
@@ -117,12 +123,12 @@ def main() -> None:
     ecr = session.client("ecr")
     ensure_ecr_repo(ecr, IMAGE_NAME)
 
-    # 2. ECS cluster (reuse the dashboard cluster)
+    # 2. ECS cluster (must already exist — created by the dashboard deploy)
     print("\n2. ECS cluster...")
     resp = ecs.describe_clusters(clusters=[ECS_CLUSTER_NAME])
     if resp.get("failures") or not resp.get("clusters") or resp["clusters"][0].get("status") != "ACTIVE":
         raise RuntimeError(
-            f"Cluster {ECS_CLUSTER_NAME} not found or not ACTIVE. " "Deploy the dashboard first to create the cluster."
+            f"Cluster {ECS_CLUSTER_NAME} not found or not ACTIVE. Deploy the dashboard first to create it."
         )
     print(f"  Using existing cluster: {ECS_CLUSTER_NAME}")
 
@@ -143,7 +149,7 @@ def main() -> None:
     sg_name_task = f"{SERVICE_NAME}-task-sg"
 
     try:
-        sg_alb = ec2.create_security_group(GroupName=sg_name_alb, Description="ALB for AI chat agent", VpcId=vpc_id)
+        sg_alb = ec2.create_security_group(GroupName=sg_name_alb, Description="ALB for RAG service", VpcId=vpc_id)
         sg_alb_id = sg_alb["GroupId"]
         print(f"  Created ALB security group: {sg_alb_id}")
     except ClientError as e:
@@ -173,7 +179,7 @@ def main() -> None:
 
     try:
         sg_task = ec2.create_security_group(
-            GroupName=sg_name_task, Description="ECS tasks for AI chat agent", VpcId=vpc_id
+            GroupName=sg_name_task, Description="ECS tasks for RAG service", VpcId=vpc_id
         )
         sg_task_id = sg_task["GroupId"]
         print(f"  Created task security group: {sg_task_id}")
@@ -191,13 +197,13 @@ def main() -> None:
             IpPermissions=[
                 {
                     "IpProtocol": "tcp",
-                    "FromPort": AGENT_PORT,
-                    "ToPort": AGENT_PORT,
+                    "FromPort": SERVICE_PORT,
+                    "ToPort": SERVICE_PORT,
                     "UserIdGroupPairs": [{"GroupId": sg_alb_id, "Description": "From ALB"}],
                 }
             ],
         )
-        print(f"  Added task inbound rule ({AGENT_PORT} from ALB)")
+        print(f"  Added task inbound rule ({SERVICE_PORT} from ALB)")
     except ClientError as e:
         if "Duplicate" not in str(e):
             raise
@@ -208,7 +214,7 @@ def main() -> None:
             IpPermissions=[
                 {
                     "IpProtocol": "-1",
-                    "IpRanges": [{"CidrIp": "0.0.0.0/0", "Description": "All outbound (LLM APIs)"}],
+                    "IpRanges": [{"CidrIp": "0.0.0.0/0", "Description": "All outbound (Gemini, S3)"}],
                 }
             ],
         )
@@ -251,7 +257,7 @@ def main() -> None:
         tg = elbv2.create_target_group(
             Name=tg_name,
             Protocol="HTTP",
-            Port=AGENT_PORT,
+            Port=SERVICE_PORT,
             VpcId=vpc_id,
             TargetType="ip",
             HealthCheckProtocol="HTTP",
@@ -291,75 +297,68 @@ def main() -> None:
             raise
         print("  Listener exists")
 
-    # 7b. Execution role + Secrets Manager access for the task
-    print("\n7b. ECS task execution role...")
+    # 7b. Execution role + S3 read for the Faiss artifact + Secrets Manager read.
+    print("\n7b. ECS task execution role + inline policies...")
     exec_role_arn = ensure_ecs_task_execution_role(iam, account_id)
     iam.put_role_policy(
         RoleName=ECS_TASK_EXECUTION_ROLE_NAME,
-        PolicyName="ecsTaskRole-secrets-ai-agent",
+        PolicyName="ecsTaskRole-rag-service",
         PolicyDocument=json.dumps(
             {
                 "Version": "2012-10-17",
                 "Statement": [
                     {
+                        "Sid": "ReadFaissArtifact",
+                        "Effect": "Allow",
+                        "Action": ["s3:GetObject", "s3:ListBucket"],
+                        "Resource": [
+                            f"arn:aws:s3:::{S3_BUCKET}",
+                            f"arn:aws:s3:::{S3_BUCKET}/{RAG_INDEX_PREFIX}/*",
+                        ],
+                    },
+                    {
+                        "Sid": "ReadEmbeddingApiKey",
                         "Effect": "Allow",
                         "Action": ["secretsmanager:GetSecretValue"],
-                        "Resource": [f"arn:aws:secretsmanager:{REGION}:{account_id}:secret:ai-dashboard_ai_agent*"],
-                    }
+                        "Resource": [f"arn:aws:secretsmanager:{REGION}:{account_id}:secret:{SECRETS_MANAGER_NAME}*"],
+                    },
                 ],
             }
         ),
     )
-    print("  Attached Secrets Manager read policy for ai-dashboard_ai_agent")
+    print(f"  Attached S3 read policy on s3://{S3_BUCKET}/{RAG_INDEX_PREFIX}/*")
+    print(f"  Attached Secrets Manager read policy on {SECRETS_MANAGER_NAME}")
 
     # 8. Task definition
     print("\n8. Task definition...")
     env_vars = [
-        {"name": "CHAT_PROVIDER", "value": CHAT_PROVIDER},
+        {"name": "RAG_BACKEND", "value": "faiss"},
+        {"name": "RAG_EMBEDDING_PROVIDER", "value": "gemini"},
+        {"name": "AWS_REGION", "value": REGION},
     ]
 
-    # Resolve the RAG service URL (auto-detect from its ALB if not provided)
-    # so the agent's rag_service.client can call /retrieve.
-    rag_service_url = args.rag_service_url
-    if not rag_service_url:
-        try:
-            rag_albs = elbv2.describe_load_balancers(Names=["rag-service-alb"])["LoadBalancers"]
-            if rag_albs:
-                rag_service_url = f"http://{rag_albs[0]['DNSName']}"
-                print(f"  Auto-detected RAG service ALB: {rag_service_url}")
-        except ClientError:
-            pass
-    if rag_service_url:
-        env_vars.append({"name": "RAG_SERVICE_URL", "value": rag_service_url})
-    else:
-        print(
-            "  Warning: RAG_SERVICE_URL not set. /retrieve will fall back to "
-            "localhost:8052 (which won't exist on Fargate). Deploy rag-service "
-            "first or pass --rag-service-url."
-        )
-
     container_def = {
-        "name": "ai-agent",
+        "name": "rag-service",
         "image": ecr_uri,
-        "portMappings": [{"containerPort": AGENT_PORT, "protocol": "tcp"}],
+        "portMappings": [{"containerPort": SERVICE_PORT, "protocol": "tcp"}],
         "logConfiguration": {
             "logDriver": "awslogs",
             "options": {
                 "awslogs-group": log_group,
                 "awslogs-region": REGION,
-                "awslogs-stream-prefix": "ai-agent",
+                "awslogs-stream-prefix": "rag-service",
             },
         },
         "environment": env_vars,
         "healthCheck": {
             "command": [
                 "CMD-SHELL",
-                f"curl -sf http://localhost:{AGENT_PORT}{HEALTH_CHECK_PATH} || exit 1",
+                f"curl -sf http://localhost:{SERVICE_PORT}{HEALTH_CHECK_PATH} || exit 1",
             ],
-            "interval": 10,
+            "interval": 30,
             "timeout": 5,
             "retries": 3,
-            "startPeriod": 30,
+            "startPeriod": 60,
         },
     }
     task_def = {
@@ -377,7 +376,6 @@ def main() -> None:
     new_revision = resp_td["taskDefinition"]["taskDefinitionArn"]
     print(f"  Registered task definition: {SERVICE_NAME} (revision {resp_td['taskDefinition']['revision']})")
 
-    # Deregister old revisions (keep only the new one)
     old_revisions = ecs.list_task_definitions(familyPrefix=SERVICE_NAME, status="ACTIVE")["taskDefinitionArns"]
     for old_arn in old_revisions:
         if old_arn != new_revision:
@@ -404,8 +402,8 @@ def main() -> None:
             loadBalancers=[
                 {
                     "targetGroupArn": tg_arn,
-                    "containerName": "ai-agent",
-                    "containerPort": AGENT_PORT,
+                    "containerName": "rag-service",
+                    "containerPort": SERVICE_PORT,
                 }
             ],
         )
@@ -431,7 +429,6 @@ def main() -> None:
         else:
             raise
 
-    # Wait
     if not args.wait:
         print("\nSkipping wait. Check ECS console and CloudWatch logs if tasks fail.")
     else:
@@ -448,14 +445,13 @@ def main() -> None:
             print(f"\n  Warning: Service did not stabilize: {e}")
 
     print("\n" + "=" * 60)
-    print("AI Chat Agent deployed successfully!")
-    print(f"  API URL:  http://{alb_dns}")
-    print(f"  Health:   http://{alb_dns}/health")
-    print(f"  Chat:     POST http://{alb_dns}/api/chat")
-    print(f"  Docs:     http://{alb_dns}/docs")
+    print("RAG service deployed successfully!")
+    print(f"  Health:    http://{alb_dns}/health")
+    print(f"  Retrieve:  POST http://{alb_dns}/retrieve")
+    print(f"  Sources:   GET  http://{alb_dns}/sources")
     print("=" * 60)
-    print("\nTo point the dashboard at this agent, set CHAT_API_URL:")
-    print(f"  export CHAT_API_URL=http://{alb_dns}")
+    print("\nTo point the chat agent at this RAG service, set RAG_SERVICE_URL:")
+    print(f"  export RAG_SERVICE_URL=http://{alb_dns}")
 
 
 if __name__ == "__main__":

@@ -367,10 +367,19 @@ def list_etl_sources() -> str:
 
 @tool
 def search_confluence(query: str, space_key: str = "") -> str:
-    """Search Confluence documentation for pages matching a query.
+    """FALLBACK ONLY. Live keyword search against the Confluence API.
 
-    Use this when the user asks about processes, policies, documentation,
-    or anything not covered by the dashboard metadata tools.
+    DO NOT call this tool first. For any documentation question you must
+    call ``search_confluence_rag`` first. Only call ``search_confluence``
+    when ``search_confluence_rag`` has already been called for the same
+    question and returned one of:
+
+      - "No Confluence passages found for: ..."
+      - "RAG service unavailable (...)"
+
+    Otherwise this tool is the wrong choice — it's slower, hits the live
+    Confluence API per call, and returns keyword hits (not semantic
+    passages) so answers are noisier.
 
     Args:
         query: Search keywords (e.g. "RTP calculation", "user segmentation rules")
@@ -399,10 +408,12 @@ def search_confluence(query: str, space_key: str = "") -> str:
 
 @tool
 def read_confluence_page(page_id: str) -> str:
-    """Read the full content of a Confluence page by its ID.
+    """FALLBACK ONLY. Read the full content of a Confluence page by ID.
 
-    Use this after search_confluence returns page IDs to read the actual content
-    and answer the user's question based on the documentation.
+    DO NOT call this tool unless ``search_confluence`` (the fallback search
+    tool) has already returned a page id for the current question.
+    ``search_confluence_rag`` already returns full passage text, so you
+    almost never need to read the page on top of it.
 
     Args:
         page_id: The Confluence page ID (numeric string from search results)
@@ -415,6 +426,33 @@ def read_confluence_page(page_id: str) -> str:
         return _get_page(page_id)
     except Exception as exc:
         return f"Failed to read Confluence page {page_id}: {exc}"
+
+
+@tool
+def search_confluence_rag(query: str, top_k: int = 5) -> str:
+    """PRIMARY documentation tool. ALWAYS call this first for any question
+    about processes, policies, internal docs, game design, math tables,
+    RTP, math/strategy/model details, or anything that might be in Confluence.
+
+    Returns ranked passages (dense vector search over a curated, pre-indexed
+    Confluence corpus). The passages already include the full chunk text and
+    page title, so you typically don't need any follow-up tool call — answer
+    directly from what this returns.
+
+    Only fall back to ``search_confluence`` + ``read_confluence_page`` when
+    THIS tool's return value literally starts with "No Confluence passages
+    found" or "RAG service unavailable". In every other case, ignore those
+    fallback tools entirely.
+
+    Args:
+        query: A natural-language question or descriptive phrase.
+        top_k: Number of passages to return (default 5).
+    """
+    try:
+        from rag_service.client import retrieve_passages
+    except ImportError:
+        return "RAG service client is not installed in this environment."
+    return retrieve_passages(query, top_k=top_k)
 
 
 # ---------------------------------------------------------------------------
@@ -461,11 +499,25 @@ Understanding the data pipeline:
   (how per-user data is computed) and the Python aggregation (how users are
   filtered and aggregated into the dashboard metric).
 
+Documentation lookup — STRICT ordering (this is not optional):
+- ANY question that might be answered by team documentation, Confluence
+  pages, internal design docs, math-table designs, RTP rules, game-specific
+  configurations, model notes, etc. MUST start with `search_confluence_rag`.
+  There is NO exception. Even if the question seems trivial. Even if you
+  think you already know the answer. Call `search_confluence_rag` first.
+- After `search_confluence_rag` returns, answer from its passages directly.
+  Do NOT then call `search_confluence` or `read_confluence_page`.
+- The ONLY situation where you may call `search_confluence` or
+  `read_confluence_page` is when `search_confluence_rag` returned a string
+  literally beginning with "No Confluence passages found" or "RAG service
+  unavailable". In that one case, treat them as a backup retrieval path.
+- If you find yourself about to call `search_confluence` without having
+  first called `search_confluence_rag` in this conversation turn, STOP
+  and call `search_confluence_rag` instead.
+
 Other guidelines:
 - When asked about user groups (new/old/beginner/AI/Default), use lookup_group.
 - For game-specific questions, use get_game_info.
-- For questions about processes, policies, or documentation, use search_confluence
-  to find relevant pages, then read_confluence_page to read the content.
 - Be precise about formulas and SQL definitions.
 - If a column has both a hand-curated description and ETL-derived formula, include both.
 - Explain RTP (Return to Player) as total_payout / total_bet when relevant.
@@ -487,6 +539,7 @@ _TOOLS = [
     get_game_info,
     read_etl_source,
     list_etl_sources,
+    search_confluence_rag,
     search_confluence,
     read_confluence_page,
 ]
@@ -509,33 +562,7 @@ MODEL_CATALOG = {
 }
 
 # Secrets Manager secret name (stores GOOGLE_API_KEY and OPENAI_API_KEY).
-_SECRETS_MANAGER_NAME = "ai-dashboard_ai_agent"
-_SECRETS_MANAGER_REGION = "us-west-2"
-_secrets_cache: Optional[Dict[str, str]] = None
-
-
-def _get_secret(key: str) -> Optional[str]:
-    """Return an API key from env var first, then AWS Secrets Manager."""
-    value = os.environ.get(key)
-    if value:
-        return value
-
-    global _secrets_cache
-    if _secrets_cache is None:
-        try:
-            import json as _json
-
-            import boto3  # type: ignore[import-untyped]
-
-            session = boto3.Session(region_name=_SECRETS_MANAGER_REGION)
-            client = session.client(service_name="secretsmanager")
-            resp = client.get_secret_value(SecretId=_SECRETS_MANAGER_NAME)
-            _secrets_cache = _json.loads(resp["SecretString"])
-        except Exception as exc:
-            logger.warning("Secrets Manager lookup failed: %s", exc)
-            _secrets_cache = {}
-
-    return (_secrets_cache or {}).get(key)
+from dashboards.secrets import get_secret as _get_secret  # noqa: F401  (re-export for callers)
 
 
 def _build_llm(model_key: Optional[str] = None) -> BaseChatModel:
@@ -544,13 +571,29 @@ def _build_llm(model_key: Optional[str] = None) -> BaseChatModel:
     Args:
         model_key: A catalog key like ``"openai:gpt-4.1"`` or ``"gemini:gemini-2.5-pro"``.
                    Falls back to ``CHAT_PROVIDER`` / ``CHAT_MODEL`` env vars.
+
+    ``CHAT_PROVIDER`` defaults to ``"auto"``: prefer OpenAI if its key is set,
+    otherwise fall back to Gemini if its key is set. Mirrors the
+    rag_service embedder's auto-mode so a single ``GOOGLE_API_KEY`` (or
+    ``OPENAI_API_KEY``) is enough to bring up both surfaces.
     """
     if model_key and model_key in MODEL_CATALOG:
         entry = MODEL_CATALOG[model_key]
         provider = entry["provider"]
         model = entry["model"]
     else:
-        provider = os.environ.get("CHAT_PROVIDER", "openai").lower()
+        provider = os.environ.get("CHAT_PROVIDER", "auto").lower()
+        if provider == "auto":
+            if _get_secret("OPENAI_API_KEY"):
+                provider = "openai"
+            elif _get_secret("GOOGLE_API_KEY") or _get_secret("GEMINI_API_KEY"):
+                provider = "gemini"
+            else:
+                raise ValueError(
+                    "No LLM credentials found. Set OPENAI_API_KEY or "
+                    "GOOGLE_API_KEY/GEMINI_API_KEY in .env, your shell, or "
+                    "Secrets Manager. Or pin CHAT_PROVIDER to a specific provider."
+                )
         model = os.environ.get("CHAT_MODEL", _DEFAULT_MODELS.get(provider, "gpt-4o-mini"))
 
     if provider == "gemini":
