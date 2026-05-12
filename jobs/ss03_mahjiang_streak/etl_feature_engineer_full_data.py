@@ -12,6 +12,7 @@
 
 import argparse
 import os
+from datetime import datetime
 from textwrap import dedent
 
 from bituslabs_ds.config import (
@@ -30,8 +31,8 @@ from bituslabs_ds.config import (
 )
 from bituslabs_ds.etl import DataLoader, RedshiftBackend
 
-# select a short period (2 months) as ss03 has large number of users, and calculating percentiles is time-consuming.
-DATE_START = "2026-03-01 00:00:00"
+# select a short period as ss03 has large number of users, and calculating percentiles is time-consuming.
+DATE_START = "2026-01-01 00:00:00"
 DATE_END = "2026-05-01 00:00:00"
 
 MAX_SESSION_INTERVAL = 60 * 60 * 24 * 7
@@ -39,8 +40,46 @@ STREAK_THRESHOLD = 200
 MAX_SESSION_GAP = 60 * 60  # 1 hour
 SESSION_LENGTH = 100  # number of consecutive bets in the same session
 
+AI_GROUPS = ("AI", "AB_TEST_A", "AB_TEST_B", "Default")
+# Restrict the query to these ai_group labels. Set to AI_GROUPS to keep all.
+SELECTED_GROUPS = "AI"
+
+
+def _normalize_groups(groups):
+    return (groups,) if isinstance(groups, str) else tuple(groups)
+
+
+def _build_output_suffix(selected_groups):
+    normalized = _normalize_groups(selected_groups)
+    if set(normalized) >= set(AI_GROUPS):
+        groups_tag = "all"
+    else:
+        groups_tag = "_".join(sorted(normalized))
+    return f"{groups_tag}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+
+def _build_ai_group_filter(selected_groups):
+    selected_groups = _normalize_groups(selected_groups)
+    if set(selected_groups) >= set(AI_GROUPS):
+        return ""
+    conditions = []
+    if "AI" in selected_groups:
+        conditions.append(f"t.partition_ab[0] = '{AI_GROUP_ID}'")
+    if "AB_TEST_A" in selected_groups:
+        conditions.append(f"t.partition_ab[0] = '{AB_TEST_GROUP_A}'")
+    if "AB_TEST_B" in selected_groups:
+        conditions.append(f"t.partition_ab[0] = '{AB_TEST_GROUP_B}'")
+    if "Default" in selected_groups:
+        conditions.append(
+            f"(t.partition_ab[0] IS NULL OR t.partition_ab[0] NOT IN "
+            f"('{AI_GROUP_ID}', '{AB_TEST_GROUP_A}', '{AB_TEST_GROUP_B}'))"
+        )
+    return "AND (" + " OR ".join(conditions) + ")"
+
 
 def generate_query():
+
+    ai_group_filter = _build_ai_group_filter(SELECTED_GROUPS)
 
     query_ctes = dedent(
         f"""
@@ -75,6 +114,7 @@ def generate_query():
                 AND t.status = 'COMPLETED'
                 AND t.game_id = 'SS03'
                 AND t.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
+                {ai_group_filter}
         ),
 
         free_game_group AS (
@@ -686,7 +726,8 @@ if __name__ == "__main__":
     )
 
     query_raw_stats, query_grouped_stats = generate_query()
-    execute_query(redshift_loader, "ss03_features_enriched_full", query_raw_stats)
-    execute_query(redshift_loader, "ss03_features_grouped_full", query_grouped_stats)
+    output_suffix = _build_output_suffix(SELECTED_GROUPS)
+    execute_query(redshift_loader, f"ss03_features_enriched_{output_suffix}", query_raw_stats)
+    execute_query(redshift_loader, f"ss03_features_grouped_{output_suffix}", query_grouped_stats)
 
     redshift_loader.close()
