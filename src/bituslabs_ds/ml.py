@@ -24,12 +24,12 @@ from sklearn.cluster import AgglomerativeClustering, KMeans
 from sklearn.compose import ColumnTransformer
 from sklearn.decomposition import PCA
 from sklearn.feature_selection import VarianceThreshold
-from sklearn.metrics import silhouette_score
+from sklearn.metrics import pairwise_distances_argmin, silhouette_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import MinMaxScaler, PowerTransformer, RobustScaler, StandardScaler
 
 from bituslabs_ds.config import DEFAULT_MAX_JOBS, LOCAL_ROOT
-from bituslabs_ds.s3_utils import list_s3_files, read_files, read_local_cache, save_local_cache
+from bituslabs_ds.s3_utils import apply_row_filters, list_s3_files, read_files, read_local_cache, save_local_cache
 from bituslabs_ds.utils import (
     clip_outliers,
     column_iterator,
@@ -42,6 +42,55 @@ from bituslabs_ds.utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class SubsampledAgglomerativeClustering(ClusterMixin):
+    """Memory-bounded hierarchical clustering via random subsampling.
+
+    sklearn's :class:`AgglomerativeClustering` allocates an O(n^2) linkage matrix; at
+    n=70k that's ~40 GB. This wrapper fits the underlying model on at most
+    ``sample_size`` random rows, computes per-cluster centroids (means) of the sample
+    in the input feature space, then assigns every input row to its nearest centroid.
+    Exposes ``predict`` so it slots into a sklearn ``Pipeline`` for downstream label
+    attachment on new data.
+    """
+
+    def __init__(
+        self,
+        n_clusters: int = 5,
+        linkage: str = "ward",
+        sample_size: int = 10000,
+        random_state: int = 42,
+    ):
+        self.n_clusters = n_clusters
+        self.linkage = linkage
+        self.sample_size = sample_size
+        self.random_state = random_state
+
+    def fit(self, X, y=None, **kwargs: Any):
+        self.fit_predict(X, y=y, **kwargs)
+        return self
+
+    def fit_predict(self, X, y=None, **kwargs: Any):
+        X_arr = np.asarray(X)
+        n = X_arr.shape[0]
+        if n > self.sample_size:
+            rng = np.random.default_rng(self.random_state)
+            sample_idx = rng.choice(n, self.sample_size, replace=False)
+            X_sample = X_arr[sample_idx]
+            logger.info(f"hierarchical: subsampling {self.sample_size} of {n} rows for AgglomerativeClustering fit")
+        else:
+            X_sample = X_arr
+
+        agg = AgglomerativeClustering(n_clusters=self.n_clusters, linkage=self.linkage)
+        sample_labels = agg.fit_predict(X_sample)
+
+        self.cluster_centers_ = np.vstack([X_sample[sample_labels == k].mean(axis=0) for k in range(self.n_clusters)])
+        self.labels_ = pairwise_distances_argmin(X_arr, self.cluster_centers_)
+        return self.labels_
+
+    def predict(self, X):
+        return pairwise_distances_argmin(np.asarray(X), self.cluster_centers_)
 
 
 class ClusterAnalysisPipeline:
@@ -87,6 +136,15 @@ class ClusterAnalysisPipeline:
     @property
     def cluster_model(self):
         return self._config["cluster_analysis"].get("model", "kmeans")
+
+    @property
+    def cluster_label_column(self):
+        return f"{self.cluster_model}-n_features_{self.n_top_features}-k_{self.n_clusters}"
+
+    @property
+    def cluster_labels_file_path(self):
+        """Shared parquet across all (model, n_features, k) runs; one column per run."""
+        return self.work_dir / self._config["project_name"] / "cluster_labels.parquet"
 
     @property
     def key_features(self):
@@ -237,6 +295,7 @@ class ClusterAnalysisPipeline:
 
         output_file = self._config["data_loader"]["attach_data"]["local_cache"]
         local_cache_path = f"{self.work_dir}/{output_file}"
+        row_filters = self._config["data_loader"]["attach_data"].get("row_filters")
 
         if not reload and os.path.exists(local_cache_path):
             logger.info(f"read local attach data: {local_cache_path}")
@@ -255,6 +314,7 @@ class ClusterAnalysisPipeline:
             valid_groups = group_counts.loc[group_counts["count"] == self.session_length, merge_cols]
             data = data.merge(valid_groups, on=merge_cols, how="inner")
             save_local_cache(data, local_cache_path)
+        data = apply_row_filters(cast(pd.DataFrame, data), row_filters)
         return cast(pd.DataFrame, data)
 
     def load_cluster_data(
@@ -275,6 +335,7 @@ class ClusterAnalysisPipeline:
 
         output_file = self._config["data_loader"]["cluster_data"]["local_cache"]
         local_cache_path = f"{self.work_dir}/{output_file}"
+        row_filters = self._config["data_loader"]["cluster_data"].get("row_filters")
 
         if not reload and os.path.exists(local_cache_path):
             logger.info(f"read local attach data: {local_cache_path}")
@@ -300,6 +361,7 @@ class ClusterAnalysisPipeline:
             data, _ = remove_outliers(cast(pd.DataFrame, data), self.outlier_threshold)
             save_local_cache(cast(pd.DataFrame, data), local_cache_path)
 
+        data = apply_row_filters(cast(pd.DataFrame, data), row_filters)
         return cast(pd.DataFrame, data)
 
     def preprocess_data(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -422,9 +484,12 @@ class ClusterAnalysisPipeline:
                 n_init=self._config["cluster_analysis"].get("n_init", 10),
             )
         elif self.cluster_model == "hierarchical":
-            # AgglomerativeClustering does not use random_state or n_init
-            return AgglomerativeClustering(
-                n_clusters=n_clusters, linkage=self._config["cluster_analysis"].get("linkage", "ward")
+            # AgglomerativeClustering has O(n^2) memory; we subsample to keep it bounded.
+            return SubsampledAgglomerativeClustering(
+                n_clusters=n_clusters,
+                linkage=self._config["cluster_analysis"].get("linkage", "ward"),
+                sample_size=self._config["cluster_analysis"].get("hierarchical_sample_size", 10000),
+                random_state=self._config["cluster_analysis"]["random_state"],
             )
         else:
             logger.critical(f"{self.cluster_model} not supported, fallback to kmeans")
@@ -497,7 +562,7 @@ class ClusterAnalysisPipeline:
             silhouette_scores = []
             cluster_sizes = []
 
-            def fit_kmeans(k):
+            def fit_one_k(k):
                 _, transform_columns_index = self.get_transform_columns(df_x)
                 cluster_pipeline = self.create_clustering_pipeline(
                     n_clusters=k, transform_columns_index=transform_columns_index
@@ -512,9 +577,11 @@ class ClusterAnalysisPipeline:
                 cluster_counts = np.bincount(labels)
                 return k, labels, inertia_val, silhouette, cluster_counts
 
+            # Hierarchical fits are memory-heavy even after subsampling; run them serially.
+            max_workers = 1 if self.cluster_model == "hierarchical" else DEFAULT_MAX_JOBS
             results = []
-            with ThreadPoolExecutor(max_workers=DEFAULT_MAX_JOBS) as executor:
-                future_to_k = {executor.submit(fit_kmeans, k): k for k in k_range}
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_k = {executor.submit(fit_one_k, k): k for k in k_range}
                 for future in as_completed(future_to_k):
                     k, labels, inertia_val, silhouette, cluster_counts = future.result()
                     results.append((k, labels, inertia_val, silhouette, cluster_counts))
@@ -590,9 +657,14 @@ class ClusterAnalysisPipeline:
         """Run K-means clustering analysis using pipeline approach."""
 
         feature_columns = features_ordered_by_importance[: self.n_top_features]
-        # don't use clip_outliers as this is skipped in deployment:
-        # clustering_data = clip_outliers(data[feature_columns], self.clip_threshold[0], self.clip_threshold[1])
-        clustering_data = cast(pd.DataFrame, data[feature_columns])
+        # Clip outliers to match elbow_method's preprocessing, so the cluster sizes
+        # reported here match the elbow table for the same (n_features, k).
+        clipped, _, _ = clip_outliers(
+            cast(pd.DataFrame, data[feature_columns]),
+            self.clip_threshold[0],
+            self.clip_threshold[1],
+        )
+        clustering_data = cast(pd.DataFrame, clipped)
         transform_columns, transform_columns_index = self.get_transform_columns(clustering_data)
         pipeline = self.create_clustering_pipeline(
             n_clusters=self.n_clusters,
@@ -618,15 +690,24 @@ class ClusterAnalysisPipeline:
                 index=False,
             )
 
-        # Save cluster labels:
-        data_with_cluster_label = data[self.merge_features].copy()
-        data_with_cluster_label["cluster_label"] = cluster_label
-        data_with_cluster_label.to_parquet(
-            self.output_path
-            / "output"
-            / f"cluster_label_top_features_{self.n_top_features}_k_{self.n_clusters}.parquet",
-            index=False,
+        # Save cluster labels into the shared parquet; one column per <model>-n_features_<N>-k_<K>.
+        # Re-running the same (model, n_features, k) overwrites only its own column.
+        new_labels = data[self.merge_features].copy()
+        new_labels[self.cluster_label_column] = cluster_label
+
+        merge_cols: List[str] = (
+            [self.merge_features] if isinstance(self.merge_features, str) else list(self.merge_features)
         )
+        labels_path = self.cluster_labels_file_path
+        if labels_path.exists():
+            existing = pd.read_parquet(labels_path)
+            if self.cluster_label_column in existing.columns:
+                existing = existing.drop(columns=[self.cluster_label_column])
+            combined = existing.merge(new_labels, on=merge_cols, how="outer")
+        else:
+            combined = new_labels
+        labels_path.parent.mkdir(parents=True, exist_ok=True)
+        combined.to_parquet(labels_path, index=False)
 
         # Save pipeline model
         self.save_pipeline_model(pipeline)
@@ -878,13 +959,14 @@ class ClusterAnalysisPipeline:
         merge_cols: List[str] = (
             [self.merge_features] if isinstance(self.merge_features, str) else list(self.merge_features)
         )
-        cluster_column = "cluster_label"
+        cluster_column = self.cluster_label_column
         data_with_cluster_label = pd.read_parquet(
-            self.output_path
-            / "output"
-            / f"cluster_label_top_features_{self.n_top_features}_k_{self.n_clusters}.parquet",
+            self.cluster_labels_file_path,
             columns=[cluster_column] + merge_cols,
         )
+        # Outer-merged shared file can leave NaN where another model clustered different rows.
+        data_with_cluster_label = data_with_cluster_label.dropna(subset=[cluster_column])
+        data_with_cluster_label[cluster_column] = data_with_cluster_label[cluster_column].astype(int)
         unique_clusters = data_with_cluster_label[cluster_column].unique()
 
         attach_data = self.load_attach_data(reload=reload)
@@ -919,7 +1001,7 @@ class ClusterAnalysisPipeline:
                 how="inner",
                 suffixes=("", "_y"),
             )
-            cluster_data = cluster_data[attach_data.columns]
+            cluster_data = cluster_data[list(attach_data.columns) + [cluster_column]]
             cluster_data.to_parquet(self.output_path / "output" / file_name, index=False)
             num_samples += len(cluster_data)
 
