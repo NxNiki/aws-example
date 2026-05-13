@@ -302,6 +302,7 @@ def generate_query():
                 t.session_group,
                 t.min_created_at,
                 t.max_created_at,
+                t.spin_id,
                 t.fg_rounds,
                 t.bet_amount,
                 t.delta_bet_amount,
@@ -784,6 +785,6 @@ if __name__ == "__main__":
     query_raw_stats, query_grouped_stats = generate_query()
     output_suffix = _build_output_suffix(SELECTED_GROUPS)
     execute_query(redshift_loader, f"ss03_features_enriched_{output_suffix}", query_raw_stats)
-    execute_query(redshift_loader, f"ss03_features_grouped_{output_suffix}", query_grouped_stats)
+    # execute_query(redshift_loader, f"ss03_features_grouped_{output_suffix}", query_grouped_stats)
 
     redshift_loader.close()
