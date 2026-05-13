@@ -34,7 +34,9 @@ Public API (imported by game_stats_monitor):
 
 from __future__ import annotations
 
+import inspect
 import logging
+import re
 from datetime import date, datetime, timedelta
 from functools import cached_property
 from typing import ClassVar, Dict, FrozenSet, List, Optional, Set, Tuple, Union
@@ -207,6 +209,57 @@ class DataMetrics:
     def date_col(self) -> str:
         """First element of ``key_cols`` — always the time dimension."""
         return self.key_cols[0]
+
+    # ------------------------------------------------------------------
+    # Schema-dependency introspection
+    # ------------------------------------------------------------------
+
+    _user_col_pattern: ClassVar = re.compile(r'pl\.col\(\s*"(user_[A-Za-z0-9_]+)"\s*\)')
+    _self_method_pattern: ClassVar = re.compile(r"self\._([A-Za-z_][A-Za-z0-9_]*)")
+
+    @classmethod
+    def _source_user_col_deps(cls, attr_name: str, _seen: Optional[Set[str]] = None) -> Set[str]:
+        """Pull ``user_*`` deps out of one ``self._<attr_name>`` body, recursing into helpers it calls.
+
+        ``attr_name`` may be either a ``cached_property`` (e.g. ``rtp``) or a
+        plain method (e.g. ``_count_at_horizon``). Internal helpers count
+        too because retention metrics route through ``_cohorts`` /
+        ``_presence_map`` rather than touching ``pl.col("user_*")`` directly.
+        """
+        if _seen is None:
+            _seen = set()
+        if attr_name in _seen:
+            return set()
+        _seen.add(attr_name)
+
+        prop = getattr(cls, attr_name, None)
+        func = getattr(prop, "func", None) or (prop if callable(prop) else None)
+        if func is None:
+            return set()
+        try:
+            src = inspect.getsource(func)
+        except (OSError, TypeError):
+            return set()
+
+        deps = set(cls._user_col_pattern.findall(src))
+        for ref in cls._self_method_pattern.findall(src):
+            deps |= cls._source_user_col_deps(f"_{ref}", _seen)
+        return deps
+
+    @classmethod
+    def metric_user_col_deps(cls, metric_name: str) -> Set[str]:
+        """Return the ``user_*`` columns a metric needs (transitively).
+
+        Used by the dashboard to filter which derived metrics are
+        offerable for a given game's data — without it, a fishhunter
+        config could expose slot-only metrics like ``active_user_no_fg_ratio``
+        (depends on ``user_num_bets_fg``) and crash on access. We
+        introspect each metric body for ``pl.col("user_*")`` references,
+        chasing ``self._another_attr`` references through both
+        ``cached_property`` metrics and internal helper methods. Pure
+        regex is enough — metric bodies are simple aggregations.
+        """
+        return cls._source_user_col_deps(f"_{metric_name}")
 
     # ------------------------------------------------------------------
     # Dict-like interface
@@ -1007,6 +1060,7 @@ ENRICH_USER_ROW_INPUT_COLUMNS: FrozenSet[str] = frozenset(
         "user_num_bets_fg",
         "user_total_bet",
         "user_total_bet_bg",
+        "user_avg_bet_amount",
         "user_total_payout",
         "user_total_payout_bg",
         "user_total_payout_fg",

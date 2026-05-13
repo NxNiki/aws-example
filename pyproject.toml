@@ -7,6 +7,7 @@ readme = "README.md"
 packages = [
     { include = "bituslabs_ds", from = "src" },
     { include = "dashboards", from = "src" },
+    { include = "rag_service", from = "src" },
 ]
 
 [tool.poetry.dependencies]
@@ -59,6 +60,7 @@ optional = true
 [tool.poetry.group.dashboard.dependencies]
 matplotlib = "^3.9.0"
 plotly = "^6.3.1"
+kaleido = ">=1.0.0"
 dash = "^3.2.0"
 polars = "^1.38.1"  # avoid 1.38.0 (yanked on PyPI)
 gunicorn = "^22.0"  # production WSGI server; replaces Flask dev server in Docker
@@ -73,6 +75,24 @@ langgraph = ">=0.2.0"
 fastapi = ">=0.115.0"
 uvicorn = {extras = ["standard"], version = ">=0.30.0"}
 atlassian-python-api = ">=3.41.0"
+requests = ">=2.32.0"
+
+# RAG microservice — its own group keeps the service image slim
+# (no langchain, no dash). Only the indexer/retriever/FastAPI app pull this in.
+[tool.poetry.group.rag_service]
+optional = true
+[tool.poetry.group.rag_service.dependencies]
+fastapi = ">=0.115.0"
+uvicorn = {extras = ["standard"], version = ">=0.30.0"}
+faiss-cpu = ">=1.8.0"
+opensearch-py = ">=2.6.0"
+# Embedding providers — at least one API key (OPENAI_API_KEY or
+# GOOGLE_API_KEY/GEMINI_API_KEY) must be set; both SDKs are installed so
+# the embedder can auto-fall-back at runtime.
+openai = ">=1.40.0"
+google-generativeai = ">=0.8.0"
+atlassian-python-api = ">=3.41.0"
+requests = ">=2.32.0"
 
 [tool.poetry.group.etl]
 optional = true 
@@ -97,6 +117,7 @@ pyjanitor = "^0.31.0"
 # pyspark-stubs = "^3.0.0.post3"
 types-pyyaml = "^6.0.12.20250822"
 types-paramiko = "^3.4.0"
+types-requests = "^2.32.0"
 jupyter = "^1.0"
 bokeh = "^3.4.3"
 ydata-profiling = "^4.16.1"
@@ -146,10 +167,15 @@ exclude = '''
 # Resolve `from dashboards.*` / `from bituslabs_ds.*` without sys.path hacks
 extraPaths = ["src"]
 
+[tool.mypy]
+# Same purpose as pyright's extraPaths — let mypy find the src/ layout.
+mypy_path = "src"
+ignore_missing_imports = true
+
 [tool.isort]
 profile = "black"
 line_length = 120
-known_first_party = ["bituslabs_ds", "dashboards"]
+known_first_party = ["bituslabs_ds", "dashboards", "rag_service"]
 known_third_party = ["numpy", "pandas"]
 combine_as_imports = true
 include_trailing_comma = true

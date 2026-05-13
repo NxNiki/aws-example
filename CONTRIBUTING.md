@@ -12,7 +12,13 @@ feature/* ──► dev ──► main (tagged release)
 - **`dev`** — integration branch. Direct commits allowed for small fixes; feature branches merge here first.
 - **`feature/*`** — short-lived, per-topic branches. Branch off `dev`, rebase onto `dev` during development, merge back to `dev` via squash-merge PR, then delete. One topic → one branch → one PR.
 
-## Three workflows
+### Never rewrite shared history
+
+`main` and `dev` — and any **integration feature branch** (one with sub-branches based on it, see Workflow 4) — are *shared*. Never rebase, force-push, or amend already-pushed commits on them. Rebase rewrites commit SHAs, so anyone who already pulled the old commits ends up with a divergent local history that is painful to reconcile.
+
+Branches you alone work on (typical short-lived `feature/*` branches) *may* be rebased — that's why Workflow 2 says "rebase onto `dev`, then `--force-with-lease`." The rule of thumb: if anyone else might have based work on a branch, treat it as shared and don't rewrite it.
+
+## Four workflows
 
 ### 1. Small change → commit directly to `dev`
 
@@ -178,9 +184,61 @@ git merge --ff-only main
 git push origin dev
 ```
 
+### 4. Multi-person feature → sub-branches → integration branch → PR to `dev`
+
+For a feature too large for one person, branch a long-lived **integration feature branch** off `dev`, then have each developer work on a short-lived **sub-branch** that fans into it. Sub-branches follow Workflow 2 (rebase + squash-merge); the integration branch is *shared* — no history rewrites.
+
+```text
+    dev          o---o---o---o
+                  \           \
+    feature/big    I---I'---I''---M    <- integration (squash-merged into dev)
+                    \   ^   ^
+                     \  |   |
+    feature/big/A     a-a'  |          (squash-merged into feature/big)
+                            |
+    feature/big/B           b---b'     (squash-merged into feature/big)
+```
+
+```bash
+# 1. create the integration branch off dev (one-time, by whoever starts)
+git checkout dev && git pull --ff-only origin dev
+git checkout -b feature/big
+git push -u origin feature/big
+
+# 2. each contributor: sub-branch off the integration branch
+git checkout feature/big && git pull --ff-only origin feature/big
+git checkout -b feature/big/component-a
+
+# 3. develop on the sub-branch; rebase onto feature/big (NOT dev)
+git fetch origin
+git rebase origin/feature/big
+git push --force-with-lease origin feature/big/component-a
+
+# 4. open a PR from sub-branch into the integration branch, squash-merge, delete
+gh pr create --base feature/big --title "[feat] component A of big-thing"
+gh pr merge <num> --squash --delete-branch
+
+# 5. keep the integration branch current with dev — MERGE, don't rebase
+#    (rebase would rewrite SHAs that other sub-branches are based on)
+git checkout feature/big && git pull --ff-only origin feature/big
+git fetch origin
+git merge origin/dev
+git push origin feature/big
+
+# 6. when the whole feature is ready: PR feature/big → dev, squash-merge as usual
+gh pr create --base dev --title "[feat] big-thing"
+gh pr merge <num> --squash --delete-branch
+```
+
+**When to choose Workflow 4 over Workflow 2**
+
+- **Default to Workflow 2.** Single owner, single short branch — simplest path, smallest review surface.
+- **Reach for Workflow 4** only when the feature is genuinely too big for one person *and* decomposes into independently-reviewable pieces. The cost is a long-lived integration branch that drifts from `dev` and needs periodic `git merge origin/dev` to stay current; the longer it lives, the more painful the eventual merge back to `dev`.
+- **Avoid two people pushing directly to one shared feature branch.** It works for a day or two, then becomes a worse version of Workflow 4 (every push is a coordination event, conflicts pile up, no isolated review). Switch to sub-branches as soon as the feature outgrows one person.
+
 ## Pull request descriptions
 
-Every PR (feature → dev, or dev → main) gets a structured body. Claude Code will draft this when asked.
+Every PR (feature → dev, sub-branch → integration branch, or dev → main) gets a structured body. Claude Code will draft this when asked.
 
 ```markdown
 ## Summary

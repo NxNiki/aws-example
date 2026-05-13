@@ -20,16 +20,16 @@ from scipy.stats import skew
 from skl2onnx import convert_sklearn
 from skl2onnx.common.data_types import FloatTensorType
 from sklearn.base import ClusterMixin
-from sklearn.cluster import AgglomerativeClustering, KMeans
+from sklearn.cluster import DBSCAN, AgglomerativeClustering, KMeans
 from sklearn.compose import ColumnTransformer
 from sklearn.decomposition import PCA
 from sklearn.feature_selection import VarianceThreshold
-from sklearn.metrics import silhouette_score
+from sklearn.metrics import pairwise_distances_argmin, silhouette_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import MinMaxScaler, PowerTransformer, RobustScaler, StandardScaler
 
 from bituslabs_ds.config import DEFAULT_MAX_JOBS, LOCAL_ROOT
-from bituslabs_ds.s3_utils import list_s3_files, read_files, read_local_cache, save_local_cache
+from bituslabs_ds.s3_utils import apply_row_filters, list_s3_files, read_files, read_local_cache, save_local_cache
 from bituslabs_ds.utils import (
     clip_outliers,
     column_iterator,
@@ -42,6 +42,55 @@ from bituslabs_ds.utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class SubsampledAgglomerativeClustering(ClusterMixin):
+    """Memory-bounded hierarchical clustering via random subsampling.
+
+    sklearn's :class:`AgglomerativeClustering` allocates an O(n^2) linkage matrix; at
+    n=70k that's ~40 GB. This wrapper fits the underlying model on at most
+    ``sample_size`` random rows, computes per-cluster centroids (means) of the sample
+    in the input feature space, then assigns every input row to its nearest centroid.
+    Exposes ``predict`` so it slots into a sklearn ``Pipeline`` for downstream label
+    attachment on new data.
+    """
+
+    def __init__(
+        self,
+        n_clusters: int = 5,
+        linkage: str = "ward",
+        sample_size: int = 10000,
+        random_state: int = 42,
+    ):
+        self.n_clusters = n_clusters
+        self.linkage = linkage
+        self.sample_size = sample_size
+        self.random_state = random_state
+
+    def fit(self, X, y=None, **kwargs: Any):
+        self.fit_predict(X, y=y, **kwargs)
+        return self
+
+    def fit_predict(self, X, y=None, **kwargs: Any):
+        X_arr = np.asarray(X)
+        n = X_arr.shape[0]
+        if n > self.sample_size:
+            rng = np.random.default_rng(self.random_state)
+            sample_idx = rng.choice(n, self.sample_size, replace=False)
+            X_sample = X_arr[sample_idx]
+            logger.info(f"hierarchical: subsampling {self.sample_size} of {n} rows for AgglomerativeClustering fit")
+        else:
+            X_sample = X_arr
+
+        agg = AgglomerativeClustering(n_clusters=self.n_clusters, linkage=self.linkage)
+        sample_labels = agg.fit_predict(X_sample)
+
+        self.cluster_centers_ = np.vstack([X_sample[sample_labels == k].mean(axis=0) for k in range(self.n_clusters)])
+        self.labels_ = pairwise_distances_argmin(X_arr, self.cluster_centers_)
+        return self.labels_
+
+    def predict(self, X):
+        return pairwise_distances_argmin(np.asarray(X), self.cluster_centers_)
 
 
 class ClusterAnalysisPipeline:
@@ -87,6 +136,21 @@ class ClusterAnalysisPipeline:
     @property
     def cluster_model(self):
         return self._config["cluster_analysis"].get("model", "kmeans")
+
+    @property
+    def cluster_label_column(self):
+        # DBSCAN: n_clusters is meaningless (clusters emerge from density); encode eps/min_samples instead.
+        if self.cluster_model == "dbscan":
+            cfg = self._config["cluster_analysis"]
+            eps = cfg.get("dbscan_eps", 0.5)
+            min_samples = cfg.get("dbscan_min_samples", 5)
+            return f"dbscan-n_features_{self.n_top_features}-eps_{eps}-ms_{min_samples}"
+        return f"{self.cluster_model}-n_features_{self.n_top_features}-k_{self.n_clusters}"
+
+    @property
+    def cluster_labels_file_path(self):
+        """Shared parquet across all (model, n_features, k) runs; one column per run."""
+        return self.work_dir / self._config["project_name"] / "cluster_labels.parquet"
 
     @property
     def key_features(self):
@@ -237,6 +301,7 @@ class ClusterAnalysisPipeline:
 
         output_file = self._config["data_loader"]["attach_data"]["local_cache"]
         local_cache_path = f"{self.work_dir}/{output_file}"
+        row_filters = self._config["data_loader"]["attach_data"].get("row_filters")
 
         if not reload and os.path.exists(local_cache_path):
             logger.info(f"read local attach data: {local_cache_path}")
@@ -255,6 +320,7 @@ class ClusterAnalysisPipeline:
             valid_groups = group_counts.loc[group_counts["count"] == self.session_length, merge_cols]
             data = data.merge(valid_groups, on=merge_cols, how="inner")
             save_local_cache(data, local_cache_path)
+        data = apply_row_filters(cast(pd.DataFrame, data), row_filters)
         return cast(pd.DataFrame, data)
 
     def load_cluster_data(
@@ -275,6 +341,7 @@ class ClusterAnalysisPipeline:
 
         output_file = self._config["data_loader"]["cluster_data"]["local_cache"]
         local_cache_path = f"{self.work_dir}/{output_file}"
+        row_filters = self._config["data_loader"]["cluster_data"].get("row_filters")
 
         if not reload and os.path.exists(local_cache_path):
             logger.info(f"read local attach data: {local_cache_path}")
@@ -300,6 +367,7 @@ class ClusterAnalysisPipeline:
             data, _ = remove_outliers(cast(pd.DataFrame, data), self.outlier_threshold)
             save_local_cache(cast(pd.DataFrame, data), local_cache_path)
 
+        data = apply_row_filters(cast(pd.DataFrame, data), row_filters)
         return cast(pd.DataFrame, data)
 
     def preprocess_data(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -414,7 +482,7 @@ class ClusterAnalysisPipeline:
         plt.savefig(self.output_path / "figures" / "Feature Importance Rank.png")
         plt.close()
 
-    def create_cluster_model(self, n_clusters: int) -> ClusterMixin:
+    def create_cluster_model(self, n_clusters: int, eps: Optional[float] = None) -> ClusterMixin:
         if self.cluster_model == "kmeans":
             return KMeans(
                 n_clusters=n_clusters,
@@ -422,9 +490,22 @@ class ClusterAnalysisPipeline:
                 n_init=self._config["cluster_analysis"].get("n_init", 10),
             )
         elif self.cluster_model == "hierarchical":
-            # AgglomerativeClustering does not use random_state or n_init
-            return AgglomerativeClustering(
-                n_clusters=n_clusters, linkage=self._config["cluster_analysis"].get("linkage", "ward")
+            # AgglomerativeClustering has O(n^2) memory; we subsample to keep it bounded.
+            return SubsampledAgglomerativeClustering(
+                n_clusters=n_clusters,
+                linkage=self._config["cluster_analysis"].get("linkage", "ward"),
+                sample_size=self._config["cluster_analysis"].get("hierarchical_sample_size", 10000),
+                random_state=self._config["cluster_analysis"]["random_state"],
+            )
+        elif self.cluster_model == "dbscan":
+            # DBSCAN ignores n_clusters: cluster count emerges from density. Returns -1 for noise.
+            # sklearn DBSCAN has no random_state and no predict (refit-only).
+            # `eps` override is used by elbow_method when sweeping eps_range; otherwise fall back
+            # to the config value.
+            return DBSCAN(
+                eps=eps if eps is not None else self._config["cluster_analysis"].get("dbscan_eps", 0.5),
+                min_samples=self._config["cluster_analysis"].get("dbscan_min_samples", 5),
+                n_jobs=-1,
             )
         else:
             logger.critical(f"{self.cluster_model} not supported, fallback to kmeans")
@@ -438,13 +519,16 @@ class ClusterAnalysisPipeline:
         self,
         n_clusters: int = 5,
         transform_columns_index: Optional[List[int]] = None,
+        eps: Optional[float] = None,
     ) -> Pipeline:
         """
         Create and fit a clustering pipeline with optional power transformation.
 
         Args:
             transform_columns: List of column names to apply power transformation to
-            n_clusters: Number of clusters for K-means
+            n_clusters: Number of clusters for K-means / hierarchical (ignored by DBSCAN)
+            eps: DBSCAN neighborhood radius override (only used when model='dbscan',
+                e.g. when sweeping eps_range in elbow_method).
 
         Returns:
             Tuple of (fitted_pipeline, cluster_labels)
@@ -462,14 +546,19 @@ class ClusterAnalysisPipeline:
             pipeline_steps.append(("power_transform", preprocessor))
 
         # avoid robust scaler as it gives werid data pattern and destroys clustering analyis.
-        cluster_model = self.create_cluster_model(n_clusters)
+        cluster_model = self.create_cluster_model(n_clusters, eps=eps)
         pipeline_steps.extend([("scaler", self.get_scaler()), ("cluster", cluster_model)])
         pipeline = Pipeline(pipeline_steps)
 
         logger.info(f"Created clustering pipeline with {len(pipeline_steps)} steps")
         logger.info(f"Pipeline steps: {[step[0] for step in pipeline_steps]}")
         logger.info(f"clustering algorithm: {self.cluster_model}")
-        logger.info(f"n_clusters: {n_clusters}")
+        if self.cluster_model == "dbscan":
+            logger.info(
+                f"dbscan eps: {eps if eps is not None else self._config['cluster_analysis'].get('dbscan_eps', 0.5)}"
+            )
+        else:
+            logger.info(f"n_clusters: {n_clusters}")
 
         return pipeline
 
@@ -478,10 +567,24 @@ class ClusterAnalysisPipeline:
         data: pd.DataFrame,
         features_ordered_by_importance: List[str],
     ) -> Tuple[Dict[Any, Dict[Any, Any]], List[float], List[float]]:
-        """Run elbow method to determine optimal number of clusters."""
+        """Sweep the model's primary parameter and report fit quality per value.
 
-        k_range = self._config["elbow_method"]["k_range"]
+        For kmeans / hierarchical the swept parameter is ``n_clusters`` taken from
+        ``elbow_method.k_range``. For DBSCAN it is ``eps`` taken from
+        ``elbow_method.eps_range`` (``n_clusters`` is meaningless for DBSCAN, so
+        sweeping it is wasted work).
+        """
+
         n_features = self._config["elbow_method"]["top_features"]
+        if self.cluster_model == "dbscan":
+            param_range = self._config["elbow_method"].get("eps_range")
+            if not param_range:
+                raise ValueError("elbow_method.eps_range must be set in the config when model='dbscan'")
+            param_label = "eps"
+        else:
+            param_range = self._config["elbow_method"]["k_range"]
+            param_label = "k"
+
         cluster_indices = {}
         clipped = clip_outliers(
             cast(pd.DataFrame, data[features_ordered_by_importance]),
@@ -492,62 +595,88 @@ class ClusterAnalysisPipeline:
         upper_bounds, lower_bounds = clipped[1], clipped[2]
 
         for df_x, n in column_iterator(data, features_ordered_by_importance, n_features):
-            cluster_indices_by_k = {}
+            cluster_indices_by_param = {}
             inertia = []
             silhouette_scores = []
             cluster_sizes = []
 
-            def fit_kmeans(k):
+            def fit_one_param(param):
                 _, transform_columns_index = self.get_transform_columns(df_x)
-                cluster_pipeline = self.create_clustering_pipeline(
-                    n_clusters=k, transform_columns_index=transform_columns_index
-                )
+                if self.cluster_model == "dbscan":
+                    cluster_pipeline = self.create_clustering_pipeline(
+                        n_clusters=self.n_clusters,
+                        transform_columns_index=transform_columns_index,
+                        eps=param,
+                    )
+                else:
+                    cluster_pipeline = self.create_clustering_pipeline(
+                        n_clusters=param, transform_columns_index=transform_columns_index
+                    )
                 labels = cluster_pipeline.fit_predict(df_x)
                 if self.cluster_model == "kmeans":
                     inertia_val = cluster_pipeline.named_steps["cluster"].inertia_
                 else:
                     inertia_val = np.nan
                 x_transformed = cluster_pipeline[:-1].transform(df_x)
-                silhouette = calculate_silhouette_score(x_transformed, labels)
-                cluster_counts = np.bincount(labels)
-                return k, labels, inertia_val, silhouette, cluster_counts
+                if self.cluster_model == "dbscan":
+                    # Silhouette is misleading when noise is treated as its own "cluster";
+                    # restrict to non-noise rows so the score reflects actual cluster quality.
+                    mask = labels != -1
+                    if mask.sum() > 0 and len(np.unique(labels[mask])) >= 2:
+                        silhouette = calculate_silhouette_score(x_transformed[mask], labels[mask])
+                    else:
+                        silhouette = float("nan")
+                else:
+                    silhouette = calculate_silhouette_score(x_transformed, labels)
+                # np.bincount rejects negative labels; DBSCAN uses -1 for noise. np.unique
+                # returns counts sorted by label value (noise first, then clusters).
+                _, cluster_counts = np.unique(labels, return_counts=True)
+                return param, labels, inertia_val, silhouette, cluster_counts
 
+            # Hierarchical fits are memory-heavy even after subsampling; DBSCAN uses n_jobs=-1
+            # internally. Run both serially to avoid CPU/memory contention.
+            max_workers = 1 if self.cluster_model in ("hierarchical", "dbscan") else DEFAULT_MAX_JOBS
             results = []
-            with ThreadPoolExecutor(max_workers=DEFAULT_MAX_JOBS) as executor:
-                future_to_k = {executor.submit(fit_kmeans, k): k for k in k_range}
-                for future in as_completed(future_to_k):
-                    k, labels, inertia_val, silhouette, cluster_counts = future.result()
-                    results.append((k, labels, inertia_val, silhouette, cluster_counts))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_param = {executor.submit(fit_one_param, p): p for p in param_range}
+                for future in as_completed(future_to_param):
+                    param, labels, inertia_val, silhouette, cluster_counts = future.result()
+                    results.append((param, labels, inertia_val, silhouette, cluster_counts))
 
-            # Sort results by k to maintain order
-            results.sort(key=lambda x: k_range.index(x[0]))
-            for k, labels, inertia_val, silhouette, cluster_counts in results:
-                cluster_indices_by_k[k] = labels
+            # Sort results by param to maintain plot order
+            results.sort(key=lambda x: param_range.index(x[0]))
+            for param, labels, inertia_val, silhouette, cluster_counts in results:
+                cluster_indices_by_param[param] = labels
                 inertia.append(inertia_val)
                 silhouette_scores.append(silhouette)
                 cluster_sizes.append(cluster_counts)
 
-            cluster_indices[n] = cluster_indices_by_k
-            self._plot_elbow_method(k_range, inertia, silhouette_scores, cluster_sizes, n)
+            cluster_indices[n] = cluster_indices_by_param
+            self._plot_elbow_method(param_range, inertia, silhouette_scores, cluster_sizes, n, param_label)
 
         save_list(upper_bounds, str(self.output_path / "features" / "upper_bounds.json"))
         save_list(lower_bounds, str(self.output_path / "features" / "lower_bounds.json"))
         return cluster_indices, upper_bounds, lower_bounds
 
-    def _plot_elbow_method(self, k_range, inertia, silhouette_scores, cluster_sizes, n_features):
-        """Plot elbow method results."""
+    def _plot_elbow_method(self, param_range, inertia, silhouette_scores, cluster_sizes, n_features, param_label="k"):
+        """Plot elbow method results.
 
-        title = f"Elbow Method for Optimal k n_features({n_features})"
+        ``param_label`` is "k" for kmeans/hierarchical (number of clusters) or "eps" for DBSCAN
+        (neighborhood radius). The x-axis label and cluster-size column headers follow it.
+        """
+
+        title = f"Elbow Method for Optimal {param_label} n_features({n_features})"
         fig, ax1 = plt.subplots(figsize=(12, 9))
 
-        (line1,) = ax1.plot(k_range, inertia, marker="o", linestyle="-", label="Inertia")
-        ax1.set_xlabel("Number of Clusters (k)")
+        x_label = "Number of Clusters (k)" if param_label == "k" else "DBSCAN eps"
+        (line1,) = ax1.plot(param_range, inertia, marker="o", linestyle="-", label="Inertia")
+        ax1.set_xlabel(x_label)
         ax1.set_ylabel("Inertia")
         ax1.set_title(title, fontsize=16)
 
         ax2 = ax1.twinx()
         (line2,) = ax2.plot(
-            k_range, silhouette_scores, marker="s", linestyle="-", color="red", label="Silhouette Score"
+            param_range, silhouette_scores, marker="s", linestyle="-", color="red", label="Silhouette Score"
         )
         ax2.set_ylabel("Silhouette Score")
 
@@ -556,14 +685,18 @@ class ClusterAnalysisPipeline:
         ax1.legend(lines, labels, loc="upper right")
 
         # Add cluster sizes table
-        self._add_cluster_sizes_table(plt, k_range, cluster_sizes)
+        self._add_cluster_sizes_table(plt, param_range, cluster_sizes, param_label)
 
         plt.subplots_adjust(left=0.1, bottom=0.3)
         plt.savefig(self.output_path / "figures" / f"{title}.png")
         plt.close()
 
-    def _add_cluster_sizes_table(self, plt, k_range, cluster_sizes):
-        """Add cluster sizes table to elbow method plot."""
+    def _add_cluster_sizes_table(self, plt, param_range, cluster_sizes, param_label="k"):
+        """Add cluster sizes table to elbow method plot.
+
+        For DBSCAN the first row corresponds to noise (label ``-1``) since np.unique sorts
+        labels ascending; label it "noise" for clarity.
+        """
         max_clusters = max(len(sizes) for sizes in cluster_sizes)
         cluster_sizes_str = []
 
@@ -573,12 +706,15 @@ class ClusterAnalysisPipeline:
             cluster_sizes_str.append(row)
 
         cluster_sizes_table = list(map(list, zip(*cluster_sizes_str)))
-        row_labels = [f"C{i + 1}" for i in range(max_clusters)]
+        if param_label == "eps":
+            row_labels = ["noise"] + [f"C{i}" for i in range(max_clusters - 1)]
+        else:
+            row_labels = [f"C{i + 1}" for i in range(max_clusters)]
 
         plt.table(
             cellText=cluster_sizes_table,
             rowLabels=row_labels,
-            colLabels=[f"k={k}" for k in k_range],
+            colLabels=[f"{param_label}={p}" for p in param_range],
             cellLoc="center",
             loc="bottom",
             bbox=[0.0, -0.5, 1, 0.3],
@@ -590,9 +726,14 @@ class ClusterAnalysisPipeline:
         """Run K-means clustering analysis using pipeline approach."""
 
         feature_columns = features_ordered_by_importance[: self.n_top_features]
-        # don't use clip_outliers as this is skipped in deployment:
-        # clustering_data = clip_outliers(data[feature_columns], self.clip_threshold[0], self.clip_threshold[1])
-        clustering_data = cast(pd.DataFrame, data[feature_columns])
+        # Clip outliers to match elbow_method's preprocessing, so the cluster sizes
+        # reported here match the elbow table for the same (n_features, k).
+        clipped, _, _ = clip_outliers(
+            cast(pd.DataFrame, data[feature_columns]),
+            self.clip_threshold[0],
+            self.clip_threshold[1],
+        )
+        clustering_data = cast(pd.DataFrame, clipped)
         transform_columns, transform_columns_index = self.get_transform_columns(clustering_data)
         pipeline = self.create_clustering_pipeline(
             n_clusters=self.n_clusters,
@@ -618,15 +759,24 @@ class ClusterAnalysisPipeline:
                 index=False,
             )
 
-        # Save cluster labels:
-        data_with_cluster_label = data[self.merge_features].copy()
-        data_with_cluster_label["cluster_label"] = cluster_label
-        data_with_cluster_label.to_parquet(
-            self.output_path
-            / "output"
-            / f"cluster_label_top_features_{self.n_top_features}_k_{self.n_clusters}.parquet",
-            index=False,
+        # Save cluster labels into the shared parquet; one column per <model>-n_features_<N>-k_<K>.
+        # Re-running the same (model, n_features, k) overwrites only its own column.
+        new_labels = data[self.merge_features].copy()
+        new_labels[self.cluster_label_column] = cluster_label
+
+        merge_cols: List[str] = (
+            [self.merge_features] if isinstance(self.merge_features, str) else list(self.merge_features)
         )
+        labels_path = self.cluster_labels_file_path
+        if labels_path.exists():
+            existing = pd.read_parquet(labels_path)
+            if self.cluster_label_column in existing.columns:
+                existing = existing.drop(columns=[self.cluster_label_column])
+            combined = existing.merge(new_labels, on=merge_cols, how="outer")
+        else:
+            combined = new_labels
+        labels_path.parent.mkdir(parents=True, exist_ok=True)
+        combined.to_parquet(labels_path, index=False)
 
         # Save pipeline model
         self.save_pipeline_model(pipeline)
@@ -878,13 +1028,14 @@ class ClusterAnalysisPipeline:
         merge_cols: List[str] = (
             [self.merge_features] if isinstance(self.merge_features, str) else list(self.merge_features)
         )
-        cluster_column = "cluster_label"
+        cluster_column = self.cluster_label_column
         data_with_cluster_label = pd.read_parquet(
-            self.output_path
-            / "output"
-            / f"cluster_label_top_features_{self.n_top_features}_k_{self.n_clusters}.parquet",
+            self.cluster_labels_file_path,
             columns=[cluster_column] + merge_cols,
         )
+        # Outer-merged shared file can leave NaN where another model clustered different rows.
+        data_with_cluster_label = data_with_cluster_label.dropna(subset=[cluster_column])
+        data_with_cluster_label[cluster_column] = data_with_cluster_label[cluster_column].astype(int)
         unique_clusters = data_with_cluster_label[cluster_column].unique()
 
         attach_data = self.load_attach_data(reload=reload)
@@ -919,7 +1070,7 @@ class ClusterAnalysisPipeline:
                 how="inner",
                 suffixes=("", "_y"),
             )
-            cluster_data = cluster_data[attach_data.columns]
+            cluster_data = cluster_data[list(attach_data.columns) + [cluster_column]]
             cluster_data.to_parquet(self.output_path / "output" / file_name, index=False)
             num_samples += len(cluster_data)
 

@@ -100,7 +100,11 @@ def main(config_path: str):
         cluster_pipeline.get_cluster_stats()
 
     if cluster_pipeline.run_upload_result_to_s3:
-        upload_folder_to_s3(cluster_pipeline.output_path, S3_BUCKET, f"{cluster_pipeline.s3_prefix}_{time_tag}")
+        upload_folder_to_s3(
+            cluster_pipeline.output_path,
+            S3_BUCKET,
+            f"{cluster_pipeline.s3_prefix}/{cluster_pipeline.cluster_model}_{time_tag}",
+        )
 
     elapsed_time = time.time() - start_time
     logger.info(f"Total running time: {elapsed_time:.2f} seconds")
@@ -111,7 +115,8 @@ if __name__ == "__main__":
     # project = "deepdive"
     # project = "wucaishen"
     # project = "ss01"
-    project = "ss01_only_normalized"
+    # project = "ss01_only_normalized"
+    project = "ss03"
 
     current_path = os.path.abspath(os.path.dirname(__file__))
     parser = argparse.ArgumentParser(description="cluster analysis pipeline")

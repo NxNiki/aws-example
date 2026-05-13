@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import socket
+import uuid
 from datetime import datetime, timedelta
 from math import inf
 from pathlib import Path
@@ -12,7 +13,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import polars as pl
-from dash import Dash, Input, Output, State, callback_context, dcc, html, no_update
+from dash import ALL, Dash, Input, Output, State, callback_context, dcc, html, no_update
 from dash.development.base_component import Component
 from flask import request
 from plotly.subplots import make_subplots
@@ -59,6 +60,23 @@ _CHAT_PROVIDER_DROPDOWN_OPTIONS: list[dcc.Dropdown.Options] = [
     {"label": "GPT-4.1-mini (balanced)", "value": "openai:gpt-4.1-mini"},
     {"label": "GPT-4.1 (powerful)", "value": "openai:gpt-4.1"},
 ]
+
+# Per-figure export dimensions for the report-agent "Add to doc" button.
+# Widths are wider than the on-screen render so axis ticks and category
+# labels (especially the bar plots in Stats by Group) stay legible after
+# Confluence scales the image to its column width. Heights match the
+# dashboard so aspect ratios are preserved.
+_FIGURE_EXPORT_DIMENSIONS: Dict[str, tuple[int, int]] = {
+    "date-g1-plot": (1800, 430),
+    "date-g2-plot": (1800, 430),
+    "date-g3-plot": (1800, 430),
+    "group-g1-plot": (1800, 430),
+    "group-g2-plot": (1800, 430),
+    "group-g3-plot": (1800, 430),
+    "viz-p1-plot": (1800, 900),
+    "viz-p2-plot": (1800, 900),
+    "combined-plot": (1800, 950),
+}
 
 
 def _dropdown_options_from_strings(items: Sequence[str]) -> list[dcc.Dropdown.Options]:
@@ -344,6 +362,7 @@ class GameStatsDashboard:
         self._build_main_layout()
         self._register_callbacks()
         self._register_chat_callbacks()
+        self._register_report_tab_callbacks()
 
     @property
     def date_col(self) -> str:
@@ -353,6 +372,7 @@ class GameStatsDashboard:
         self.config = {}
         self.lfs_by_date = {}
         self.lf_bet = pl.DataFrame().lazy()
+        self.sessions = []
         self.df_bet_groups = []
         self.df_date_group_col = ""
         self.df_bet_group_col = ""
@@ -682,65 +702,25 @@ class GameStatsDashboard:
             [
                 html.Div(
                     [
-                        dcc.Dropdown(
-                            id="config-dropdown",
-                            options=self.config_files,
-                            value=self.config_files[0]["value"],
-                            clearable=False,
-                            style=dict(
-                                {
-                                    "width": "250px",
-                                    "marginRight": "50px",
-                                    "marginLeft": "8px",
-                                    "marginTop": "2px",
-                                    "marginBottom": "0px",
-                                }
-                            ),
-                        ),
-                        dcc.Tabs(
-                            id="navigator-tabs",
-                            value="tab-date",
-                            children=[
-                                dcc.Tab(
-                                    label="Stats by Date",
-                                    value="tab-date",
-                                    style=Styles.NAV_TAB,
-                                    selected_style=Styles.NAV_TAB_SELECTED,
-                                ),
-                                dcc.Tab(
-                                    label="Stats by Group",
-                                    value="tab-group",
-                                    style=Styles.NAV_TAB,
-                                    selected_style=Styles.NAV_TAB_SELECTED,
-                                ),
-                                dcc.Tab(
-                                    label="Stats Deepdive",
-                                    value="tab-viz",
-                                    style=Styles.NAV_TAB,
-                                    selected_style=Styles.NAV_TAB_SELECTED,
-                                ),
-                                dcc.Tab(
-                                    label="Weekly Report",
-                                    value="tab-weekly",
-                                    style=Styles.NAV_TAB,
-                                    selected_style=Styles.NAV_TAB_SELECTED,
-                                ),
-                                dcc.Tab(
-                                    label="Stats by Bet",
-                                    value="tab-bet",
-                                    style=Styles.NAV_TAB,
-                                    selected_style=Styles.NAV_TAB_SELECTED,
-                                ),
-                            ],
-                            style={"width": "1280px"},
-                        ),
                         html.Div(
                             [
+                                dcc.Dropdown(
+                                    id="config-dropdown",
+                                    options=self.config_files,
+                                    value=self.config_files[0]["value"],
+                                    clearable=False,
+                                    style={
+                                        "width": "330px",
+                                        "marginLeft": "8px",
+                                        "marginRight": "12px",
+                                    },
+                                ),
                                 html.Button(
                                     "Save Config",
                                     id="save-config-btn",
                                     n_clicks=0,
                                     style={
+                                        "marginLeft": "auto",
                                         "marginRight": "8px",
                                         "padding": "6px 12px",
                                         "cursor": "pointer",
@@ -875,10 +855,76 @@ class GameStatsDashboard:
                                     },
                                 ),
                             ],
-                            style={"display": "flex", "alignItems": "center", "marginLeft": "auto"},
+                            style={
+                                "display": "flex",
+                                "flexDirection": "row",
+                                "alignItems": "center",
+                                "width": "100%",
+                                "padding": "8px 0",
+                                "flexWrap": "wrap",
+                                "rowGap": "6px",
+                            },
+                        ),
+                        html.Div(
+                            [
+                                dcc.Tabs(
+                                    id="navigator-tabs",
+                                    value="tab-date",
+                                    children=[
+                                        dcc.Tab(
+                                            label="Stats by Date",
+                                            value="tab-date",
+                                            style=Styles.NAV_TAB,
+                                            selected_style=Styles.NAV_TAB_SELECTED,
+                                        ),
+                                        dcc.Tab(
+                                            label="Stats by Group",
+                                            value="tab-group",
+                                            style=Styles.NAV_TAB,
+                                            selected_style=Styles.NAV_TAB_SELECTED,
+                                        ),
+                                        dcc.Tab(
+                                            label="Stats Deepdive",
+                                            value="tab-viz",
+                                            style=Styles.NAV_TAB,
+                                            selected_style=Styles.NAV_TAB_SELECTED,
+                                        ),
+                                        dcc.Tab(
+                                            label="Weekly Report",
+                                            value="tab-weekly",
+                                            style=Styles.NAV_TAB,
+                                            selected_style=Styles.NAV_TAB_SELECTED,
+                                        ),
+                                        dcc.Tab(
+                                            label="Stats by Bet",
+                                            value="tab-bet",
+                                            style=Styles.NAV_TAB,
+                                            selected_style=Styles.NAV_TAB_SELECTED,
+                                        ),
+                                        dcc.Tab(
+                                            label="Report",
+                                            value="tab-report",
+                                            style=Styles.NAV_TAB,
+                                            selected_style=Styles.NAV_TAB_SELECTED,
+                                        ),
+                                    ],
+                                    style={"width": "1280px"},
+                                ),
+                            ],
+                            style={
+                                "width": "100%",
+                                "padding": "0 8px",
+                            },
                         ),
                     ],
-                    style=Styles.NAV_CONTAINER,
+                    style={
+                        "width": "100%",
+                        "minWidth": "330px",
+                        "display": "flex",
+                        "flexDirection": "column",
+                        "borderBottom": "1px solid #eee",
+                        "marginBottom": "20px",
+                    },
                 ),
                 dcc.Store(id="tab-date-g1-state", data=None),
                 dcc.Store(id="tab-date-g2-state", data=None),
@@ -917,8 +963,215 @@ class GameStatsDashboard:
                     id="tab-bet-content",
                     style={**Styles.PAGE_CONTENT, "display": "none"},
                 ),
+                html.Div(
+                    self._layout_report_tab(),
+                    id="tab-report-content",
+                    style={**Styles.PAGE_CONTENT, "display": "none"},
+                ),
                 self._layout_chat_dialog(),
             ]
+        )
+
+    @staticmethod
+    def _reference_status_pill(entry: Dict[str, Any]) -> html.Span:
+        """Inline ✓/✗/↗ indicator next to a reference URL row.
+
+        Status values come from ``persist_reference_url``:
+          * ``ok`` — Confluence fetch returned a body; show green ✓ + page title.
+          * ``error`` — fetch failed (bad URL, no permission); show red ✗ + msg.
+          * ``external`` — non-Confluence URL; show grey ↗ "external link".
+          * absent — empty / not yet checked; show nothing.
+        """
+        status = entry.get("status")
+        title = entry.get("title") or entry.get("url") or ""
+        err = entry.get("error") or ""
+        base = {
+            "marginLeft": "8px",
+            "fontSize": "11px",
+            "maxWidth": "260px",
+            "overflow": "hidden",
+            "textOverflow": "ellipsis",
+            "whiteSpace": "nowrap",
+        }
+        if status == "ok":
+            return html.Span(f"✓ {title}", title=title, style={**base, "color": "#2a7a2a"})
+        if status == "error":
+            return html.Span(f"✗ {err}", title=err, style={**base, "color": "#c00"})
+        if status == "external":
+            return html.Span("↗ external link", style={**base, "color": "#888"})
+        return html.Span("", style=base)
+
+    def _layout_report_tab(self) -> html.Div:
+        """Report tab: collects figures, generates descriptions/summary, exports to Confluence."""
+        return html.Div(
+            [
+                dcc.Store(id="report-figures", data=[]),
+                dcc.Store(id="report-summary", data=""),
+                # Each entry: {"id": uuid_hex, "url": str}. URLs are fetched
+                # lazily at generate / export time via report_agent.references.
+                dcc.Store(id="report-references", data=[]),
+                # Top bar: Confluence URL + language + export button
+                html.Div(
+                    [
+                        dcc.Input(
+                            id="report-doc-link",
+                            type="url",
+                            placeholder="Confluence doc URL",
+                            debounce=True,
+                            persistence=True,
+                            persistence_type="session",
+                            style={
+                                "flex": "1",
+                                "minWidth": "320px",
+                                "marginRight": "8px",
+                                "padding": "6px 10px",
+                                "border": "1px solid #ccc",
+                                "borderRadius": "4px",
+                                "fontSize": "13px",
+                                "height": "32px",
+                                "boxSizing": "border-box",
+                            },
+                        ),
+                        dcc.Dropdown(
+                            id="report-language",
+                            options=_dropdown_option_rows(
+                                [
+                                    ("English", "en"),
+                                    ("Chinese (Simplified)", "zh-Hans"),
+                                    ("Chinese (Traditional)", "zh-Hant"),
+                                ]
+                            ),
+                            value="en",
+                            clearable=False,
+                            persistence=True,
+                            persistence_type="session",
+                            style={"width": "200px", "marginRight": "8px"},
+                        ),
+                        html.Button(
+                            "Export to Doc",
+                            id="report-export-btn",
+                            n_clicks=0,
+                            style={
+                                "padding": "6px 14px",
+                                "cursor": "pointer",
+                                "backgroundColor": "#984EA3",
+                                "color": "white",
+                                "border": "none",
+                                "borderRadius": "4px",
+                                "fontSize": "13px",
+                                "fontWeight": "bold",
+                            },
+                        ),
+                        html.Div(
+                            id="report-export-status",
+                            style={"marginLeft": "12px", "fontSize": "12px", "color": "#666"},
+                        ),
+                    ],
+                    style={
+                        "display": "flex",
+                        "alignItems": "center",
+                        "marginBottom": "16px",
+                    },
+                ),
+                # References panel — user-curated context the agent reads
+                # at generate-time and lists in the exported doc footer.
+                html.Div(
+                    [
+                        html.Div(
+                            [
+                                html.H4(
+                                    "References",
+                                    style={**Styles.PANEL_HEADER, "display": "inline-block"},
+                                ),
+                                html.Button(
+                                    "Add reference",
+                                    id="report-add-reference-btn",
+                                    n_clicks=0,
+                                    style={
+                                        "marginLeft": "12px",
+                                        "padding": "4px 10px",
+                                        "cursor": "pointer",
+                                        "backgroundColor": "#377EB8",
+                                        "color": "white",
+                                        "border": "none",
+                                        "borderRadius": "4px",
+                                        "fontSize": "12px",
+                                    },
+                                ),
+                                html.Span(
+                                    "Confluence URLs are fetched (title + body) and given to "
+                                    "the LLM as 'Reference materials'. External URLs are still "
+                                    "listed in the exported References section.",
+                                    style={
+                                        "marginLeft": "12px",
+                                        "fontSize": "11px",
+                                        "color": "#888",
+                                    },
+                                ),
+                            ],
+                            style={"display": "flex", "alignItems": "center"},
+                        ),
+                        html.Div(id="report-references-container", style={"marginTop": "8px"}),
+                    ],
+                    style=Styles.SECTION,
+                ),
+                # Summary panel
+                html.Div(
+                    [
+                        html.Div(
+                            [
+                                html.H4("Summary", style={**Styles.PANEL_HEADER, "display": "inline-block"}),
+                                html.Button(
+                                    "Generate summary",
+                                    id="report-generate-summary-btn",
+                                    n_clicks=0,
+                                    style={
+                                        "marginLeft": "12px",
+                                        "padding": "4px 10px",
+                                        "cursor": "pointer",
+                                        "backgroundColor": "#377EB8",
+                                        "color": "white",
+                                        "border": "none",
+                                        "borderRadius": "4px",
+                                        "fontSize": "12px",
+                                    },
+                                ),
+                                html.Span(
+                                    id="report-summary-status",
+                                    style={"marginLeft": "10px", "fontSize": "11px", "color": "#666"},
+                                ),
+                            ],
+                            style={"display": "flex", "alignItems": "center"},
+                        ),
+                        dcc.Textarea(
+                            id="report-summary-display",
+                            placeholder=(
+                                "(No summary yet — click 'Generate summary'. You can edit "
+                                "the result, or add lines like  /prompt: tighten the second "
+                                "paragraph  to instruct the next regenerate.)"
+                            ),
+                            style={
+                                "width": "100%",
+                                "marginTop": "10px",
+                                "padding": "8px",
+                                "fontSize": "13px",
+                                "lineHeight": "1.6",
+                                "color": "#333",
+                                "border": "1px solid #ddd",
+                                "borderRadius": "4px",
+                                "minHeight": "120px",
+                                "fontFamily": "inherit",
+                                "resize": "vertical",
+                                "boxSizing": "border-box",
+                            },
+                        ),
+                    ],
+                    style=Styles.SECTION,
+                ),
+                # Per-figure panels container, rendered from report-figures store
+                html.Div(id="report-figures-container"),
+            ],
+            style={"padding": "8px"},
         )
 
     def _layout_inline_group_column_dropdown(
@@ -954,6 +1207,40 @@ class GameStatsDashboard:
                 ),
             ],
             style=style,
+        )
+
+    def _layout_add_to_report_panel(self, graph_id: str) -> html.Div:
+        """'Add to report' button + status row, sitting just under one figure."""
+        return html.Div(
+            [
+                html.Button(
+                    "Add to report",
+                    id={"type": "add-to-report-btn", "graph_id": graph_id},
+                    n_clicks=0,
+                    style={
+                        "marginRight": "8px",
+                        "padding": "5px 12px",
+                        "cursor": "pointer",
+                        "backgroundColor": "#984EA3",
+                        "color": "white",
+                        "border": "none",
+                        "borderRadius": "4px",
+                        "fontSize": "12px",
+                        "fontWeight": "bold",
+                    },
+                ),
+                html.Div(
+                    id={"type": "add-to-report-status", "graph_id": graph_id},
+                    style={"fontSize": "11px", "color": "#666"},
+                ),
+            ],
+            style={
+                "display": "flex",
+                "alignItems": "center",
+                "padding": "6px 8px",
+                "borderTop": "1px solid #eee",
+                "backgroundColor": "#fafafa",
+            },
         )
 
     def _layout_show_group_checklist_sections(
@@ -1180,7 +1467,8 @@ class GameStatsDashboard:
                                         id=f"date-{group_id}-plot",
                                         style={"height": "430px"},
                                         config=cast(Any, download_config),
-                                    )
+                                    ),
+                                    self._layout_add_to_report_panel(f"date-{group_id}-plot"),
                                 ],
                                 style=Styles.GRAPH_CONTAINER,
                             ),
@@ -1383,7 +1671,10 @@ class GameStatsDashboard:
                             ),
                             # --- GRAPH PANEL ---
                             html.Div(
-                                [dcc.Graph(id=dl_id, style={"height": "430px"}, config=cast(Any, download_config))],
+                                [
+                                    dcc.Graph(id=dl_id, style={"height": "430px"}, config=cast(Any, download_config)),
+                                    self._layout_add_to_report_panel(dl_id),
+                                ],
                                 style=Styles.GRAPH_CONTAINER,
                             ),
                         ],
@@ -1403,8 +1694,22 @@ class GameStatsDashboard:
         )
 
     def _viz_derived_metric_options(self) -> list[dcc.Dropdown.Options]:
-        """Derived metric options — all ``DataMetrics.METRICS`` (computed aggregates)."""
-        return _dropdown_options_from_strings(sorted(DataMetrics.METRICS))
+        """Derived metric options, filtered to those whose user-column dependencies are present.
+
+        ``DataMetrics.METRICS`` is the union across game families — slot-only
+        columns like ``user_num_bets_fg`` aren't in fishhunter's ETL output, and
+        offering metrics that depend on them produces ``ColumnNotFoundError``
+        when the user picks one. ``DataMetrics.metric_user_col_deps`` does the
+        introspection so this list is always a subset of what's computable on
+        the currently-loaded data.
+        """
+        gran = next(iter(self.date_files_config.keys()), None)
+        lf = self.lfs_by_date.get(gran) if gran else None
+        if lf is None or lf.collect_schema().len() == 0:
+            return _dropdown_options_from_strings(sorted(DataMetrics.METRICS))
+        schema_cols = set(lf.collect_schema().names())
+        valid = sorted(m for m in DataMetrics.METRICS if DataMetrics.metric_user_col_deps(m).issubset(schema_cols))
+        return _dropdown_options_from_strings(valid)
 
     def _viz_user_metric_options(self) -> list[dcc.Dropdown.Options]:
         """User-level raw metric options — every ``user_*`` column actually present in the loaded parquet.
@@ -1847,7 +2152,10 @@ class GameStatsDashboard:
                                 style=Styles.CONTROL_PANEL_CONTAINER,
                             ),
                             html.Div(
-                                [dcc.Graph(id=dl_id, style={"height": "900px"}, config=cast(Any, download_config))],
+                                [
+                                    dcc.Graph(id=dl_id, style={"height": "900px"}, config=cast(Any, download_config)),
+                                    self._layout_add_to_report_panel(dl_id),
+                                ],
                                 style=Styles.GRAPH_CONTAINER,
                             ),
                         ],
@@ -2083,7 +2391,13 @@ class GameStatsDashboard:
                     style=Styles.CONTROL_PANEL_CONTAINER,
                 ),
                 # --- MAIN PLOT ---
-                html.Div([dcc.Graph(id="combined-plot", style={"height": "950px"})], style=Styles.GRAPH_CONTAINER),
+                html.Div(
+                    [
+                        dcc.Graph(id="combined-plot", style={"height": "950px"}),
+                        self._layout_add_to_report_panel("combined-plot"),
+                    ],
+                    style=Styles.GRAPH_CONTAINER,
+                ),
             ],
             style=Styles.FLEX_ROW,
         )
@@ -2099,6 +2413,24 @@ class GameStatsDashboard:
             Output("tab-viz-content", "children"),
             Output("tab-weekly-content", "children"),
             Output("tab-bet-content", "children"),
+            # Reset every persistent Store on a config switch so
+            # ``restore_dashboard_state`` (which fires on tab-content change)
+            # short-circuits at its trigger guard and can't re-apply the
+            # previous config's metric/group selections to the freshly built
+            # dropdowns. Without this, a user who has loaded any saved S3
+            # config in the session leaks ss02 metric picks (e.g.
+            # ``active_user_no_fg_ratio``) into a fishhunter layout and
+            # crashes the viz callback on a missing column.
+            Output("dashboard-load-trigger", "data", allow_duplicate=True),
+            Output("tab-date-g1-state", "data", allow_duplicate=True),
+            Output("tab-date-g2-state", "data", allow_duplicate=True),
+            Output("tab-date-g3-state", "data", allow_duplicate=True),
+            Output("tab-group-g1-state", "data", allow_duplicate=True),
+            Output("tab-group-g2-state", "data", allow_duplicate=True),
+            Output("tab-group-g3-state", "data", allow_duplicate=True),
+            Output("tab-viz-p1-state", "data", allow_duplicate=True),
+            Output("tab-viz-p2-state", "data", allow_duplicate=True),
+            Output("tab-bet-state", "data", allow_duplicate=True),
             Input("config-dropdown", "value"),
             prevent_initial_call=True,
         )
@@ -2112,6 +2444,16 @@ class GameStatsDashboard:
                 self._layout_stats_visualization(),
                 self._layout_weekly_report(),
                 self._layout_stats_by_bet(),
+                None,  # dashboard-load-trigger
+                None,  # tab-date-g1-state
+                None,  # tab-date-g2-state
+                None,  # tab-date-g3-state
+                None,  # tab-group-g1-state
+                None,  # tab-group-g2-state
+                None,  # tab-group-g3-state
+                None,  # tab-viz-p1-state
+                None,  # tab-viz-p2-state
+                None,  # tab-bet-state
             )
 
         @self.app.callback(
@@ -2120,6 +2462,7 @@ class GameStatsDashboard:
             Output("tab-viz-content", "style"),
             Output("tab-weekly-content", "style"),
             Output("tab-bet-content", "style"),
+            Output("tab-report-content", "style"),
             Input("navigator-tabs", "value"),
             prevent_initial_call=False,
         )
@@ -2129,7 +2472,8 @@ class GameStatsDashboard:
             viz_style = {**Styles.PAGE_CONTENT, "display": "block" if tab == "tab-viz" else "none"}
             weekly_style = {**Styles.PAGE_CONTENT, "display": "block" if tab == "tab-weekly" else "none"}
             bet_style = {**Styles.PAGE_CONTENT, "display": "block" if tab == "tab-bet" else "none"}
-            return date_style, group_style, viz_style, weekly_style, bet_style
+            report_style = {**Styles.PAGE_CONTENT, "display": "block" if tab == "tab-report" else "none"}
+            return date_style, group_style, viz_style, weekly_style, bet_style, report_style
 
         @self.app.callback(
             Output("weekly-report-chart", "figure"),
@@ -5619,6 +5963,641 @@ class GameStatsDashboard:
 
             messages_ui = self._render_chat_messages(history)
             return messages_ui, history, status
+
+    def _register_report_tab_callbacks(self) -> None:
+        """Wire 'Add to report' buttons + Report tab interactions (description, summary, export)."""
+        figure_states = [
+            State("date-g1-plot", "figure"),
+            State("date-g2-plot", "figure"),
+            State("date-g3-plot", "figure"),
+            State("group-g1-plot", "figure"),
+            State("group-g2-plot", "figure"),
+            State("group-g3-plot", "figure"),
+            State("viz-p1-plot", "figure"),
+            State("viz-p2-plot", "figure"),
+            State("combined-plot", "figure"),
+        ]
+        figure_state_graph_ids = [
+            "date-g1-plot",
+            "date-g2-plot",
+            "date-g3-plot",
+            "group-g1-plot",
+            "group-g2-plot",
+            "group-g3-plot",
+            "viz-p1-plot",
+            "viz-p2-plot",
+            "combined-plot",
+        ]
+
+        @self.app.callback(
+            Output("report-figures", "data", allow_duplicate=True),
+            Output({"type": "add-to-report-status", "graph_id": ALL}, "children"),
+            Input({"type": "add-to-report-btn", "graph_id": ALL}, "n_clicks"),
+            State({"type": "add-to-report-btn", "graph_id": ALL}, "id"),
+            State("report-figures", "data"),
+            State("config-dropdown", "value"),
+            State("navigator-tabs", "value"),
+            *figure_states,
+            prevent_initial_call=True,
+        )
+        def add_to_report(
+            click_counts: List[Optional[int]],
+            button_ids: List[Dict[str, str]],
+            current_figures: Optional[List[Dict[str, Any]]],
+            config_name: Optional[str],
+            tab_value: Optional[str],
+            *figures: Optional[Dict[str, Any]],
+        ) -> Any:
+            n = len(button_ids)
+            triggered = callback_context.triggered_id
+            if not isinstance(triggered, dict) or triggered.get("type") != "add-to-report-btn":
+                return no_update, [no_update] * n
+
+            target_graph_id = triggered.get("graph_id")
+            if not isinstance(target_graph_id, str):
+                return no_update, [no_update] * n
+
+            try:
+                btn_idx = next(i for i, bid in enumerate(button_ids) if bid.get("graph_id") == target_graph_id)
+            except StopIteration:
+                return no_update, [no_update] * n
+
+            statuses: List[Any] = [no_update] * n
+            if not (click_counts[btn_idx] or 0):
+                return no_update, statuses
+
+            try:
+                fig_idx = figure_state_graph_ids.index(target_graph_id)
+            except ValueError:
+                statuses[btn_idx] = html.Span("Unknown figure id.", style={"color": "#c00"})
+                return no_update, statuses
+
+            figure_dict = figures[fig_idx] if fig_idx < len(figures) else None
+            if not figure_dict or not figure_dict.get("data"):
+                statuses[btn_idx] = html.Span("Figure is empty — render it first.", style={"color": "#c00"})
+                return no_update, statuses
+
+            try:
+                from dashboards.report_agent.data_summary import extract_data_summary
+            except ImportError as exc:
+                statuses[btn_idx] = html.Span(f"Missing dep: {exc}", style={"color": "#c00"})
+                return no_update, statuses
+
+            width, height = _FIGURE_EXPORT_DIMENSIONS.get(target_graph_id, (1200, 600))
+            entry = {
+                "id": uuid.uuid4().hex,
+                "graph_id": target_graph_id,
+                "tab": tab_value,
+                "config_name": config_name,
+                "fig_dict": figure_dict,
+                "data_summary": extract_data_summary(figure_dict),
+                "description": "",
+                "export_width": width,
+                "export_height": height,
+            }
+            new_figures = list(current_figures or []) + [entry]
+            statuses[btn_idx] = html.Span(
+                f"Added to report (now {len(new_figures)}).",
+                style={"color": "#2a7a2a"},
+            )
+            return new_figures, statuses
+
+        @self.app.callback(
+            Output("report-figures-container", "children"),
+            Input("report-figures", "data"),
+        )
+        def render_report_panels(figures: Optional[List[Dict[str, Any]]]) -> Any:
+            figures = figures or []
+            if not figures:
+                return html.Div(
+                    "No figures yet — click 'Add to report' under any chart to start.",
+                    style={"color": "#888", "fontStyle": "italic", "padding": "16px"},
+                )
+            panels: List[Component] = []
+            for idx, fig in enumerate(figures, start=1):
+                fig_id = fig.get("id", "")
+                description = fig.get("description") or ""
+                graph_id = fig.get("graph_id", "")
+                panels.append(
+                    html.Div(
+                        [
+                            html.Div(
+                                [
+                                    html.H4(
+                                        f"Figure {idx}",
+                                        style={**Styles.PANEL_HEADER, "display": "inline-block"},
+                                    ),
+                                    html.Span(
+                                        f"  ({graph_id})",
+                                        style={"color": "#888", "fontSize": "12px", "marginLeft": "8px"},
+                                    ),
+                                    html.Button(
+                                        "Generate description",
+                                        id={"type": "report-generate-desc-btn", "fig_id": fig_id},
+                                        n_clicks=0,
+                                        style={
+                                            "marginLeft": "12px",
+                                            "padding": "4px 10px",
+                                            "cursor": "pointer",
+                                            "backgroundColor": "#377EB8",
+                                            "color": "white",
+                                            "border": "none",
+                                            "borderRadius": "4px",
+                                            "fontSize": "12px",
+                                        },
+                                    ),
+                                    html.Button(
+                                        "Remove figure",
+                                        id={"type": "report-remove-btn", "fig_id": fig_id},
+                                        n_clicks=0,
+                                        style={
+                                            "marginLeft": "8px",
+                                            "padding": "4px 10px",
+                                            "cursor": "pointer",
+                                            "backgroundColor": "#E41A1C",
+                                            "color": "white",
+                                            "border": "none",
+                                            "borderRadius": "4px",
+                                            "fontSize": "12px",
+                                        },
+                                    ),
+                                    html.Span(
+                                        id={"type": "report-desc-status", "fig_id": fig_id},
+                                        style={"marginLeft": "10px", "fontSize": "11px", "color": "#666"},
+                                    ),
+                                ],
+                                style={"display": "flex", "alignItems": "center"},
+                            ),
+                            dcc.Graph(
+                                figure=fig.get("fig_dict") or {},
+                                config={"displayModeBar": False},
+                                style={"marginTop": "10px"},
+                            ),
+                            dcc.Textarea(
+                                id={"type": "report-figure-desc-text", "fig_id": fig_id},
+                                value=description,
+                                placeholder=(
+                                    "Click 'Generate description' to draft. You can edit "
+                                    "the response, or add lines like  /prompt: focus on "
+                                    "the spike on Apr 15  to instruct the next regenerate."
+                                ),
+                                style={
+                                    "width": "100%",
+                                    "marginTop": "10px",
+                                    "padding": "8px",
+                                    "fontSize": "13px",
+                                    "lineHeight": "1.6",
+                                    "color": "#333",
+                                    "border": "1px solid #ddd",
+                                    "borderRadius": "4px",
+                                    "minHeight": "120px",
+                                    "fontFamily": "inherit",
+                                    "resize": "vertical",
+                                    "boxSizing": "border-box",
+                                },
+                            ),
+                        ],
+                        style=Styles.SECTION,
+                    )
+                )
+            return panels
+
+        @self.app.callback(
+            Output("report-figures", "data", allow_duplicate=True),
+            Output({"type": "report-desc-status", "fig_id": ALL}, "children"),
+            Input({"type": "report-generate-desc-btn", "fig_id": ALL}, "n_clicks"),
+            State({"type": "report-generate-desc-btn", "fig_id": ALL}, "id"),
+            # Textarea state, so unblurred edits and any /prompt: lines the
+            # user just typed reach the LLM even if the blur-time persist
+            # callback runs out of order with this one.
+            State({"type": "report-figure-desc-text", "fig_id": ALL}, "id"),
+            State({"type": "report-figure-desc-text", "fig_id": ALL}, "value"),
+            State("report-figures", "data"),
+            State("report-language", "value"),
+            State("report-references", "data"),
+            prevent_initial_call=True,
+        )
+        def generate_description_callback(
+            click_counts: List[Optional[int]],
+            button_ids: List[Dict[str, str]],
+            textarea_ids: List[Dict[str, str]],
+            textarea_values: List[Optional[str]],
+            current_figures: Optional[List[Dict[str, Any]]],
+            language: Optional[str],
+            references: Optional[List[Dict[str, str]]],
+        ) -> Any:
+            n = len(button_ids)
+            triggered = callback_context.triggered_id
+            if not isinstance(triggered, dict) or triggered.get("type") != "report-generate-desc-btn":
+                return no_update, [no_update] * n
+
+            target_fig_id = triggered.get("fig_id")
+            try:
+                btn_idx = next(i for i, bid in enumerate(button_ids) if bid.get("fig_id") == target_fig_id)
+            except StopIteration:
+                return no_update, [no_update] * n
+
+            statuses: List[Any] = [no_update] * n
+            if not (click_counts[btn_idx] or 0):
+                return no_update, statuses
+
+            figures = list(current_figures or [])
+            try:
+                fig_idx = next(i for i, f in enumerate(figures) if f.get("id") == target_fig_id)
+            except StopIteration:
+                statuses[btn_idx] = html.Span("Figure not found.", style={"color": "#c00"})
+                return no_update, statuses
+
+            # Prefer the live textarea value over the Store (the user may
+            # have typed without blurring).
+            latest_description: Optional[str] = figures[fig_idx].get("description") or None
+            try:
+                tx_idx = next(i for i, tid in enumerate(textarea_ids) if tid.get("fig_id") == target_fig_id)
+                latest_description = textarea_values[tx_idx] or latest_description
+            except StopIteration:
+                pass
+
+            try:
+                from dashboards.report_agent.description import generate_description
+                from dashboards.report_agent.references import load_references
+            except ImportError as exc:
+                statuses[btn_idx] = html.Span(f"Missing dep: {exc}", style={"color": "#c00"})
+                return no_update, statuses
+
+            ref_urls = [(e or {}).get("url") or "" for e in (references or [])]
+            ref_urls = [u for u in ref_urls if u.strip()]
+            try:
+                fetched_refs = load_references(ref_urls)
+            except Exception:
+                logger.exception("Reference load failed; continuing without refs")
+                fetched_refs = []
+
+            try:
+                text = generate_description(
+                    data_summary=figures[fig_idx].get("data_summary") or {},
+                    language=language or "en",
+                    existing_description=latest_description,
+                    references=fetched_refs,
+                )
+            except Exception as exc:
+                logger.exception("Generate description failed for fig_id=%s", target_fig_id)
+                statuses[btn_idx] = html.Span(f"Failed: {exc}", style={"color": "#c00"})
+                return no_update, statuses
+
+            updated = dict(figures[fig_idx])
+            updated["description"] = text
+            figures[fig_idx] = updated
+            statuses[btn_idx] = html.Span("Updated.", style={"color": "#2a7a2a"})
+            return figures, statuses
+
+        @self.app.callback(
+            Output("report-figures", "data", allow_duplicate=True),
+            Input({"type": "report-remove-btn", "fig_id": ALL}, "n_clicks"),
+            State({"type": "report-remove-btn", "fig_id": ALL}, "id"),
+            State("report-figures", "data"),
+            prevent_initial_call=True,
+        )
+        def remove_figure_callback(
+            click_counts: List[Optional[int]],
+            button_ids: List[Dict[str, str]],
+            current_figures: Optional[List[Dict[str, Any]]],
+        ) -> Any:
+            triggered = callback_context.triggered_id
+            if not isinstance(triggered, dict) or triggered.get("type") != "report-remove-btn":
+                return no_update
+            target_fig_id = triggered.get("fig_id")
+            try:
+                btn_idx = next(i for i, bid in enumerate(button_ids) if bid.get("fig_id") == target_fig_id)
+            except StopIteration:
+                return no_update
+            if not (click_counts[btn_idx] or 0):
+                return no_update
+            figures = [f for f in (current_figures or []) if f.get("id") != target_fig_id]
+            return figures
+
+        @self.app.callback(
+            Output("report-summary", "data"),
+            Output("report-summary-status", "children"),
+            Input("report-generate-summary-btn", "n_clicks"),
+            State("report-figures", "data"),
+            State("report-language", "value"),
+            # Live summary textarea value too, for the same unblurred-edits
+            # reason as generate_description_callback.
+            State("report-summary-display", "value"),
+            State("report-references", "data"),
+            prevent_initial_call=True,
+        )
+        def generate_summary_callback(
+            n_clicks: int,
+            figures: Optional[List[Dict[str, Any]]],
+            language: Optional[str],
+            current_summary_text: Optional[str],
+            references: Optional[List[Dict[str, str]]],
+        ) -> Any:
+            if not (n_clicks or 0):
+                return no_update, no_update
+            figures = figures or []
+            if not figures:
+                return no_update, html.Span("Add figures first.", style={"color": "#c00"})
+            try:
+                from dashboards.report_agent.description import generate_summary
+                from dashboards.report_agent.references import load_references
+            except ImportError as exc:
+                return no_update, html.Span(f"Missing dep: {exc}", style={"color": "#c00"})
+            ref_urls = [(e or {}).get("url") or "" for e in (references or [])]
+            ref_urls = [u for u in ref_urls if u.strip()]
+            try:
+                fetched_refs = load_references(ref_urls)
+            except Exception:
+                logger.exception("Reference load failed; continuing without refs")
+                fetched_refs = []
+            try:
+                text = generate_summary(
+                    figures=figures,
+                    language=language or "en",
+                    existing_summary=current_summary_text or None,
+                    references=fetched_refs,
+                )
+            except Exception as exc:
+                logger.exception("Generate summary failed")
+                return no_update, html.Span(f"Failed: {exc}", style={"color": "#c00"})
+            return text, html.Span("Updated.", style={"color": "#2a7a2a"})
+
+        @self.app.callback(
+            Output("report-summary-display", "value"),
+            Input("report-summary", "data"),
+        )
+        def render_summary(text: Optional[str]) -> Any:
+            return text or ""
+
+        # Persist textarea edits (description + summary) into the underlying
+        # Stores on blur. Without this, render_report_panels would resync the
+        # textareas from the Store on the next re-render and the user's
+        # edits would be lost. Equality short-circuit avoids spurious writes.
+        @self.app.callback(
+            Output("report-figures", "data", allow_duplicate=True),
+            Input({"type": "report-figure-desc-text", "fig_id": ALL}, "n_blur"),
+            State({"type": "report-figure-desc-text", "fig_id": ALL}, "id"),
+            State({"type": "report-figure-desc-text", "fig_id": ALL}, "value"),
+            State("report-figures", "data"),
+            prevent_initial_call=True,
+        )
+        def persist_description_edits(
+            blurs: List[Optional[int]],
+            ids: List[Dict[str, str]],
+            values: List[Optional[str]],
+            current_figures: Optional[List[Dict[str, Any]]],
+        ) -> Any:
+            triggered = callback_context.triggered_id
+            if not isinstance(triggered, dict) or triggered.get("type") != "report-figure-desc-text":
+                return no_update
+            target_fig_id = triggered.get("fig_id")
+            try:
+                tx_idx = next(i for i, tid in enumerate(ids) if tid.get("fig_id") == target_fig_id)
+            except StopIteration:
+                return no_update
+            new_value = values[tx_idx] or ""
+            figures = list(current_figures or [])
+            try:
+                f_idx = next(i for i, f in enumerate(figures) if f.get("id") == target_fig_id)
+            except StopIteration:
+                return no_update
+            if (figures[f_idx].get("description") or "") == new_value:
+                return no_update
+            updated = dict(figures[f_idx])
+            updated["description"] = new_value
+            figures[f_idx] = updated
+            return figures
+
+        @self.app.callback(
+            Output("report-summary", "data", allow_duplicate=True),
+            Input("report-summary-display", "n_blur"),
+            State("report-summary-display", "value"),
+            State("report-summary", "data"),
+            prevent_initial_call=True,
+        )
+        def persist_summary_edits(
+            n_blur: Optional[int],
+            new_value: Optional[str],
+            current_value: Optional[str],
+        ) -> Any:
+            cleaned = new_value or ""
+            if cleaned == (current_value or ""):
+                return no_update
+            return cleaned
+
+        # References tab — Add / Remove / Persist URL / Render rows.
+        @self.app.callback(
+            Output("report-references", "data", allow_duplicate=True),
+            Input("report-add-reference-btn", "n_clicks"),
+            State("report-references", "data"),
+            prevent_initial_call=True,
+        )
+        def add_reference(n_clicks: int, current: Optional[List[Dict[str, str]]]) -> Any:
+            if not (n_clicks or 0):
+                return no_update
+            entries = list(current or [])
+            entries.append({"id": uuid.uuid4().hex, "url": ""})
+            return entries
+
+        @self.app.callback(
+            Output("report-references", "data", allow_duplicate=True),
+            Input({"type": "report-ref-remove", "ref_id": ALL}, "n_clicks"),
+            State({"type": "report-ref-remove", "ref_id": ALL}, "id"),
+            State("report-references", "data"),
+            prevent_initial_call=True,
+        )
+        def remove_reference(
+            click_counts: List[Optional[int]],
+            button_ids: List[Dict[str, str]],
+            current: Optional[List[Dict[str, str]]],
+        ) -> Any:
+            triggered = callback_context.triggered_id
+            if not isinstance(triggered, dict) or triggered.get("type") != "report-ref-remove":
+                return no_update
+            target_id = triggered.get("ref_id")
+            try:
+                btn_idx = next(i for i, bid in enumerate(button_ids) if bid.get("ref_id") == target_id)
+            except StopIteration:
+                return no_update
+            if not (click_counts[btn_idx] or 0):
+                return no_update
+            return [r for r in (current or []) if r.get("id") != target_id]
+
+        @self.app.callback(
+            Output("report-references", "data", allow_duplicate=True),
+            Input({"type": "report-ref-url", "ref_id": ALL}, "n_blur"),
+            State({"type": "report-ref-url", "ref_id": ALL}, "id"),
+            State({"type": "report-ref-url", "ref_id": ALL}, "value"),
+            State("report-references", "data"),
+            prevent_initial_call=True,
+        )
+        def persist_reference_url(
+            blurs: List[Optional[int]],
+            ids: List[Dict[str, str]],
+            values: List[Optional[str]],
+            current: Optional[List[Dict[str, str]]],
+        ) -> Any:
+            """Persist URL on blur AND eagerly fetch so the row shows ✓ title or ✗ error.
+
+            The fetch runs synchronously through ``load_references`` (which
+            uses its module-level cache, so re-blurring the same URL is a
+            no-op). Generate / Export later read the same cache.
+            """
+            triggered = callback_context.triggered_id
+            if not isinstance(triggered, dict) or triggered.get("type") != "report-ref-url":
+                return no_update
+            target_id = triggered.get("ref_id")
+            try:
+                idx = next(i for i, tid in enumerate(ids) if tid.get("ref_id") == target_id)
+            except StopIteration:
+                return no_update
+            new_url = (values[idx] or "").strip()
+            entries = list(current or [])
+            try:
+                e_idx = next(i for i, e in enumerate(entries) if e.get("id") == target_id)
+            except StopIteration:
+                return no_update
+            if (entries[e_idx].get("url") or "").strip() == new_url:
+                return no_update
+
+            updated = dict(entries[e_idx])
+            updated["url"] = new_url
+            for stale_field in ("title", "error", "status"):
+                updated.pop(stale_field, None)
+
+            if new_url:
+                try:
+                    from dashboards.report_agent.references import load_references
+
+                    fetched = load_references([new_url])
+                except Exception as exc:
+                    logger.exception("Reference fetch failed for %s", new_url)
+                    updated["status"] = "error"
+                    updated["error"] = str(exc)
+                else:
+                    if fetched:
+                        ref = fetched[0]
+                        updated["title"] = ref.get("title") or new_url
+                        if ref.get("error"):
+                            updated["status"] = "error"
+                            updated["error"] = ref["error"]
+                        elif ref.get("text"):
+                            updated["status"] = "ok"
+                        else:
+                            updated["status"] = "external"
+
+            entries[e_idx] = updated
+            return entries
+
+        @self.app.callback(
+            Output("report-references-container", "children"),
+            Input("report-references", "data"),
+        )
+        def render_reference_rows(entries: Optional[List[Dict[str, str]]]) -> Any:
+            entries = entries or []
+            if not entries:
+                return html.Div(
+                    "No references yet — click 'Add reference' to attach a Confluence or external URL.",
+                    style={"color": "#888", "fontStyle": "italic", "padding": "8px 4px"},
+                )
+            rows: List[Component] = []
+            for entry in entries:
+                ref_id = entry.get("id", "")
+                url = entry.get("url", "") or ""
+                rows.append(
+                    html.Div(
+                        [
+                            dcc.Input(
+                                id={"type": "report-ref-url", "ref_id": ref_id},
+                                type="url",
+                                value=url,
+                                placeholder="https://yourcompany.atlassian.net/wiki/...",
+                                debounce=True,
+                                style={
+                                    "flex": "1",
+                                    "marginRight": "8px",
+                                    "padding": "5px 8px",
+                                    "border": "1px solid #ccc",
+                                    "borderRadius": "4px",
+                                    "fontSize": "12px",
+                                    "boxSizing": "border-box",
+                                },
+                            ),
+                            self._reference_status_pill(entry),
+                            html.Button(
+                                "Remove",
+                                id={"type": "report-ref-remove", "ref_id": ref_id},
+                                n_clicks=0,
+                                style={
+                                    "marginLeft": "8px",
+                                    "padding": "4px 10px",
+                                    "cursor": "pointer",
+                                    "backgroundColor": "#E41A1C",
+                                    "color": "white",
+                                    "border": "none",
+                                    "borderRadius": "4px",
+                                    "fontSize": "12px",
+                                },
+                            ),
+                        ],
+                        style={"display": "flex", "alignItems": "center", "marginBottom": "6px"},
+                    )
+                )
+            return rows
+
+        @self.app.callback(
+            Output("report-export-status", "children"),
+            Input("report-export-btn", "n_clicks"),
+            State("report-doc-link", "value"),
+            State("report-figures", "data"),
+            State("report-summary", "data"),
+            State("report-references", "data"),
+            prevent_initial_call=True,
+        )
+        def export_report_callback(
+            n_clicks: int,
+            doc_url: Optional[str],
+            figures: Optional[List[Dict[str, Any]]],
+            summary: Optional[str],
+            references: Optional[List[Dict[str, str]]],
+        ) -> Any:
+            if not (n_clicks or 0):
+                return no_update
+            if not doc_url:
+                return html.Span("Set the Confluence doc URL first.", style={"color": "#c00"})
+            figures = figures or []
+            if not figures:
+                return html.Span("No figures to export.", style={"color": "#c00"})
+            try:
+                from dashboards.report_agent.exporter import export_report
+                from dashboards.report_agent.references import load_references
+            except ImportError as exc:
+                return html.Span(f"Missing dep: {exc}", style={"color": "#c00"})
+            ref_urls = [(e or {}).get("url") or "" for e in (references or [])]
+            ref_urls = [u for u in ref_urls if u.strip()]
+            try:
+                fetched_refs = load_references(ref_urls)
+            except Exception as exc:
+                logger.exception("Reference load failed")
+                fetched_refs = []
+            try:
+                result = export_report(
+                    page_url=doc_url,
+                    summary=summary or "",
+                    figures=figures,
+                    references=fetched_refs,
+                )
+            except Exception as exc:
+                logger.exception("Export report failed")
+                return html.Span(f"Failed: {exc}", style={"color": "#c00"})
+            ref_count = result.references_listed
+            ref_suffix = f", {ref_count} reference(s)" if ref_count else ""
+            return html.Span(
+                f"Exported {result.figures_uploaded} figure(s){ref_suffix} to page {result.page_id} "
+                f"(v{result.page_version}).",
+                style={"color": "#2a7a2a"},
+            )
 
     @staticmethod
     def _render_chat_messages(history: list) -> List[Component]:

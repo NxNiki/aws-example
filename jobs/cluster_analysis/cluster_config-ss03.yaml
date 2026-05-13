@@ -1,0 +1,342 @@
+# SS03 Mahjiang Streak Cluster Analysis Configuration
+# This file contains configuration specific to the ss03 clustering project.
+# Input files are produced by jobs/ss03_mahjiang_streak/etl_feature_engineer.py, which
+# writes timestamped parquet files into jobs/output_ss03_mahjiang_streak/ named
+# ss03_features_{grouped,enriched}_<groups_tag>_<YYYYMMDD_HHMMSS>.parquet.
+# Update the `local_cache` suffix below to match the specific ETL run you want to analyze.
+
+project_name: "ss03_2026"  # Current analysis environment
+work_dir: "output_ss03_mahjiang_streak"  # Base working directory, where local cache of the input data will be saved.
+s3_prefix: ""
+
+data_loader:
+  cluster_data:  # data to train cluster model.
+    bucket: ""  # S3 bucket for input data
+    prefix: ""  # S3 prefix for input data
+    pattern: ''  # Pattern for grouped data files
+    row_filters:  # General row filtering; empty string / null / [] entries are skipped.
+      currency: ""  # Filter to specific currency
+      math_table_id: "normal_zero"  # Restrict to a single math table; scalar -> equality, list -> isin.
+    outlier_threshold: 0  # z score to filter outliers
+    clip_threshold: [.025, .975]
+    local_cache: "ss03_features_grouped_Default_20260512_163311.parquet"  # Update suffix to match ETL output.
+
+    data_types:
+      user_id: "category"
+      ai_group: "category"
+      math_table_id: "category"
+      session_group: "category"
+      agg_group: "category"
+      rtp_mean: "float64"
+      rtp_min: "float64"
+      rtp_max: "float64"
+      rtp_p25: "float64"
+      rtp_median: "float64"
+      rtp_p75: "float64"
+      bet_amount_min: "float64"
+      bet_amount_max: "float64"
+      bet_amount_std: "float64"
+      bet_amount_cv: "float64"
+      bet_amount_avg: "float64"
+      bet_amount_p25: "float64"
+      bet_amount_median: "float64"
+      bet_amount_p75: "float64"
+      bet_amount_drawdown_ratio: "float64"
+      bet_amount_spike_ratio: "float64"
+      delta_bet_amount_min: "float64"
+      delta_bet_amount_max: "float64"
+      delta_bet_amount_std: "float64"
+      delta_bet_amount_cv: "float64"
+      delta_bet_amount_avg: "float64"
+      delta_bet_amount_p25: "float64"
+      delta_bet_amount_median: "float64"
+      delta_bet_amount_p75: "float64"
+      delta_bet_amount_drawdown_ratio: "float64"
+      delta_bet_amount_spike_ratio: "float64"
+      accum_pos_delta_bet_amount: "float64"
+      accum_neg_delta_bet_amount: "float64"
+      accum_pos_delta_bet_amount_ratio: "float64"
+      accum_neg_delta_bet_amount_ratio: "float64"
+      balance_after_bet_min: "float64"
+      balance_after_bet_max: "float64"
+      balance_after_bet_avg: "float64"
+      balance_after_bet_p25: "float64"
+      balance_after_bet_median: "float64"
+      balance_after_bet_p75: "float64"
+      balance_after_bet_std: "float64"
+      balance_after_bet_cv: "float64"
+      balance_after_bet_drawdown_ratio: "float64"
+      balance_after_bet_spike_ratio: "float64"
+      payout_min: "float64"
+      payout_max: "float64"
+      payout_avg: "float64"
+      payout_p25: "float64"
+      payout_median: "float64"
+      payout_p75: "float64"
+      payout_std: "float64"
+      payout_cv: "float64"
+      payout_drawdown_ratio: "float64"
+      payout_spike_ratio: "float64"
+      delta_payout_min: "float64"
+      delta_payout_max: "float64"
+      delta_payout_avg: "float64"
+      delta_payout_p25: "float64"
+      delta_payout_median: "float64"
+      delta_payout_p75: "float64"
+      delta_payout_std: "float64"
+      delta_payout_cv: "float64"
+      delta_payout_drawdown_ratio: "float64"
+      delta_payout_spike_ratio: "float64"
+      profit_min: "float64"
+      profit_max: "float64"
+      profit_avg: "float64"
+      profit_p25: "float64"
+      profit_median: "float64"
+      profit_p75: "float64"
+      profit_std: "float64"
+      profit_cv: "float64"
+      min_profit_ratio: "float64"
+      max_profit_ratio: "float64"
+      accum_pos_profit: "float64"
+      accum_pos_profit_ratio: "float64"
+      accum_neg_profit: "float64"
+      accum_neg_profit_ratio: "float64"
+      delta_t_seconds_avg: "float64"
+      delta_t_seconds_std: "float64"
+      delta_t_seconds_min: "float64"
+      delta_t_seconds_max: "float64"
+      delta_t_seconds_p25: "float64"
+      delta_t_seconds_median: "float64"
+      delta_t_seconds_p75: "float64"
+      delta_t_seconds_nogap_avg: "float64"
+      delta_t_seconds_nogap_std: "float64"
+      delta_t_seconds_nogap_min: "float64"
+      delta_t_seconds_nogap_max: "float64"
+      delta_t_seconds_nogap_p25: "float64"
+      delta_t_seconds_nogap_median: "float64"
+      delta_t_seconds_nogap_p75: "float64"
+      streak_min: "float64"
+      streak_max: "float64"
+      streak_avg: "float64"
+      streak_p25: "float64"
+      streak_median: "float64"
+      streak_p75: "float64"
+      streak_std: "float64"
+      win_streak_min: "float64"
+      win_streak_max: "float64"
+      win_streak_avg: "float64"
+      win_streak_p25: "float64"
+      win_streak_median: "float64"
+      win_streak_p75: "float64"
+      win_streak_std: "float64"
+      lose_streak_min: "float64"
+      lose_streak_max: "float64"
+      lose_streak_avg: "float64"
+      lose_streak_p25: "float64"
+      lose_streak_median: "float64"
+      lose_streak_p75: "float64"
+      lose_streak_std: "float64"
+      num_deposit: "uint32"
+      accum_deposit: "float64"
+      accum_deposit_ratio: "float64"
+      num_withdraw: "uint32"
+      accum_withdraw: "float64"
+      accum_withdraw_ratio: "float64"
+
+  attach_data:  # data to attach cluster index.
+    bucket: ""  # S3 bucket for input data
+    prefix: ""  # S3 prefix for input data
+    pattern: ''  # Pattern for grouped data files
+    row_filters:  # General row filtering; empty string / null / [] entries are skipped.
+      currency: ""  # Filter to specific currency
+      math_table_id: "normal_zero"  # Restrict to a single math table; scalar -> equality, list -> isin.
+    session_length: 100  # SS03 SESSION_LENGTH; rows whose (merge_on) group != session_length are dropped.
+    local_cache: "ss03_features_enriched_Default_20260512_163311.parquet"  # Update suffix to match ETL output.
+
+    columns_to_read:  # Columns to read from original data files (match raw_stats CTE in etl_feature_engineer.py)
+      - "user_id"
+      - "ai_group"
+      - "math_table_id"
+      - "session_group"
+      - "agg_group"
+      - "min_created_at"
+      - "fg_rounds"
+      - "bet_amount"
+      - "delta_bet_amount"
+      - "payout"
+      - "delta_payout"
+      - "balance_after_bet"
+      - "delta_t_seconds"
+      - "profit"
+      - "streak"
+      - "win_streak"
+      - "lose_streak"
+
+    cluster_stats_columns: ["user_id", "min_created_at", "balance_after_bet", "bet_amount", "fg_rounds"]
+
+  merge_on: ["user_id", "ai_group", "math_table_id", "session_group", "agg_group"]  # Column used to attach cluster index to attach_data.
+
+output:
+  bucket: "bituslabs-team-ai"  # S3 bucket for output data
+  prefix: "ss03_cluster_analysis"  # Base S3 prefix; uploads land at <prefix>/<model>_<time_tag>/...
+  # ONNX model configuration
+  onnx:
+    opset_version: 19  # ONNX opset version for model conversion
+
+features:
+  key_features:
+    - "user_id"
+    - "ai_group"
+    - "math_table_id"
+    - "session_group"
+    - "agg_group"
+
+  skewed_features:  # Features that need power transformation
+    - "rtp_mean"
+    - "rtp_min"
+    - "rtp_max"
+    - "rtp_p25"
+    - "rtp_median"
+    - "rtp_p75"
+    - "bet_amount_min"
+    - "bet_amount_max"
+    # - "bet_amount_std"
+    - "bet_amount_cv"
+    - "bet_amount_avg"
+    - "bet_amount_p25"
+    - "bet_amount_median"
+    - "bet_amount_p75"
+    - "bet_amount_drawdown_ratio"
+    - "bet_amount_spike_ratio"
+    - "delta_bet_amount_min"
+    - "delta_bet_amount_max"
+    # - "delta_bet_amount_std"
+    - "delta_bet_amount_cv"
+    - "delta_bet_amount_avg"
+    - "delta_bet_amount_p25"
+    - "delta_bet_amount_median"
+    - "delta_bet_amount_p75"
+    - "delta_bet_amount_drawdown_ratio"
+    - "delta_bet_amount_spike_ratio"
+    - "accum_pos_delta_bet_amount"
+    - "accum_neg_delta_bet_amount"
+    - "accum_pos_delta_bet_amount_ratio"
+    - "accum_neg_delta_bet_amount_ratio"
+    - "balance_after_bet_min"
+    - "balance_after_bet_max"
+    - "balance_after_bet_avg"
+    - "balance_after_bet_p25"
+    - "balance_after_bet_median"
+    - "balance_after_bet_p75"
+    # - "balance_after_bet_std"
+    - "balance_after_bet_cv"
+    - "balance_after_bet_drawdown_ratio"
+    - "balance_after_bet_spike_ratio"
+    - "payout_min"
+    - "payout_max"
+    - "payout_avg"
+    - "payout_p25"
+    - "payout_median"
+    - "payout_p75"
+    # - "payout_std"
+    - "payout_cv"
+    - "payout_drawdown_ratio"
+    - "payout_spike_ratio"
+    - "delta_payout_min"
+    - "delta_payout_max"
+    - "delta_payout_avg"
+    - "delta_payout_p25"
+    - "delta_payout_median"
+    - "delta_payout_p75"
+    # - "delta_payout_std"
+    - "delta_payout_cv"
+    - "delta_payout_drawdown_ratio"
+    - "delta_payout_spike_ratio"
+    - "profit_min"
+    - "profit_max"
+    - "profit_avg"
+    - "profit_p25"
+    - "profit_median"
+    - "profit_p75"
+    # - "profit_std"
+    - "profit_cv"
+    - "min_profit_ratio"
+    - "max_profit_ratio"
+    - "accum_pos_profit"
+    - "accum_pos_profit_ratio"
+    - "accum_neg_profit"
+    - "accum_neg_profit_ratio"
+    # - "delta_t_seconds_avg"
+    # - "delta_t_seconds_std"
+    # - "delta_t_seconds_min"
+    # - "delta_t_seconds_max"
+    # - "delta_t_seconds_p25"
+    # - "delta_t_seconds_median"
+    # - "delta_t_seconds_p75"
+    - "delta_t_seconds_nogap_avg"
+    - "delta_t_seconds_nogap_std"
+    - "delta_t_seconds_nogap_min"
+    - "delta_t_seconds_nogap_max"
+    - "delta_t_seconds_nogap_p25"
+    - "delta_t_seconds_nogap_median"
+    - "delta_t_seconds_nogap_p75"
+    - "streak_min"
+    - "streak_max"
+    - "streak_avg"
+    - "streak_p25"
+    - "streak_median"
+    - "streak_p75"
+    - "streak_std"
+    - "win_streak_min"
+    - "win_streak_max"
+    - "win_streak_avg"
+    - "win_streak_p25"
+    - "win_streak_median"
+    - "win_streak_p75"
+    - "win_streak_std"
+    - "lose_streak_min"
+    - "lose_streak_max"
+    - "lose_streak_avg"
+    - "lose_streak_p25"
+    - "lose_streak_median"
+    - "lose_streak_p75"
+    - "lose_streak_std"
+    - "num_deposit"
+    - "accum_deposit"
+    - "accum_deposit_ratio"
+    - "num_withdraw"
+    - "accum_withdraw"
+    - "accum_withdraw_ratio"
+
+  normal_features:  # Features that don't need transformation
+    - "fg_rounds"
+    - "payout_rate"
+    - "profit_rate"
+
+feature_selection:
+  correlation_threshold: 0.9  # Threshold for removing highly correlated features
+  variance_threshold: 0.01  # Threshold for removing low-variance features
+
+elbow_method:
+  top_features: [25, 30, 35, 40, 45, 50]  # Range of feature counts to test
+  k_range: [2, 3, 4, 5, 6, 7]  # Range of n_clusters to sweep (kmeans / hierarchical)
+  eps_range: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]  # Range of eps values to sweep when model='dbscan'; ignored otherwise
+
+cluster_analysis:
+  model: 'kmeans'  # available: 'kmeans' (sklearn KMeans), 'hierarchical' (sklearn AgglomerativeClustering, subsampled), 'dbscan' (sklearn DBSCAN; density-based, n_clusters ignored, returns -1 for noise, no predict)
+  random_state: 42  # Random state for reproducible results
+  n_init: 10  # Number of initializations for K-means algorithm
+  linkage: "ward"  # Linkage for hierarchical clustering algorithm
+  hierarchical_sample_size: 10000  # Subsample size for hierarchical fit (caps O(n^2) memory); other rows assigned by nearest centroid. Ignored for kmeans/dbscan.
+  dbscan_eps: 3  # DBSCAN: neighborhood radius in scaled feature space; tune per dataset.
+  dbscan_min_samples: 50  # DBSCAN: min samples in eps-neighborhood for a core point.
+  n_clusters: 3  # Default number of clusters for K-means
+  top_features: 40  # Default number of top features to use
+
+pipeline:
+  elbow_method: true  # Run elbow method analysis
+  cluster_analysis: true  # Run cluster analysis with selected features and n_clusters
+  test_model: false  # Apply trained model to new data
+  attach_cluster_label: true  # Attach cluster indices to original data
+  get_cluster_stats: true 
+  upload_result_to_s3: true 

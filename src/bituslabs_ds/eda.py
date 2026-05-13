@@ -33,6 +33,7 @@ from statannotations.Annotator import Annotator
 
 from bituslabs_ds.config import DEFAULT_MAX_JOBS
 from bituslabs_ds.descriptors import ListProperty
+from bituslabs_ds.s3_utils import apply_row_filters
 from bituslabs_ds.utils import batch_iterator, convert_to_list, group_iterator, keep_numeric_columns
 
 logger = logging.getLogger(__name__)
@@ -81,15 +82,7 @@ def read_csv_cols(
             # Read only the necessary columns
             df = pd.read_csv(file, usecols=list(needed_cols))
 
-            if filters:
-                for col, val in filters.items():
-                    if col not in df.columns:
-                        logger.warning(
-                            f"Filter column '{col}' not found in '{file}'; skipping this filter.",
-                            UserWarning,
-                        )
-                        continue
-                    df = df[df[col] == val]
+            df = apply_row_filters(df, filters)
 
             # Ensure final column order and presence
             missing_cols = [col for col in columns if col not in df.columns]
@@ -2212,16 +2205,37 @@ class Anova:
         self.between_vars = between_vars
         self.var_columns = var_columns
         self.anova_report: Dict = defaultdict(list)
-        self.post_hoc_report: Dict = defaultdict(list)
+        # Per-effects post-hoc reports, keyed by the `effects` arg of run_post_hoc_analysis
+        # ("main", "interaction"). Storing them separately means consecutive calls don't clobber
+        # each other, so downstream consumers (e.g., show_box_plot) can still see prior results.
+        self._post_hoc_reports: Dict[str, Dict[str, List]] = {}
 
         self._check_between_var_levels()
 
     def _check_between_var_levels(self) -> None:
         unique_counts = self.data[self.between_vars].nunique()
-        for col in self.between_vars:
+        # Iterate over a copy: removing items while iterating would skip the next element.
+        for col in list(self.between_vars):
             if unique_counts[col] <= 1:
                 logger.warning(f"Remove between variable '{col}' which has only {unique_counts[col]} unique values")
                 self.between_vars.remove(col)
+
+    @property
+    def post_hoc_report(self) -> Dict[str, List]:
+        """
+        Merged post-hoc results across every `effects` bucket previously run, with an extra
+        ``effects`` column identifying the source call. Read-only view for callers that
+        don't care which bucket a row came from.
+        """
+        merged: Dict[str, List] = defaultdict(list)
+        for effects_type, report in self._post_hoc_reports.items():
+            n = len(report.get("variable", []))
+            if n == 0:
+                continue
+            merged["effects"].extend([effects_type] * n)
+            for key, vals in report.items():
+                merged[key].extend(vals)
+        return merged
 
     def run_anova(self, transpose_report: bool = False, p_thresh: float = 0.05) -> pd.DataFrame:
 
@@ -2265,10 +2279,11 @@ class Anova:
         return res
 
     def _perform_and_report_post_hoc(
-        self, data_df: DataFrame, dv_col: str, between_factor: str, method: str, p_thresh: float
+        self, data_df: DataFrame, dv_col: str, between_factor: str, method: str, p_thresh: float, effects: str
     ):
         """
-        Helper function to perform a post-hoc test and append results to the report dictionary.
+        Helper function to perform a post-hoc test and append results to the
+        per-`effects` bucket in ``self._post_hoc_reports``.
         """
 
         data_df[between_factor] = data_df[between_factor].apply(self.tuple_to_string)
@@ -2312,13 +2327,14 @@ class Anova:
         else:
             logger.info(f"post hoc result for {dv_col}: \n{sig_res[report_cols].to_markdown(index=False)}")
 
+        target_report = self._post_hoc_reports.setdefault(effects, defaultdict(list))
         for _, row in sig_res.iterrows():
-            self.post_hoc_report["variable"].append(dv_col)
-            self.post_hoc_report["factor"].append(between_factor)
-            self.post_hoc_report["comparison"].append((self.string_to_tuple(row["A"]), self.string_to_tuple(row["B"])))
-            self.post_hoc_report["method"].append(method)
-            self.post_hoc_report["p_value"].append(row[p_col])
-            self.post_hoc_report["effect_size"].append(row["hedges"])
+            target_report["variable"].append(dv_col)
+            target_report["factor"].append(between_factor)
+            target_report["comparison"].append((self.string_to_tuple(row["A"]), self.string_to_tuple(row["B"])))
+            target_report["method"].append(method)
+            target_report["p_value"].append(row[p_col])
+            target_report["effect_size"].append(row["hedges"])
 
     @staticmethod
     def tuple_to_string(element):
@@ -2350,11 +2366,12 @@ class Anova:
         :return:
         """
 
-        logger.info("--- Running Post-Hoc Analysis ---")
+        logger.info(f"--- Running Post-Hoc Analysis ({effects}) ---")
         anova_table = self.anova_table
 
-        # clear previous post-hoc result:
-        self.post_hoc_report = defaultdict(list)
+        # Clear only this effects bucket; other buckets (e.g. previously-run "main" results) are
+        # preserved so downstream callers like show_box_plot can still see them.
+        self._post_hoc_reports[effects] = defaultdict(list)
 
         if len(anova_table) == 0:
             logger.warning("Run anova before post-hoc analysis!")
@@ -2372,7 +2389,7 @@ class Anova:
                 for var in self.between_vars:
                     if anova_row[f"{var}-p_value"] < p_thresh:
                         logger.info(f"\nSignificance detected for {var} on {col} (p={anova_row[f'{var}-p_value']:.4f})")
-                        self._perform_and_report_post_hoc(self.data, col, var, method, p_thresh)
+                        self._perform_and_report_post_hoc(self.data, col, var, method, p_thresh, effects)
 
             elif effects == "interaction":
                 for var1, var2 in itertools.combinations(self.between_vars, 2):
@@ -2384,18 +2401,18 @@ class Anova:
                                 zip(data_interaction[var1].astype(str), data_interaction[var2].astype(str))
                             )
                             self._perform_and_report_post_hoc(
-                                data_interaction, col, "interaction_group", method, p_thresh
+                                data_interaction, col, "interaction_group", method, p_thresh, effects
                             )
             else:
                 raise ValueError(f"Unknown effect: {effects}")
 
-        res_post_hoc = pd.DataFrame(self.post_hoc_report)
+        res_post_hoc = pd.DataFrame(self._post_hoc_reports[effects])
         if not res_post_hoc.empty:
-            print("\n--- Summary Post-Hoc Report (Significant Comparisons Only) ---")
+            print(f"\n--- Summary Post-Hoc Report ({effects}, Significant Comparisons Only) ---")
             for res_post_hoc_group, _, _ in group_iterator(res_post_hoc, group_col="variable"):
                 print(res_post_hoc_group.sort_values(by="comparison").to_markdown(index=False))
         else:
-            print("\nNo significant post-hoc effects were found.")
+            print(f"\nNo significant post-hoc effects were found for {effects}.")
         return res_post_hoc
 
     def show_box_plot(
@@ -2406,8 +2423,17 @@ class Anova:
         output_path: str = ".",
         fig_title: str = "boxplot",
         stripplot_kws: Dict[str, Any] = {},
+        effects: Optional[str] = None,
     ) -> Optional[DataVisualizer]:
-        post_hoc_table = pd.DataFrame(self.post_hoc_report)
+        """
+        :param effects: which post-hoc bucket to plot, matching the ``effects`` arg passed to
+            ``run_post_hoc_analysis`` (e.g., "main" or "interaction"). If ``None``, the merged
+            view across every bucket is used.
+        """
+        if effects is not None:
+            post_hoc_table = pd.DataFrame(self._post_hoc_reports.get(effects, {}))
+        else:
+            post_hoc_table = pd.DataFrame(self.post_hoc_report)
 
         if len(post_hoc_table) == 0:
             logger.warning("No post-hoc results found. Skip boxplot.")

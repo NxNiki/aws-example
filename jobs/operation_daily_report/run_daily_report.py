@@ -203,18 +203,24 @@ def main():
     if not args.skip_pid_check:
         print(f"\n{'='*60}\nRunning: Check PID difference\n{'='*60}")
         import io
+        import traceback
 
         _saved_stdout = sys.stdout
+        captured = io.StringIO()
         pid_report = None
         try:
-            sys.stdout = io.StringIO()  # Suppress DataFrame/logging prints from check_pid
+            sys.stdout = captured  # Suppress DataFrame prints from check_pid
             pid_report = _get_pid_report(reload_athena=args.reload_cached_etl)
         except Exception as e:
             sys.stdout = _saved_stdout
-            print(f"[ERROR] Check PID difference failed: {e}")
+            print(f"[ERROR] Check PID difference failed: {e!r}")
+            traceback.print_exc()
+            sys.stdout.write("--- captured stdout from check_pid ---\n")
+            sys.stdout.write(captured.getvalue())
+            sys.stdout.write("--- end captured stdout ---\n")
             failed.append("Check PID difference")
             pid_report = None
-        else:
+        finally:
             sys.stdout = _saved_stdout
         if pid_report is not None:
             report_chunks.append(pid_report)

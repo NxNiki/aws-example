@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>__TITLE__</title>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+           max-width: 1200px; margin: 1em auto; padding: 0 1em; color: #222; }
+    h1 { margin-bottom: 0.2em; }
+    h2 { border-bottom: 1px solid #ccc; padding-bottom: 0.3em; margin-top: 2em; }
+    .filters { margin: 0.6em 0 1em; padding: 0.6em; background: #f5f5f7; border-radius: 6px; }
+    .filters > label { margin-right: 1.2em; font-size: 0.95em; display: inline-block; }
+    .filters select { font-size: 0.95em; padding: 4px 8px; min-width: 320px; }
+    .meta { color: #666; font-size: 0.9em; }
+    .chart { width: 100%; height: 620px; }
+  </style>
+</head>
+<body>
+  <h1>__TITLE__</h1>
+  <p class="meta">Rows in cluster_labels.parquet: __N_ROWS__ &nbsp;|&nbsp; Label columns: __N_LABELS__</p>
+
+  <!--
+    Each analysis section is self-contained: a filters block + a chart div.
+    To add a new analysis, mirror this block, add a bootstrap entry in the Python script,
+    and add a render function in cluster_consistency.js.
+  -->
+  <h2>Contingency matrix</h2>
+  <div class="filters">
+    <label>Label A (rows): <select id="labelASelect">__LABEL_OPTIONS__</select></label>
+    <label>Label B (cols): <select id="labelBSelect">__LABEL_OPTIONS__</select></label>
+    <label>Cell value:
+      <select id="normSelect">
+        <option value="none">Counts</option>
+        <option value="row">Row %</option>
+        <option value="col">Column %</option>
+        <option value="total">Total %</option>
+      </select>
+    </label>
+  </div>
+  <div id="contingency-heatmap" class="chart"></div>
+  <p id="overlap-meta" class="meta"></p>
+
+  <script type="application/json" id="dashboard-bootstrap">__BOOTSTRAP_JSON__</script>
+  <script>
+__SCRIPT__
+  </script>
+</body>
+</html>
