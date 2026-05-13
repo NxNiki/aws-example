@@ -151,7 +151,7 @@ data_loader:
       currency: ""  # Filter to specific currency
       math_table_id: "normal_zero"  # Restrict to a single math table; scalar -> equality, list -> isin.
     session_length: 100  # SS03 SESSION_LENGTH; rows whose (merge_on) group != session_length are dropped.
-    local_cache: "ss03_features_enriched_Default_20260512_163311.parquet"  # Update suffix to match ETL output.
+    local_cache: "ss03_features_enriched_Default_20260513_162102.parquet"  # Update suffix to match ETL output.
 
     columns_to_read:  # Columns to read from original data files (match raw_stats CTE in etl_feature_engineer.py)
       - "user_id"
