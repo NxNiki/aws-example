@@ -178,7 +178,7 @@ data_loader:
 
 output:
   bucket: "bituslabs-team-ai"  # S3 bucket for output data
-  prefix: "ss03_analysis_hierarchical"  # S3 prefix for output data
+  prefix: "ss03_cluster_analysis"  # Base S3 prefix; uploads land at <prefix>/<model>_<time_tag>/...
   # ONNX model configuration
   onnx:
     opset_version: 19  # ONNX opset version for model conversion
@@ -318,15 +318,18 @@ feature_selection:
   variance_threshold: 0.01  # Threshold for removing low-variance features
 
 elbow_method:
-  top_features: [15, 20, 25, 30, 35, 40, 45, 50]  # Range of k values to test
-  k_range: [2, 3, 4, 5, 6, 7]  # Range of k values to test
+  top_features: [25, 30, 35, 40, 45, 50]  # Range of feature counts to test
+  k_range: [2, 3, 4, 5, 6, 7]  # Range of n_clusters to sweep (kmeans / hierarchical)
+  eps_range: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]  # Range of eps values to sweep when model='dbscan'; ignored otherwise
 
 cluster_analysis:
-  model: 'kmeans'  # available: 'kmeans' (sklearn KMeans), 'hierarchical' (sklearn AgglomerativeClustering)
+  model: 'kmeans'  # available: 'kmeans' (sklearn KMeans), 'hierarchical' (sklearn AgglomerativeClustering, subsampled), 'dbscan' (sklearn DBSCAN; density-based, n_clusters ignored, returns -1 for noise, no predict)
   random_state: 42  # Random state for reproducible results
   n_init: 10  # Number of initializations for K-means algorithm
   linkage: "ward"  # Linkage for hierarchical clustering algorithm
-  hierarchical_sample_size: 10000  # Subsample size for hierarchical fit (caps O(n^2) memory); other rows assigned by nearest centroid. Ignored for kmeans.
+  hierarchical_sample_size: 10000  # Subsample size for hierarchical fit (caps O(n^2) memory); other rows assigned by nearest centroid. Ignored for kmeans/dbscan.
+  dbscan_eps: 3  # DBSCAN: neighborhood radius in scaled feature space; tune per dataset.
+  dbscan_min_samples: 50  # DBSCAN: min samples in eps-neighborhood for a core point.
   n_clusters: 3  # Default number of clusters for K-means
   top_features: 40  # Default number of top features to use
 
@@ -334,6 +337,6 @@ pipeline:
   elbow_method: true  # Run elbow method analysis
   cluster_analysis: true  # Run cluster analysis with selected features and n_clusters
   test_model: false  # Apply trained model to new data
-  attach_cluster_label: false  # Attach cluster indices to original data
-  get_cluster_stats: false
-  upload_result_to_s3: false
+  attach_cluster_label: true  # Attach cluster indices to original data
+  get_cluster_stats: true 
+  upload_result_to_s3: true 
