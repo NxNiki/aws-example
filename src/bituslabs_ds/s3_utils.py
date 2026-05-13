@@ -88,6 +88,32 @@ def parse_s3_path(s3_path: str) -> Tuple[str, str]:
     return bucket, key
 
 
+def apply_row_filters(df: pd.DataFrame, row_filters: Optional[Dict[str, Any]]) -> pd.DataFrame:
+    """Apply {column: allowed} row filters to ``df``.
+
+    Scalar ``allowed`` -> equality match; list/set/tuple -> ``isin``. Entries whose value is
+    ``None``, ``""``, or ``[]`` are skipped so they act as "filter disabled" placeholders.
+    Missing columns are skipped with a warning.
+    """
+    if not row_filters:
+        return df
+    for column_name, allowed in row_filters.items():
+        if allowed is None or allowed == "" or allowed == []:
+            continue
+        if column_name not in df.columns:
+            logger.warning(f"Row filter column '{column_name}' not in df; skipping this filter")
+            continue
+        if isinstance(allowed, (list, set, tuple)):
+            df = cast(pd.DataFrame, df[df[column_name].isin(list(allowed))])
+            logger.info(
+                f"Applied filter on '{column_name}' with {len(list(allowed))} allowed values; remaining {len(df)} rows"
+            )
+        else:
+            df = cast(pd.DataFrame, df[df[column_name] == allowed])
+            logger.info(f"Applied filter on '{column_name}' == {allowed!r}; remaining {len(df)} rows")
+    return df
+
+
 def read_to_pandas_df(
     bucket: str,
     key: str,
@@ -120,23 +146,7 @@ def read_to_pandas_df(
     else:
         raise ValueError(f"Unsupported file extension for S3 object: {key}")
 
-    df: pd.DataFrame = cast(pd.DataFrame, data)
-
-    if row_filters:
-        for column_name, allowed in row_filters.items():
-            if column_name not in df.columns:
-                logger.warning(f"Row filter column '{column_name}' not in df; skipping this filter")
-                continue
-            if isinstance(allowed, (list, set, tuple)):
-                df = cast(pd.DataFrame, df[df[column_name].isin(list(allowed))])
-                logger.info(
-                    f"Applied filter on '{column_name}' with {len(list(allowed))} allowed values; remaining {len(df)} rows"
-                )
-            else:
-                df = cast(pd.DataFrame, df[df[column_name] == allowed])
-                logger.info(f"Applied filter on '{column_name}' == {allowed!r}; remaining {len(df)} rows")
-
-    return df
+    return apply_row_filters(cast(pd.DataFrame, data), row_filters)
 
 
 def write_df_to_s3(data: Union[pd.DataFrame, "SparkDataFrame"], bucket: str, key: str) -> None:

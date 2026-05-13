@@ -33,6 +33,7 @@ from statannotations.Annotator import Annotator
 
 from bituslabs_ds.config import DEFAULT_MAX_JOBS
 from bituslabs_ds.descriptors import ListProperty
+from bituslabs_ds.s3_utils import apply_row_filters
 from bituslabs_ds.utils import batch_iterator, convert_to_list, group_iterator, keep_numeric_columns
 
 logger = logging.getLogger(__name__)
@@ -81,15 +82,7 @@ def read_csv_cols(
             # Read only the necessary columns
             df = pd.read_csv(file, usecols=list(needed_cols))
 
-            if filters:
-                for col, val in filters.items():
-                    if col not in df.columns:
-                        logger.warning(
-                            f"Filter column '{col}' not found in '{file}'; skipping this filter.",
-                            UserWarning,
-                        )
-                        continue
-                    df = df[df[col] == val]
+            df = apply_row_filters(df, filters)
 
             # Ensure final column order and presence
             missing_cols = [col for col in columns if col not in df.columns]
