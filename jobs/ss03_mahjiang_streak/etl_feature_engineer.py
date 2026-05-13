@@ -50,10 +50,20 @@
 -- delta_bet_amount
 -- delta_payout
 
+-- group selection:
+-- SELECTED_GROUPS controls which ab_partition buckets are included. Each row gets an ai_group label
+-- ('AI', 'AB_TEST_A', 'AB_TEST_B', 'Default'); set SELECTED_GROUPS to AI_GROUPS to keep all.
+
+-- incomplete tail groups:
+-- When DROP_INCOMPLETE_TAIL_GROUPS is True, the grouped output keeps only agg_groups with exactly
+-- SESSION_LENGTH rows -- the final (incomplete) group in each session is dropped, so unique
+-- (user_id, ai_group, math_table_id, session_group, agg_group) in ss03_features_grouped <= ss03_features_enriched.
+-- When False, the tail group is kept even if it has fewer rows.
 """
 
 import argparse
 import os
+from datetime import datetime
 from textwrap import dedent
 
 from bituslabs_ds.config import (
@@ -72,8 +82,8 @@ from bituslabs_ds.config import (
 )
 from bituslabs_ds.etl import DataLoader, RedshiftBackend
 
-# select a short period (2 months) as ss03 has large number of users, and calculating percentiles is time-consuming.
-DATE_START = "2026-03-01 00:00:00"
+# select a short period as ss03 has large number of users, and calculating percentiles is time-consuming.
+DATE_START = "2026-01-01 00:00:00"
 DATE_END = "2026-05-01 00:00:00"
 
 MAX_SESSION_INTERVAL = 60 * 60 * 24 * 7
@@ -81,8 +91,50 @@ STREAK_THRESHOLD = 200
 MAX_SESSION_GAP = 60 * 60  # 1 hour
 SESSION_LENGTH = 100  # number of consecutive bets in the same session
 
+AI_GROUPS = ("AI", "AB_TEST_A", "AB_TEST_B", "Default")
+# Restrict the query to these ai_group labels. Set to AI_GROUPS to keep all.
+SELECTED_GROUPS = "Default"
+
+# Drop the final agg_group in each session if it has fewer than SESSION_LENGTH rows.
+DROP_INCOMPLETE_TAIL_GROUPS = False
+
+
+def _normalize_groups(groups):
+    return (groups,) if isinstance(groups, str) else tuple(groups)
+
+
+def _build_output_suffix(selected_groups):
+    normalized = _normalize_groups(selected_groups)
+    if set(normalized) >= set(AI_GROUPS):
+        groups_tag = "all"
+    else:
+        groups_tag = "_".join(sorted(normalized))
+    return f"{groups_tag}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+
+def _build_ai_group_filter(selected_groups):
+    selected_groups = _normalize_groups(selected_groups)
+    if set(selected_groups) >= set(AI_GROUPS):
+        return ""
+    conditions = []
+    if "AI" in selected_groups:
+        conditions.append(f"t.partition_ab[0] = '{AI_GROUP_ID}'")
+    if "AB_TEST_A" in selected_groups:
+        conditions.append(f"t.partition_ab[0] = '{AB_TEST_GROUP_A}'")
+    if "AB_TEST_B" in selected_groups:
+        conditions.append(f"t.partition_ab[0] = '{AB_TEST_GROUP_B}'")
+    if "Default" in selected_groups:
+        conditions.append(
+            f"(t.partition_ab[0] IS NULL OR t.partition_ab[0] NOT IN "
+            f"('{AI_GROUP_ID}', '{AB_TEST_GROUP_A}', '{AB_TEST_GROUP_B}'))"
+        )
+    return "AND (" + " OR ".join(conditions) + ")"
+
 
 def generate_query():
+
+    ai_group_filter = _build_ai_group_filter(SELECTED_GROUPS)
+    having_clause = f"HAVING COUNT(t.user_id) = {SESSION_LENGTH}" if DROP_INCOMPLETE_TAIL_GROUPS else ""
 
     query_ctes = dedent(
         f"""
@@ -90,6 +142,7 @@ def generate_query():
             SELECT
                 t.spin_id,
                 t.user_id,
+                t.math_table_id,
                 t.created_at,
                 t.bet_type,
                 -- ignore bet amount in free game (0). This will influence avg and std stats
@@ -101,7 +154,13 @@ def generate_query():
                 CASE
                     WHEN t.bet_type = 'BASE' THEN 1
                     ELSE 0
-                END AS is_new_game_group
+                END AS is_new_game_group,
+                CASE
+                    WHEN t.partition_ab[0] = '{AI_GROUP_ID}' THEN 'AI'
+                    WHEN t.partition_ab[0] = '{AB_TEST_GROUP_A}' THEN 'AB_TEST_A'
+                    WHEN t.partition_ab[0] = '{AB_TEST_GROUP_B}' THEN 'AB_TEST_B'
+                    ELSE 'Default'
+                END AS ai_group
             FROM public.fct_bet_orders AS t
             WHERE
                 t.created_at >= '{DATE_START}'
@@ -110,13 +169,15 @@ def generate_query():
                 AND t.status = 'COMPLETED'
                 AND t.game_id = 'SS03'
                 AND t.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
-                AND t.partition_ab[0] NOT IN ('{AI_GROUP_ID}', '{AB_TEST_GROUP_A}', '{AB_TEST_GROUP_B}') -- select default group, excluding AI and A/B test groups
+                {ai_group_filter}
         ),
 
         free_game_group AS (
             SELECT
                 t.spin_id,
                 t.user_id,
+                t.ai_group,
+                t.math_table_id,
                 t.created_at,
                 t.bet_type,
                 t.bet_amount,
@@ -135,6 +196,8 @@ def generate_query():
         agg_free_game AS (
             SELECT
                 t.user_id,
+                t.ai_group,
+                t.math_table_id,
                 MIN(t.spin_id) AS spin_id,
                 MIN(t.created_at) AS min_created_at,
                 MAX(t.created_at) AS max_created_at,
@@ -145,12 +208,14 @@ def generate_query():
                 MIN(t.balance_after_bet) AS balance_after_bet,
                 MAX(t.balance_after_payout) AS balance_after_payout
             FROM free_game_group AS t
-            GROUP BY t.user_id, t.fg_group
+            GROUP BY t.user_id, t.ai_group, t.math_table_id, t.fg_group
         ),
 
         delta_stats AS (
             SELECT
                 t.user_id,
+                t.ai_group,
+                t.math_table_id,
                 t.spin_id,
                 t.min_created_at,
                 t.max_created_at,
@@ -186,6 +251,8 @@ def generate_query():
         user_group AS (
             SELECT
                 t.user_id,
+                t.ai_group,
+                t.math_table_id,
                 t.spin_id,
                 t.min_created_at,
                 t.max_created_at,
@@ -230,6 +297,8 @@ def generate_query():
         raw_stats AS (
             SELECT
                 t.user_id,
+                t.ai_group,
+                t.math_table_id,
                 t.session_group,
                 t.min_created_at,
                 t.max_created_at,
@@ -279,105 +348,107 @@ def generate_query():
         -- CTEs to separate percentile calculations by sort order
         perc_delta_t AS (
             SELECT
-                user_id, session_group, agg_group,
+                user_id, ai_group, math_table_id, session_group, agg_group,
                 PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY delta_t_seconds) AS delta_t_seconds_p25,
                 PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY delta_t_seconds) AS delta_t_seconds_median,
                 PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY delta_t_seconds) AS delta_t_seconds_p75
-            FROM raw_stats GROUP BY user_id, session_group, agg_group
+            FROM raw_stats GROUP BY user_id, ai_group, math_table_id, session_group, agg_group
         ),
         perc_delta_t_ng AS (
             SELECT
-                user_id, session_group, agg_group,
+                user_id, ai_group, math_table_id, session_group, agg_group,
                 PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY delta_t_seconds_nogap) AS delta_t_seconds_nogap_p25,
                 PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY delta_t_seconds_nogap) AS delta_t_seconds_nogap_median,
                 PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY delta_t_seconds_nogap) AS delta_t_seconds_nogap_p75
-            FROM raw_stats GROUP BY user_id, session_group, agg_group
+            FROM raw_stats GROUP BY user_id, ai_group, math_table_id, session_group, agg_group
         ),
         perc_bet_amount AS (
             SELECT
-                user_id, session_group, agg_group,
+                user_id, ai_group, math_table_id, session_group, agg_group,
                 PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY bet_amount) AS bet_amount_p25,
                 PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY bet_amount) AS bet_amount_median,
                 PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY bet_amount) AS bet_amount_p75
-            FROM raw_stats GROUP BY user_id, session_group, agg_group
+            FROM raw_stats GROUP BY user_id, ai_group, math_table_id, session_group, agg_group
         ),
         perc_delta_bet AS (
             SELECT
-                user_id, session_group, agg_group,
+                user_id, ai_group, math_table_id, session_group, agg_group,
                 PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY delta_bet_amount) AS delta_bet_amount_p25,
                 PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY delta_bet_amount) AS delta_bet_amount_median,
                 PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY delta_bet_amount) AS delta_bet_amount_p75
-            FROM raw_stats GROUP BY user_id, session_group, agg_group
+            FROM raw_stats GROUP BY user_id, ai_group, math_table_id, session_group, agg_group
         ),
         perc_payout AS (
             SELECT
-                user_id, session_group, agg_group,
+                user_id, ai_group, math_table_id, session_group, agg_group,
                 PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY payout) AS payout_p25,
                 PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY payout) AS payout_median,
                 PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY payout) AS payout_p75
-            FROM raw_stats GROUP BY user_id, session_group, agg_group
+            FROM raw_stats GROUP BY user_id, ai_group, math_table_id, session_group, agg_group
         ),
         perc_rtp AS (
             SELECT
-                user_id, session_group, agg_group,
+                user_id, ai_group, math_table_id, session_group, agg_group,
                 PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY payout * 1.0 / NULLIF(bet_amount, 0)) AS rtp_p25,
                 PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY payout * 1.0 / NULLIF(bet_amount, 0)) AS rtp_median,
                 PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY payout * 1.0 / NULLIF(bet_amount, 0)) AS rtp_p75
-            FROM raw_stats GROUP BY user_id, session_group, agg_group
+            FROM raw_stats GROUP BY user_id, ai_group, math_table_id, session_group, agg_group
         ),
         perc_profit AS (
             SELECT
-                user_id, session_group, agg_group,
+                user_id, ai_group, math_table_id, session_group, agg_group,
                 PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY profit) AS profit_p25,
                 PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY profit) AS profit_median,
                 PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY profit) AS profit_p75
-            FROM raw_stats GROUP BY user_id, session_group, agg_group
+            FROM raw_stats GROUP BY user_id, ai_group, math_table_id, session_group, agg_group
         ),
         perc_delta_payout AS (
             SELECT
-                user_id, session_group, agg_group,
+                user_id, ai_group, math_table_id, session_group, agg_group,
                 PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY delta_payout) AS delta_payout_p25,
                 PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY delta_payout) AS delta_payout_median,
                 PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY delta_payout) AS delta_payout_p75
-            FROM raw_stats GROUP BY user_id, session_group, agg_group
+            FROM raw_stats GROUP BY user_id, ai_group, math_table_id, session_group, agg_group
         ),
         perc_balance AS (
             SELECT
-                user_id, session_group, agg_group,
+                user_id, ai_group, math_table_id, session_group, agg_group,
                 PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY balance_after_bet) AS balance_after_bet_p25,
                 PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY balance_after_bet) AS balance_after_bet_median,
                 PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY balance_after_bet) AS balance_after_bet_p75
-            FROM raw_stats GROUP BY user_id, session_group, agg_group
+            FROM raw_stats GROUP BY user_id, ai_group, math_table_id, session_group, agg_group
         ),
         perc_streak AS (
             SELECT
-                user_id, session_group, agg_group,
+                user_id, ai_group, math_table_id, session_group, agg_group,
                 PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY streak) AS streak_p25,
                 PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY streak) AS streak_median,
                 PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY streak) AS streak_p75
-            FROM raw_stats GROUP BY user_id, session_group, agg_group
+            FROM raw_stats GROUP BY user_id, ai_group, math_table_id, session_group, agg_group
         ),
         perc_win_streak AS (
             SELECT
-                user_id, session_group, agg_group,
+                user_id, ai_group, math_table_id, session_group, agg_group,
                 PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY win_streak) AS win_streak_p25,
                 PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY win_streak) AS win_streak_median,
                 PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY win_streak) AS win_streak_p75
-            FROM raw_stats GROUP BY user_id, session_group, agg_group
+            FROM raw_stats GROUP BY user_id, ai_group, math_table_id, session_group, agg_group
         ),
         perc_lose_streak AS (
             SELECT
-                user_id, session_group, agg_group,
+                user_id, ai_group, math_table_id, session_group, agg_group,
                 PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY lose_streak) AS lose_streak_p25,
                 PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY lose_streak) AS lose_streak_median,
                 PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY lose_streak) AS lose_streak_p75
-            FROM raw_stats GROUP BY user_id, session_group, agg_group
+            FROM raw_stats GROUP BY user_id, ai_group, math_table_id, session_group, agg_group
         ),
 
     -- Assemble standard metrics and join with percentiles
         stats_base AS (
             SELECT
                 t.user_id,
+                t.ai_group,
+                t.math_table_id,
                 t.session_group,
                 t.agg_group,
                 MIN(t.min_created_at) AS min_created_at,
@@ -444,16 +515,18 @@ def generate_query():
             FROM raw_stats AS t
             GROUP BY
                 t.user_id,
+                t.ai_group,
+                t.math_table_id,
                 t.session_group,
                 t.agg_group
-            -- Only keep groups with exactly SESSION_LENGTH (100) rows. Incomplete "tail" groups are dropped,
-            -- so unique (user_id, session_group, agg_group) in ss03_features_grouped <= ss03_features_enriched.
-            HAVING COUNT(t.user_id) = {SESSION_LENGTH}
+            {having_clause}
         )
 
     -- Final assembly join
     SELECT
         b.user_id,
+        b.ai_group,
+        b.math_table_id,
         b.session_group,
         b.agg_group,
         b.min_created_at,
@@ -592,54 +665,80 @@ def generate_query():
     FROM stats_base AS b
             JOIN perc_delta_t AS p1
                 ON b.user_id = p1.user_id
+                    AND b.ai_group = p1.ai_group
+                    AND b.math_table_id = p1.math_table_id
                     AND b.session_group = p1.session_group
                     AND b.agg_group = p1.agg_group
             JOIN perc_delta_t_ng AS p2
                 ON b.user_id = p2.user_id
+                    AND b.ai_group = p2.ai_group
+                    AND b.math_table_id = p2.math_table_id
                     AND b.session_group = p2.session_group
                     AND b.agg_group = p2.agg_group
             JOIN perc_bet_amount AS p3
                 ON b.user_id = p3.user_id
+                    AND b.ai_group = p3.ai_group
+                    AND b.math_table_id = p3.math_table_id
                     AND b.session_group = p3.session_group
                     AND b.agg_group = p3.agg_group
             JOIN perc_delta_bet AS p4
                 ON b.user_id = p4.user_id
+                    AND b.ai_group = p4.ai_group
+                    AND b.math_table_id = p4.math_table_id
                     AND b.session_group = p4.session_group
                     AND b.agg_group = p4.agg_group
             JOIN perc_payout AS p5
                 ON b.user_id = p5.user_id
+                    AND b.ai_group = p5.ai_group
+                    AND b.math_table_id = p5.math_table_id
                     AND b.session_group = p5.session_group
                     AND b.agg_group = p5.agg_group
             JOIN perc_rtp AS p6
                 ON b.user_id = p6.user_id
+                    AND b.ai_group = p6.ai_group
+                    AND b.math_table_id = p6.math_table_id
                     AND b.session_group = p6.session_group
                     AND b.agg_group = p6.agg_group
             JOIN perc_profit AS p7
                 ON b.user_id = p7.user_id
+                    AND b.ai_group = p7.ai_group
+                    AND b.math_table_id = p7.math_table_id
                     AND b.session_group = p7.session_group
                     AND b.agg_group = p7.agg_group
             JOIN perc_delta_payout AS p8
                 ON b.user_id = p8.user_id
+                    AND b.ai_group = p8.ai_group
+                    AND b.math_table_id = p8.math_table_id
                     AND b.session_group = p8.session_group
                     AND b.agg_group = p8.agg_group
             JOIN perc_balance AS p9
                 ON b.user_id = p9.user_id
+                    AND b.ai_group = p9.ai_group
+                    AND b.math_table_id = p9.math_table_id
                     AND b.session_group = p9.session_group
                     AND b.agg_group = p9.agg_group
             JOIN perc_streak AS p10
                 ON b.user_id = p10.user_id
+                    AND b.ai_group = p10.ai_group
+                    AND b.math_table_id = p10.math_table_id
                     AND b.session_group = p10.session_group
                     AND b.agg_group = p10.agg_group
             JOIN perc_win_streak AS p11
                 ON b.user_id = p11.user_id
+                    AND b.ai_group = p11.ai_group
+                    AND b.math_table_id = p11.math_table_id
                     AND b.session_group = p11.session_group
                     AND b.agg_group = p11.agg_group
             JOIN perc_lose_streak AS p12
                 ON b.user_id = p12.user_id
+                    AND b.ai_group = p12.ai_group
+                    AND b.math_table_id = p12.math_table_id
                     AND b.session_group = p12.session_group
                     AND b.agg_group = p12.agg_group
         ORDER BY
             b.user_id,
+            b.ai_group,
+            b.math_table_id,
             b.session_group,
             b.agg_group
         ;
@@ -683,7 +782,8 @@ if __name__ == "__main__":
     )
 
     query_raw_stats, query_grouped_stats = generate_query()
-    execute_query(redshift_loader, "ss03_features_enriched", query_raw_stats)
-    execute_query(redshift_loader, "ss03_features_grouped", query_grouped_stats)
+    output_suffix = _build_output_suffix(SELECTED_GROUPS)
+    execute_query(redshift_loader, f"ss03_features_enriched_{output_suffix}", query_raw_stats)
+    execute_query(redshift_loader, f"ss03_features_grouped_{output_suffix}", query_grouped_stats)
 
     redshift_loader.close()
