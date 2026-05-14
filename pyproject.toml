@@ -89,6 +89,13 @@ optional = true
 [tool.poetry.group.ai_agent.dependencies]
 fastapi = ">=0.115.0"
 uvicorn = {extras = ["standard"], version = ">=0.30.0"}
+# Slack bot — Bolt for HTTPS event routing + signing-secret verification.
+# Pulls in slack-sdk transitively (no need to list it separately). aiohttp
+# is an *optional* dep of slack-bolt that the async path imports at module
+# load (slack_bolt.async_app does `from aiohttp import web`), so we must
+# list it explicitly or the AsyncApp import fails at runtime.
+slack-bolt = ">=1.20.0"
+aiohttp = ">=3.9.0"
 
 # RAG microservice — its own group keeps the service image slim
 # (no langchain, no dash). Only the indexer/retriever/FastAPI app pull this in.

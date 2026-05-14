@@ -42,6 +42,7 @@ COPY --from=builder /app/.venv /app/.venv
 COPY src/bituslabs_ds ./src/bituslabs_ds
 COPY src/dashboards/chat_agent.py         ./src/dashboards/chat_agent.py
 COPY src/dashboards/chat_api.py           ./src/dashboards/chat_api.py
+COPY src/dashboards/slack_handler.py      ./src/dashboards/slack_handler.py
 COPY src/dashboards/metadata_builder.py   ./src/dashboards/metadata_builder.py
 COPY src/dashboards/confluence_client.py  ./src/dashboards/confluence_client.py
 COPY src/dashboards/secrets.py            ./src/dashboards/secrets.py
