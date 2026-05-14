@@ -24,3 +24,8 @@ dist/
 .mypy_cache/
 .idea/
 .vscode/
+
+# Claude Code — personal/runtime files (keep .claude/settings.json shared)
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/.credentials.json
