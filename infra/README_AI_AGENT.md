@@ -91,6 +91,10 @@ instead of plain-text environment variables.
 
 ## Slack Bot (HTTPS Events)
 
+See [`docs/ai_agent.md`](../docs/ai_agent.md) for the design spec, request flow,
+and the CloudFront-frontdoor configuration reference. This section covers the
+operational setup steps only.
+
 The agent ships an optional Slack endpoint at `POST /slack/events`. It is
 **only mounted when both `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` are
 configured** (env var or AWS Secrets Manager entry `ai-dashboard_ai_agent`),
@@ -102,6 +106,13 @@ posts in the message's thread; if the @mention is already inside a
 thread, the prior 20 messages are pulled into the LLM's history so
 follow-ups have context.
 
+**HTTPS prerequisite.** Slack requires HTTPS for the Request URL, but the
+ai_agent ALB is HTTP-only. We front the ALB with a CloudFront distribution
+that exposes the ALB over `https://*.cloudfront.net` and forwards to the
+origin on port 80. Use the CloudFront domain (not the raw ALB DNS) in the
+Slack app config. See `docs/ai_agent.md` for the exact distribution
+settings if it ever needs to be recreated.
+
 ### One-time Slack app setup
 
 1. Create a Slack app at https://api.slack.com/apps → *From scratch*.
@@ -111,7 +122,7 @@ follow-ups have context.
    - `channels:history` — read thread history for context (public channels)
    - `groups:history` — same, for private channels (optional)
 3. **Event Subscriptions** → *Enable Events* → set Request URL to
-   `https://<ai-agent-alb-dns>/slack/events`. Slack will send a one-time
+   `https://<cloudfront-domain>/slack/events`. Slack will send a one-time
    challenge; the agent must already be deployed and the secrets set.
 4. Under *Subscribe to bot events*, add `app_mention` (and nothing else).
 5. *Install to Workspace*. Copy the **Bot User OAuth Token** (`xoxb-…`).
