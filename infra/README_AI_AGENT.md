@@ -83,9 +83,77 @@ curl -X POST http://<ALB_DNS>/api/chat \
 | `CHAT_MODEL`     | provider default| Model name override                   |
 | `OPENAI_API_KEY` | —               | Required when `CHAT_PROVIDER=openai`  |
 | `GOOGLE_API_KEY` | —               | Required when `CHAT_PROVIDER=gemini`  |
+| `SLACK_BOT_TOKEN`      | —         | Optional — enables Slack bot endpoint |
+| `SLACK_SIGNING_SECRET` | —         | Optional — required when bot enabled  |
 
 For production, store API keys in **AWS Secrets Manager** and reference them in the task definition
 instead of plain-text environment variables.
+
+## Slack Bot (HTTPS Events)
+
+The agent ships an optional Slack endpoint at `POST /slack/events`. It is
+**only mounted when both `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` are
+configured** (env var or AWS Secrets Manager entry `ai-dashboard_ai_agent`),
+so local dev without Slack credentials still works.
+
+Behavior: responds **only** to `app_mention` events (when the bot is
+@-tagged). DMs and regular channel messages are ignored. Each reply
+posts in the message's thread; if the @mention is already inside a
+thread, the prior 20 messages are pulled into the LLM's history so
+follow-ups have context.
+
+### One-time Slack app setup
+
+1. Create a Slack app at https://api.slack.com/apps → *From scratch*.
+2. **OAuth & Permissions** → *Bot Token Scopes*. Add:
+   - `app_mentions:read` — receive @mention events
+   - `chat:write` — post replies
+   - `channels:history` — read thread history for context (public channels)
+   - `groups:history` — same, for private channels (optional)
+3. **Event Subscriptions** → *Enable Events* → set Request URL to
+   `https://<ai-agent-alb-dns>/slack/events`. Slack will send a one-time
+   challenge; the agent must already be deployed and the secrets set.
+4. Under *Subscribe to bot events*, add `app_mention` (and nothing else).
+5. *Install to Workspace*. Copy the **Bot User OAuth Token** (`xoxb-…`).
+6. Back on *Basic Information*, copy the **Signing Secret**.
+
+### Wire up secrets
+
+Add the two values to the existing Secrets Manager entry:
+
+```bash
+# Read current secret, edit, then re-put
+aws secretsmanager get-secret-value \
+  --secret-id ai-dashboard_ai_agent --region us-west-2 \
+  --query SecretString --output text | jq '. + {
+    SLACK_BOT_TOKEN: "xoxb-...",
+    SLACK_SIGNING_SECRET: "32charhex..."
+  }' > /tmp/secret.json
+aws secretsmanager put-secret-value \
+  --secret-id ai-dashboard_ai_agent --region us-west-2 \
+  --secret-string file:///tmp/secret.json
+rm /tmp/secret.json
+```
+
+Roll the ECS service to pick up the new secret on cold start:
+
+```bash
+python infra/deploy_ai_agent_ecs.py
+```
+
+### Cold-start caveat
+
+The service runs with **scale-to-zero** by default. The first @mention
+after idle waits ~30–60 s for ECS to launch a task; Slack will retry
+the event up to 3 times during that window. The handler dedupes on
+`event_id` so retries don't double-respond, but the human user sees a
+slow first reply. If that's annoying, redeploy without scale-to-zero:
+
+```bash
+python infra/deploy_ai_agent_ecs.py --no-scale-to-zero
+```
+
+(always-on Fargate cost: ~$10–15/month for the default 0.5 vCPU task)
 
 ## Resource Sizing
 

@@ -9371,12 +9371,27 @@ onnxconverter-common = ">=1.7.0"
 scikit-learn = ">=0.19"
 
 [[package]]
+name = "slack-bolt"
+version = "1.28.0"
+description = "The Bolt Framework for Python"
+optional = false
+python-versions = ">=3.7"
+groups = ["ai-agent"]
+files = [
+    {file = "slack_bolt-1.28.0-py2.py3-none-any.whl", hash = "sha256:738d1ca5e7c7039b6e18103d29267ced6e18c2517053eff18991fdd593acce5c"},
+    {file = "slack_bolt-1.28.0.tar.gz", hash = "sha256:bfe367d867e8fb157a057248ebd4ac2d7f43acac6d0700fa31381db1e10f3b0f"},
+]
+
+[package.dependencies]
+slack_sdk = ">=3.38.0,<4"
+
+[[package]]
 name = "slack-sdk"
 version = "3.40.1"
 description = "The Slack API Platform SDK for Python"
 optional = false
 python-versions = ">=3.7"
-groups = ["etl"]
+groups = ["ai-agent", "etl"]
 files = [
     {file = "slack_sdk-3.40.1-py2.py3-none-any.whl", hash = "sha256:cd8902252979aa248092b0d77f3a9ea3cc605bc5d53663ad728e892e26e14a65"},
     {file = "slack_sdk-3.40.1.tar.gz", hash = "sha256:a215333bc251bc90abf5f5110899497bf61a3b5184b6d9ee35d73ebf09ec3fd0"},
@@ -11719,4 +11734,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10.0.0,<3.13"
-content-hash = "b06dc8724dbe76eaaf3fda4603aa3997766c69d67d58635e345e861a854968ab"
+content-hash = "e86cae425615af65929a0f3640fb6ee05b4fa6acb0cafa1acc7e4064977522d6"

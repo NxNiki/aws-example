@@ -25,12 +25,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from dashboards.chat_agent import achat, chat, init_metadata
 from dashboards.metadata_builder import build_metadata
+from dashboards.slack_handler import build_slack_handler
 
 logger = logging.getLogger(__name__)
 
@@ -268,6 +269,16 @@ def create_chat_app(*, prefix: str = "") -> FastAPI:
             columns_count=len(meta.get("columns", {})),
             etl_sources_count=len(meta.get("etl_sources", [])),
         )
+
+    # --- Slack bot endpoint (only mounted when secrets are configured) ---
+    slack_handler = build_slack_handler()
+    if slack_handler is not None:
+
+        @app.post("/slack/events")
+        async def slack_events(req: Request):  # type: ignore[no-untyped-def]
+            return await slack_handler.handle(req)
+
+        logger.info("Slack bot mounted at /slack/events")
 
     return app
 
