@@ -76,6 +76,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lookup module extracted from `chat_agent.py`. Lets the slim
   rag-service Docker image use `_get_secret` without dragging
   `langchain_core` into its dependency closure.
+- **Slack bot integration for the AI agent.** New `POST /slack/events`
+  endpoint on the ai_agent FastAPI service that responds to Slack
+  `app_mention` events (DMs and untagged channel messages are ignored
+  on purpose — heavyweight LLM calls only fire when the bot is
+  explicitly tagged). Replies post in-thread, with the prior 20 thread
+  messages pulled back as history so follow-up @-mentions have
+  context. The handler dispatches the LLM call as an `asyncio` task
+  so the Bolt adapter can ack inside Slack's 3-second deadline, and
+  dedupes on `event_id` to swallow Slack's cold-start retries. The
+  endpoint is opt-in — mounted only when `SLACK_BOT_TOKEN` +
+  `SLACK_SIGNING_SECRET` are present in env or Secrets Manager, so
+  local dev without Slack credentials still boots cleanly. Fronted by
+  a CloudFront distribution that exposes the HTTP-only ALB over
+  `https://*.cloudfront.net` (Slack requires HTTPS for Event
+  Subscriptions URLs). See `docs/ai_agent.md` for the design spec,
+  request flow, CloudFront configuration reference (for recovery),
+  Slack app setup steps, and a troubleshooting table covering the
+  scope-mismatch and missing-`aiohttp` gotchas hit while wiring this
+  up.
 
 ### Changed
 
@@ -89,9 +108,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   legacy 6-char base64 tinyurl format (`/wiki/x/Z4AfOw`) offline and
   newer Cloud short codes via authenticated HTTP redirect, with a
   graceful fallback when neither path matches.
-- Bumped `kaleido` constraint to `>=1.0` (was `^0.2.1`) so Apple
-  Silicon / Python 3.12 environments can install a wheel —
-  `0.2.1.post1` had no `arm64` build.
+- Pinned `kaleido` to `0.2.1` (briefly tried `>=1.0` for arm64 wheel
+  availability, then reverted): 1.x rewrote its renderer to drive an
+  *external* Chrome via DevTools Protocol and fails with
+  `Kaleido requires Google Chrome to be installed` on the slim ECS
+  image used for the dashboard. 0.2.1 ships a self-contained
+  Chromium wheel (~70 MB) that works in slim containers — much
+  smaller than installing system Chrome (~150–250 MB). Affects the
+  Report tab's PNG export of figures into Confluence.
 - `_viz_derived_metric_options` is now schema-aware (see Fixed below);
   this changes the **Stats Deepdive** dropdown contents per-game.
 - `chat_agent` tool docstrings and `_SYSTEM_PROMPT` rewritten to make
