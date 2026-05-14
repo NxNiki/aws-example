@@ -125,4 +125,4 @@ Optional longer explanation if the why is non-obvious.
 
 ## Poetry Dependency Groups
 
-All optional groups: `ds` (scipy, pymc), `ml` (scikit-learn, sagemaker), `dl` (pytorch), `dashboard` (dash, plotly, polars), `ai_agent` (langchain, fastapi), `etl` (redshift, paramiko, slack), `spark` (pyspark — do NOT bundle when deploying to EMR).
+All optional groups: `ds` (scipy, pymc), `ml` (scikit-learn, sagemaker), `dl` (pytorch), `dashboard` (dash, plotly, polars), `llm` (langchain, langgraph, atlassian-python-api — shared by dashboard + ai_agent images), `ai_agent` (fastapi, uvicorn — install together with `llm`), `etl` (redshift, paramiko, slack), `spark` (pyspark — do NOT bundle when deploying to EMR).

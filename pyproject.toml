@@ -60,22 +60,35 @@ optional = true
 [tool.poetry.group.dashboard.dependencies]
 matplotlib = "^3.9.0"
 plotly = "^6.3.1"
-kaleido = ">=1.0.0"
+kaleido = "0.2.1"  # 1.x needs system Chrome; 0.2.x bundles Chromium and works in slim Docker images
 dash = "^3.2.0"
 polars = "^1.38.1"  # avoid 1.38.0 (yanked on PyPI)
 gunicorn = "^22.0"  # production WSGI server; replaces Flask dev server in Docker
 
-[tool.poetry.group.ai_agent]
+# Shared LLM stack — loaded by both the dashboard process
+# (chat_agent + report_agent) and the ai_agent service (chat_api).
+# Kept in its own group so version pins live in one place and neither
+# Docker image picks up the other's runtime-only deps (fastapi/uvicorn
+# vs. dash/plotly/polars).
+[tool.poetry.group.llm]
 optional = true
-[tool.poetry.group.ai_agent.dependencies]
+[tool.poetry.group.llm.dependencies]
 langchain = ">=0.3.0"
 langchain-openai = ">=0.3.0"
 langchain-google-genai = ">=4.0.0"
 langgraph = ">=0.2.0"
-fastapi = ">=0.115.0"
-uvicorn = {extras = ["standard"], version = ">=0.30.0"}
+# Confluence integration is exercised by both surfaces (chat tools in
+# ai_agent, report-tab references in dashboard), so its deps live here too.
 atlassian-python-api = ">=3.41.0"
 requests = ">=2.32.0"
+
+# ai_agent group is now just the HTTP-server-specific extras.
+# Install alongside 'llm':  poetry install --only main,llm,ai_agent
+[tool.poetry.group.ai_agent]
+optional = true
+[tool.poetry.group.ai_agent.dependencies]
+fastapi = ">=0.115.0"
+uvicorn = {extras = ["standard"], version = ">=0.30.0"}
 
 # RAG microservice — its own group keeps the service image slim
 # (no langchain, no dash). Only the indexer/retriever/FastAPI app pull this in.

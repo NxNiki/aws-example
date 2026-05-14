@@ -18,8 +18,9 @@ ENV PATH="/root/.local/bin:$PATH"
 
 COPY pyproject.toml poetry.lock ./
 
-# Install main + ai_agent group only (no dash, plotly, polars, gunicorn)
-RUN poetry install --only main,ai_agent --no-root --no-cache && rm -rf $POETRY_CACHE_DIR
+# Install main + shared 'llm' group (langchain/langgraph + Confluence)
+# + ai_agent (FastAPI/uvicorn). No dash, plotly, polars, gunicorn.
+RUN poetry install --only main,llm,ai_agent --no-root --no-cache && rm -rf $POETRY_CACHE_DIR
 
 # --- Stage 2: Runtime ---
 FROM python:3.11-slim AS runtime
