@@ -125,7 +125,9 @@ def test_ai_agent_question(entry: Dict[str, Any]) -> None:
     messages = _build_messages(user_message=entry["question"], history=None)
 
     t0 = time.monotonic()
-    result = agent.invoke({"messages": messages})
+    # invoke() wants langchain.agents._InputAgentState (private TypedDict);
+    # plain dict is structurally equivalent at runtime.
+    result = agent.invoke({"messages": messages})  # type: ignore[arg-type]
     elapsed_s = time.monotonic() - t0
 
     answer = _extract_response(result)

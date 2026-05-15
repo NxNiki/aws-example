@@ -41,10 +41,10 @@ for _env_candidate in [Path.cwd() / ".env", _repo_root / ".env"]:
         load_dotenv(dotenv_path=str(_env_candidate), override=False)
         break
 
+from langchain.agents import create_agent as _create_langchain_agent
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import tool
-from langgraph.prebuilt import create_react_agent
 
 from dashboards.metadata_builder import build_metadata, format_metadata_context
 
@@ -642,7 +642,7 @@ def _build_llm(model_key: Optional[str] = None) -> BaseChatModel:
 def create_agent(model_key: Optional[str] = None):
     """Create and return the LangGraph ReAct agent."""
     llm = _build_llm(model_key=model_key)
-    return create_react_agent(llm, _TOOLS)
+    return _create_langchain_agent(llm, _TOOLS)
 
 
 def init_metadata(
@@ -791,7 +791,11 @@ def chat(
     _ensure_metadata(dashboard_config_path=dashboard_config_path)
     agent = create_agent(model_key=model_key)
     messages = _build_messages(user_message, history)
-    result = agent.invoke({"messages": messages})
+    # invoke() wants the private langchain.agents._InputAgentState TypedDict,
+    # which we can't import. The plain {"messages": [...]} dict is structurally
+    # equivalent at runtime; the type-ignore silences pyright without coupling
+    # us to a private symbol.
+    result = agent.invoke({"messages": messages})  # type: ignore[arg-type]
     return _extract_response(result)
 
 
@@ -811,5 +815,6 @@ async def achat(
     _ensure_metadata(dashboard_config_path=dashboard_config_path)
     agent = create_agent(model_key=model_key)
     messages = _build_messages(user_message, history)
-    result = await agent.ainvoke({"messages": messages})
+    # See chat() above for the type-ignore rationale.
+    result = await agent.ainvoke({"messages": messages})  # type: ignore[arg-type]
     return _extract_response(result)
