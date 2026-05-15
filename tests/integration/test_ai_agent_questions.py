@@ -117,7 +117,7 @@ def test_ai_agent_question(entry: Dict[str, Any]) -> None:
     """
     # Imported lazily so module-level pytest collection works even when
     # the LangChain stack is not installed (e.g., dashboard-only dev env).
-    from dashboards.chat_agent import _build_messages, _ensure_metadata, _extract_response, create_agent
+    from ai_agent.chat_agent import _build_messages, _ensure_metadata, _extract_response, create_agent
 
     _ensure_metadata(dashboard_config_path=_resolve_dashboard_config(entry))
 

@@ -171,7 +171,7 @@ _SUMMARY_APPEND_SYSTEM_PROMPT = (
 def _invoke_llm(system_prompt: str, user_message: str, *, model_key: Optional[str]) -> str:
     from langchain_core.messages import HumanMessage, SystemMessage
 
-    from dashboards.chat_agent import _build_llm
+    from ai_agent.chat_agent import _build_llm
 
     llm = _build_llm(model_key=model_key)
     response = llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=user_message)])

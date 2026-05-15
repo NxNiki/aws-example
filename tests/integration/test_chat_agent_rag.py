@@ -76,7 +76,7 @@ def _tool_names_called(messages: List[Any]) -> List[str]:
 
 def test_rag_tool_is_registered() -> None:
     """Static check: the RAG tool is in the agent's tool list at all."""
-    from dashboards.chat_agent import _TOOLS
+    from ai_agent.chat_agent import _TOOLS
 
     names = [t.name for t in _TOOLS]
     assert "search_confluence_rag" in names, f"search_confluence_rag missing from _TOOLS — got: {names}"
@@ -91,7 +91,7 @@ def test_rag_tool_is_registered() -> None:
 def test_agent_invokes_rag_for_internal_docs_query() -> None:
     """The agent should call ``search_confluence_rag`` for an internal-only
     documentation question."""
-    from dashboards.chat_agent import _build_messages, create_agent
+    from ai_agent.chat_agent import _build_messages, create_agent
 
     agent = create_agent()
     messages = _build_messages(
@@ -117,7 +117,7 @@ def test_agent_prefers_rag_over_live_confluence() -> None:
     'Prefer this over `search_confluence`'. If the LLM picks the live
     keyword tool first, we lose the RAG's cost/latency win.
     """
-    from dashboards.chat_agent import _build_messages, create_agent
+    from ai_agent.chat_agent import _build_messages, create_agent
 
     agent = create_agent()
     messages = _build_messages(
@@ -143,7 +143,7 @@ def test_agent_prefers_rag_over_live_confluence() -> None:
 def test_rag_returns_chunks_with_attribution() -> None:
     """Sanity-check that when the RAG tool *is* called, its output makes it
     into the final answer with at least the page title surfaced."""
-    from dashboards.chat_agent import _build_messages, create_agent
+    from ai_agent.chat_agent import _build_messages, create_agent
 
     agent = create_agent()
     messages = _build_messages(

@@ -4,7 +4,7 @@ FastAPI REST API for the dashboard AI chatbot.
 Runs as a standalone service on Uvicorn, separate from the dashboard.
 The dashboard calls this API over HTTP (``CHAT_API_URL`` env var).
 
-    uvicorn dashboards.chat_api:app --host 0.0.0.0 --port 8051
+    uvicorn ai_agent.chat_api:app --host 0.0.0.0 --port 8051
 
 Endpoints
 ---------
@@ -31,9 +31,9 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from dashboards.chat_agent import achat, chat, init_metadata
-from dashboards.metadata_builder import build_metadata
-from dashboards.report_agent.description import (
+from ai_agent.chat_agent import achat, chat, init_metadata
+from ai_agent.metadata_builder import build_metadata
+from ai_agent.report_agent.description import (
     STATUS_APPENDED,
     STATUS_GENERATED,
     STATUS_NO_INSTRUCTIONS,
@@ -41,7 +41,7 @@ from dashboards.report_agent.description import (
     generate_description,
     generate_summary,
 )
-from dashboards.slack_handler import build_slack_handler
+from ai_agent.slack_handler import build_slack_handler
 
 logger = logging.getLogger(__name__)
 
@@ -374,7 +374,7 @@ def create_chat_app(*, prefix: str = "") -> FastAPI:
     @app.get("/health", response_model=HealthResponse)
     @app.get("/api/health", response_model=HealthResponse)
     async def health_check() -> HealthResponse:
-        from dashboards.chat_agent import _METADATA
+        from ai_agent.chat_agent import _METADATA
 
         return HealthResponse(status="ok", metadata_loaded=_METADATA is not None)
 
@@ -403,7 +403,7 @@ def create_chat_app(*, prefix: str = "") -> FastAPI:
 
 # ---------------------------------------------------------------------------
 # Module-level app instance (used by Uvicorn in production and local dev)
-#   uvicorn dashboards.chat_api:app --host 0.0.0.0 --port 8051
+#   uvicorn ai_agent.chat_api:app --host 0.0.0.0 --port 8051
 # ---------------------------------------------------------------------------
 app = create_chat_app()
 

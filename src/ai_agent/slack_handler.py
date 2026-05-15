@@ -139,7 +139,7 @@ async def _respond_to_mention(event_id: str, event: Dict[str, Any], client: Any)
     if parent_ts:
         history = await _fetch_thread_history(client, channel, parent_ts)
 
-    from dashboards.chat_agent import achat
+    from ai_agent.chat_agent import achat
 
     try:
         reply = await achat(user_message=user_text, history=history)
