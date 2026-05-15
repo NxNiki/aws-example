@@ -67,4 +67,5 @@ sources:
   - name: ai_summary_pages
     page_urls:
       - https://bituslabs.atlassian.net/wiki/spaces/hub/pages/627179541/AI
+      - https://bituslabs.atlassian.net/wiki/spaces/hub/pages/718012441/AI
     include_children: false
