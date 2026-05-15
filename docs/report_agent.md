@@ -296,12 +296,12 @@ snapshot:
 | Concern | Module |
 | --- | --- |
 | Plotly figure → JSON data summary for LLM prompts (incl. heatmap z, Plotly 6.x binary-array decoding) | `src/dashboards/report_agent/data_summary.py` |
-| LLM helpers for per-figure description and overall summary; `/prompt` parsing; references plumbing | `src/dashboards/report_agent/description.py` |
+| LLM helpers for per-figure description and overall summary; `/prompt` parsing; references plumbing | `src/ai_agent/report_agent/description.py` |
 | User-curated reference loader: URL → Confluence page → stripped, truncated body; cached | `src/dashboards/report_agent/references.py` |
 | Render PNGs, attach, write the snapshot region (with trailing References section) | `src/dashboards/report_agent/exporter.py` |
 | Report tab layout + callbacks (add/render/describe/remove figure, summarize, persist edits, add/remove/persist/render reference, export) | `src/dashboards/game_stats_monitor.py` (`_layout_report_tab`, `_register_report_tab_callbacks`) |
 | Confluence read / attach / update API wrapper, tinyurl decoding, HTTP redirect fallback | `src/dashboards/confluence_client.py` |
-| LLM factory used by description/summary; auto-mode provider pick | `src/dashboards/chat_agent.py:_build_llm` |
+| LLM factory used by description/summary; auto-mode provider pick | `src/ai_agent/chat_agent.py:_build_llm` |
 
 
 ## Authentication

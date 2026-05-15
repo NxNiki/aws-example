@@ -37,9 +37,11 @@ poetry run python jobs/<script>.py
 
 ## Architecture
 
-**Two source packages** (both under `src/`, configured in pyproject.toml):
+**Four source packages** (all under `src/`, configured in pyproject.toml):
 - `bituslabs_ds` — Core library: ETL, S3 utilities, ML, EDA, Athena, PySpark helpers
-- `dashboards` — Dash web apps for game analytics with AI chat integration
+- `dashboards` — Dash web app (game stats, Report tab UI) + a small set of shared utilities (`confluence_client.py`, `secrets.py`, `user_stats_aggregates.py`) that the ai_agent and rag_service also import
+- `ai_agent` — FastAPI chat service: LangChain ReAct agent, Slack bot, metadata cache, Report-tab LLM endpoints
+- `rag_service` — FastAPI retrieval microservice: Confluence loader, embeddings, Faiss/OpenSearch backed retriever
 
 **Data flow:**
 ```
@@ -125,4 +127,4 @@ Optional longer explanation if the why is non-obvious.
 
 ## Poetry Dependency Groups
 
-All optional groups: `ds` (scipy, pymc), `ml` (scikit-learn, sagemaker), `dl` (pytorch), `dashboard` (dash, plotly, polars), `llm` (langchain, langgraph, atlassian-python-api — shared by dashboard + ai_agent images), `ai_agent` (fastapi, uvicorn — install together with `llm`), `etl` (redshift, paramiko, slack), `spark` (pyspark — do NOT bundle when deploying to EMR).
+All optional groups: `ds` (scipy, pymc), `ml` (scikit-learn, sagemaker), `dl` (pytorch), `dashboard` (dash, plotly, polars, kaleido), `llm` (langchain, langgraph — ai_agent-only now), `confluence` (atlassian-python-api, requests — shared by dashboard + ai_agent + rag_service), `ai_agent` (fastapi, uvicorn, slack-bolt, aiohttp — install with `llm,confluence`), `rag_service` (faiss-cpu, opensearch-py, openai, google-generativeai), `etl` (redshift, paramiko, slack), `spark` (pyspark — do NOT bundle when deploying to EMR).

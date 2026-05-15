@@ -160,6 +160,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deploy time and injects `RAG_SERVICE_URL` into the task environment
   (mirrors how the dashboard deploy auto-detects the ai-chat-agent's
   ALB for `CHAT_API_URL`).
+- **Promoted ai_agent service modules out of `src/dashboards/` into a
+  new `src/ai_agent/` package.** Moved: `chat_agent.py`, `chat_api.py`,
+  `slack_handler.py`, `metadata_builder.py`, `column_metadata.yaml`,
+  `report_agent/description.py`. Stays in `dashboards/` (shared or
+  dashboard-only): `confluence_client.py`, `secrets.py`,
+  `user_stats_aggregates.py`, `report_agent/{references,exporter,
+  data_summary}.py`, dashboard configs. uvicorn entrypoint:
+  `dashboards.chat_api:app` → `ai_agent.chat_api:app`. `Dockerfile.ai_agent`
+  swaps 6 per-file COPYs for one `COPY src/ai_agent ./src/ai_agent`.
+  External code referencing `dashboards.chat_agent` /
+  `dashboards.chat_api` / `dashboards.slack_handler` /
+  `dashboards.metadata_builder` / `dashboards.report_agent.description`
+  must update to `ai_agent.X`; all in-tree call sites + 6 doc files
+  + the dashboard's "AI agent unreachable" UI message updated together.
+- **Migrated chat agent off the deprecated `langgraph.prebuilt.create_react_agent`**
+  to `langchain.agents.create_agent`. Same first two positional args,
+  so the call site is unchanged (import is aliased to
+  `_create_langchain_agent` to avoid colliding with the local
+  `create_agent()` helper). Removes the `LangGraphDeprecatedSinceV10`
+  warning. The new `CompiledStateGraph.invoke` / `ainvoke` type their
+  input as a private `_InputAgentState` TypedDict; the plain
+  `{"messages": […]}` dict gets a targeted `# type: ignore[arg-type]`
+  at the three call sites — runtime unaffected, just silences pyright
+  without coupling to a private symbol.
 
 ### Fixed
 
