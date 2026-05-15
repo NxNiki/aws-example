@@ -1,0 +1,49 @@
+# AI Agent Q&A test cases.
+#
+# Each entry below is fed to the chat agent by
+# tests/integration/test_ai_agent_questions.py. The test prints the
+# answer (and the list of tools the agent invoked) so you can review
+# them manually with:
+#
+#     poetry run pytest tests/integration/test_ai_agent_questions.py -v -s
+#
+# Required fields:
+#   id        — short stable identifier; shown in pytest output on
+#               failure, so make it greppable.
+#   question  — the user's question to the agent (any length, YAML
+#               literal blocks `|` work fine for multi-line).
+#
+# Optional fields:
+#   dashboard_config   — filename under src/dashboards/, e.g.
+#                        "dashboard_config-ss03.yaml". Controls which
+#                        metric/group metadata the agent loads.
+#   model              — model_key, e.g. "gemini:gemini-2.5-flash" or
+#                        "openai:gpt-4.1". Defaults to whatever
+#                        chat_agent._build_llm picks from env.
+#   must_contain       — list of substrings that MUST appear in the
+#                        answer (case-insensitive). Empty/missing = no
+#                        substring check; the test passes as long as
+#                        the agent responds.
+#   must_call_tools    — list of tool names the agent MUST invoke
+#                        somewhere in its trace. Empty/missing = no
+#                        tool-call check. Useful for behavior tests
+#                        (e.g. "did the agent reach for RAG vs.
+#                        live Confluence?").
+#   notes              — free-form comment for reviewers; ignored by
+#                        the test runner.
+#
+# Tip: keep one entry per logical question. Don't bundle several
+# questions into one entry — single-shot tests are easier to triage.
+
+cases:
+  - id: ss03_active_user_rtp_metric
+    question: What does active_user_rtp_less_0_4_ratio mean, and how is it computed?
+    dashboard_config: dashboard_config-ss03.yaml
+    model: gemini:gemini-2.5-flash
+    must_contain: []
+    must_call_tools: []
+    notes: |
+      Baseline grounded-in-metadata question — the agent should
+      describe the metric using the column_metadata.yaml entry and
+      ideally cite the ETL formula. Review the answer for clarity
+      and accuracy before adding strict assertions.
