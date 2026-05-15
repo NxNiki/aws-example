@@ -19,11 +19,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Editable descriptions and summary.** Both render as textareas;
     edits persist on blur and are sent to the LLM as a "prior draft to
     refine, preserving any user edits" on the next regenerate.
-  - **`/prompt:` instruction syntax.** Lines starting with `/prompt:`
-    anywhere in a textarea are extracted as explicit instructions to
-    the next LLM call (routed into a separate prompt section) and
-    stripped from the regenerated output. Lets users iterate without
-    rewriting prose by hand.
+  - **`/prompt` instruction syntax + intent-driven Generate.** Lines
+    starting with `/prompt` (legacy `/prompt:` also accepted) at the
+    start of a textarea line are extracted as explicit instructions
+    to the next LLM call. Generate is now safe to click — it never
+    silently overwrites manual edits:
+    * Empty textarea → first draft from the data summary.
+    * Non-empty + no `/prompt` → **no-op**; a status hint tells the
+      user nothing happened.
+    * Non-empty + `/prompt` at the very start → full regenerate from
+      instructions.
+    * Non-empty + `/prompt` after some prose → prose before the first
+      `/prompt` is preserved byte-for-byte; the LLM produces only
+      additional paragraphs and the caller concatenates the two.
+      Uses a dedicated `*_APPEND_SYSTEM_PROMPT` that forbids the
+      model from echoing or rewriting the preserved region.
   - **Per-figure data summary.** The LLM receives a JSON summary of
     each figure's traces, axes, error bars, and heatmap z-matrix —
     not the rendered PNG — so descriptions cite exact values instead

@@ -4,9 +4,28 @@ LLM helpers for the Report tab.
 Two entry points:
   * ``generate_description`` — interpret a single figure given its
     ``data_summary`` (and optionally an existing description the user wants
-    refined). Returns prose in the requested language.
+    refined). Returns ``(text, status)``.
   * ``generate_summary`` — synthesize an overall report summary across all
-    figures' descriptions + data summaries.
+    figures' descriptions + data summaries. Same return shape.
+
+Generate semantics
+------------------
+The Generate buttons are intentionally *intent-driven*: clicking Generate
+does not blindly overwrite manual edits. Behavior branches on the
+textarea's current contents:
+
+1. **Empty textarea** → LLM produces a first draft from the data summary.
+   Status: ``STATUS_GENERATED``.
+2. **Non-empty, no ``/prompt`` lines** → no LLM call; the textarea is
+   returned unchanged. Status: ``STATUS_NO_INSTRUCTIONS``. The caller
+   surfaces this as a status hint so the user knows nothing happened.
+3. **Non-empty, ``/prompt`` line(s) at the very start (no preserved
+   prose)** → full regenerate from scratch using the instructions.
+   Status: ``STATUS_REGENERATED``.
+4. **Non-empty, ``/prompt`` line(s) after some prose** → the prose
+   *before* the first ``/prompt`` is preserved byte-for-byte and the
+   LLM generates additional paragraphs based on the instructions; the
+   two are concatenated. Status: ``STATUS_APPENDED``.
 
 The same ``chat_agent._build_llm()`` factory is used so model selection +
 credentials behave identically to the AI Assistant chat panel.
@@ -33,21 +52,51 @@ def _language_name(language_code: str) -> str:
     return SUPPORTED_LANGUAGES.get(language_code, "English")
 
 
-# Lines starting with ``/prompt:`` are user instructions, not prose to keep.
-# Anywhere in the textarea, one per line, case-insensitive.
-_PROMPT_LINE_RE = re.compile(r"^[ \t]*/prompt:\s*(.+?)\s*$", re.MULTILINE | re.IGNORECASE)
+# Lines starting with ``/prompt`` (optional trailing colon) are user
+# instructions, not prose to keep. One per line, case-insensitive. The
+# trigger must be at the start of the line (after optional indentation) —
+# mid-line occurrences of ``/prompt`` in prose are not stripped.
+# Accepted forms (both produce identical parsing):
+#   /prompt make this more concise
+#   /prompt: make this more concise
+_PROMPT_LINE_RE = re.compile(r"^[ \t]*/prompt(?::|\s)\s*(.+?)\s*$", re.MULTILINE | re.IGNORECASE)
 
 
-def _split_prompts(text: Optional[str]) -> Tuple[str, List[str]]:
-    """Split a textarea value into ``(prose_to_preserve, list_of_user_instructions)``.
+def _split_at_first_prompt(text: Optional[str]) -> Tuple[str, List[str]]:
+    """Split a textarea value at the first ``/prompt`` line.
 
-    Empty string or ``None`` returns ``("", [])``.
+    Returns ``(preserved_prose, prompts)``:
+
+    * ``preserved_prose`` — everything before the first ``/prompt`` line,
+      with trailing whitespace trimmed. This text is preserved verbatim
+      when the caller appends new LLM content beneath it.
+    * ``prompts`` — list of all ``/prompt`` instruction texts (from
+      anywhere in the textarea, in document order).
+
+    If no ``/prompt`` line is present, returns ``(text or "", [])``.
+    ``None`` or empty returns ``("", [])``.
     """
     if not text:
         return "", []
-    prompts = [m.group(1).strip() for m in _PROMPT_LINE_RE.finditer(text)]
-    prose = _PROMPT_LINE_RE.sub("", text).strip()
-    return prose, prompts
+    first = _PROMPT_LINE_RE.search(text)
+    if not first:
+        return text, []
+    preserved = text[: first.start()].rstrip()
+    after = text[first.start() :]
+    prompts = [m.group(1).strip() for m in _PROMPT_LINE_RE.finditer(after)]
+    return preserved, prompts
+
+
+# Status strings returned by ``generate_description`` / ``generate_summary``.
+# Callers compare against the ``STATUS_NO_INSTRUCTIONS`` sentinel to decide
+# whether to skip writing the (unchanged) text back into the Store.
+STATUS_GENERATED = "Generated."
+STATUS_REGENERATED = "Regenerated from instructions."
+STATUS_APPENDED = "Appended below preserved content."
+STATUS_NO_INSTRUCTIONS = (
+    "No /prompt instructions — content unchanged. "
+    "Add `/prompt …` lines to regenerate or clear the textarea for a fresh draft."
+)
 
 
 _DESCRIPTION_SYSTEM_PROMPT = (
@@ -62,7 +111,7 @@ _DESCRIPTION_SYSTEM_PROMPT = (
     "not invent metrics or dates that are not in the summary or "
     "references. No headings, markdown fences, bullet lists, or HTML — "
     "only paragraphs separated by blank lines. Never echo back "
-    "``/prompt:`` lines."
+    "``/prompt`` or ``/prompt:`` lines."
 )
 
 
@@ -77,7 +126,45 @@ _SUMMARY_SYSTEM_PROMPT = (
     "any trend that appears across multiple figures. Stay grounded in "
     "the provided material — do not invent metrics. No headings, "
     "markdown fences, bullets, or HTML — only paragraphs separated by "
-    "blank lines. Never echo back ``/prompt:`` lines."
+    "blank lines. Never echo back ``/prompt`` or ``/prompt:`` lines."
+)
+
+
+# Append-mode system prompts: used when the textarea contains preserved
+# prose followed by ``/prompt`` lines. The model must NOT echo or rewrite
+# the preserved prose — it is concatenated by the caller. The model's job
+# is to produce only the new paragraphs to follow.
+_DESCRIPTION_APPEND_SYSTEM_PROMPT = (
+    "You are a data analyst adding paragraphs to an existing report "
+    "section about one figure. The user has prior prose they want "
+    "preserved verbatim — your output will be appended directly after "
+    "it. DO NOT repeat, paraphrase, restate, or rewrite the preserved "
+    "prose; the caller will concatenate it with your output. You will "
+    "receive: (a) the preserved prose as read-only context, (b) "
+    "explicit user instructions for what to add, (c) the figure's JSON "
+    "data summary, and (d) optional reference materials. Generate 1–2 "
+    "additional paragraphs of plain prose that follow the instructions "
+    "and use the figure data. Quote specific numbers from the data "
+    "summary. No headings, markdown fences, bullet lists, HTML, or "
+    "``/prompt`` lines. Output only the new paragraphs — the caller "
+    "will insert a blank line between the preserved content and your "
+    "output."
+)
+
+
+_SUMMARY_APPEND_SYSTEM_PROMPT = (
+    "You are a data analyst adding paragraphs to an existing report "
+    "summary that synthesizes across figures. The user has prior prose "
+    "they want preserved verbatim — your output will be appended "
+    "directly after it. DO NOT repeat, paraphrase, restate, or rewrite "
+    "the preserved prose. You will receive: (a) the preserved prose as "
+    "read-only context, (b) explicit user instructions for what to "
+    "add, (c) every figure's description + data summary, and (d) "
+    "optional reference materials. Generate 1–2 additional paragraphs "
+    "of plain prose that follow the instructions, draw on the figures' "
+    "data, and complement (rather than duplicate) what the preserved "
+    "prose already says. No headings, markdown fences, bullets, HTML, "
+    "or ``/prompt`` lines. Output only the new paragraphs."
 )
 
 
@@ -91,6 +178,10 @@ def _invoke_llm(system_prompt: str, user_message: str, *, model_key: Optional[st
     return response.content if isinstance(response.content, str) else str(response.content)
 
 
+def _format_prompt_block(prompts: List[str]) -> str:
+    return "\n".join(f"- {p}" for p in prompts)
+
+
 def generate_description(
     *,
     data_summary: Dict[str, Any],
@@ -98,34 +189,46 @@ def generate_description(
     model_key: Optional[str] = None,
     existing_description: Optional[str] = None,
     references: Optional[List[Dict[str, str]]] = None,
-) -> str:
+) -> Tuple[str, str]:
     """Generate a 2-3 paragraph interpretation of one figure.
 
-    ``existing_description`` may contain prior LLM prose mixed with user
-    edits and ``/prompt: ...`` instruction lines. Prose is sent to the LLM
-    as a draft to preserve, prompts as explicit instructions to follow.
-    ``references`` is a list of fetched reference docs (output of
-    ``references.load_references``); their bodies are inlined in the
-    prompt for context.
+    See the module docstring for the four-case behavior. Returns
+    ``(text, status)`` where ``status`` is one of the module-level
+    ``STATUS_*`` constants; the caller surfaces it as a UI hint and
+    can compare against ``STATUS_NO_INSTRUCTIONS`` to skip writing
+    the (unchanged) text back into its Store.
     """
     from dashboards.report_agent.references import format_for_prompt
 
     language_name = _language_name(language)
     summary_json = json.dumps(data_summary, ensure_ascii=False, default=str)
-    prior_prose, prompts = _split_prompts(existing_description)
+    preserved, prompts = _split_at_first_prompt(existing_description)
+    is_empty = not (existing_description or "").strip()
+
+    # Case 2: non-empty textarea with no /prompt — no-op so manual edits aren't clobbered.
+    if not is_empty and not prompts:
+        return (existing_description or ""), STATUS_NO_INSTRUCTIONS
+
+    refs_block = format_for_prompt(references or [])
+
     parts: List[str] = [
         f"# Output language\nWrite the response in {language_name}.",
         f"# Figure data\n{summary_json}",
     ]
-    refs_block = format_for_prompt(references or [])
     if refs_block:
         parts.append(f"# Reference materials\n{refs_block}")
-    if prior_prose:
-        parts.append(f"# Prior draft (refine, preserving any user edits)\n{prior_prose}")
     if prompts:
-        prompt_block = "\n".join(f"- {p}" for p in prompts)
-        parts.append(f"# User instructions to follow\n{prompt_block}")
-    return _invoke_llm(_DESCRIPTION_SYSTEM_PROMPT, "\n\n".join(parts), model_key=model_key)
+        parts.append(f"# User instructions to follow\n{_format_prompt_block(prompts)}")
+
+    # Case 4: append mode — preserved prose stays verbatim, LLM writes only the new paragraphs.
+    if preserved:
+        parts.append(f"# Preserved prose (read-only context — do NOT echo or rewrite)\n{preserved}")
+        new_content = _invoke_llm(_DESCRIPTION_APPEND_SYSTEM_PROMPT, "\n\n".join(parts), model_key=model_key)
+        return preserved + "\n\n" + new_content.strip(), STATUS_APPENDED
+
+    # Cases 1 + 3: full generate. Either empty textarea (first draft) or /prompt at start (instruction-driven regen).
+    text = _invoke_llm(_DESCRIPTION_SYSTEM_PROMPT, "\n\n".join(parts), model_key=model_key)
+    return text, (STATUS_GENERATED if is_empty else STATUS_REGENERATED)
 
 
 def generate_summary(
@@ -135,15 +238,11 @@ def generate_summary(
     model_key: Optional[str] = None,
     existing_summary: Optional[str] = None,
     references: Optional[List[Dict[str, str]]] = None,
-) -> str:
+) -> Tuple[str, str]:
     """Generate an overall report summary across all figures.
 
-    ``figures`` is the list stored in the Report tab's ``report-figures``
-    store: each item must have ``data_summary`` and may have ``description``.
-    ``existing_summary`` works the same way as ``existing_description`` —
-    prose to preserve, plus optional ``/prompt:`` instruction lines.
-    ``references`` is the same per-call list of fetched reference docs
-    used by ``generate_description``.
+    Same four-case behavior as ``generate_description`` — see module
+    docstring. Returns ``(text, status)``.
     """
     from dashboards.report_agent.references import format_for_prompt
 
@@ -154,18 +253,29 @@ def generate_summary(
         data = json.dumps(fig.get("data_summary") or {}, ensure_ascii=False, default=str)
         blocks.append(f"## Figure {idx}\nDescription: {desc}\nData: {data}")
     if not blocks:
-        return ""
+        return "", STATUS_GENERATED
+
+    preserved, prompts = _split_at_first_prompt(existing_summary)
+    is_empty = not (existing_summary or "").strip()
+
+    if not is_empty and not prompts:
+        return (existing_summary or ""), STATUS_NO_INSTRUCTIONS
+
+    refs_block = format_for_prompt(references or [])
+
     parts: List[str] = [
         f"# Output language\nWrite the response in {language_name}.",
         "# Figures\n" + "\n\n".join(blocks),
     ]
-    refs_block = format_for_prompt(references or [])
     if refs_block:
         parts.append(f"# Reference materials\n{refs_block}")
-    prior_prose, prompts = _split_prompts(existing_summary)
-    if prior_prose:
-        parts.append(f"# Prior draft (refine, preserving any user edits)\n{prior_prose}")
     if prompts:
-        prompt_block = "\n".join(f"- {p}" for p in prompts)
-        parts.append(f"# User instructions to follow\n{prompt_block}")
-    return _invoke_llm(_SUMMARY_SYSTEM_PROMPT, "\n\n".join(parts), model_key=model_key)
+        parts.append(f"# User instructions to follow\n{_format_prompt_block(prompts)}")
+
+    if preserved:
+        parts.append(f"# Preserved prose (read-only context — do NOT echo or rewrite)\n{preserved}")
+        new_content = _invoke_llm(_SUMMARY_APPEND_SYSTEM_PROMPT, "\n\n".join(parts), model_key=model_key)
+        return preserved + "\n\n" + new_content.strip(), STATUS_APPENDED
+
+    text = _invoke_llm(_SUMMARY_SYSTEM_PROMPT, "\n\n".join(parts), model_key=model_key)
+    return text, (STATUS_GENERATED if is_empty else STATUS_REGENERATED)

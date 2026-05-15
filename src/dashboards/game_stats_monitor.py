@@ -1147,7 +1147,7 @@ class GameStatsDashboard:
                             id="report-summary-display",
                             placeholder=(
                                 "(No summary yet — click 'Generate summary'. You can edit "
-                                "the result, or add lines like  /prompt: tighten the second "
+                                "the result, or add lines like  /prompt tighten the second "
                                 "paragraph  to instruct the next regenerate.)"
                             ),
                             style={
@@ -6138,7 +6138,7 @@ class GameStatsDashboard:
                                 value=description,
                                 placeholder=(
                                     "Click 'Generate description' to draft. You can edit "
-                                    "the response, or add lines like  /prompt: focus on "
+                                    "the response, or add lines like  /prompt focus on "
                                     "the spike on Apr 15  to instruct the next regenerate."
                                 ),
                                 style={
@@ -6167,7 +6167,7 @@ class GameStatsDashboard:
             Output({"type": "report-desc-status", "fig_id": ALL}, "children"),
             Input({"type": "report-generate-desc-btn", "fig_id": ALL}, "n_clicks"),
             State({"type": "report-generate-desc-btn", "fig_id": ALL}, "id"),
-            # Textarea state, so unblurred edits and any /prompt: lines the
+            # Textarea state, so unblurred edits and any /prompt lines the
             # user just typed reach the LLM even if the blur-time persist
             # callback runs out of order with this one.
             State({"type": "report-figure-desc-text", "fig_id": ALL}, "id"),
@@ -6218,7 +6218,7 @@ class GameStatsDashboard:
                 pass
 
             try:
-                from dashboards.report_agent.description import generate_description
+                from dashboards.report_agent.description import STATUS_NO_INSTRUCTIONS, generate_description
                 from dashboards.report_agent.references import load_references
             except ImportError as exc:
                 statuses[btn_idx] = html.Span(f"Missing dep: {exc}", style={"color": "#c00"})
@@ -6233,7 +6233,7 @@ class GameStatsDashboard:
                 fetched_refs = []
 
             try:
-                text = generate_description(
+                text, status = generate_description(
                     data_summary=figures[fig_idx].get("data_summary") or {},
                     language=language or "en",
                     existing_description=latest_description,
@@ -6244,10 +6244,15 @@ class GameStatsDashboard:
                 statuses[btn_idx] = html.Span(f"Failed: {exc}", style={"color": "#c00"})
                 return no_update, statuses
 
+            if status == STATUS_NO_INSTRUCTIONS:
+                # No LLM call happened; leave the Store untouched and just surface the hint.
+                statuses[btn_idx] = html.Span(status, style={"color": "#888"})
+                return no_update, statuses
+
             updated = dict(figures[fig_idx])
             updated["description"] = text
             figures[fig_idx] = updated
-            statuses[btn_idx] = html.Span("Updated.", style={"color": "#2a7a2a"})
+            statuses[btn_idx] = html.Span(status, style={"color": "#2a7a2a"})
             return figures, statuses
 
         @self.app.callback(
@@ -6300,7 +6305,7 @@ class GameStatsDashboard:
             if not figures:
                 return no_update, html.Span("Add figures first.", style={"color": "#c00"})
             try:
-                from dashboards.report_agent.description import generate_summary
+                from dashboards.report_agent.description import STATUS_NO_INSTRUCTIONS, generate_summary
                 from dashboards.report_agent.references import load_references
             except ImportError as exc:
                 return no_update, html.Span(f"Missing dep: {exc}", style={"color": "#c00"})
@@ -6312,7 +6317,7 @@ class GameStatsDashboard:
                 logger.exception("Reference load failed; continuing without refs")
                 fetched_refs = []
             try:
-                text = generate_summary(
+                text, status = generate_summary(
                     figures=figures,
                     language=language or "en",
                     existing_summary=current_summary_text or None,
@@ -6321,7 +6326,9 @@ class GameStatsDashboard:
             except Exception as exc:
                 logger.exception("Generate summary failed")
                 return no_update, html.Span(f"Failed: {exc}", style={"color": "#c00"})
-            return text, html.Span("Updated.", style={"color": "#2a7a2a"})
+            if status == STATUS_NO_INSTRUCTIONS:
+                return no_update, html.Span(status, style={"color": "#888"})
+            return text, html.Span(status, style={"color": "#2a7a2a"})
 
         @self.app.callback(
             Output("report-summary-display", "value"),
