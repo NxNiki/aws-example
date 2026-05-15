@@ -77,6 +77,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`infra/rag_service/deploy_ecs.py`) — public ALB on the shared
   ECS cluster, IAM scoped to S3 read of the Faiss artifact plus
   Secrets Manager read of `GOOGLE_API_KEY`.
+- **RAG source: `ai_summary_pages`.** New entry in
+  `src/rag_service/config/rag_sources.yaml` pointing at the
+  `spaces/hub/pages/627179541/AI` Confluence page (no recursion).
+  Picked up by the next daily index rebuild.
 - **`infra/shared/ecs_helpers.py`** consolidates the helpers that were
   duplicated across the three deploy scripts (account ID lookup,
   default VPC/subnet discovery, ECR repo idempotent create, ECS task
