@@ -34,6 +34,18 @@
 #
 # Tip: keep one entry per logical question. Don't bundle several
 # questions into one entry — single-shot tests are easier to triage.
+#
+# RAG questions: the harness runs the chat agent in-process, but the
+# agent's `search_confluence_rag` tool calls the rag-service over HTTP.
+# Point local runs at the deployed ECS rag-service rather than spinning
+# one up locally — same service real users hit, catches deploy
+# regressions, no local faiss/embeddings/S3 setup. Set in `.env`:
+#
+#     RAG_SERVICE_URL=http://rag-service-alb-1946335648.us-west-2.elb.amazonaws.com
+#
+# Without it the client defaults to http://localhost:8052 and connection
+# refused → the agent falls back to live Confluence keyword search and
+# any `must_call_tools: [search_confluence_rag]` assertion will fail.
 
 cases:
   - id: ss03_active_user_rtp_metric
@@ -47,3 +59,15 @@ cases:
       describe the metric using the column_metadata.yaml entry and
       ideally cite the ETL formula. Review the answer for clarity
       and accuracy before adding strict assertions.
+
+  - id: confluence_ai_activity
+    question: 请介绍一下SS03的AI活动时间线
+    model: gemini:gemini-2.5-flash
+    must_contain: []
+    must_call_tools:
+      - search_confluence_rag
+    notes: |
+      Confluence question — the agent MUST start with search_confluence_rag
+      (the curated RAG index) per the system prompt; live search_confluence
+      / read_confluence_page are fallback-only. Needs RAG_SERVICE_URL in
+      .env pointing at the deployed rag-service ALB (see file header).
