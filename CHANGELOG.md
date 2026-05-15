@@ -86,6 +86,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lookup module extracted from `chat_agent.py`. Lets the slim
   rag-service Docker image use `_get_secret` without dragging
   `langchain_core` into its dependency closure.
+- **Report-agent LLM moved to the ai_agent service.** Two new endpoints
+  on the ai_agent FastAPI app — `POST /api/report/description` and
+  `POST /api/report/summary` — wrap the existing `generate_description`
+  / `generate_summary` functions. The dashboard's Report tab now calls
+  these over HTTP instead of running LangChain in-process. The four-case
+  generate semantics (empty / no-`/prompt` no-op / `/prompt` at start /
+  preserved + append) are preserved verbatim and reported as a typed
+  status string in the response body. Reference fetching stays in the
+  dashboard — pre-fetched bodies ship in the request payload, so the
+  ai_agent never does Confluence I/O on the hot path. Effect: prompt
+  and behavior tweaks redeploy only the ai_agent; dashboard rebuilds
+  drop from ~5–10 min to never-needed for report-agent iteration.
+  Poetry's `confluence` group splits out of `llm` so the dashboard
+  image can install Confluence integration without the LangChain stack.
 - **Slack bot integration for the AI agent.** New `POST /slack/events`
   endpoint on the ai_agent FastAPI service that responds to Slack
   `app_mention` events (DMs and untagged channel messages are ignored

@@ -18,9 +18,10 @@ ENV PATH="/root/.local/bin:$PATH"
 
 COPY pyproject.toml poetry.lock ./
 
-# Install main + shared 'llm' group (langchain/langgraph + Confluence)
-# + ai_agent (FastAPI/uvicorn). No dash, plotly, polars, gunicorn.
-RUN poetry install --only main,llm,ai_agent --no-root --no-cache && rm -rf $POETRY_CACHE_DIR
+# Install main + 'llm' (langchain/langgraph) + 'confluence' (atlassian /
+# requests, used by chat tools and the report-agent endpoint) + ai_agent
+# (FastAPI/uvicorn/slack-bolt/aiohttp). No dash, plotly, polars, gunicorn.
+RUN poetry install --only main,llm,confluence,ai_agent --no-root --no-cache && rm -rf $POETRY_CACHE_DIR
 
 # --- Stage 2: Runtime ---
 FROM python:3.11-slim AS runtime
@@ -47,6 +48,11 @@ COPY src/dashboards/metadata_builder.py   ./src/dashboards/metadata_builder.py
 COPY src/dashboards/confluence_client.py  ./src/dashboards/confluence_client.py
 COPY src/dashboards/secrets.py            ./src/dashboards/secrets.py
 COPY src/dashboards/user_stats_aggregates.py  ./src/dashboards/user_stats_aggregates.py
+# Report-agent LLM endpoint (chat_api mounts /api/report/description and
+# /api/report/summary, wrapping these). The module is self-contained —
+# format_for_prompt is inlined so we don't need references.py here.
+COPY src/dashboards/report_agent/__init__.py    ./src/dashboards/report_agent/__init__.py
+COPY src/dashboards/report_agent/description.py ./src/dashboards/report_agent/description.py
 # Thin HTTP client for the RAG service — only depends on requests, no
 # OpenSearch / Faiss / embeddings. Without these, search_confluence_rag
 # fails with "RAG service client is not installed".

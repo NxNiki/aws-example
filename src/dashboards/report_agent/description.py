@@ -182,6 +182,29 @@ def _format_prompt_block(prompts: List[str]) -> str:
     return "\n".join(f"- {p}" for p in prompts)
 
 
+def _format_references_block(refs: List[Dict[str, str]]) -> Optional[str]:
+    """Concatenate fetched references into the ``# Reference materials`` block.
+
+    Inlined here (rather than imported from ``dashboards.report_agent.references``)
+    so this module is self-contained — the ai_agent image only needs to
+    COPY this file, not the broader ``references.py`` / ``confluence_client.py``
+    chain that handles fetching.
+    """
+    if not refs:
+        return None
+    parts: List[str] = []
+    for ref in refs:
+        title = ref.get("title") or ref.get("url") or "(unnamed)"
+        url = ref.get("url") or ""
+        body = ref.get("text") or ""
+        if not body:
+            err = ref.get("error") or "(no body fetched — external link)"
+            parts.append(f"--- {title} ({url}) ---\n[{err}]")
+        else:
+            parts.append(f"--- {title} ({url}) ---\n{body}")
+    return "\n\n".join(parts)
+
+
 def generate_description(
     *,
     data_summary: Dict[str, Any],
@@ -198,8 +221,6 @@ def generate_description(
     can compare against ``STATUS_NO_INSTRUCTIONS`` to skip writing
     the (unchanged) text back into its Store.
     """
-    from dashboards.report_agent.references import format_for_prompt
-
     language_name = _language_name(language)
     summary_json = json.dumps(data_summary, ensure_ascii=False, default=str)
     preserved, prompts = _split_at_first_prompt(existing_description)
@@ -209,7 +230,7 @@ def generate_description(
     if not is_empty and not prompts:
         return (existing_description or ""), STATUS_NO_INSTRUCTIONS
 
-    refs_block = format_for_prompt(references or [])
+    refs_block = _format_references_block(references or [])
 
     parts: List[str] = [
         f"# Output language\nWrite the response in {language_name}.",
@@ -244,8 +265,6 @@ def generate_summary(
     Same four-case behavior as ``generate_description`` — see module
     docstring. Returns ``(text, status)``.
     """
-    from dashboards.report_agent.references import format_for_prompt
-
     language_name = _language_name(language)
     blocks: List[str] = []
     for idx, fig in enumerate(figures, start=1):
@@ -261,7 +280,7 @@ def generate_summary(
     if not is_empty and not prompts:
         return (existing_summary or ""), STATUS_NO_INSTRUCTIONS
 
-    refs_block = format_for_prompt(references or [])
+    refs_block = _format_references_block(references or [])
 
     parts: List[str] = [
         f"# Output language\nWrite the response in {language_name}.",

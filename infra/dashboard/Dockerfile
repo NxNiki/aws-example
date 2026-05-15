@@ -18,11 +18,12 @@ ENV PATH="/root/.local/bin:$PATH"
 
 COPY pyproject.toml poetry.lock ./
 
-# Install main, dashboard (matplotlib, plotly, dash, polars), and the
-# shared 'llm' group (langchain/langgraph + Confluence client) — chat_agent
-# and report_agent/description import langchain_core/langgraph at module
-# top, so the dashboard process fails to start without them.
-RUN poetry install --only main,dashboard,llm --no-root --no-cache && rm -rf $POETRY_CACHE_DIR
+# Install main + dashboard (matplotlib, plotly, dash, polars) + 'confluence'
+# (atlassian-python-api/requests for report-tab reference fetching and
+# Confluence PNG export). No 'llm' group — the dashboard now calls the
+# ai_agent service over HTTP for chat AND report description/summary
+# generation, so it no longer imports langchain/langgraph in-process.
+RUN poetry install --only main,dashboard,confluence --no-root --no-cache && rm -rf $POETRY_CACHE_DIR
 
 # --- Stage 2: Runtime ---
 FROM public.ecr.aws/docker/library/python:3.11-slim AS runtime
