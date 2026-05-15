@@ -65,11 +65,9 @@ dash = "^3.2.0"
 polars = "^1.38.1"  # avoid 1.38.0 (yanked on PyPI)
 gunicorn = "^22.0"  # production WSGI server; replaces Flask dev server in Docker
 
-# Shared LLM stack — loaded by both the dashboard process
-# (chat_agent + report_agent) and the ai_agent service (chat_api).
-# Kept in its own group so version pins live in one place and neither
-# Docker image picks up the other's runtime-only deps (fastapi/uvicorn
-# vs. dash/plotly/polars).
+# LangChain / LangGraph stack — only the ai_agent service runs the LLM
+# in-process now (the dashboard calls it over HTTP via /api/chat and
+# /api/report/*), so the dashboard image no longer needs these.
 [tool.poetry.group.llm]
 optional = true
 [tool.poetry.group.llm.dependencies]
@@ -77,8 +75,16 @@ langchain = ">=0.3.0"
 langchain-openai = ">=0.3.0"
 langchain-google-genai = ">=4.0.0"
 langgraph = ">=0.2.0"
-# Confluence integration is exercised by both surfaces (chat tools in
-# ai_agent, report-tab references in dashboard), so its deps live here too.
+
+# Confluence client + HTTP — used by both surfaces:
+#  * ai_agent: chat-agent tools and report-tab reference inlining
+#  * dashboard: report-tab reference fetching (load_references) and
+#    PNG export to Confluence (exporter.py)
+# Kept in a separate group so the dashboard image can install Confluence
+# integration without dragging in the LangChain stack.
+[tool.poetry.group.confluence]
+optional = true
+[tool.poetry.group.confluence.dependencies]
 atlassian-python-api = ">=3.41.0"
 requests = ">=2.32.0"
 

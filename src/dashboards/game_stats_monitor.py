@@ -6217,8 +6217,11 @@ class GameStatsDashboard:
             except StopIteration:
                 pass
 
+            import json as _json
+            import urllib.error
+            import urllib.request
+
             try:
-                from dashboards.report_agent.description import STATUS_NO_INSTRUCTIONS, generate_description
                 from dashboards.report_agent.references import load_references
             except ImportError as exc:
                 statuses[btn_idx] = html.Span(f"Missing dep: {exc}", style={"color": "#c00"})
@@ -6232,27 +6235,46 @@ class GameStatsDashboard:
                 logger.exception("Reference load failed; continuing without refs")
                 fetched_refs = []
 
+            # LLM generation runs in the ai_agent service. Send the
+            # already-fetched references so ai_agent doesn't need to do
+            # Confluence I/O itself.
+            payload = {
+                "data_summary": figures[fig_idx].get("data_summary") or {},
+                "existing_description": latest_description,
+                "references": fetched_refs,
+                "language": language or "en",
+            }
             try:
-                text, status = generate_description(
-                    data_summary=figures[fig_idx].get("data_summary") or {},
-                    language=language or "en",
-                    existing_description=latest_description,
-                    references=fetched_refs,
+                req = urllib.request.Request(
+                    f"{_CHAT_API_URL}/api/report/description",
+                    data=_json.dumps(payload).encode(),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
                 )
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    body = _json.loads(resp.read().decode())
+            except urllib.error.URLError:
+                logger.exception("Report description: ai_agent unreachable at %s", _CHAT_API_URL)
+                statuses[btn_idx] = html.Span(f"AI agent unreachable at {_CHAT_API_URL}", style={"color": "#c00"})
+                return no_update, statuses
             except Exception as exc:
                 logger.exception("Generate description failed for fig_id=%s", target_fig_id)
                 statuses[btn_idx] = html.Span(f"Failed: {exc}", style={"color": "#c00"})
                 return no_update, statuses
 
-            if status == STATUS_NO_INSTRUCTIONS:
-                # No LLM call happened; leave the Store untouched and just surface the hint.
-                statuses[btn_idx] = html.Span(status, style={"color": "#888"})
+            text = body.get("text", "")
+            status = body.get("status", "generated")
+            message = body.get("message", "Updated.")
+
+            if status == "no_instructions":
+                # No LLM call happened on the server; leave the Store untouched and surface the hint.
+                statuses[btn_idx] = html.Span(message, style={"color": "#888"})
                 return no_update, statuses
 
             updated = dict(figures[fig_idx])
             updated["description"] = text
             figures[fig_idx] = updated
-            statuses[btn_idx] = html.Span(status, style={"color": "#2a7a2a"})
+            statuses[btn_idx] = html.Span(message, style={"color": "#2a7a2a"})
             return figures, statuses
 
         @self.app.callback(
@@ -6304,8 +6326,11 @@ class GameStatsDashboard:
             figures = figures or []
             if not figures:
                 return no_update, html.Span("Add figures first.", style={"color": "#c00"})
+            import json as _json
+            import urllib.error
+            import urllib.request
+
             try:
-                from dashboards.report_agent.description import STATUS_NO_INSTRUCTIONS, generate_summary
                 from dashboards.report_agent.references import load_references
             except ImportError as exc:
                 return no_update, html.Span(f"Missing dep: {exc}", style={"color": "#c00"})
@@ -6316,19 +6341,41 @@ class GameStatsDashboard:
             except Exception:
                 logger.exception("Reference load failed; continuing without refs")
                 fetched_refs = []
+
+            # Strip figure store entries down to what /api/report/summary needs
+            # — the full Store entry has UI fields (id, traces, etc.) that the
+            # LLM doesn't see anyway.
+            figures_payload = [
+                {"data_summary": f.get("data_summary") or {}, "description": f.get("description")} for f in figures
+            ]
+            payload = {
+                "figures": figures_payload,
+                "existing_summary": current_summary_text or None,
+                "references": fetched_refs,
+                "language": language or "en",
+            }
             try:
-                text, status = generate_summary(
-                    figures=figures,
-                    language=language or "en",
-                    existing_summary=current_summary_text or None,
-                    references=fetched_refs,
+                req = urllib.request.Request(
+                    f"{_CHAT_API_URL}/api/report/summary",
+                    data=_json.dumps(payload).encode(),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
                 )
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    body = _json.loads(resp.read().decode())
+            except urllib.error.URLError:
+                logger.exception("Report summary: ai_agent unreachable at %s", _CHAT_API_URL)
+                return no_update, html.Span(f"AI agent unreachable at {_CHAT_API_URL}", style={"color": "#c00"})
             except Exception as exc:
                 logger.exception("Generate summary failed")
                 return no_update, html.Span(f"Failed: {exc}", style={"color": "#c00"})
-            if status == STATUS_NO_INSTRUCTIONS:
-                return no_update, html.Span(status, style={"color": "#888"})
-            return text, html.Span(status, style={"color": "#2a7a2a"})
+
+            text = body.get("text", "")
+            status = body.get("status", "generated")
+            message = body.get("message", "Updated.")
+            if status == "no_instructions":
+                return no_update, html.Span(message, style={"color": "#888"})
+            return text, html.Span(message, style={"color": "#2a7a2a"})
 
         @self.app.callback(
             Output("report-summary-display", "value"),

@@ -8,12 +8,14 @@ The dashboard calls this API over HTTP (``CHAT_API_URL`` env var).
 
 Endpoints
 ---------
-POST /api/chat          — Send a message, get AI response
-GET  /api/metadata/columns          — List all column names and categories
-GET  /api/metadata/columns/{name}   — Get details for one column
-GET  /api/metadata/groups           — List all group definitions
-GET  /api/health                    — Health check
-POST /api/metadata/rebuild          — Force-rebuild the metadata cache
+POST /api/chat                       — Send a message, get AI response
+POST /api/report/description         — LLM-generate one figure's description
+POST /api/report/summary             — LLM-generate the overall report summary
+GET  /api/metadata/columns           — List all column names and categories
+GET  /api/metadata/columns/{name}    — Get details for one column
+GET  /api/metadata/groups            — List all group definitions
+GET  /api/health                     — Health check
+POST /api/metadata/rebuild           — Force-rebuild the metadata cache
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,6 +33,14 @@ from pydantic import BaseModel, Field
 
 from dashboards.chat_agent import achat, chat, init_metadata
 from dashboards.metadata_builder import build_metadata
+from dashboards.report_agent.description import (
+    STATUS_APPENDED,
+    STATUS_GENERATED,
+    STATUS_NO_INSTRUCTIONS,
+    STATUS_REGENERATED,
+    generate_description,
+    generate_summary,
+)
 from dashboards.slack_handler import build_slack_handler
 
 logger = logging.getLogger(__name__)
@@ -113,6 +123,71 @@ class RebuildResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Report tab — description / summary generation
+# ---------------------------------------------------------------------------
+
+GenerateStatusLiteral = Literal["generated", "regenerated", "appended", "no_instructions"]
+
+# Map the internal STATUS_* constants from description.py to the wire enum.
+# The constants are user-facing strings ("Generated.", etc.) and may evolve;
+# this layer is the stable contract.
+_STATUS_TO_WIRE: Dict[str, GenerateStatusLiteral] = {
+    STATUS_GENERATED: "generated",
+    STATUS_REGENERATED: "regenerated",
+    STATUS_APPENDED: "appended",
+    STATUS_NO_INSTRUCTIONS: "no_instructions",
+}
+
+
+class ReferenceItem(BaseModel):
+    url: str = Field(..., description="Original URL the user attached")
+    title: Optional[str] = Field(None, description="Resolved page title; falls back to URL")
+    text: Optional[str] = Field(None, description="Stripped, truncated body. Empty for external links.")
+    error: Optional[str] = Field(None, description="Set when fetch failed; surfaced to the LLM as context")
+
+
+class GenerateDescriptionRequest(BaseModel):
+    data_summary: Dict[str, Any] = Field(
+        ...,
+        description="JSON output of dashboards.report_agent.data_summary.extract_data_summary(figure)",
+    )
+    existing_description: Optional[str] = Field(
+        None,
+        description="Current textarea contents — may include /prompt lines. None / '' triggers a first draft.",
+    )
+    references: List[ReferenceItem] = Field(
+        default_factory=list,
+        description=(
+            "Pre-fetched references. The dashboard owns Confluence fetching "
+            "(load_references) and ships the bodies here; ai_agent only "
+            "inlines them into the prompt."
+        ),
+    )
+    language: str = Field("en", description='"en", "zh-Hans", or "zh-Hant"')
+    model: Optional[str] = Field(None, description='Optional model_key like "openai:gpt-4.1"')
+
+
+class FigureForSummary(BaseModel):
+    data_summary: Dict[str, Any]
+    description: Optional[str] = None
+
+
+class GenerateSummaryRequest(BaseModel):
+    figures: List[FigureForSummary]
+    existing_summary: Optional[str] = None
+    references: List[ReferenceItem] = Field(default_factory=list)
+    language: str = "en"
+    model: Optional[str] = None
+
+
+class GenerateResponse(BaseModel):
+    text: str = Field(..., description="Full text to display in the textarea")
+    status: GenerateStatusLiteral
+    message: str = Field(..., description="Human-readable status hint for the UI")
+    elapsed_ms: int
+
+
+# ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
 
@@ -188,6 +263,49 @@ def create_chat_app(*, prefix: str = "") -> FastAPI:
 
         elapsed = int((time.monotonic() - t0) * 1000)
         return ChatResponse(response=response_text, elapsed_ms=elapsed)
+
+    # --- Report tab endpoints ---
+    @app.post("/api/report/description", response_model=GenerateResponse)
+    async def post_report_description(req: GenerateDescriptionRequest) -> GenerateResponse:
+        t0 = time.monotonic()
+        try:
+            text, status = generate_description(
+                data_summary=req.data_summary,
+                language=req.language,
+                model_key=req.model,
+                existing_description=req.existing_description,
+                references=[r.model_dump(exclude_none=True) for r in req.references],
+            )
+        except Exception as exc:
+            logger.exception("Report description generation failed")
+            raise HTTPException(status_code=500, detail=str(exc))
+        return GenerateResponse(
+            text=text,
+            status=_STATUS_TO_WIRE[status],
+            message=status,
+            elapsed_ms=int((time.monotonic() - t0) * 1000),
+        )
+
+    @app.post("/api/report/summary", response_model=GenerateResponse)
+    async def post_report_summary(req: GenerateSummaryRequest) -> GenerateResponse:
+        t0 = time.monotonic()
+        try:
+            text, status = generate_summary(
+                figures=[fig.model_dump(exclude_none=True) for fig in req.figures],
+                language=req.language,
+                model_key=req.model,
+                existing_summary=req.existing_summary,
+                references=[r.model_dump(exclude_none=True) for r in req.references],
+            )
+        except Exception as exc:
+            logger.exception("Report summary generation failed")
+            raise HTTPException(status_code=500, detail=str(exc))
+        return GenerateResponse(
+            text=text,
+            status=_STATUS_TO_WIRE[status],
+            message=status,
+            elapsed_ms=int((time.monotonic() - t0) * 1000),
+        )
 
     # --- Metadata endpoints ---
     @app.get("/api/metadata/columns", response_model=ColumnListResponse)

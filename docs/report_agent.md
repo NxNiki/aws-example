@@ -96,6 +96,31 @@ not read-only HTML. The user's editing surface is the dashboard;
 Confluence is still snapshot-only (the export pushes the latest
 textarea contents and never reads back).
 
+### LLM lives in the ai_agent service
+
+LLM generation runs in the **ai_agent** service, not in the dashboard
+process. The dashboard sends `POST` requests to two endpoints on
+`{CHAT_API_URL}`:
+
+* `POST /api/report/description` — one figure's description
+* `POST /api/report/summary` — overall report summary
+
+Both wrap the same `generate_description` / `generate_summary` functions
+in `dashboards/report_agent/description.py`, which is mounted into the
+ai_agent Docker image. The dashboard image no longer needs LangChain /
+LangGraph — `pyproject.toml` keeps the `llm` group (ai_agent-only) and
+a separate `confluence` group (shared with the dashboard for reference
+fetching + Confluence PNG export).
+
+**Reference fetching stays in the dashboard.** Each Generate request
+sends *pre-fetched* reference bodies (via `references.load_references`)
+to the ai_agent, so the ai_agent never does Confluence I/O on the
+hot path. This also keeps the per-session reference cache local to
+the dashboard process where it belongs.
+
+Prompt and behavior tweaks (system prompts, the four-case logic) now
+only require redeploying ai_agent — no dashboard rebuild needed.
+
 - Edit prose directly in the textarea. On blur the value persists into
   `report-figures[i].description` or `report-summary` via dedicated
   callbacks (`persist_description_edits`, `persist_summary_edits`).
