@@ -93,6 +93,24 @@ async def _fetch_thread_history(client: Any, channel: str, thread_ts: str) -> Li
     return history
 
 
+_THINKING_REACTION = "eyes"
+
+
+async def _add_thinking_reaction(client: Any, channel: str, ts: str) -> None:
+    """Drop an :eyes: reaction on the user's mention so they know the bot
+    saw them while the LLM call is still running.
+
+    Errors are swallowed — the reaction is a nice-to-have UX cue, not a
+    correctness requirement. Common failure: the Slack app lacks
+    ``reactions:write`` (returns ``missing_scope``); the user reaction
+    feature stays dark until the scope is added and the app reinstalled.
+    """
+    try:
+        await client.reactions_add(channel=channel, timestamp=ts, name=_THINKING_REACTION)
+    except Exception:
+        logger.warning("Slack: reactions_add failed (continuing without ack reaction)", exc_info=True)
+
+
 async def _respond_to_mention(event_id: str, event: Dict[str, Any], client: Any) -> None:
     """Background-task body: call achat and post the reply in-thread."""
     if _seen(event_id):
@@ -104,11 +122,18 @@ async def _respond_to_mention(event_id: str, event: Dict[str, Any], client: Any)
     # If the mention is inside an existing thread, ``thread_ts`` is set;
     # otherwise the new reply starts a thread anchored on ``ts``.
     parent_ts = event.get("thread_ts")
-    thread_ts = parent_ts or event.get("ts")
+    mention_ts = event.get("ts")
+    thread_ts = parent_ts or mention_ts
 
     if not channel or not user_text:
         logger.info("Slack: empty mention or missing channel; skipping")
         return
+
+    # Immediate visual ack on the user's message so they know the bot picked
+    # up the @mention — the actual reply arrives 10-30s later (or longer on
+    # cold start). Fire-and-forget; failures don't block the LLM call.
+    if mention_ts:
+        await _add_thinking_reaction(client, channel, mention_ts)
 
     history: List[Dict[str, str]] = []
     if parent_ts:
