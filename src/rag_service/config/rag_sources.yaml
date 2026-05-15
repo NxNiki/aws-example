@@ -63,3 +63,8 @@ sources:
     page_urls:
       - []
     include_children: true
+
+  - name: ai_summary_pages
+    page_urls:
+      - https://bituslabs.atlassian.net/wiki/spaces/hub/pages/627179541/AI
+    include_children: false
