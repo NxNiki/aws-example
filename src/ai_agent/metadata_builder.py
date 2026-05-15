@@ -23,8 +23,10 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-_THIS_DIR = Path(__file__).resolve().parent
-_REPO_ROOT = _THIS_DIR.parent.parent
+_THIS_DIR = Path(__file__).resolve().parent  # src/ai_agent/
+_SRC_DIR = _THIS_DIR.parent  # src/
+_REPO_ROOT = _SRC_DIR.parent  # project root
+_DASHBOARDS_DIR = _SRC_DIR / "dashboards"  # for cross-package file reads
 
 METADATA_YAML_PATH = _THIS_DIR / "column_metadata.yaml"
 CACHE_DIR = _THIS_DIR / ".metadata_cache"
@@ -213,8 +215,10 @@ def build_metadata(
             src = result.get("file", "unknown")
             etl_aliases[alias][src] = expr
 
-    # Scan Python aggregation logic (user_stats_aggregates.py)
-    agg_file = _THIS_DIR / "user_stats_aggregates.py"
+    # Scan Python aggregation logic (user_stats_aggregates.py lives in
+    # the dashboards package — it's dashboard runtime code that the chat
+    # agent only introspects for documenting aggregation methods).
+    agg_file = _DASHBOARDS_DIR / "user_stats_aggregates.py"
     python_agg: Dict[str, str] = {}
     if agg_file.exists():
         python_agg = _scan_python_aggregation_file(agg_file)

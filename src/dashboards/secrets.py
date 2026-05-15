@@ -4,7 +4,7 @@ Confluence client.
 
 Resolution order: process env var → AWS Secrets Manager (cached for the
 process lifetime). Lives in its own module — without dragging
-``langchain_core`` (which ``dashboards.chat_agent`` imports at module
+``langchain_core`` (which ``ai_agent.chat_agent`` imports at module
 top) — so the slim RAG-service Docker image can use it without
 shipping the LangChain stack.
 """

@@ -12,7 +12,7 @@ over OpenAI or Gemini. It exposes two surfaces:
   back as conversation history.
 
 Both surfaces share the same `chat()`/`achat()` core in
-`dashboards.chat_agent`, so they have identical tool access (column
+`ai_agent.chat_agent`, so they have identical tool access (column
 lookup, group lookup, RAG search via `rag_service.client`, Confluence
 fetch via `dashboards.confluence_client`).
 

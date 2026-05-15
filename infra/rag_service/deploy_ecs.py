@@ -15,7 +15,7 @@ Prerequisites:
   2. ECS cluster (infra/shared/ecs_helpers.ECS_CLUSTER_NAME) must already exist —
      it's created by the dashboard deploy script.
   3. AWS Secrets Manager entry "ai-dashboard_ai_agent" must contain
-     GOOGLE_API_KEY (the embedder reads it via dashboards.chat_agent._get_secret).
+     GOOGLE_API_KEY (the embedder reads it via ai_agent.chat_agent._get_secret).
 
 Usage:
   python infra/rag_service/deploy_ecs.py

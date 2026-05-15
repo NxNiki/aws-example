@@ -5946,7 +5946,7 @@ class GameStatsDashboard:
                 response = (
                     f"Cannot reach the AI Agent at `{_CHAT_API_URL}`.\n\n"
                     "**Local dev:** start the agent first:\n"
-                    "```\nPYTHONPATH=src uvicorn dashboards.chat_api:app --port 8051\n```\n\n"
+                    "```\nPYTHONPATH=src uvicorn ai_agent.chat_api:app --port 8051\n```\n\n"
                     "**ECS:** ensure the ai-chat-agent service is running and "
                     "`CHAT_API_URL` is set to its ALB URL."
                 )

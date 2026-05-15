@@ -53,7 +53,7 @@ docker run -p 8051:8051 \
 
 # Or without Docker:
 CHAT_PROVIDER=gemini GOOGLE_API_KEY=your-key \
-  uvicorn dashboards.chat_api:app --host 0.0.0.0 --port 8051
+  uvicorn ai_agent.chat_api:app --host 0.0.0.0 --port 8051
 ```
 
 ## API Endpoints

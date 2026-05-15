@@ -6,7 +6,7 @@ lookups. It indexes Confluence pages declared in
 exposes a hybrid (BM25 + vector) retrieval endpoint at
 `POST /retrieve`.
 
-The chat agent (`dashboards.chat_agent`) calls the service over HTTP via
+The chat agent (`ai_agent.chat_agent`) calls the service over HTTP via
 `rag_service.client.retrieve_passages` — no OpenSearch knowledge leaks into
 the agent.
 

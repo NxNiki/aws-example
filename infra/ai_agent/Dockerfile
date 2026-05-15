@@ -39,29 +39,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /app/.venv /app/.venv
 
-# Application code — only the modules the chat agent needs
+# Application code — only the modules the chat agent needs.
+#
+# Layout:
+#   src/ai_agent/  — chat_agent, chat_api, slack_handler, metadata_builder,
+#                    report_agent/description (this service's own modules)
+#   src/dashboards/ — only the shared/auxiliary files: confluence_client +
+#                    secrets (also used by rag_service), user_stats_aggregates
+#                    (read at runtime by metadata_builder for Python aggregation
+#                    docstrings), column_metadata.yaml + dashboard_config*.yaml.
+#   src/rag_service/ — thin HTTP client only; no OpenSearch/Faiss/embeddings
+#                    (search_confluence_rag would fail with "RAG service
+#                    client is not installed" without these two files).
 COPY src/bituslabs_ds ./src/bituslabs_ds
-COPY src/dashboards/chat_agent.py         ./src/dashboards/chat_agent.py
-COPY src/dashboards/chat_api.py           ./src/dashboards/chat_api.py
-COPY src/dashboards/slack_handler.py      ./src/dashboards/slack_handler.py
-COPY src/dashboards/metadata_builder.py   ./src/dashboards/metadata_builder.py
-COPY src/dashboards/confluence_client.py  ./src/dashboards/confluence_client.py
-COPY src/dashboards/secrets.py            ./src/dashboards/secrets.py
+COPY src/ai_agent ./src/ai_agent
+COPY src/dashboards/__init__.py               ./src/dashboards/__init__.py
+COPY src/dashboards/confluence_client.py      ./src/dashboards/confluence_client.py
+COPY src/dashboards/secrets.py                ./src/dashboards/secrets.py
 COPY src/dashboards/user_stats_aggregates.py  ./src/dashboards/user_stats_aggregates.py
-# Report-agent LLM endpoint (chat_api mounts /api/report/description and
-# /api/report/summary, wrapping these). The module is self-contained —
-# format_for_prompt is inlined so we don't need references.py here.
-COPY src/dashboards/report_agent/__init__.py    ./src/dashboards/report_agent/__init__.py
-COPY src/dashboards/report_agent/description.py ./src/dashboards/report_agent/description.py
-# Thin HTTP client for the RAG service — only depends on requests, no
-# OpenSearch / Faiss / embeddings. Without these, search_confluence_rag
-# fails with "RAG service client is not installed".
-COPY src/rag_service/__init__.py          ./src/rag_service/__init__.py
-COPY src/rag_service/client.py            ./src/rag_service/client.py
-COPY src/dashboards/column_metadata.yaml       ./src/dashboards/column_metadata.yaml
-COPY src/dashboards/__init__.py           ./src/dashboards/__init__.py
-# Dashboard config YAMLs — the agent reads these to contextualize answers
-COPY src/dashboards/dashboard_config*.yaml ./src/dashboards/
+COPY src/dashboards/dashboard_config*.yaml    ./src/dashboards/
+COPY src/rag_service/__init__.py              ./src/rag_service/__init__.py
+COPY src/rag_service/client.py                ./src/rag_service/client.py
 # ETL source files — only the .py scripts the metadata builder scans for SQL.
 # Exclude output/, log/, __pycache__ (multi-GB data files not needed).
 COPY jobs/ss01_wucaishen/*.py               ./jobs/ss01_wucaishen/
@@ -79,7 +77,7 @@ EXPOSE 8051
 # --host 0.0.0.0       Reachable from outside the container.
 # --port 8051          Separate from dashboard (8050).
 CMD ["uvicorn", \
-     "dashboards.chat_api:app", \
+     "ai_agent.chat_api:app", \
      "--host", "0.0.0.0", \
      "--port", "8051", \
      "--workers", "1", \

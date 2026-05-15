@@ -46,7 +46,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import tool
 
-from dashboards.metadata_builder import build_metadata, format_metadata_context
+from ai_agent.metadata_builder import build_metadata, format_metadata_context
 
 logger = logging.getLogger(__name__)
 
