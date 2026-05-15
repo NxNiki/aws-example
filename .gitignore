@@ -29,3 +29,6 @@ dist/
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
 .claude/.credentials.json
+
+# Dashboard metadata builder cache — regenerated locally on first run.
+**/.metadata_cache/
