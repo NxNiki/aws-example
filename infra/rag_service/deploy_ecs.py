@@ -2,7 +2,7 @@
 """
 Deploy the RAG service to AWS ECS Fargate with a public Application Load Balancer.
 
-Mirrors infra/deploy_ai_agent_ecs.py — same VPC / cluster / execution
+Mirrors infra/ai_agent/deploy_ecs.py — same VPC / cluster / execution
 role patterns. The RAG service is its own ECS service so its lifecycle
 (daily index reload, FastAPI serving) is independent of the chat agent
 or dashboard.
@@ -11,16 +11,16 @@ The Faiss artifact lives in S3 at bituslabs_ds.config.DEFAULT_RAG_INDEX_URI;
 the task role gets read access to that prefix.
 
 Prerequisites:
-  1. Run `bash infra/docker_build_rag_service.sh` to build/push the image.
-  2. ECS cluster (infra/ecs_helpers.ECS_CLUSTER_NAME) must already exist —
+  1. Run `bash infra/rag_service/build.sh` to build/push the image.
+  2. ECS cluster (infra/shared/ecs_helpers.ECS_CLUSTER_NAME) must already exist —
      it's created by the dashboard deploy script.
   3. AWS Secrets Manager entry "ai-dashboard_ai_agent" must contain
      GOOGLE_API_KEY (the embedder reads it via dashboards.chat_agent._get_secret).
 
 Usage:
-  python infra/deploy_rag_service_ecs.py
-  python infra/deploy_rag_service_ecs.py --build-first
-  python infra/deploy_rag_service_ecs.py --dry-run
+  python infra/rag_service/deploy_ecs.py
+  python infra/rag_service/deploy_ecs.py --build-first
+  python infra/rag_service/deploy_ecs.py --dry-run
 """
 
 import argparse
@@ -37,9 +37,10 @@ except ImportError:
     sys.exit(1)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent
+PROJECT_ROOT = SCRIPT_DIR.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
-from ecs_helpers import (  # noqa: E402  (sibling module on sys.path[0])
+from infra.shared.ecs_helpers import (  # noqa: E402
     ECS_CLUSTER_NAME,
     ECS_TASK_EXECUTION_ROLE_NAME,
     ensure_ecr_repo,
@@ -79,14 +80,14 @@ TG_HEALTHY_THRESHOLD = 2
 def main() -> None:
     parser = argparse.ArgumentParser(description="Deploy RAG service to ECS Fargate")
     parser.add_argument("--dry-run", action="store_true", help="Print planned actions without executing")
-    parser.add_argument("--build-first", action="store_true", help="Run docker_build_rag_service.sh before deploying")
+    parser.add_argument("--build-first", action="store_true", help="Run infra/rag_service/build.sh before deploying")
     parser.add_argument("--wait", action="store_true", help="Wait for service to stabilize")
     args = parser.parse_args()
 
     if args.build_first and not args.dry_run:
         print("Building and pushing RAG service Docker image...")
         subprocess.run(
-            ["bash", str(SCRIPT_DIR / "docker_build_rag_service.sh")],
+            ["bash", str(SCRIPT_DIR / "build.sh")],
             check=True,
             cwd=PROJECT_ROOT,
         )

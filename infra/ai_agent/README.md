@@ -25,23 +25,23 @@ A crash or slow LLM response in the agent does not impact the dashboard.
 ### 1. Build & push the Docker image
 
 ```bash
-bash infra/docker_build_ai_agent.sh
+bash infra/ai_agent/build.sh
 ```
 
 ### 2. Deploy to ECS
 
 ```bash
 # Default: Gemini, scale-to-zero, reuse existing cluster
-python infra/deploy_ai_agent_ecs.py
+python infra/ai_agent/deploy_ecs.py
 
 # With OpenAI instead:
-python infra/deploy_ai_agent_ecs.py --chat-provider openai
+python infra/ai_agent/deploy_ecs.py --chat-provider openai
 
 # Build + deploy in one step:
-python infra/deploy_ai_agent_ecs.py --build-first
+python infra/ai_agent/deploy_ecs.py --build-first
 
 # Dry run (print plan without executing):
-python infra/deploy_ai_agent_ecs.py --dry-run
+python infra/ai_agent/deploy_ecs.py --dry-run
 ```
 
 ### 3. Run locally
@@ -149,7 +149,7 @@ rm /tmp/secret.json
 Roll the ECS service to pick up the new secret on cold start:
 
 ```bash
-python infra/deploy_ai_agent_ecs.py
+python infra/ai_agent/deploy_ecs.py
 ```
 
 ### Cold-start caveat
@@ -161,7 +161,7 @@ the event up to 3 times during that window. The handler dedupes on
 slow first reply. If that's annoying, redeploy without scale-to-zero:
 
 ```bash
-python infra/deploy_ai_agent_ecs.py --no-scale-to-zero
+python infra/ai_agent/deploy_ecs.py --no-scale-to-zero
 ```
 
 (always-on Fargate cost: ~$10–15/month for the default 0.5 vCPU task)

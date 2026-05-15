@@ -102,11 +102,11 @@ production are env vars.
 Build and push the image:
 
 ```bash
-./infra/docker_build_rag_service.sh push
+./infra/rag_service/build.sh push
 ```
 
 Then deploy as an ECS Fargate service (mirror the patterns in
-`infra/deploy_ai_agent_ecs.py`). The IAM task role needs `aoss:APIAccessAll`
+`infra/ai_agent/deploy_ecs.py`). The IAM task role needs `aoss:APIAccessAll`
 on the target collection plus read access to the Secrets Manager entries
 for `OPENAI_API_KEY` and the `CONFLUENCE_*` triple.
 

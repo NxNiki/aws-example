@@ -3,7 +3,7 @@
 Deploy the Game Stats Dashboard to AWS ECS Fargate with a public Application Load Balancer.
 
 Prerequisites:
-  1. Run `bash infra/docker_build_dashboard.sh` to build and push the image to ECR.
+  1. Run `bash infra/dashboard/build.sh` to build and push the image to ECR.
   2. Ensure ecsTaskExecutionRole exists (ECS console creates it, or use the default).
   3. ecsTaskExecutionRole (or your task role) needs S3 read/write access for dashboard data:
      Add policy: s3:GetObject, s3:PutObject, s3:ListBucket on s3://bituslabs-team-ai/*
@@ -11,10 +11,10 @@ Prerequisites:
      IAM needs: ecs:*, elasticloadbalancing:*, ec2:*, logs:*, iam:PassRole/CreateRole/AttachRolePolicy/PutRolePolicy.
 
 Usage:
-  python infra/deploy_dashboard_ecs.py
-  python infra/deploy_dashboard_ecs.py --region us-west-2
+  python infra/dashboard/deploy_ecs.py
+  python infra/dashboard/deploy_ecs.py --region us-west-2
 
-The cluster name is fixed in ``infra/ecs_helpers.py`` so all three deploy
+The cluster name is fixed in ``infra/shared/ecs_helpers.py`` so all three deploy
 scripts (dashboard, ai-agent, rag-service) target the same ECS cluster.
 
 Options:
@@ -28,7 +28,7 @@ Options:
   --no-scale-to-zero    Disable scale-to-zero; keep 1 task always running
   --public-url          DASHBOARD_PUBLIC_URL env (default: ALB URL)
   --chat-api-url        CHAT_API_URL for the AI agent (auto-detected from ai-chat-agent ALB)
-  --build-first         Run docker_build_dashboard.sh before deploying
+  --build-first         Run infra/dashboard/build.sh before deploying
   --dry-run             Print planned actions without executing
 """
 
@@ -45,11 +45,14 @@ except ImportError:
     print("boto3 required. Run: poetry add boto3  # or pip install boto3", file=sys.stderr)
     sys.exit(1)
 
-# Project root (script lives in infra/)
+# Script lives in infra/dashboard/, so project root is two levels up.
+# Prepend it to sys.path so the cross-service import below resolves
+# regardless of where the script is invoked from.
 SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent
+PROJECT_ROOT = SCRIPT_DIR.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
-from ecs_helpers import (  # noqa: E402  (sibling module on sys.path[0])
+from infra.shared.ecs_helpers import (  # noqa: E402
     ECS_CLUSTER_NAME,
     ECS_TASK_EXECUTION_ROLE_NAME,
     ensure_ecr_repo,
@@ -138,7 +141,7 @@ def main() -> None:
         "--build-first",
         action="store_true",
         default=False,
-        help="Run docker_build_dashboard.sh before deploying",
+        help="Run infra/dashboard/build.sh before deploying",
     )
     parser.add_argument(
         "--create-cluster",
@@ -160,7 +163,7 @@ def main() -> None:
     if args.build_first and not args.dry_run:
         print("Building and pushing Docker image...")
         subprocess.run(
-            ["bash", str(SCRIPT_DIR / "docker_build_dashboard.sh")],
+            ["bash", str(SCRIPT_DIR / "build.sh")],
             check=True,
             cwd=PROJECT_ROOT,
         )
@@ -208,7 +211,7 @@ def main() -> None:
         if resp.get("failures"):
             raise RuntimeError(
                 f"Cluster {ECS_CLUSTER_NAME} not found. "
-                "Pass --create-cluster to create it, or update infra/ecs_helpers.py."
+                "Pass --create-cluster to create it, or update infra/shared/ecs_helpers.py."
             )
         if not resp.get("clusters") or resp["clusters"][0].get("status") != "ACTIVE":
             raise RuntimeError(f"Cluster {ECS_CLUSTER_NAME} not found or not ACTIVE.")

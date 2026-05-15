@@ -1,13 +1,16 @@
 #!/bin/bash
 set -e
 
-# run bash infra/docker_build_etl.sh from project root directory to ensure build context is correctly specified.
+# Build and push the Game Stats Dashboard Docker image to ECR.
+# Run: bash infra/dashboard/build.sh
+# From: project root directory (to ensure build context is correct).
 
-IMAGE_NAME="bituslabs-ds-etl"
+IMAGE_NAME="bituslabs-ds-dashboard"
 TAG="latest"
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 REGION="us-west-2"
 ECR_URL="$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$IMAGE_NAME"
+
 echo "ECR_URL: $ECR_URL"
 
 # 1. Ensure the repository exists in ECR
@@ -18,14 +21,20 @@ else
     echo "Repository $IMAGE_NAME already exists. Skipping creation."
 fi
 
-# Login to ECR
+# 2. Login to ECR
 aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com"
 
-# Build the Docker image
-docker build --platform linux/amd64 -t $IMAGE_NAME -f infra/Dockerfile.etl ./
+# 3. Build the Docker image
+docker build --platform linux/amd64 -t $IMAGE_NAME -f infra/dashboard/Dockerfile ./
 
-# Tag and push to ECR
+# 4. Tag and push to ECR
 docker tag $IMAGE_NAME "$ECR_URL:$TAG"
 docker push "$ECR_URL:$TAG"
 
 echo "Image pushed to: $ECR_URL:$TAG"
+echo ""
+echo "To run locally: docker run -p 8050:8050 -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY $IMAGE_NAME"
+echo ""
+echo "To deploy to ECS:"
+echo "  python infra/dashboard/deploy_ecs.py --build-first"
+echo "  # Or: bash infra/dashboard/build.sh && python infra/dashboard/deploy_ecs.py"

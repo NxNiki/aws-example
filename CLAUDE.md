@@ -57,11 +57,11 @@ Redshift (prod) → SSH bastion tunnel → DataLoader (etl.py) → S3 parquet ca
 **Entry points:**
 - `jobs/run_scheduled_etl_jobs.py` — Master ETL orchestrator (EventBridge/Fargate)
 - `entry_points/etl_dispatcher.py` — Dynamic job runner
-- `infra/deploy_dashboard_ecs.py` — Dashboard deployment to ECS
-- `infra/deploy_ai_agent_ecs.py` — AI agent deployment to ECS
-- `infra/deploy_emr.py` — EMR cluster management
+- `infra/dashboard/deploy_ecs.py` — Dashboard deployment to ECS
+- `infra/ai_agent/deploy_ecs.py` — AI agent deployment to ECS
+- `infra/emr/deploy.py` — EMR cluster management
 
-**Infrastructure:** Five Dockerfiles in `infra/` (base, dashboard, etl, ai_agent, sagemaker) with corresponding build scripts.
+**Infrastructure:** `infra/` is organized one subfolder per service — `dashboard/`, `ai_agent/`, `rag_service/`, `etl/`, `sagemaker/`, `operation_report/`, `emr/` — each containing its own `Dockerfile`, `build.sh`, deploy script, and README where relevant. Shared deploy plumbing (base Docker image, ECS helpers) lives in `infra/shared/`. See `infra/README.md` for the index.
 
 ## Code Style
 

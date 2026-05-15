@@ -57,7 +57,7 @@ Attach policies that match what you run. Common needs:
 | EMR: submit steps, manage cluster | e.g. `AmazonEMRFullAccessPolicy_v2` |
 | SageMaker: training, tuning | Execution role (see `SAGEMAKER_ROLE` in `src/bituslabs_ds/config.py`) plus `sagemaker:*` / PassRole as required |
 | ECR push/pull (Docker deploys) | ECR login + push policies for your repos |
-| ECS / EventBridge (scheduled ETL, dashboard) | See [infra/README_ETL_JOBS.md](infra/README_ETL_JOBS.md) and [infra/README_DASHBOARD.md](infra/README_DASHBOARD.md) |
+| ECS / EventBridge (scheduled ETL, dashboard) | See [infra/etl/README.md](infra/etl/README.md) and [infra/dashboard/README.md](infra/dashboard/README.md) |
 
 Narrow permissions in production; the table above matches the older README’s intent.
 
@@ -114,7 +114,7 @@ Shared settings (region, bucket, role, image URI) are in **`src/bituslabs_ds/con
 2. **IAM:** policy such as `AmazonEMRFullAccessPolicy_v2` for submitting steps and managing flows.
 3. **Example:** upload your driver script to S3 and add a Spark step:
    - [jobs/examples/data_loader_pyspark_example_submit.py](jobs/examples/data_loader_pyspark_example_submit.py) — uses `submit_spark_step` with `cluster_id`, script URI, data and output S3 paths.
-4. Optional automation: **`infra/deploy_emr.py`** can start a cluster and upload bootstrap/package artifacts (see script docstring and code).
+4. Optional automation: **`infra/emr/deploy.py`** can start a cluster and upload bootstrap/package artifacts (see script docstring and code).
 
 Local PySpark driver for development: [jobs/examples/data_loader_pyspark_example.py](jobs/examples/data_loader_pyspark_example.py).
 
@@ -161,7 +161,7 @@ poetry run python jobs/run_scheduled_etl_jobs.py
 
 ### Scheduled ETL on AWS (Fargate / EventBridge)
 
-Long-running ETL is better suited to **ECS Fargate** than Lambda. See **[infra/README_ETL_JOBS.md](infra/README_ETL_JOBS.md)** for Docker build, schedules, and IAM.
+Long-running ETL is better suited to **ECS Fargate** than Lambda. See **[infra/etl/README.md](infra/etl/README.md)** for Docker build, schedules, and IAM.
 
 ---
 
@@ -175,14 +175,14 @@ For SQL against Athena instead of Redshift, add **`AmazonAthenaFullAccess`** (or
 
 The Game Stats Dashboard runs as a container on **ECS Fargate** with an ALB.
 
-- **Full instructions:** **[infra/README_DASHBOARD.md](infra/README_DASHBOARD.md)**
-- **`infra/deploy_dashboard_ecs.py`** — deploy or update the service.
-- **`infra/Dockerfile.dashboard`** + **`infra/docker_build_dashboard.sh`** — build and push the image to ECR.
+- **Full instructions:** **[infra/dashboard/README.md](infra/dashboard/README.md)**
+- **`infra/dashboard/deploy_ecs.py`** — deploy or update the service.
+- **`infra/dashboard/Dockerfile`** + **`infra/dashboard/build.sh`** — build and push the image to ECR.
 
 After code or dependency changes, **rebuild the image** before deploy:
 
 ```bash
-python infra/deploy_dashboard_ecs.py --build-first
+python infra/dashboard/deploy_ecs.py --build-first
 ```
 
 ---
@@ -191,8 +191,8 @@ python infra/deploy_dashboard_ecs.py --build-first
 
 | Topic | Location |
 |------------|----------|
-| Dashboard (ECS, Docker, `--build-first`) | [infra/README_DASHBOARD.md](infra/README_DASHBOARD.md) |
-| Scheduled ETL on Fargate | [infra/README_ETL_JOBS.md](infra/README_ETL_JOBS.md) |
+| Dashboard (ECS, Docker, `--build-first`) | [infra/dashboard/README.md](infra/dashboard/README.md) |
+| Scheduled ETL on Fargate | [infra/etl/README.md](infra/etl/README.md) |
 | Clustering / K-means | [jobs/cluster_analysis/README.md](jobs/cluster_analysis/README.md) |
 | Operation daily report | [jobs/operation_daily_report/README.md](jobs/operation_daily_report/README.md) |
 | Examples (S3, EMR, SageMaker) | [jobs/examples/README.md](jobs/examples/README.md) |

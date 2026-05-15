@@ -2,7 +2,7 @@
 set -e
 
 # Build and push the RAG service Docker image to ECR.
-# Run: bash infra/docker_build_rag_service.sh
+# Run: bash infra/rag_service/build.sh
 # From: project root directory (to ensure build context is correct).
 
 IMAGE_NAME="bituslabs-ds-rag-service"
@@ -25,7 +25,7 @@ fi
 aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com"
 
 # 3. Build the Docker image (linux/amd64 for Fargate compatibility on Apple Silicon)
-docker build --platform linux/amd64 -t $IMAGE_NAME -f infra/Dockerfile.rag_service ./
+docker build --platform linux/amd64 -t $IMAGE_NAME -f infra/rag_service/Dockerfile ./
 
 # 4. Tag and push to ECR
 docker tag $IMAGE_NAME "$ECR_URL:$TAG"
@@ -36,5 +36,5 @@ echo ""
 echo "To run locally: docker run -p 8052:8052 -e GOOGLE_API_KEY $IMAGE_NAME"
 echo ""
 echo "To deploy to ECS:"
-echo "  python infra/deploy_rag_service_ecs.py --build-first"
-echo "  # Or: bash infra/docker_build_rag_service.sh && python infra/deploy_rag_service_ecs.py"
+echo "  python infra/rag_service/deploy_ecs.py --build-first"
+echo "  # Or: bash infra/rag_service/build.sh && python infra/rag_service/deploy_ecs.py"

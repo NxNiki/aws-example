@@ -74,10 +74,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `tool_calls` so the "agent isn't actually calling the RAG" class
     of bug fails the suite before it ships.
 - **Deploy script for the RAG service**
-  (`infra/deploy_rag_service_ecs.py`) — public ALB on the shared
+  (`infra/rag_service/deploy_ecs.py`) — public ALB on the shared
   ECS cluster, IAM scoped to S3 read of the Faiss artifact plus
   Secrets Manager read of `GOOGLE_API_KEY`.
-- **`infra/ecs_helpers.py`** consolidates the helpers that were
+- **`infra/shared/ecs_helpers.py`** consolidates the helpers that were
   duplicated across the three deploy scripts (account ID lookup,
   default VPC/subnet discovery, ECR repo idempotent create, ECS task
   execution role ensure) plus `ECS_CLUSTER_NAME`. Removes ≈210 lines
@@ -135,10 +135,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   literally "No Confluence passages found" or "RAG service
   unavailable". Gemini 2.5 Flash was previously prone to picking the
   live keyword tool first.
-- `infra/deploy_dashboard_ecs.py` drops the `--cluster-name`
-  CLI argument; cluster name comes from `infra/ecs_helpers.py` so
+- `infra/dashboard/deploy_ecs.py` drops the `--cluster-name`
+  CLI argument; cluster name comes from `infra/shared/ecs_helpers.py` so
   all three deploy scripts share one source of truth.
-- `infra/deploy_ai_agent_ecs.py` auto-detects the rag-service ALB at
+- `infra/ai_agent/deploy_ecs.py` auto-detects the rag-service ALB at
   deploy time and injects `RAG_SERVICE_URL` into the task environment
   (mirrors how the dashboard deploy auto-detects the ai-chat-agent's
   ALB for `CHAT_API_URL`).

@@ -5,7 +5,7 @@ import boto3
 
 from bituslabs_ds.config import REGION, S3_BUCKET
 from bituslabs_ds.s3_utils import upload_file_to_s3
-from infra.deploy_emr import build_package, start_emr_cluster, upload_bootstrap_script, wait_for_cluster_ready
+from infra.emr.deploy import build_package, start_emr_cluster, upload_bootstrap_script, wait_for_cluster_ready
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())

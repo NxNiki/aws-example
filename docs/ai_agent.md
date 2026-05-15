@@ -16,7 +16,7 @@ Both surfaces share the same `chat()`/`achat()` core in
 lookup, group lookup, RAG search via `rag_service.client`, Confluence
 fetch via `dashboards.confluence_client`).
 
-Deploy / build steps live in [`infra/README_AI_AGENT.md`](../infra/README_AI_AGENT.md);
+Deploy / build steps live in [`infra/ai_agent/README.md`](../infra/ai_agent/README.md);
 this doc focuses on architecture and the Slack-side setup.
 
 
@@ -123,7 +123,7 @@ re-deploys.
 
 ### Slack app setup (one-time)
 
-Detailed step-by-step is in [`infra/README_AI_AGENT.md`](../infra/README_AI_AGENT.md)
+Detailed step-by-step is in [`infra/ai_agent/README.md`](../infra/ai_agent/README.md)
 under *Slack Bot (HTTPS Events)*. Summary:
 
 1. Create Slack app → add scopes `app_mentions:read`, `chat:write`,

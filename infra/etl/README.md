@@ -22,7 +22,7 @@ ETL jobs can run **~30+ minutes** (Redshift queries, multiple runs). **Lambda is
 
 ## Prerequisites
 
-- ETL image built and pushed to **ECR** (you already have `infra/docker_build_etl.sh`).
+- ETL image built and pushed to **ECR** (you already have `infra/etl/build.sh`).
 - **VPC + subnets** where the task runs. If Redshift is in a VPC, run the task in the same VPC (or a peered one) so it can reach Redshift; if you use a bastion, ensure the task can reach it or pass a bastion IP.
 - **IAM**: task execution role (pull image, write logs), task role (S3, Redshift if needed, Secrets Manager if you store DB credentials there).
 
@@ -56,7 +56,7 @@ Use the provided script to create the ECS cluster, log group, task definition, a
 
 1. **Build and push the ETL image** (from project root):
    ```bash
-   bash infra/docker_build_etl.sh
+   bash infra/etl/build.sh
    ```
 
 2. **Create IAM role for EventBridge** (one-time; if you already use ECS scheduled tasks you may have this):
@@ -68,14 +68,14 @@ Use the provided script to create the ECS cluster, log group, task definition, a
    ```bash
    export SUBNETS="subnet-xxx,subnet-yyy"   # at least one; use private if Redshift is in VPC
    export SECURITY_GROUP="sg-xxx"          # allow outbound; allow Redshift/bastion if needed
-   bash infra/setup_etl_schedule.sh
+   bash infra/etl/setup_schedule.sh
    ```
 
 The script creates:
 
 - ECS cluster `etl-cluster`
 - Log group `/ecs/etl-fish-hunter`
-- Fargate task definition `etl-fish-hunter` (from `infra/ecs_etl_task_def.json` with your ECR image)
+- Fargate task definition `etl-fish-hunter` (from `infra/etl/ecs_task_def.json` with your ECR image)
 - EventBridge rule `etl-fish-hunter-daily` (cron: daily at 02:00 UTC) and target to run the task
 
 Override names with env vars: `ETL_CLUSTER_NAME`, `ETL_TASK_FAMILY`, `ETL_LOG_GROUP`, `ETL_RULE_NAME`, `AWS_REGION`.
@@ -178,13 +178,13 @@ The operation daily report (`jobs/operation_daily_report/run_daily_report.py`) r
    ```bash
    export SUBNETS="subnet-xxx,subnet-yyy"
    export SECURITY_GROUP="sg-xxx"
-   bash infra/setup_operation_daily_report_schedule.sh
+   bash infra/operation_report/setup_ecs_schedule.sh
    ```
 
 4. **Adjust schedule** (optional): Default is 14:30 UTC (22:30 Beijing). Override:
    ```bash
    export DAILY_REPORT_SCHEDULE="cron(0 15 * * ? *)"  # 15:00 UTC
-   bash infra/setup_operation_daily_report_schedule.sh
+   bash infra/operation_report/setup_ecs_schedule.sh
    ```
 
 5. **Grant IAM permissions**: Ensure `ecsTaskExecutionRole` has `secretsmanager:GetSecretValue` on `etl/slack-bot-token` and `etl/slack-channel-id`.
@@ -215,10 +215,10 @@ Lightweight option that runs the daily report locally on your Mac—no AWS ECS n
 
 2. Run the install script:
    ```bash
-   bash infra/setup_daily_report_schedule_mac.sh
+   bash infra/operation_report/setup_schedule_mac.sh
    ```
 
-3. To change the scheduled time, edit `infra/com.operation.daily-report.plist` (set `Hour` 0–23 and `Minute` 0–59 in local time), then re-run the setup script.
+3. To change the scheduled time, edit `infra/operation_report/daily-report.plist` (set `Hour` 0–23 and `Minute` 0–59 in local time), then re-run the setup script.
 
 **Useful commands:**
 ```bash
@@ -233,4 +233,4 @@ launchctl load ~/Library/LaunchAgents/com.operation.daily-report.plist     # sta
 
 - **Use Fargate** (via ECS) for long-running ETL; avoid Lambda for 30‑minute jobs.
 - **EventBridge (cron) → ECS RunTask (Fargate)** with your existing ETL image is the standard pattern.
-- Build/push image with `infra/docker_build_etl.sh`, then create an ECS cluster, Fargate task definition, and EventBridge rule as above.
+- Build/push image with `infra/etl/build.sh`, then create an ECS cluster, Fargate task definition, and EventBridge rule as above.

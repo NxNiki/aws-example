@@ -30,6 +30,8 @@ def build_package() -> Tuple[str, str]:
     wheel = next(f for f in dist_files if f.endswith(".whl"))
     package_file = rootdir / os.path.join("dist", wheel)
     package_file_uri = upload_file_to_s3(package_file, S3_BUCKET, f"package/{package_file.name}")
+    if package_file_uri is None:
+        raise RuntimeError(f"Failed to upload package {package_file.name} to s3://{S3_BUCKET}")
     return package_file_uri, package_file.name
 
 

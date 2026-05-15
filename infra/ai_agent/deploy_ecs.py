@@ -7,14 +7,14 @@ This gives fault-isolation: a chat agent crash or slow LLM call never
 blocks the dashboard.
 
 Prerequisites:
-  1. Run `bash infra/docker_build_ai_agent.sh` to build and push the image to ECR.
+  1. Run `bash infra/ai_agent/build.sh` to build and push the image to ECR.
   2. Ensure ecsTaskExecutionRole exists (shared with the dashboard).
   3. Store your LLM API key(s) in AWS Secrets Manager (or pass via env vars).
 
 Usage:
-  python infra/deploy_ai_agent_ecs.py
-  python infra/deploy_ai_agent_ecs.py --build-first
-  python infra/deploy_ai_agent_ecs.py --dry-run
+  python infra/ai_agent/deploy_ecs.py
+  python infra/ai_agent/deploy_ecs.py --build-first
+  python infra/ai_agent/deploy_ecs.py --dry-run
 """
 
 import argparse
@@ -31,9 +31,10 @@ except ImportError:
     sys.exit(1)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent
+PROJECT_ROOT = SCRIPT_DIR.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
-from ecs_helpers import (  # noqa: E402  (sibling module on sys.path[0])
+from infra.shared.ecs_helpers import (  # noqa: E402
     ECS_CLUSTER_NAME,
     ECS_TASK_EXECUTION_ROLE_NAME,
     ensure_ecr_repo,
@@ -69,7 +70,7 @@ TG_HEALTHY_THRESHOLD = 2
 def main() -> None:
     parser = argparse.ArgumentParser(description="Deploy AI Chat Agent to ECS Fargate")
     parser.add_argument("--dry-run", action="store_true", help="Print planned actions without executing")
-    parser.add_argument("--build-first", action="store_true", help="Run docker_build_ai_agent.sh before deploying")
+    parser.add_argument("--build-first", action="store_true", help="Run infra/ai_agent/build.sh before deploying")
     parser.add_argument("--wait", action="store_true", help="Wait for service to stabilize")
     parser.add_argument(
         "--rag-service-url",
@@ -82,7 +83,7 @@ def main() -> None:
     if args.build_first and not args.dry_run:
         print("Building and pushing AI Agent Docker image...")
         subprocess.run(
-            ["bash", str(SCRIPT_DIR / "docker_build_ai_agent.sh")],
+            ["bash", str(SCRIPT_DIR / "build.sh")],
             check=True,
             cwd=PROJECT_ROOT,
         )

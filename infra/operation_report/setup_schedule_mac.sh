@@ -1,15 +1,15 @@
 #!/bin/bash
 # Install launchd schedule for operation daily report on macOS.
-# Runs daily at the time configured in infra/com.operation.daily-report.plist (local time).
+# Runs daily at the time configured in infra/operation_report/daily-report.plist (local time).
 #
-# Usage: bash infra/setup_daily_report_schedule_mac.sh
+# Usage: bash infra/operation_report/setup_schedule_mac.sh
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PLIST_NAME="com.operation.daily-report"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
-PLIST_SRC="$SCRIPT_DIR/$PLIST_NAME.plist"
+PLIST_SRC="$SCRIPT_DIR/daily-report.plist"
 PLIST_DEST="$LAUNCH_AGENTS/$PLIST_NAME.plist"
 
 # Ensure log dir exists
@@ -41,4 +41,4 @@ echo "Commands:"
 echo "  Check status:  launchctl list $PLIST_NAME"
 echo "  Unload/stop:   launchctl unload $PLIST_DEST"
 echo "  Reload:        launchctl unload $PLIST_DEST && launchctl load $PLIST_DEST"
-echo "  Change time:   edit infra/com.operation.daily-report.plist (Hour 0-23, Minute 0-59), then re-run this script"
+echo "  Change time:   edit infra/operation_report/daily-report.plist (Hour 0-23, Minute 0-59), then re-run this script"

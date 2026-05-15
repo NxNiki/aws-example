@@ -5,7 +5,7 @@ Lives under ``infra/`` (not under ``bituslabs_ds``) because these helpers
 are only consumed by deploy scripts. The deploy scripts import this as a
 sibling module — Python adds the script's directory to ``sys.path[0]``
 when invoked as ``python infra/deploy_*.py``, so a bare
-``from ecs_helpers import ...`` works without sys.path tinkering.
+``from infra.shared.ecs_helpers import ...`` works without sys.path tinkering.
 
 What's here vs what stays in the deploy scripts
 -----------------------------------------------
