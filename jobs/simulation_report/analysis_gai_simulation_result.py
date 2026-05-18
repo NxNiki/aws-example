@@ -77,8 +77,11 @@ def load_data(config, reload: bool = False) -> pd.DataFrame:
     local_output = f"{LOCAL_ROOT}/jobs/{config['work_dir']}/{config['data_loader']['local_cache']}"
     s3_files: List[str] = []
     if reload or not os.path.exists(local_output):
+        # Honor the per-project bucket override in the yaml (e.g. ss03 reads from
+        # slotmachine-ai-game-table) instead of the team-wide S3_BUCKET constant.
+        input_bucket = config["data_loader"].get("bucket", S3_BUCKET)
         s3_files += list_s3_files(
-            S3_BUCKET,
+            input_bucket,
             prefix=config["data_loader"]["prefix"],
             pattern=config["data_loader"]["pattern"],
         )
@@ -89,10 +92,13 @@ def load_data(config, reload: bool = False) -> pd.DataFrame:
             s3_files, local_cache_path=local_output, reload=reload, columns=config["data_loader"]["columns_to_read"]
         ),
     )
-    data["cluster_index"] = data["player_id"].str.extract(r"(cluster\d+)", expand=False).astype(str)
-    data["cluster_index"].replace(
-        {"cluster0": "user group: 0", "cluster1": "user group: 1", "cluster2": "user group: 2"}, inplace=True
-    )
+    # Pull the cluster digit out of player_id (e.g. "cluster2_user_007" -> "2") and prefix
+    # it dynamically, so the dashboard handles 1-cluster runs (ss03) and N-cluster runs
+    # (ss01/ss02) without a hardcoded label map. Direct assignment avoids the chained
+    # `df[col].replace(..., inplace=True)` pattern, which under pandas 2.x copy-on-write
+    # semantics can silently no-op and leave cluster_index with the raw "clusterN" tokens.
+    cluster_digit = data["player_id"].str.extract(r"cluster(\d+)", expand=False)
+    data["cluster_index"] = "user group: " + cluster_digit
 
     print(data.shape)
     # data = data[data["total_spins"]>40]
