@@ -936,6 +936,14 @@ class GameStatsDashboard:
                 dcc.Store(id="tab-viz-p2-state", data=None),
                 dcc.Store(id="tab-bet-state", data=None),
                 dcc.Store(id="dashboard-load-trigger", data=None),
+                # Two-step config-load plumbing — see load_config_select +
+                # apply_pending_load. `pending-load-payload` carries the
+                # restored per-tab Store values across the config switch;
+                # `config-applied-signal` is set by ``update_config`` at the
+                # very end and is what fires step 2 so it can never observe
+                # the pre-reset state.
+                dcc.Store(id="pending-load-payload", data=None),
+                dcc.Store(id="config-applied-signal", data=None),
                 dcc.Store(id="chat-history", data=[]),
                 dcc.Store(id="chat-pending-request", data=None),
                 html.Div(
@@ -2431,6 +2439,10 @@ class GameStatsDashboard:
             Output("tab-viz-p1-state", "data", allow_duplicate=True),
             Output("tab-viz-p2-state", "data", allow_duplicate=True),
             Output("tab-bet-state", "data", allow_duplicate=True),
+            # Fires step 2 of the two-step config-load — see apply_pending_load.
+            # Always set, even for user-initiated config switches: step 2 is
+            # a no-op when ``pending-load-payload`` is None.
+            Output("config-applied-signal", "data", allow_duplicate=True),
             Input("config-dropdown", "value"),
             prevent_initial_call=True,
         )
@@ -2454,6 +2466,7 @@ class GameStatsDashboard:
                 None,  # tab-viz-p1-state
                 None,  # tab-viz-p2-state
                 None,  # tab-bet-state
+                datetime.now().isoformat(),  # config-applied-signal — fires step 2
             )
 
         @self.app.callback(
@@ -3208,6 +3221,13 @@ class GameStatsDashboard:
             State("date-g3-log", "value"),
             State("date-g3-thresh", "value"),
             State("tab-bet-state", "data"),
+            # Report tab — included in the save so AI-generated descriptions,
+            # the overall summary, and the user's attached reference URLs
+            # all round-trip through the JSON. Weekly Report is intentionally
+            # omitted (a few clicks to regenerate from S3 cache).
+            State("report-figures", "data"),
+            State("report-summary", "data"),
+            State("report-references", "data"),
             prevent_initial_call=True,
         )
         def save_config_confirm(
@@ -3246,6 +3266,9 @@ class GameStatsDashboard:
             date_g3_log: Any,
             date_g3_thresh: Any,
             bet: Optional[Dict],
+            report_figures: Optional[List[Dict[str, Any]]],
+            report_summary: Optional[str],
+            report_references: Optional[List[Dict[str, Any]]],
         ):
             if not n_clicks:
                 return no_update, no_update, no_update
@@ -3367,6 +3390,11 @@ class GameStatsDashboard:
                     "p2": _group_tab_panel_for_config(viz_tab_p2_state),
                 },
                 "tab_bet": bet,
+                "tab_report": {
+                    "figures": report_figures or [],
+                    "summary": report_summary or "",
+                    "references": report_references or [],
+                },
             }
             normalized = _normalize_dates_in_state(payload)
             payload = normalized if normalized is not None else payload
@@ -3398,26 +3426,26 @@ class GameStatsDashboard:
                 opts = []
             return {"display": "block", "marginLeft": "8px", "minWidth": "200px"}, opts, None
 
-        # Load config: apply when user selects a file (populate stores + trigger restore)
+        # Load config — step 1: switch the dashboard's config (which fires
+        # update_config and rebuilds every tab + resets every per-tab Store),
+        # and stash the rest of the saved JSON in ``pending-load-payload``
+        # for step 2 to apply once the rebuild settles.
+        #
+        # Outputs are intentionally minimal — just config-dropdown,
+        # navigator-tabs, the load-dropdown reset, and the payload stash.
+        # Writing to per-tab Stores here would race update_config's reset.
+        # ``apply_pending_load`` (next callback) does the per-tab writes
+        # after ``config-applied-signal`` fires.
         @self.app.callback(
             Output("config-dropdown", "value", allow_duplicate=True),
             Output("navigator-tabs", "value", allow_duplicate=True),
             Output("load-config-dropdown", "value", allow_duplicate=True),
-            Output("tab-date-g1-state", "data", allow_duplicate=True),
-            Output("tab-date-g2-state", "data", allow_duplicate=True),
-            Output("tab-date-g3-state", "data", allow_duplicate=True),
-            Output("tab-group-g1-state", "data", allow_duplicate=True),
-            Output("tab-group-g2-state", "data", allow_duplicate=True),
-            Output("tab-group-g3-state", "data", allow_duplicate=True),
-            Output("tab-viz-p1-state", "data", allow_duplicate=True),
-            Output("tab-viz-p2-state", "data", allow_duplicate=True),
-            Output("tab-bet-state", "data", allow_duplicate=True),
-            Output("dashboard-load-trigger", "data", allow_duplicate=True),
+            Output("pending-load-payload", "data", allow_duplicate=True),
             Input("load-config-dropdown", "value"),
             prevent_initial_call=True,
         )
         def load_config_select(s3_uri: Optional[str]):
-            nothing = (no_update,) * 13
+            nothing = (no_update,) * 4
             if not s3_uri:
                 return nothing
             try:
@@ -3541,24 +3569,96 @@ class GameStatsDashboard:
                 p1_out = _p_with_dates("p1")
                 p2_out = _p_with_dates("p2")
 
+                # Report tab — figures (with AI-generated descriptions),
+                # overall summary, attached references. Missing for older
+                # JSONs saved before the Report tab was supported; default
+                # to empty containers so the dashboard renders normally.
+                tab_report = data.get("tab_report") or {}
+                report_figures = tab_report.get("figures") or []
+                report_summary = tab_report.get("summary") or ""
+                report_references = tab_report.get("references") or []
+
+                # Everything step 2 needs goes into the payload Store. Step 2
+                # picks each key out and writes to the matching Store after
+                # update_config has finished rebuilding the tab content.
+                pending_payload: Dict[str, Any] = {
+                    "tab_date": {"g1": d1_out, "g2": d2_out, "g3": d3_out},
+                    "tab_group": {"g1": g1_out, "g2": g2_out, "g3": g3_out},
+                    "tab_viz": {"p1": p1_out, "p2": p2_out},
+                    "tab_bet": tab_bet,
+                    "tab_report": {
+                        "figures": report_figures,
+                        "summary": report_summary,
+                        "references": report_references,
+                    },
+                }
+
                 return (
-                    config_file,
-                    current_tab,
-                    None,
-                    d1_out,
-                    d2_out,
-                    d3_out,
-                    g1_out,
-                    g2_out,
-                    g3_out,
-                    p1_out,
-                    p2_out,
-                    tab_bet,
-                    datetime.now().isoformat(),
+                    config_file,  # config-dropdown — fires update_config
+                    current_tab,  # navigator-tabs
+                    None,  # load-config-dropdown — clear selection
+                    pending_payload,  # pending-load-payload — step 2 reads this
                 )
             except Exception as e:
                 logger.error(f"Failed to load config: {e}")
-            return (no_update,) * 13
+            return (no_update,) * 4
+
+        # Load config — step 2: applies the stashed payload to each per-tab
+        # Store and trips ``dashboard-load-trigger`` so ``restore_dashboard_state``
+        # can splat the values onto the UI components. Fires from
+        # ``config-applied-signal`` which ``update_config`` writes at the
+        # very end of its body, so by the time this runs the rebuild + reset
+        # have already finished — no race with update_config.
+        #
+        # No-op when ``pending-load-payload`` is None (= the config switch
+        # came from the user picking a different config in the dropdown,
+        # not from a JSON load). That keeps the user-initiated path
+        # unchanged.
+        @self.app.callback(
+            Output("tab-date-g1-state", "data", allow_duplicate=True),
+            Output("tab-date-g2-state", "data", allow_duplicate=True),
+            Output("tab-date-g3-state", "data", allow_duplicate=True),
+            Output("tab-group-g1-state", "data", allow_duplicate=True),
+            Output("tab-group-g2-state", "data", allow_duplicate=True),
+            Output("tab-group-g3-state", "data", allow_duplicate=True),
+            Output("tab-viz-p1-state", "data", allow_duplicate=True),
+            Output("tab-viz-p2-state", "data", allow_duplicate=True),
+            Output("tab-bet-state", "data", allow_duplicate=True),
+            Output("report-figures", "data", allow_duplicate=True),
+            Output("report-summary", "data", allow_duplicate=True),
+            Output("report-references", "data", allow_duplicate=True),
+            Output("dashboard-load-trigger", "data", allow_duplicate=True),
+            Output("pending-load-payload", "data", allow_duplicate=True),
+            Input("config-applied-signal", "data"),
+            State("pending-load-payload", "data"),
+            prevent_initial_call=True,
+        )
+        def apply_pending_load(signal: Any, payload: Optional[Dict[str, Any]]):
+            if not payload:
+                # Normal config switch (user picked a different config) —
+                # nothing to apply. Leave every Store as update_config
+                # already reset it.
+                return (no_update,) * 14
+            td = payload.get("tab_date") or {}
+            tg = payload.get("tab_group") or {}
+            tv = payload.get("tab_viz") or {}
+            tr = payload.get("tab_report") or {}
+            return (
+                td.get("g1"),
+                td.get("g2"),
+                td.get("g3"),
+                tg.get("g1"),
+                tg.get("g2"),
+                tg.get("g3"),
+                tv.get("p1"),
+                tv.get("p2"),
+                payload.get("tab_bet"),
+                tr.get("figures") or [],
+                tr.get("summary") or "",
+                tr.get("references") or [],
+                datetime.now().isoformat(),  # dashboard-load-trigger — fires restore_dashboard_state
+                None,  # clear pending-load-payload
+            )
 
         # Restore: apply loaded state to all UI components when load-trigger fires
         @self.app.callback(
@@ -3688,8 +3788,19 @@ class GameStatsDashboard:
             Output("linear-thresh", "value", allow_duplicate=True),
             Output("filter-check", "value", allow_duplicate=True),
             Output("filter-thresh", "value", allow_duplicate=True),
+            # Two firing triggers:
+            #   1. tab-date-content rebuilds (config switch path — the trigger
+            #      is None here, so the trigger-guard short-circuits)
+            #   2. dashboard-load-trigger changes (config-load path — fired by
+            #      apply_pending_load AFTER update_config finished rebuilding,
+            #      so the per-tab State Stores below already hold the saved
+            #      values)
+            # Promoting the previous State("dashboard-load-trigger") to an
+            # Input is what unblocks the load — without this second Input,
+            # restore_dashboard_state never fires once update_config has
+            # already rebuilt the tabs.
             Input("tab-date-content", "children"),
-            State("dashboard-load-trigger", "data"),
+            Input("dashboard-load-trigger", "data"),
             State("tab-date-g1-state", "data"),
             State("tab-date-g2-state", "data"),
             State("tab-date-g3-state", "data"),
@@ -3716,9 +3827,15 @@ class GameStatsDashboard:
         ):
             if trigger is None:
                 return (no_update,) * 246
-            # Keep the load trigger token so default-picker callbacks don't recompute
-            # and clamp restored DatePickerRange values.
-            out: List[Any] = [trigger]
+            # Don't write the trigger Output back to its own value — the
+            # trigger is already set by ``apply_pending_load`` (which now
+            # also serves as this callback's Input), so leaving the Output
+            # as no_update keeps the value pinned without creating a
+            # self-firing loop (Input → fires callback → writes Output to
+            # same Store → fires callback again …). The trigger keeps the
+            # default-picker callbacks from recomputing + clamping
+            # restored DatePickerRange values.
+            out: List[Any] = [no_update]
             sd = d1 or {}
             out.extend(
                 [
