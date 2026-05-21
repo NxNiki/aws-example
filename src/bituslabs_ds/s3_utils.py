@@ -61,6 +61,9 @@ def parse_bucket_name(bucket: str) -> str:
     if bucket.startswith("s3a://"):
         logger.info(f"remove 's3a://' from {bucket}")
         bucket = bucket[len("s3a://") :]
+    if bucket.startswith("s3n://"):
+        logger.info(f"remove 's3n://' from {bucket}")
+        bucket = bucket[len("s3n://") :]
     if bucket.startswith("s3://"):
         logger.info(f"remove 's3://' from {bucket}")
         bucket = bucket[len("s3://") :]

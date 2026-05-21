@@ -52,8 +52,11 @@ class TestReadCsvCols:
 
         result = read_csv_cols([str(csv_file)], ["id", "value"], filters={"category": "A"})
 
+        # read_csv_cols intentionally returns only the requested `columns` list,
+        # so the filter column ("category") is dropped from the result. Verify
+        # the filter took effect via row count + value identity instead.
         assert len(result) == 2
-        assert all(result["category"] == "A")
+        assert set(result["id"]) == {1, 3}
 
     def test_read_csv_cols_with_sampling(self, temp_dir):
         """Test CSV reading with sampling."""

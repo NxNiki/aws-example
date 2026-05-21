@@ -227,7 +227,11 @@ class TestMLDataPipeline:
 
         # Step 5: Final validation
         assert final_data.shape[0] <= initial_shape[0]  # May have fewer rows due to outlier removal
-        assert final_data.shape[1] >= initial_shape[1]  # May have more columns due to transformations
+        # Power-transform doubles the numeric column count, then the >0.95 correlation
+        # filter trims some. The right baseline is the numeric input, not the full
+        # initial_shape (which includes string/datetime cols already excluded by
+        # select_dtypes(include=[np.number])).
+        assert final_data.shape[1] >= numeric_data.shape[1]
 
         # Check for any remaining missing values
         assert final_data.isnull().sum().sum() == 0
@@ -236,13 +240,16 @@ class TestMLDataPipeline:
         assert np.isfinite(final_data.select_dtypes(include=[np.number])).all().all()
 
         # Step 6: Data quality metrics
+        # feature_expansion_rate compares against the numeric input (the actual
+        # baseline for power-transform expansion); initial_shape includes
+        # string/datetime cols that select_dtypes(include=[np.number]) drops.
         data_quality_metrics = {
             "initial_rows": initial_shape[0],
             "final_rows": final_data.shape[0],
             "initial_cols": initial_shape[1],
             "final_cols": final_data.shape[1],
             "retention_rate": final_data.shape[0] / initial_shape[0],
-            "feature_expansion_rate": final_data.shape[1] / initial_shape[1],
+            "feature_expansion_rate": final_data.shape[1] / numeric_data.shape[1],
         }
 
         assert data_quality_metrics["retention_rate"] > 0.5  # Keep at least 50% of data
