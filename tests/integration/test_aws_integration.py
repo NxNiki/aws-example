@@ -38,7 +38,11 @@ class TestS3Integration:
         assert len(result) == len(sample_dataframe)
         assert list(result.columns) == list(sample_dataframe.columns)
 
-        # Check that data matches (allowing for type differences)
+        # CSV is lossy for datetime64[ns] — after the round trip, `timestamp`
+        # comes back as object-dtype Timestamps, which assert_frame_equal
+        # treats as different from the original DatetimeArray even with
+        # check_dtype=False. Normalize so the values comparison is apples-to-apples.
+        result["timestamp"] = pd.to_datetime(result["timestamp"])
         pd.testing.assert_frame_equal(result, sample_dataframe, check_dtype=False)
 
     @mock_s3
