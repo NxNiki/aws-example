@@ -71,3 +71,25 @@ cases:
       (the curated RAG index) per the system prompt; live search_confluence
       / read_confluence_page are fallback-only. Needs RAG_SERVICE_URL in
       .env pointing at the deployed rag-service ALB (see file header).
+
+  - id: fish_hunter_boost_pool_sql
+    question: show me the SQL query in the fish_hunter ETL source code that assigns the BOOST_POOL and BOOST_POOL_2 group labels.
+    dashboard_config: dashboard_config-fishhunter.yaml
+    model: gemini:gemini-2.5-flash
+    must_contain:
+      - BOOST_POOL_2
+      - strategy_name
+    must_call_tools: []
+    notes: |
+      Regression test for the codebase-tools deploy. The boost-pool /
+      boost-pool-2 strategy assignment lives in a CASE expression inside
+      jobs/fish_hunter/etl_game_stats_daily_by_user.py (`daily_group`).
+      Assertions chosen for stability: `BOOST_POOL_2` is the discriminating
+      label the agent cannot produce without reading the source (distinct
+      from `BOOST_POOL` only by the `_2` suffix); `strategy_name` is the
+      SQL column the CASE switches on. Avoided asserting on the partition
+      event ID literal — it rotates per campaign, so it would punish
+      correct behavior when the ETL is legitimately updated.
+      `must_call_tools` is intentionally empty: either `read_etl_source`
+      (metadata cache) or `grep_codebase` + `read_source_file` (live repo)
+      is an acceptable route.
