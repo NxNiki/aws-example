@@ -46,6 +46,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import tool
 
+from ai_agent.codebase_tools import CODEBASE_TOOLS
 from ai_agent.metadata_builder import build_metadata, format_metadata_context
 
 logger = logging.getLogger(__name__)
@@ -530,6 +531,18 @@ Citing Confluence sources:
 - Do not include `page_id=` or `score=` in citations — those are
   retrieval-debug fields, not for the user.
 
+Source code lookup — when to use:
+- Use `grep_codebase` / `read_source_file` / `list_source_files` ONLY when the
+  question is about the code itself: where a symbol is defined, how a class
+  or function is implemented, what files live in a module.
+- Do NOT use them for column/metric questions (use `lookup_column` /
+  `read_etl_source`) or documentation questions (use `search_confluence_rag`).
+  Those return curated, semantically indexed content; raw grep is the wrong
+  tool for them.
+- Typical flow: `grep_codebase` with a tight pattern (e.g. a function name
+  or string literal) to locate the file and line, then `read_source_file`
+  with a narrow `start_line`/`end_line` range to read context.
+
 Other guidelines:
 - When asked about user groups (new/old/beginner/AI/Default), use lookup_group.
 - For game-specific questions, use get_game_info.
@@ -556,6 +569,7 @@ _TOOLS = [
     search_confluence_rag,
     search_confluence,
     read_confluence_page,
+    *CODEBASE_TOOLS,
 ]
 
 

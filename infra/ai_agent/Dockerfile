@@ -35,6 +35,7 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/.venv /app/.venv
@@ -46,8 +47,9 @@ COPY --from=builder /app/.venv /app/.venv
 #                    report_agent/description (this service's own modules)
 #   src/dashboards/ — only the shared/auxiliary files: confluence_client +
 #                    secrets (also used by rag_service), user_stats_aggregates
-#                    (read at runtime by metadata_builder for Python aggregation
-#                    docstrings), column_metadata.yaml + dashboard_config*.yaml.
+#                    + game_stats_monitor (data-processing functions the agent
+#                    answers questions about), and dashboard_config*.yaml
+#                    (so the agent can answer data-location questions).
 #   src/rag_service/ — thin HTTP client only; no OpenSearch/Faiss/embeddings
 #                    (search_confluence_rag would fail with "RAG service
 #                    client is not installed" without these two files).
@@ -57,16 +59,23 @@ COPY src/dashboards/__init__.py               ./src/dashboards/__init__.py
 COPY src/dashboards/confluence_client.py      ./src/dashboards/confluence_client.py
 COPY src/dashboards/secrets.py                ./src/dashboards/secrets.py
 COPY src/dashboards/user_stats_aggregates.py  ./src/dashboards/user_stats_aggregates.py
+COPY src/dashboards/game_stats_monitor.py     ./src/dashboards/game_stats_monitor.py
 COPY src/dashboards/dashboard_config*.yaml    ./src/dashboards/
 COPY src/rag_service/__init__.py              ./src/rag_service/__init__.py
 COPY src/rag_service/client.py                ./src/rag_service/client.py
-# ETL source files — only the .py scripts the metadata builder scans for SQL.
-# Exclude output/, log/, __pycache__ (multi-GB data files not needed).
-COPY jobs/ss01_wucaishen/*.py               ./jobs/ss01_wucaishen/
-COPY jobs/ss02_deepdive/*.py                ./jobs/ss02_deepdive/
-COPY jobs/ss03_mahjiang_streak/*.py         ./jobs/ss03_mahjiang_streak/
-COPY jobs/fish_hunter/*.py                  ./jobs/fish_hunter/
-COPY jobs/operation_daily_report/*.py       ./jobs/operation_daily_report/
+# ETL source files — explicit list of the scripts the agent should be able to
+# inspect via codebase_tools (grep_codebase / read_source_file). Covers every
+# ETL job scheduled by jobs/run_scheduled_etl_jobs.py PLUS the extra file
+# scanned by metadata_builder (etl_game_stats_daily_by_group.py — required at
+# startup; see src/ai_agent/column_metadata.yaml `etl_files`).
+COPY jobs/run_scheduled_etl_jobs.py                                    ./jobs/run_scheduled_etl_jobs.py
+COPY jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py         ./jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py
+COPY jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py          ./jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py
+COPY jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py   ./jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py
+COPY jobs/fish_hunter/etl_game_stats_daily_by_user.py                  ./jobs/fish_hunter/etl_game_stats_daily_by_user.py
+COPY jobs/operation_daily_report/run_daily_report.py                   ./jobs/operation_daily_report/run_daily_report.py
+COPY jobs/operation_daily_report/etl_game_stats_daily_by_group.py      ./jobs/operation_daily_report/etl_game_stats_daily_by_group.py
+COPY jobs/operation_daily_report/etl_weekly_report_all_games.py        ./jobs/operation_daily_report/etl_weekly_report_all_games.py
 
 EXPOSE 8051
 
