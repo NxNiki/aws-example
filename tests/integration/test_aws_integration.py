@@ -139,96 +139,52 @@ class TestS3Integration:
 class TestAthenaIntegration:
     """Integration tests for Athena operations."""
 
-    @mock_athena
     def test_athena_query_execution_cycle(self):
         """Test complete Athena query execution cycle."""
-        # Setup Athena
-        athena_client = boto3.client("athena", region_name="us-west-2")
+        # execute_query always fetches results via get_query_result(DEFAULT_ATHENA_OUTPUT),
+        # so patch that boundary directly rather than mocking inner paginator/read_to_pandas_df.
+        with patch("bituslabs_ds.athena_utils.athena") as mock_athena_client:
+            with patch("bituslabs_ds.athena_utils.get_query_result") as mock_get_result:
+                mock_athena_client.start_query_execution.return_value = {"QueryExecutionId": "test-query-id"}
+                mock_get_result.return_value = pd.DataFrame({"id": ["1", "2"], "name": ["Alice", "Bob"]})
 
-        # Mock the query execution flow
-        with patch.object(athena_client, "start_query_execution") as mock_start:
-            with patch.object(athena_client, "get_query_execution") as mock_get:
-                with patch.object(athena_client, "get_paginator") as mock_paginator:
-                    # Mock query submission
-                    mock_start.return_value = {"QueryExecutionId": "test-query-id"}
+                result = execute_query("SELECT id, name FROM test_table", "test_database", return_result=True)
 
-                    # Mock query status checks
-                    mock_get.side_effect = [
-                        {"QueryExecution": {"Status": {"State": "RUNNING"}}},
-                        {"QueryExecution": {"Status": {"State": "SUCCEEDED"}}},
-                    ]
+                assert isinstance(result, pd.DataFrame)
+                assert len(result) == 2
+                assert list(result.columns) == ["id", "name"]
+                assert result["id"].iloc[0] == "1"
+                assert result["name"].iloc[0] == "Alice"
 
-                    # Mock query results
-                    mock_paginator.return_value.paginate.return_value = [
-                        {
-                            "ResultSet": {
-                                "Rows": [
-                                    {"Data": [{"VarCharValue": "id"}, {"VarCharValue": "name"}]},
-                                    {"Data": [{"VarCharValue": "1"}, {"VarCharValue": "Alice"}]},
-                                    {"Data": [{"VarCharValue": "2"}, {"VarCharValue": "Bob"}]},
-                                ]
-                            }
-                        }
-                    ]
-
-                    # Execute query
-                    result = execute_query("SELECT id, name FROM test_table", "test_database", return_result=True)
-
-                    # Verify results
-                    assert isinstance(result, pd.DataFrame)
-                    assert len(result) == 2
-                    assert list(result.columns) == ["id", "name"]
-                    assert result["id"].iloc[0] == "1"
-                    assert result["name"].iloc[0] == "Alice"
-
-    @mock_athena
     def test_athena_query_with_s3_output(self):
         """Test Athena query with S3 output."""
-        # Setup Athena
-        athena_client = boto3.client("athena", region_name="us-west-2")
+        with patch("bituslabs_ds.athena_utils.athena") as mock_athena_client:
+            with patch("bituslabs_ds.athena_utils.get_query_result") as mock_get_result:
+                with patch("bituslabs_ds.athena_utils.s3"):
+                    # Pin Athena results bucket to match the dest so the cross-bucket guard passes.
+                    with patch("bituslabs_ds.athena_utils.DEFAULT_ATHENA_OUTPUT", "s3://test-bucket/athena-results"):
+                        mock_athena_client.start_query_execution.return_value = {"QueryExecutionId": "test-query-id"}
+                        mock_get_result.return_value = pd.DataFrame({"id": [1, 2, 3], "value": [10, 20, 30]})
 
-        with patch.object(athena_client, "start_query_execution") as mock_start:
-            with patch.object(athena_client, "get_query_execution") as mock_get:
-                with patch("bituslabs_ds.athena_utils.read_to_pandas_df") as mock_read:
-                    # Mock query submission
-                    mock_start.return_value = {"QueryExecutionId": "test-query-id"}
+                        result = execute_query(
+                            "SELECT id, value FROM test_table",
+                            "test_database",
+                            s3_file_path="s3://test-bucket/custom-output.csv",
+                            return_result=True,
+                        )
 
-                    # Mock query completion
-                    mock_get.return_value = {"QueryExecution": {"Status": {"State": "SUCCEEDED"}}}
+                        assert isinstance(result, pd.DataFrame)
+                        assert len(result) == 3
+                        assert list(result.columns) == ["id", "value"]
 
-                    # Mock S3 read
-                    mock_read.return_value = pd.DataFrame({"id": [1, 2, 3], "value": [10, 20, 30]})
-
-                    # Execute query with S3 output
-                    result = execute_query(
-                        "SELECT id, value FROM test_table",
-                        "test_database",
-                        s3_file_path="s3://test-bucket/custom-output.csv",
-                        return_result=True,
-                    )
-
-                    # Verify results
-                    assert isinstance(result, pd.DataFrame)
-                    assert len(result) == 3
-                    assert list(result.columns) == ["id", "value"]
-
-    @mock_athena
     def test_athena_query_failure_handling(self):
         """Test Athena query failure handling."""
-        # Setup Athena
-        athena_client = boto3.client("athena", region_name="us-west-2")
+        with patch("bituslabs_ds.athena_utils.athena") as mock_athena_client:
+            mock_athena_client.start_query_execution.return_value = {"QueryExecutionId": "test-query-id"}
+            mock_athena_client.get_query_execution.return_value = {"QueryExecution": {"Status": {"State": "FAILED"}}}
 
-        with patch.object(athena_client, "start_query_execution") as mock_start:
-            with patch.object(athena_client, "get_query_execution") as mock_get:
-                # Mock query submission
-                mock_start.return_value = {"QueryExecutionId": "test-query-id"}
-
-                # Mock query failure
-                mock_get.return_value = {"QueryExecution": {"Status": {"State": "FAILED"}}}
-
-                # Execute query and expect failure
-                with pytest.raises(Exception, match="Query failed with status: FAILED"):
-                    execute_query("INVALID SQL QUERY", "test_database", return_result=True)
+            with pytest.raises(Exception, match="Query failed with status: FAILED"):
+                execute_query("INVALID SQL QUERY", "test_database", return_result=True)
 
 
 @pytest.mark.integration
