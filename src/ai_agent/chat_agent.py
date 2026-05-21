@@ -47,37 +47,30 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_core.tools import tool
 
 from ai_agent.codebase_tools import CODEBASE_TOOLS
-from ai_agent.metadata_builder import build_metadata, format_metadata_context
+from ai_agent.metadata_builder import build_metadata
 
 logger = logging.getLogger(__name__)
 
 _THIS_DIR = Path(__file__).resolve().parent
 
 # ---------------------------------------------------------------------------
-# Module-level singleton — built on first call, reused for process lifetime
+# Module-level singleton — built on first call, reused for process lifetime.
+# Read by every @tool function below (lookup_column, lookup_group, etc.).
 # ---------------------------------------------------------------------------
 _METADATA: Optional[Dict[str, Any]] = None
-_METADATA_TEXT: Optional[str] = None
 
 
 def _ensure_metadata(
     dashboard_config_path: Optional[Path] = None,
     force_rebuild: bool = False,
 ) -> Dict[str, Any]:
-    global _METADATA, _METADATA_TEXT
+    global _METADATA
     if _METADATA is None or force_rebuild:
         _METADATA = build_metadata(
             dashboard_config_path=dashboard_config_path,
             force_rebuild=force_rebuild,
         )
-        _METADATA_TEXT = format_metadata_context(_METADATA)
     return _METADATA
-
-
-def _get_metadata_text() -> str:
-    if _METADATA_TEXT is None:
-        _ensure_metadata()
-    return _METADATA_TEXT or ""
 
 
 # ---------------------------------------------------------------------------
