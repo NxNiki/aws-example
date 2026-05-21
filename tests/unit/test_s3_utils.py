@@ -102,7 +102,7 @@ class TestReadToPandasDf:
         """Test successful reading of CSV from S3."""
         # Setup S3
         s3_client = boto3.client("s3", region_name="us-west-2")
-        s3_client.create_bucket(Bucket="test-bucket")
+        s3_client.create_bucket(Bucket="test-bucket", CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
 
         # Upload CSV content
         s3_client.put_object(Bucket="test-bucket", Key="data/test.csv", Body=sample_csv_content)
@@ -120,7 +120,7 @@ class TestReadToPandasDf:
         """Test reading CSV with specific columns."""
         # Setup S3
         s3_client = boto3.client("s3", region_name="us-west-2")
-        s3_client.create_bucket(Bucket="test-bucket")
+        s3_client.create_bucket(Bucket="test-bucket", CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
 
         # Upload CSV content
         s3_client.put_object(Bucket="test-bucket", Key="data/test.csv", Body=sample_csv_content)
@@ -140,7 +140,7 @@ class TestWritePandasToS3:
         """Test successful writing of DataFrame to S3."""
         # Setup S3
         s3_client = boto3.client("s3", region_name="us-west-2")
-        s3_client.create_bucket(Bucket="test-bucket")
+        s3_client.create_bucket(Bucket="test-bucket", CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
 
         # Write DataFrame
         write_pandas_to_s3(sample_dataframe, "test-bucket", "data/output.csv")
@@ -162,7 +162,7 @@ class TestWriteDfToS3:
         """Test writing pandas DataFrame."""
         # Setup S3
         s3_client = boto3.client("s3", region_name="us-west-2")
-        s3_client.create_bucket(Bucket="test-bucket")
+        s3_client.create_bucket(Bucket="test-bucket", CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
 
         # Write DataFrame
         write_df_to_s3(sample_dataframe, "test-bucket", "data/output.csv")
@@ -185,7 +185,7 @@ class TestUploadFileToS3:
         """Test successful file upload to S3."""
         # Setup S3
         s3_client = boto3.client("s3", region_name="us-west-2")
-        s3_client.create_bucket(Bucket="test-bucket")
+        s3_client.create_bucket(Bucket="test-bucket", CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
 
         # Create test file
         test_file = temp_dir / "test.csv"
@@ -210,7 +210,7 @@ class TestUploadFileToS3:
         """Test content type detection for different file types."""
         # Setup S3
         s3_client = boto3.client("s3", region_name="us-west-2")
-        s3_client.create_bucket(Bucket="test-bucket")
+        s3_client.create_bucket(Bucket="test-bucket", CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
 
         # Test JSON file
         json_file = temp_dir / "test.json"
@@ -235,7 +235,7 @@ class TestUploadFolderToS3:
         """Test successful folder upload to S3."""
         # Setup S3
         s3_client = boto3.client("s3", region_name="us-west-2")
-        s3_client.create_bucket(Bucket="test-bucket")
+        s3_client.create_bucket(Bucket="test-bucket", CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
 
         # Create test folder structure
         test_folder = temp_dir / "test_folder"
@@ -268,7 +268,7 @@ class TestListS3Files:
         """Test basic S3 file listing."""
         # Setup S3
         s3_client = boto3.client("s3", region_name="us-west-2")
-        s3_client.create_bucket(Bucket="test-bucket")
+        s3_client.create_bucket(Bucket="test-bucket", CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
 
         # Upload test files
         s3_client.put_object(Bucket="test-bucket", Key="data/file1.csv", Body="content1")
@@ -287,7 +287,7 @@ class TestListS3Files:
         """Test S3 file listing with pattern."""
         # Setup S3
         s3_client = boto3.client("s3", region_name="us-west-2")
-        s3_client.create_bucket(Bucket="test-bucket")
+        s3_client.create_bucket(Bucket="test-bucket", CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
 
         # Upload test files
         s3_client.put_object(Bucket="test-bucket", Key="data/file1.csv", Body="content1")
@@ -309,7 +309,7 @@ class TestReadFiles:
         """Test reading single file from S3."""
         # Setup S3
         s3_client = boto3.client("s3", region_name="us-west-2")
-        s3_client.create_bucket(Bucket="test-bucket")
+        s3_client.create_bucket(Bucket="test-bucket", CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
 
         # Upload CSV content
         s3_client.put_object(Bucket="test-bucket", Key="data/test.csv", Body=sample_csv_content)
@@ -326,7 +326,7 @@ class TestReadFiles:
         """Test reading multiple files from S3."""
         # Setup S3
         s3_client = boto3.client("s3", region_name="us-west-2")
-        s3_client.create_bucket(Bucket="test-bucket")
+        s3_client.create_bucket(Bucket="test-bucket", CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
 
         # Upload multiple CSV files
         for i in range(3):
@@ -348,7 +348,7 @@ class TestReadFiles:
         """Test reading files with local cache."""
         # Setup S3
         s3_client = boto3.client("s3", region_name="us-west-2")
-        s3_client.create_bucket(Bucket="test-bucket")
+        s3_client.create_bucket(Bucket="test-bucket", CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
 
         # Upload CSV content
         s3_client.put_object(Bucket="test-bucket", Key="data/test.csv", Body=sample_csv_content)
@@ -368,7 +368,7 @@ class TestReadFiles:
         """Test reading files with specific columns."""
         # Setup S3
         s3_client = boto3.client("s3", region_name="us-west-2")
-        s3_client.create_bucket(Bucket="test-bucket")
+        s3_client.create_bucket(Bucket="test-bucket", CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
 
         # Upload CSV content
         s3_client.put_object(Bucket="test-bucket", Key="data/test.csv", Body=sample_csv_content)

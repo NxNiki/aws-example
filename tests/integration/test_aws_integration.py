@@ -25,7 +25,7 @@ class TestS3Integration:
         """Test complete S3 read-write cycle."""
         # Setup S3
         s3_client = boto3.client("s3", region_name="us-west-2")
-        s3_client.create_bucket(Bucket="test-bucket")
+        s3_client.create_bucket(Bucket="test-bucket", CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
 
         # Write DataFrame to S3
         write_pandas_to_s3(sample_dataframe, "test-bucket", "data/test.csv")
@@ -46,7 +46,7 @@ class TestS3Integration:
         """Test uploading and downloading multiple files."""
         # Setup S3
         s3_client = boto3.client("s3", region_name="us-west-2")
-        s3_client.create_bucket(Bucket="test-bucket")
+        s3_client.create_bucket(Bucket="test-bucket", CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
 
         # Create test files
         test_files = []
@@ -89,7 +89,7 @@ class TestS3Integration:
 
         # Setup S3
         s3_client = boto3.client("s3", region_name="us-west-2")
-        s3_client.create_bucket(Bucket="test-bucket")
+        s3_client.create_bucket(Bucket="test-bucket", CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
 
         # Write large DataFrame
         write_pandas_to_s3(large_df, "test-bucket", "data/large.csv")
@@ -108,7 +108,7 @@ class TestS3Integration:
         """Test parallel processing of multiple files."""
         # Setup S3
         s3_client = boto3.client("s3", region_name="us-west-2")
-        s3_client.create_bucket(Bucket="test-bucket")
+        s3_client.create_bucket(Bucket="test-bucket", CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
 
         # Create multiple test files
         file_uris = []
@@ -242,7 +242,7 @@ class TestAWSDataPipeline:
         """Test complete data pipeline from S3 to Athena and back."""
         # Setup S3
         s3_client = boto3.client("s3", region_name="us-west-2")
-        s3_client.create_bucket(Bucket="test-bucket")
+        s3_client.create_bucket(Bucket="test-bucket", CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
 
         # Setup Athena
         athena_client = boto3.client("athena", region_name="us-west-2")
@@ -278,7 +278,7 @@ class TestAWSDataPipeline:
         """Test data validation pipeline."""
         # Setup S3
         s3_client = boto3.client("s3", region_name="us-west-2")
-        s3_client.create_bucket(Bucket="test-bucket")
+        s3_client.create_bucket(Bucket="test-bucket", CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
 
         # Upload original data
         write_pandas_to_s3(sample_dataframe, "test-bucket", "data/original.csv")
