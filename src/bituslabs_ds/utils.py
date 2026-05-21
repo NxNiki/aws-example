@@ -398,7 +398,7 @@ def check_consecutive_event(
             df[col_name] = df["_diff_to_next_seconds"] > threshold
         else:
             df[col_name] = df["_diff_to_next_seconds"] <= threshold
-        df.drop(columns=["_diff_from_prev_seconds"], inplace=True)
+        df.drop(columns=["_diff_to_next_seconds"], inplace=True)
 
     return df
 
@@ -502,13 +502,14 @@ def convert_to_list(arg: Any) -> List[Any]:
     :param arg: The input argument of any type.
     :return: A list representation of the input argument.
     """
-    if not arg:
+    # Check ndarray before truthiness — `not arg` on a multi-element array raises ValueError.
+    if isinstance(arg, np.ndarray):
+        return arg.tolist()
+    if arg is None or arg == "":
         logger.warning(f"empty arg: {arg}")
         return []
     elif isinstance(arg, (str, int, float, bool)):
         return [arg]
-    elif isinstance(arg, np.ndarray):
-        return arg.tolist()
     elif isinstance(arg, Iterable):
         return list(arg)
     elif isinstance(arg, list):

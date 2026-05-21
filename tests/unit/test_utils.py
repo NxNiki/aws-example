@@ -45,11 +45,14 @@ class TestGetDataFromUrl:
         assert result is True
         assert mock_run.call_count == 2  # wget and unzip
 
+    @patch("os.path.isdir")
     @patch("os.path.exists")
     @patch("os.listdir")
-    def test_skip_existing_directory(self, mock_listdir, mock_exists):
+    def test_skip_existing_directory(self, mock_listdir, mock_exists, mock_isdir):
         """Test skipping download when directory exists and is not empty."""
         mock_exists.return_value = True
+        # The skip-path checks both os.path.exists AND os.path.isdir on extraction_dir.
+        mock_isdir.return_value = True
         mock_listdir.return_value = ["file1.txt", "file2.txt"]
 
         result = get_data_from_url("https://example.com/data.zip", "data.zip", "extracted", overwrite=False)
@@ -97,7 +100,8 @@ class TestSaveList:
             content = f.read()
         assert "my_list = [" in content
         assert "1," in content
-        assert '"test",' in content
+        # save_list("python") uses repr(), which renders strings with single quotes.
+        assert "'test'," in content
 
     def test_invalid_format(self):
         """Test error handling for invalid format."""
@@ -110,10 +114,11 @@ class TestRemoveOutliers:
 
     def test_remove_outliers_numpy_array(self):
         """Test removing outliers from numpy array."""
-        # Create data with clear outliers
+        # With only 5 points, the [100,200] outlier inflates the std enough that
+        # a 2-sigma threshold lets it through. 1.5 σ is enough to flag it.
         data = np.array([[1, 2], [2, 3], [100, 200], [3, 4], [4, 5]])
 
-        filtered_data, filtered_indices = remove_outliers(data, z_thresh=2)
+        filtered_data, filtered_indices = remove_outliers(data, z_thresh=1.5)
 
         assert len(filtered_data) < len(data)
         assert len(filtered_indices) == len(data)
@@ -123,7 +128,7 @@ class TestRemoveOutliers:
         """Test removing outliers from pandas DataFrame."""
         df = pd.DataFrame({"col1": [1, 2, 100, 3, 4], "col2": [2, 3, 200, 4, 5]})
 
-        filtered_df, filtered_indices = remove_outliers(df, z_thresh=2)
+        filtered_df, filtered_indices = remove_outliers(df, z_thresh=1.5)
 
         assert len(filtered_df) < len(df)
         assert len(filtered_indices) == len(df)
