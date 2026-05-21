@@ -17,10 +17,57 @@ from bituslabs_ds.pyspark_utils import (
 )
 
 
+class _SparkFnStub:
+    """Stand-in for a PySpark Column built via F.min(col) / F.max(col) / etc.
+
+    PySpark column constructors require an active SparkContext (they call into
+    Java even to *build* a Column expression), so tests that don't start a
+    real Spark session can't import F.min / F.max directly. This stub mimics
+    just enough of the Column API to let `create_stat_aggregations` build its
+    list and have the test read back the alias names:
+
+        Fmin("value").alias("value_min")  ->  _SparkFnStub("value_min")
+        result.alias()                    ->  "value_min"
+    """
+
+    def __init__(self, name=None):
+        self._name = name
+
+    def alias(self, name=None):
+        # Two-arg form returns a new stub carrying the supplied alias.
+        # Zero-arg form returns the name we're currently carrying (matches
+        # the test's `[agg.alias() for agg in result]` read-back pattern).
+        if name is None:
+            return self._name
+        return _SparkFnStub(name)
+
+
+def _spark_fn(*args, **kwargs):
+    """Replacement for F.min / F.max / col / input_file_name / regexp_extract."""
+    return _SparkFnStub()
+
+
+@pytest.fixture
+def mock_spark_functions():
+    """Patch every pyspark.sql.functions symbol used by pyspark_utils so tests
+    can exercise the code without a JVM / SparkContext."""
+    with patch.multiple(
+        "bituslabs_ds.pyspark_utils",
+        Fmin=_spark_fn,
+        Fmax=_spark_fn,
+        Favg=_spark_fn,
+        percentile_approx=_spark_fn,
+        col=_spark_fn,
+        input_file_name=_spark_fn,
+        regexp_extract=_spark_fn,
+    ):
+        yield
+
+
 class TestReadDataWithPartition:
     """Test the read_data_with_partition function."""
 
-    def test_read_data_with_partition_success(self, mock_spark_session):
+    def test_read_data_with_partition_success(self, mock_spark_session, mock_spark_functions):
         """Test successful data reading with partition extraction."""
         # Mock Spark DataFrame
         mock_df = MagicMock()
@@ -47,7 +94,7 @@ class TestReadDataWithPartition:
         assert mock_df.withColumn.call_count >= 2  # year and month columns
         mock_df.drop.assert_called_once_with("_filepath")
 
-    def test_read_data_with_partition_parquet_format(self, mock_spark_session):
+    def test_read_data_with_partition_parquet_format(self, mock_spark_session, mock_spark_functions):
         """Test reading parquet format with partition extraction."""
         # Mock Spark DataFrame
         mock_df = MagicMock()
@@ -64,7 +111,7 @@ class TestReadDataWithPartition:
         # Verify format was set to parquet
         mock_spark_session.read.format.assert_called_once_with("parquet")
 
-    def test_read_data_with_partition_no_read_opts(self, mock_spark_session):
+    def test_read_data_with_partition_no_read_opts(self, mock_spark_session, mock_spark_functions):
         """Test reading data without read options."""
         # Mock Spark DataFrame
         mock_df = MagicMock()
@@ -237,7 +284,7 @@ class TestEncodeLabel:
 class TestCreateStatAggregations:
     """Test the create_stat_aggregations function."""
 
-    def test_create_stat_aggregations_basic(self):
+    def test_create_stat_aggregations_basic(self, mock_spark_functions):
         """Test basic statistical aggregations creation."""
         column_name = "value"
 
@@ -254,7 +301,7 @@ class TestCreateStatAggregations:
         actual_names = [agg.alias() for agg in result]
         assert actual_names == expected_names
 
-    def test_create_stat_aggregations_with_rename(self):
+    def test_create_stat_aggregations_with_rename(self, mock_spark_functions):
         """Test statistical aggregations with custom rename."""
         column_name = "value"
         rename = "custom_name"
@@ -275,7 +322,7 @@ class TestCreateStatAggregations:
         actual_names = [agg.alias() for agg in result]
         assert actual_names == expected_names
 
-    def test_create_stat_aggregations_no_rename(self):
+    def test_create_stat_aggregations_no_rename(self, mock_spark_functions):
         """Test statistical aggregations without rename (should use original name)."""
         column_name = "test_column"
 
@@ -295,7 +342,7 @@ class TestCreateStatAggregations:
         actual_names = [agg.alias() for agg in result]
         assert actual_names == expected_names
 
-    def test_create_stat_aggregations_empty_rename(self):
+    def test_create_stat_aggregations_empty_rename(self, mock_spark_functions):
         """Test statistical aggregations with empty rename string."""
         column_name = "value"
         rename = ""

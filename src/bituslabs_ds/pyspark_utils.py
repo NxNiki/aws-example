@@ -82,7 +82,8 @@ def read_files_to_spark(
         for i, col_name in enumerate(column_names):
             df = df.withColumnRenamed(f"_c{i}", col_name)
 
-    df = df.select(*keep_columns)
+    if keep_columns is not None:
+        df = df.select(*keep_columns)
     display_df_rows(df, "data loaded:")
     return df
 
