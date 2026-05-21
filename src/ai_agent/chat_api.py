@@ -31,7 +31,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from ai_agent.chat_agent import achat, chat, init_metadata
+from ai_agent.chat_agent import achat, init_metadata
 from ai_agent.metadata_builder import build_metadata
 from ai_agent.report_agent.description import (
     STATUS_APPENDED,
