@@ -73,6 +73,69 @@ Redshift (prod) → SSH bastion tunnel → DataLoader (etl.py) → S3 parquet ca
 - **Pre-commit hooks** run black, isort, mypy on every commit
 - Pyright `extraPaths = ["src"]` for import resolution
 
+## Comments
+
+Default to writing no comments. Only add one when the WHY is non-obvious: a
+hidden constraint, a subtle invariant, a workaround for a specific bug,
+behavior that would surprise a reader. Don't restate what well-named code
+already conveys. Don't reference the current task, PR, or callers — those
+belong in commit messages and rot fast.
+
+**Narrow exception — user-facing feature surfaces.** Functions that
+implement a user-facing feature *do* get a purpose docstring, because they
+sit on a vocabulary boundary: a user asks about "clip data", the AI agent
+greps the repo, and without a comment naming the feature, neither the
+agent nor a new engineer can bridge the user's words to the code. This
+applies to:
+
+- Dashboard callbacks / panel builders / chart controls (`src/dashboards/`)
+- AI-agent API endpoints + tool functions (`src/ai_agent/`)
+- ETL jobs producing named dashboard metrics (`jobs/*/etl_*.py`)
+- Scheduled jobs invoked from `jobs/run_scheduled_etl_jobs.py`
+
+It does NOT apply to: private helpers, internal data-plumbing utilities,
+boilerplate callback wiring, or anything purely internal whose name is
+already self-explanatory.
+
+### Docstring template for user-facing features
+
+```python
+def _apply_outlier_clipping(df: pl.DataFrame, lo: float, hi: float) -> pl.DataFrame:
+    """Clip per-row metric values to a user-configured [min, max] for display.
+
+    Dashboard feature: "Clip data" toggle in each chart's controls
+    (element IDs ``group-{group_id}-clip-{enable|min|max}`` in
+    Group/Range mode, ``viz-{panel_id}-clip-{enable|min|max}`` in
+    Viz mode).
+
+    Behavior: when the toggle is on, values outside [lo, hi] are pinned
+    to the bound — NOT removed. This stops a single outlier from
+    squashing the visible y-axis range without dropping data points.
+    The original values stay intact upstream; clipping is purely a
+    display transformation applied right before the figure is rendered.
+    """
+```
+
+Structure to follow (skip a section if it genuinely doesn't apply):
+
+1. **One-line summary** in user/UX vocabulary, not code vocabulary.
+2. **`Dashboard feature:`** (or `API endpoint:` / `ETL job:`) line naming
+   the feature as users / dashboards / API callers refer to it, plus
+   *where it surfaces* — the panel/tab/control IDs, the URL path, the
+   output table/column, whichever is the searchable handle. This is what
+   lets the AI agent's `grep_codebase` connect a question like
+   *"how does the clip data toggle work?"* to this function.
+3. **`Behavior:`** 2-4 lines on *what it does and why*, including the
+   trigger (button click, config toggle, scheduled run) and any
+   non-obvious invariant. Skip what well-named code already conveys.
+4. **`Inputs:`** only if a parameter's meaning isn't obvious from its
+   name + type (e.g. units, ranges, what it represents in dashboard
+   terms).
+
+Style: keep it tight. A user-facing-feature docstring should usually be
+6–15 lines. If it grows past 20, the function is probably doing two
+features and should be split.
+
 ## Testing
 
 - pytest config in `tests/pytest.ini`
