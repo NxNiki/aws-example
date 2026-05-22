@@ -99,6 +99,23 @@ STATUS_NO_INSTRUCTIONS = (
 )
 
 
+# Glossary / convention block appended to every report-agent system prompt.
+# The report agent does NOT have tool access to lookup_column, so we have to
+# state these conventions in-prompt — the LLM otherwise defaults to common
+# business-English readings (e.g. "profit" → company profit) that don't
+# match this dataset's column semantics.
+_INTERPRETATION_CONVENTIONS = (
+    " Interpretation conventions for the figure data: all profit, payout, "
+    "bet, win, loss, and RTP metrics are from the PLAYER's perspective — "
+    "a negative profit means the player lost money (and the operator / "
+    "house earned money on those bets). NEVER describe these as company "
+    "profit, casino profit, or house earnings — always frame them as the "
+    "player's outcome. When the user message includes a "
+    "`# Column definitions` block, treat those definitions as "
+    "authoritative and prefer their wording over any prior assumption."
+)
+
+
 _DESCRIPTION_SYSTEM_PROMPT = (
     "You are a data analyst writing a section of an analytical report. "
     "You will receive a JSON summary of one figure (traces, axes, values, "
@@ -111,7 +128,7 @@ _DESCRIPTION_SYSTEM_PROMPT = (
     "not invent metrics or dates that are not in the summary or "
     "references. No headings, markdown fences, bullet lists, or HTML — "
     "only paragraphs separated by blank lines. Never echo back "
-    "``/prompt`` or ``/prompt:`` lines."
+    "``/prompt`` or ``/prompt:`` lines." + _INTERPRETATION_CONVENTIONS
 )
 
 
@@ -126,7 +143,7 @@ _SUMMARY_SYSTEM_PROMPT = (
     "any trend that appears across multiple figures. Stay grounded in "
     "the provided material — do not invent metrics. No headings, "
     "markdown fences, bullets, or HTML — only paragraphs separated by "
-    "blank lines. Never echo back ``/prompt`` or ``/prompt:`` lines."
+    "blank lines. Never echo back ``/prompt`` or ``/prompt:`` lines." + _INTERPRETATION_CONVENTIONS
 )
 
 
@@ -148,7 +165,7 @@ _DESCRIPTION_APPEND_SYSTEM_PROMPT = (
     "summary. No headings, markdown fences, bullet lists, HTML, or "
     "``/prompt`` lines. Output only the new paragraphs — the caller "
     "will insert a blank line between the preserved content and your "
-    "output."
+    "output." + _INTERPRETATION_CONVENTIONS
 )
 
 
@@ -164,7 +181,7 @@ _SUMMARY_APPEND_SYSTEM_PROMPT = (
     "of plain prose that follow the instructions, draw on the figures' "
     "data, and complement (rather than duplicate) what the preserved "
     "prose already says. No headings, markdown fences, bullets, HTML, "
-    "or ``/prompt`` lines. Output only the new paragraphs."
+    "or ``/prompt`` lines. Output only the new paragraphs." + _INTERPRETATION_CONVENTIONS
 )
 
 
@@ -180,6 +197,46 @@ def _invoke_llm(system_prompt: str, user_message: str, *, model_key: Optional[st
 
 def _format_prompt_block(prompts: List[str]) -> str:
     return "\n".join(f"- {p}" for p in prompts)
+
+
+def _format_column_definitions_block(data_blob: str) -> Optional[str]:
+    """Build a `# Column definitions` block for any column from
+    ``column_metadata.yaml`` whose name appears in the figure data summary.
+
+    The report agent has no tool access to ``lookup_column``, so we
+    pre-resolve the relevant subset of the curated metadata and feed it
+    inline. Word-boundary regex match keeps the glossary tight to the
+    columns the figure actually references.
+    """
+    try:
+        # Reuse the chat agent's process-wide metadata cache so the report
+        # endpoints see the same column descriptions as the chat tools.
+        from ai_agent.chat_agent import _ensure_metadata
+
+        meta = _ensure_metadata()
+    except Exception:
+        logger.exception("Could not load column metadata for report glossary")
+        return None
+    columns = meta.get("columns") or {}
+    if not columns:
+        return None
+
+    found: List[str] = []
+    for name in columns:
+        if re.search(rf"\b{re.escape(name)}\b", data_blob):
+            found.append(name)
+    if not found:
+        return None
+
+    lines: List[str] = []
+    for name in found:
+        info = columns[name]
+        desc = (info.get("description") or "").strip()
+        lines.append(f"- **{name}**: {desc}")
+        formula = info.get("formula")
+        if formula:
+            lines.append(f"  Formula: `{formula}`")
+    return "\n".join(lines)
 
 
 def _format_references_block(refs: List[Dict[str, str]]) -> Optional[str]:
@@ -231,11 +288,14 @@ def generate_description(
         return (existing_description or ""), STATUS_NO_INSTRUCTIONS
 
     refs_block = _format_references_block(references or [])
+    defs_block = _format_column_definitions_block(summary_json)
 
     parts: List[str] = [
         f"# Output language\nWrite the response in {language_name}.",
         f"# Figure data\n{summary_json}",
     ]
+    if defs_block:
+        parts.append(f"# Column definitions\n{defs_block}")
     if refs_block:
         parts.append(f"# Reference materials\n{refs_block}")
     if prompts:
@@ -281,11 +341,16 @@ def generate_summary(
         return (existing_summary or ""), STATUS_NO_INSTRUCTIONS
 
     refs_block = _format_references_block(references or [])
+    # Pool every figure's data into one blob so the glossary covers any
+    # column appearing in any of them.
+    defs_block = _format_column_definitions_block("\n".join(blocks))
 
     parts: List[str] = [
         f"# Output language\nWrite the response in {language_name}.",
         "# Figures\n" + "\n\n".join(blocks),
     ]
+    if defs_block:
+        parts.append(f"# Column definitions\n{defs_block}")
     if refs_block:
         parts.append(f"# Reference materials\n{refs_block}")
     if prompts:

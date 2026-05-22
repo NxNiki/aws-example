@@ -11,6 +11,12 @@
 #   games:      Game-specific context (game IDs, source tables, AB groups)
 #   columns:    Per-column metadata (description, formula hint, category)
 #   etl_files:  Paths to ETL scripts the metadata_builder can scan
+#
+# Interpretation convention:
+#   All profit / payout / bet / win / loss / RTP metrics are from the
+#   PLAYER's perspective. A negative profit means the player lost money
+#   (and the operator earned). Never describe these as "company profit",
+#   "casino profit", or "house earnings".
 # =============================================================================
 
 # ---------------------------------------------------------------------------
@@ -223,7 +229,12 @@ columns:
 
   user_total_profit:
     category: user_metric
-    description: "Net profit for the user (positive = player won money)."
+    description: >
+      Net profit for the individual user, from the PLAYER's perspective:
+      user_total_payout - user_total_bet. Positive = the player won money
+      net on the day; negative = the player lost money (the operator
+      earned that amount on the player's bets). Never frame this as
+      company / casino / house profit.
     formula: "user_total_payout - user_total_bet"
 
   user_avg_delta_t_seconds_bg:
@@ -383,11 +394,19 @@ columns:
 
   total_profit:
     category: aggregate_metric
-    description: "Net profit for the group: total_payout - total_bet."
+    description: >
+      Aggregate net profit for the group, from the PLAYER's perspective:
+      total_payout - total_bet. Negative = players in this group lost
+      money (and the operator earned that amount); positive = players won.
+      Never frame this as company / casino / house profit.
 
   total_profit_per_user:
     category: aggregate_metric
-    description: "Average net profit per user."
+    description: >
+      Average net profit per user in the group, from the PLAYER's
+      perspective (total_profit / num_users). Negative = the typical
+      player in this group lost money on the day. Never frame as
+      company / casino / house earnings per user.
 
   rtp:
     category: aggregate_metric
