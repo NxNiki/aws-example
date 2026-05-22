@@ -81,14 +81,21 @@ EXPOSE 8051
 
 # Uvicorn ASGI server — async-friendly for LLM API calls.
 #
-# --workers 1          Single process; metadata cache shared across requests.
-# --timeout-keep-alive 65  Match ALB idle timeout (60s) + buffer.
+# --workers 2          Two processes so the dashboard's per-figure description
+#                      fan-out can run two LLM calls in parallel instead of
+#                      serializing through a single worker (which caused 504s
+#                      on 6+ figure reports). Each worker keeps its own
+#                      metadata cache; cold-start happens twice but
+#                      steady-state is unaffected. ~150 MB extra RAM.
+# --timeout-keep-alive 310  Slightly above the ALB idle timeout (300s) so the
+#                      server doesn't close keep-alive connections before
+#                      the LB does — avoids spurious 502/504 races.
 # --host 0.0.0.0       Reachable from outside the container.
 # --port 8051          Separate from dashboard (8050).
 CMD ["uvicorn", \
      "ai_agent.chat_api:app", \
      "--host", "0.0.0.0", \
      "--port", "8051", \
-     "--workers", "1", \
-     "--timeout-keep-alive", "65", \
+     "--workers", "2", \
+     "--timeout-keep-alive", "310", \
      "--access-log"]

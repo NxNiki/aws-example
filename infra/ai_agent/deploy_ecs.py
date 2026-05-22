@@ -245,6 +245,16 @@ def main() -> None:
     waiter.wait(LoadBalancerArns=[alb_arn])
     print("  ALB is active")
 
+    # Idle timeout: the chat/report endpoints can take 30s+ per LLM call,
+    # and the dashboard fan-outs N description requests for an N-figure
+    # report. With the default 60s, queued requests return 504 even though
+    # the agent eventually finishes. 300s buffers ~10 stacked calls.
+    elbv2.modify_load_balancer_attributes(
+        LoadBalancerArn=alb_arn,
+        Attributes=[{"Key": "idle_timeout.timeout_seconds", "Value": "300"}],
+    )
+    print("  ALB idle_timeout set to 300s")
+
     # 6. Target group
     print("\n6. Target group...")
     tg_name = f"{SERVICE_NAME}-tg"
