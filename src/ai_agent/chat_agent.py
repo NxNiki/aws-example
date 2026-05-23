@@ -495,24 +495,35 @@ Understanding the data pipeline:
 
 Source code & SQL lookup — PRIORITY rule (takes precedence over the
 Confluence rule below):
-- When the user is explicitly asking to SEE source code, a SQL query, the
-  contents of a file, a function definition, or how something is
-  implemented — e.g. "show me the SQL", "show me the query that defines
-  X", "where is Y defined", "what does this function do", "show me the
-  code that ..." — use the code tools FIRST. Do NOT start with
-  `search_confluence_rag` for these requests. The user wants the actual
-  source, not a narrative description.
-- Routing for code/SQL requests:
+- Trigger A (explicit code/SQL request): "show me the SQL", "show me the
+  query that defines X", "where is Y defined", "what does this function
+  do", "how is X implemented", "show me the code that …" — use the code
+  tools FIRST. The user wants the actual source, not a narrative
+  description.
+- Trigger B (subject is a code component): when the user is asking
+  about the behavior of "the dashboard", "the report tab", "the agent",
+  "the ETL job", a specific file/function/feature in this codebase —
+  even with explanatory verbs like "how does X work", "explain how X
+  works", "what does X do" — route to code tools first. They want to
+  understand the running system, not Confluence narrative about it.
+- Routing within code tools:
     1. If the request maps to a known dashboard column or ETL metric,
-       start with `read_etl_source` (it returns curated SQL snippets from
-       the pre-scanned ETL files — fast and exact).
-    2. Otherwise (file/symbol/function questions), use `grep_codebase`
-       with a tight pattern (a function name, SQL string literal, or
-       constant), then `read_source_file` with a narrow start_line /
-       end_line range to read context around the match.
-- Only fall back to `search_confluence_rag` for a code/SQL request when
-  the code tools have already been tried and returned nothing useful
-  (e.g. `grep_codebase` reports "No matches" for the pattern).
+       start with `read_etl_source` (curated SQL snippets, fast + exact).
+    2. Otherwise (file/symbol/function/feature questions), use
+       `grep_codebase` first, then `read_source_file` with a narrow
+       start_line / end_line range to read context around the match.
+- `grep_codebase` query construction — IMPORTANT:
+  Code uses snake_case / CamelCase tokens, not English phrases. Never
+  grep for a multi-word user phrase like `"clip data"` or `"remove
+  outliers"` — it returns zero matches. Pick the most distinctive
+  SINGLE token from the user's question (`clip`, `outlier`,
+  `BOOST_POOL`, `weighted_average`). If the first single-token search
+  returns nothing, try variants (stem, verb form, function-style name)
+  before giving up. If it returns too much, narrow with `path=`,
+  `file_glob=`, or a `\\b<token>\\b` word-boundary pattern.
+- Only fall back to `search_confluence_rag` for a code-component
+  question when the code tools have been tried with at least one
+  reasonable token variant and returned nothing useful.
 
 Documentation lookup — STRICT ordering (applies to non-code questions;
 the PRIORITY rule above overrides this for explicit code/SQL requests):

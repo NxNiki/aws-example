@@ -93,3 +93,24 @@ cases:
       `must_call_tools` is intentionally empty: either `read_etl_source`
       (metadata cache) or `grep_codebase` + `read_source_file` (live repo)
       is an acceptable route.
+
+  - id: dashboard_clip_data_feature
+    question: how does the dashboard clip outlier values for display?
+    model: gemini:gemini-2.5-flash
+    must_contain:
+      - clip
+      - game_stats_monitor
+    must_call_tools:
+      - grep_codebase
+    notes: |
+      Regression test for the PRIORITY rule + grep query-strategy
+      improvements. The dashboard's clip-data UI is implemented in
+      src/dashboards/game_stats_monitor.py (element IDs `group-{id}-clip-*`
+      and `viz-{id}-clip-*`, plus the `pl.col(c).clip(lower_bound=lo,
+      upper_bound=hi)` transform applied before rendering). Previously the
+      agent went straight to Confluence on "how does X work in the
+      dashboard" phrasing, and when explicitly told to grep it queried for
+      the literal phrase "clip data" (zero matches) and gave up. After the
+      fix the agent should (a) skip Confluence because the subject is "the
+      dashboard", (b) grep for the single token "clip" rather than the
+      English phrase, and (c) surface game_stats_monitor.py in the answer.

@@ -100,9 +100,26 @@ def grep_codebase(pattern: str, path: str = "", file_glob: str = "") -> str:
     Use this to locate where a symbol, SQL alias, config key, or string
     literal is defined or referenced — analogous to ``ripgrep`` on the repo.
 
+    Search strategy — IMPORTANT:
+    - Code uses snake_case / CamelCase tokens, not English phrases. Never
+      grep for a multi-word natural-language phrase like ``"clip data"`` or
+      ``"remove outliers"`` — it will return zero matches because no source
+      file contains that literal string.
+    - Start with the most distinctive SINGLE token from the user's question
+      (``"clip"``, ``"outlier"``, ``"weighted_average"``, ``"BOOST_POOL"``).
+      If that's too noisy, narrow with ``\\b<token>\\b`` for word-boundary
+      match, or pass ``path=`` to scope to one module (``"src/dashboards"``),
+      or ``file_glob=`` to filter file types (``"*.py"``).
+    - If the first single-token search returns nothing, try variants before
+      giving up: stem (``"clipping"`` → ``"clip"``), the verb form
+      (``"clip"``), the function-style form (``"clip_outliers"``), or the
+      Python module name from the dashboard config.
+
     Args:
         pattern: Regex (extended). Examples: ``"def build_metadata"``,
                  ``"ACTIVE_USER_MIN_BETS\\s*="``, ``"user_total_bet"``.
+                 NOT ``"clip data"`` — that is a user phrase, not a code
+                 token.
         path: Optional sub-path to scope the search (e.g. ``"src/ai_agent"``,
               ``"jobs/fish_hunter"``). Must live under one of
               ``src/``, ``jobs/``, ``infra/``, ``tests/``, ``entry_points/``.
@@ -117,8 +134,14 @@ def grep_codebase(pattern: str, path: str = "", file_glob: str = "") -> str:
         cmd = ["rg", "--no-heading", "--line-number", "--max-count", "5", "--color", "never"]
         if file_glob:
             cmd += ["--glob", file_glob]
-        # If no path was given, restrict ripgrep to the allowed dirs.
-        targets = [str(search_root)] if path else [str(_REPO_ROOT / d) for d in _ALLOWED_DIRS]
+        # If no path was given, restrict ripgrep to the allowed dirs that
+        # actually exist in this checkout — the runtime image is a subset of
+        # the repo (no infra/, tests/, entry_points/), so passing the full
+        # allowlist would emit spurious "No such file or directory" warnings.
+        if path:
+            targets = [str(search_root)]
+        else:
+            targets = [str(_REPO_ROOT / d) for d in _ALLOWED_DIRS if (_REPO_ROOT / d).exists()]
         cmd += [pattern, *targets]
         try:
             out = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
