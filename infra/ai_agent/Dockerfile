@@ -57,7 +57,7 @@ COPY src/bituslabs_ds ./src/bituslabs_ds
 COPY src/ai_agent ./src/ai_agent
 COPY src/dashboards/__init__.py               ./src/dashboards/__init__.py
 COPY src/dashboards/confluence_client.py      ./src/dashboards/confluence_client.py
-COPY src/dashboards/secrets.py                ./src/dashboards/secrets.py
+COPY src/dashboards/aws_secrets.py            ./src/dashboards/aws_secrets.py
 COPY src/dashboards/user_stats_aggregates.py  ./src/dashboards/user_stats_aggregates.py
 COPY src/dashboards/game_stats_monitor.py     ./src/dashboards/game_stats_monitor.py
 COPY src/dashboards/dashboard_config*.yaml    ./src/dashboards/

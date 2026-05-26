@@ -605,7 +605,7 @@ MODEL_CATALOG = {
 }
 
 # Secrets Manager secret name (stores GOOGLE_API_KEY and OPENAI_API_KEY).
-from dashboards.secrets import get_secret as _get_secret  # noqa: F401  (re-export for callers)
+from dashboards.aws_secrets import get_secret as _get_secret  # noqa: F401  (re-export for callers)
 
 
 def _build_llm(model_key: Optional[str] = None) -> BaseChatModel:

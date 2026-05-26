@@ -126,6 +126,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Renamed `src/dashboards/secrets.py` → `src/dashboards/aws_secrets.py`
+  to avoid shadowing the Python stdlib ``secrets`` module. Running any
+  module under ``src/dashboards/`` as a path (e.g. ``python
+  src/dashboards/game_stats_monitor.py``) used to put the directory on
+  ``sys.path[0]`` and break numpy's ``bit_generator`` import
+  (``cannot import name randbits``). All importers updated:
+  ``ai_agent.chat_agent``, ``ai_agent.slack_handler``,
+  ``dashboards.confluence_client``, ``rag_service.embeddings``, plus
+  the ``COPY`` lines in ``infra/ai_agent/Dockerfile`` and
+  ``infra/rag_service/Dockerfile``.
 - `chat_agent._build_llm` defaults `CHAT_PROVIDER` to `auto`, picking
   OpenAI if `OPENAI_API_KEY` is set or Gemini if
   `GOOGLE_API_KEY` / `GEMINI_API_KEY` is. Previously the default
