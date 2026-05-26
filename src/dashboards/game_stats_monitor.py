@@ -4361,6 +4361,38 @@ class GameStatsDashboard:
         val = str(user_group_filter).strip() if user_group_filter is not None else ""
         return f" ({val})" if val and val.lower() not in ("all", "") else ""
 
+    @staticmethod
+    def _add_week_stripes(fig: go.Figure, start_dt: datetime, end_dt: datetime) -> None:
+        """Shade alternating Mon→Sun calendar weeks behind the date chart.
+
+        Dashboard feature: week-range vertical bands on the
+        Stats-by-Date chart (``date-graph``). Light-gray fill is
+        applied to every other ISO week (Monday→Sunday) and drawn
+        beneath the traces so users can see at a glance which points
+        belong to the same calendar week.
+
+        Behavior: walks Monday-aligned 7-day strides from the Monday
+        on/before ``start_dt`` up through ``end_dt``, adding a
+        ``vrect`` on odd-indexed weeks. The first visible week is
+        intentionally left unshaded so shading starts from the second
+        week, making the alternation obvious even on short windows.
+        """
+        monday = start_dt - timedelta(days=start_dt.weekday())
+        idx = 0
+        while monday <= end_dt:
+            next_monday = monday + timedelta(days=7)
+            if idx % 2 == 1:
+                fig.add_vrect(
+                    x0=monday,
+                    x1=next_monday,
+                    fillcolor="lightgray",
+                    opacity=0.18,
+                    line_width=0,
+                    layer="below",
+                )
+            monday = next_monday
+            idx += 1
+
     def update_date_plot(
         self,
         left_metrics: Any,
@@ -4571,6 +4603,10 @@ class GameStatsDashboard:
         ug2_lbl = _label_from_vals(clean_ug2) if effective_col2 else ""
         ug_label = " " + " ".join(p for p in [ug1_lbl, ug2_lbl] if p) if (ug1_lbl or ug2_lbl) else ""
         # ug_label = (ug_label + " [all groups combined]").strip()
+
+        if str(date_granularity or "day").lower() in ("day", "daily", "d"):
+            self._add_week_stripes(fig, start_dt, end_dt)
+
         fig.update_layout(
             title=f"{metrics_label}{ug_label}" if metrics_label else None,
             height=400,
