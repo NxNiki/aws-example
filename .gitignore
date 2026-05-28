@@ -9,6 +9,7 @@ log
 **/*.pkl
 **/*.onnx
 **/features/
+!src/bituslabs_ds/features/
 **/figures/
 **/model_output/
 **/output/
