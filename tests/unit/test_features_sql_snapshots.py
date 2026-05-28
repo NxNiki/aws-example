@@ -14,6 +14,7 @@ snapshot files is exactly what a reviewer needs to inspect to validate the
 SQL change.
 """
 
+import importlib.util
 import os
 from pathlib import Path
 
@@ -22,6 +23,22 @@ import pytest
 from bituslabs_ds.features import GameFeatureConfig, compose_enriched_query, compose_grouped_query
 
 SNAPSHOTS_DIR = Path(__file__).parent / "features_snapshots"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _load_jobs_config(relative_path: str, attr: str = "CONFIG") -> GameFeatureConfig:
+    """Import a ``CONFIG`` constant from a job script under ``jobs/`` by file path.
+
+    ``jobs/<game>/`` is not a Python package, so we side-load the module via
+    importlib instead of a normal import.
+    """
+    spec = importlib.util.spec_from_file_location(f"_jobs_{relative_path.replace('/', '_')}", REPO_ROOT / relative_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load {relative_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return getattr(module, attr)
+
 
 # Configs match what the per-game job scripts under jobs/ss0x/etl_feature_engineer.py
 # will use after Phases 2-4. Keep these in sync if you change the job-side configs.
@@ -94,4 +111,17 @@ def test_sql_matches_snapshot(config: GameFeatureConfig, kind: str) -> None:
     assert actual == expected, (
         f"SQL for {config.game_id} {kind} drifted from snapshot {snapshot_path}. "
         "If this is intentional, regenerate with REGENERATE_SNAPSHOTS=1."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Per-game job-config parity checks. Each migrated jobs/ss0x/etl_feature_engineer.py
+# must declare a CONFIG identical to the one used to generate the snapshot.
+# (ss01 and ss03 are added here when Phases 3 and 4 migrate them.)
+# ---------------------------------------------------------------------------
+def test_ss02_jobs_config_matches_snapshot_config() -> None:
+    jobs_config = _load_jobs_config("jobs/ss02_deepdive/etl_feature_engineer.py")
+    assert jobs_config == SS02, (
+        "jobs/ss02_deepdive/etl_feature_engineer.py CONFIG drifted from the snapshot's SS02 config. "
+        "If the change is intentional, update both and regenerate the snapshot."
     )
