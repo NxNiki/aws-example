@@ -117,8 +117,15 @@ def test_sql_matches_snapshot(config: GameFeatureConfig, kind: str) -> None:
 # ---------------------------------------------------------------------------
 # Per-game job-config parity checks. Each migrated jobs/ss0x/etl_feature_engineer.py
 # must declare a CONFIG identical to the one used to generate the snapshot.
-# (ss01 is added here when Phase 4 migrates it.)
 # ---------------------------------------------------------------------------
+def test_ss01_jobs_config_matches_snapshot_config() -> None:
+    jobs_config = _load_jobs_config("jobs/ss01_wucaishen/etl_feature_engineer.py")
+    assert jobs_config == SS01, (
+        "jobs/ss01_wucaishen/etl_feature_engineer.py CONFIG drifted from the snapshot's SS01 config. "
+        "If the change is intentional, update both and regenerate the snapshot."
+    )
+
+
 def test_ss02_jobs_config_matches_snapshot_config() -> None:
     jobs_config = _load_jobs_config("jobs/ss02_deepdive/etl_feature_engineer.py")
     assert jobs_config == SS02, (
