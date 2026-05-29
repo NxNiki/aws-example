@@ -70,7 +70,12 @@ class FeaturePipelineRunner:
     # ------------------------------------------------------------------
     def run(self, loader: DataLoader, *, overwrite: bool = False) -> None:
         storage_root = f"{DEFAULT_ETL_OUTPUT}/jobs/{self.cfg.output_prefix}"
-        scheduler = ETLScheduler(loader, storage_root, lookback_days=3, overwrite=overwrite)
+        scheduler = ETLScheduler(
+            loader,
+            storage_root,
+            lookback_days=self.cfg.effective_lookback_days(),
+            overwrite=overwrite,
+        )
         scheduler.default_start_date = self.cfg.date_start
 
         scheduler.run_incremental_job(

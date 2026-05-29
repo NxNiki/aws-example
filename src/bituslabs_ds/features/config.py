@@ -9,6 +9,7 @@ Adding a new game ideally requires only a new ``GameFeatureConfig``
 instance and a thin wrapper script — no new SQL.
 """
 
+import math
 from dataclasses import dataclass
 
 from bituslabs_ds.config import AB_TEST_GROUP_A, AB_TEST_GROUP_B, AI_GROUP_ID
@@ -78,6 +79,9 @@ class GameFeatureConfig:
     drop_incomplete_tail_groups: bool = False
     extra_where_clauses: tuple[str, ...] = ()
     requires_full_history: bool = True
+    # Explicit override for ETLScheduler lookback. ``None`` -> derive from
+    # ``max_session_interval_seconds`` via ``effective_lookback_days()``.
+    lookback_days: int | None = None
 
     def __post_init__(self) -> None:
         if not self.ai_groups:
@@ -94,3 +98,25 @@ class GameFeatureConfig:
                 f"selected_groups contains labels not in ai_groups: {sorted(unknown_sel)}. "
                 f"ai_groups: {self.ai_groups}."
             )
+
+    def effective_lookback_days(self) -> int:
+        """ETLScheduler lookback derived from ``max_session_interval_seconds``.
+
+        Formula: ``ceil(max_session_interval_seconds / 86400) + 1`` -- one full
+        ``max_session_interval`` plus a one-day safety buffer. Examples:
+
+        * 12-hour ``max_session_interval_seconds`` -> 2 days
+        * 7-day ``max_session_interval_seconds`` -> 8 days
+
+        Any session that started within the lookback window has its first bet
+        captured by the query, so ``session_start_ts`` (and therefore
+        ``session_start_date`` + ``session_group``) is computed correctly.
+        Sessions that began *before* the lookback window are not re-queried;
+        their existing rows in S3 stay untouched.
+
+        ``lookback_days`` on the config overrides this if explicitly set
+        (e.g. for users known to bet continuously beyond the formula's buffer).
+        """
+        if self.lookback_days is not None:
+            return self.lookback_days
+        return math.ceil(self.max_session_interval_seconds / 86400) + 1
