@@ -15,9 +15,11 @@ historical SS03 cluster-analysis runs. Flip ``selected_groups`` to a tuple
 containing other labels (e.g. ``("AI",)`` or ``("AB_TEST_A", "AB_TEST_B")``)
 to materialise other slices.
 
-Window functions (session_group, streak_group, ...) reach back across the
-watermark, so the canonical run is ``--overwrite``; incremental runs near
-the leading edge may have session / streak values that ignore prior history.
+Runs incrementally by default. ``session_start_date`` / ``session_group``
+are stable across runs, so the lookback-window merge is safe. Default
+lookback is derived from MAX_SESSION_INTERVAL via
+``GameFeatureConfig.effective_lookback_days()``; pass ``--overwrite``
+only when the SQL semantics change.
 """
 
 from bituslabs_ds.features import FeaturePipelineRunner, GameFeatureConfig

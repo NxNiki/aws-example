@@ -9,9 +9,13 @@ Output (written via ETLScheduler):
         features_enriched/   (per-bet raw stats)
         features_grouped/    (per agg_group stats)
 
-Window functions (session_group, streak_group, ...) reach back across the
-watermark, so the canonical run is ``--overwrite``; incremental runs near
-the leading edge may have session / streak values that ignore prior history.
+Runs incrementally by default. ETLScheduler reads the existing S3 watermark
+and re-queries from ``max(activity_date) - effective_lookback_days()``; the
+dataclass derives an 8-day lookback from the 7-day MAX_SESSION_INTERVAL, which
+is the shortest window that guarantees any active session's first bet is
+visible. ``session_start_date`` / ``session_group`` are stable across runs,
+so the new rows merge cleanly with existing rows on the lookback boundary.
+Pass ``--overwrite`` only when the SQL semantics change.
 """
 
 from bituslabs_ds.features import FeaturePipelineRunner, GameFeatureConfig

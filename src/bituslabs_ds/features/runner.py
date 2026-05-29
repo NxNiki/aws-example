@@ -44,9 +44,10 @@ class FeaturePipelineRunner:
 
         if self.cfg.requires_full_history and not args.overwrite:
             logger.warning(
-                "%s feature pipeline requires full prior history for session/streak window "
-                "functions, but --overwrite was not passed. Session and streak values near "
-                "the watermark may be wrong. Re-run with --overwrite for the canonical result.",
+                "%s: requires_full_history=True but --overwrite was not passed. "
+                "Pass --overwrite when the SQL semantics have changed (new columns, "
+                "different thresholds, etc.) so the existing S3 dataset is recomputed "
+                "from scratch under the new logic.",
                 self.cfg.game_id,
             )
 
@@ -125,7 +126,8 @@ class FeaturePipelineRunner:
             action="store_true",
             help=(
                 "Overwrite existing S3 output (full reload from date_start). "
-                "Recommended for this job because session/streak window functions need full prior history."
+                "Use when SQL semantics changed (new columns, threshold changes) "
+                "so the dataset is recomputed from scratch."
             ),
         )
         return parser.parse_args(argv)

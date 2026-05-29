@@ -59,10 +59,15 @@ class GameFeatureConfig:
             ``agg_group`` per session is dropped.
         extra_where_clauses: additional AND-conjuncted WHERE clauses appended to
             ``user_bets`` (e.g. ``("t.script_id = 'giftShop'",)`` for ss01).
-        requires_full_history: when ``True``, the runner forces / warns about
-            ``--overwrite``. The window functions used here are not
-            incremental-safe -- rows near the watermark would compute session
-            and streak values from a truncated history.
+        requires_full_history: when ``True``, the runner emits a warning if
+            ``--overwrite`` was not passed. Set this when the SQL semantics
+            change (new columns, threshold updates) and existing data on S3
+            needs a full recomputation. With stable session IDs +
+            ``effective_lookback_days()`` the normal incremental run is safe,
+            so the default is ``False``.
+        lookback_days: explicit override for ETLScheduler lookback. ``None`` ->
+            derive from ``max_session_interval_seconds`` via
+            ``effective_lookback_days()``.
     """
 
     game_id: str
@@ -78,7 +83,7 @@ class GameFeatureConfig:
     max_session_gap_seconds: int = 60 * 60
     drop_incomplete_tail_groups: bool = False
     extra_where_clauses: tuple[str, ...] = ()
-    requires_full_history: bool = True
+    requires_full_history: bool = False
     # Explicit override for ETLScheduler lookback. ``None`` -> derive from
     # ``max_session_interval_seconds`` via ``effective_lookback_days()``.
     lookback_days: int | None = None

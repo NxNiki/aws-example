@@ -19,9 +19,12 @@ SS01 specifics vs SS02 / SS03:
   ``ai_group`` column will therefore be the constant ``'Default'``.
 * ``script_id = 'giftShop'`` filter is appended via ``extra_where_clauses``.
 
-Window functions (session_group, streak_group, ...) reach back across the
-watermark, so the canonical run is ``--overwrite``; incremental runs near
-the leading edge may have session / streak values that ignore prior history.
+Runs incrementally by default. ``session_start_date`` / ``session_group``
+are stable across runs, so the lookback-window merge is safe. Default
+lookback is derived from MAX_SESSION_INTERVAL via
+``GameFeatureConfig.effective_lookback_days()`` (8 days here, since
+SS01 keeps the 7-day MAX_SESSION_INTERVAL); pass ``--overwrite`` only
+when the SQL semantics change.
 """
 
 from bituslabs_ds.features import FeaturePipelineRunner, GameFeatureConfig
