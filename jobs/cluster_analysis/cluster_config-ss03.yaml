@@ -27,6 +27,7 @@ data_loader:
       user_id: "category"
       ai_group: "category"
       math_table_id: "category"
+      session_start_date: "category"
       session_group: "category"
       agg_group: "category"
       rtp_mean: "float64"
@@ -159,6 +160,7 @@ data_loader:
       - "user_id"
       - "ai_group"
       - "math_table_id"
+      - "session_start_date"
       - "session_group"
       - "agg_group"
       - "min_created_at"
@@ -176,7 +178,7 @@ data_loader:
 
     cluster_stats_columns: ["user_id", "min_created_at", "balance_after_bet", "bet_amount", "fg_rounds"]
 
-  merge_on: ["user_id", "ai_group", "math_table_id", "session_group", "agg_group"]  # Column used to attach cluster index to attach_data.
+  merge_on: ["user_id", "ai_group", "math_table_id", "session_start_date", "session_group", "agg_group"]  # Column used to attach cluster index to attach_data.
 
 output:
   bucket: "bituslabs-team-ai"  # S3 bucket for output data
@@ -190,6 +192,7 @@ features:
     - "user_id"
     - "ai_group"
     - "math_table_id"
+    - "session_start_date"
     - "session_group"
     - "agg_group"
 

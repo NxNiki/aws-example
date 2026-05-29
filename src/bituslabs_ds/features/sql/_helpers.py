@@ -9,18 +9,32 @@ Conventions:
 from bituslabs_ds.features.config import AI_GROUP_PARTITION_IDS, GameFeatureConfig
 
 # Always-present aggregation key columns. ``cfg.partition_cols`` extends this.
-BASE_PARTITION_COLS: tuple[str, ...] = ("user_id", "ai_group", "session_group", "agg_group")
+BASE_PARTITION_COLS: tuple[str, ...] = (
+    "user_id",
+    "ai_group",
+    "session_start_date",
+    "session_group",
+    "agg_group",
+)
 
 
 def all_partition_cols(cfg: GameFeatureConfig) -> tuple[str, ...]:
     """Full aggregation key for stats_base / percentile CTEs / final join.
 
-    Order: ``user_id`` first, then ``ai_group``, then ``cfg.partition_cols``, then
-    ``session_group`` and ``agg_group``. Keeping the ordering deterministic is
-    what makes the snapshot SQL reproducible.
+    Order: ``user_id``, ``ai_group``, ``cfg.partition_cols``, then
+    ``session_start_date``, ``session_group``, ``agg_group``. ``session_start_date``
+    is the stable per-session identifier (date of the session's first bet);
+    ``session_group`` is a within-(user, session_start_date) ordinal so multiple
+    sessions on the same calendar date stay distinct.
     """
-    user, ai_group, session, agg = "user_id", "ai_group", "session_group", "agg_group"
-    return (user, ai_group, *cfg.partition_cols, session, agg)
+    return (
+        "user_id",
+        "ai_group",
+        *cfg.partition_cols,
+        "session_start_date",
+        "session_group",
+        "agg_group",
+    )
 
 
 def select_lines(cols: tuple[str, ...], alias: str = "t", indent: str = "    ") -> str:

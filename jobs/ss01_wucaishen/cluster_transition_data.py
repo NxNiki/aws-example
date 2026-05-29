@@ -15,7 +15,7 @@ import pandas as pd
 
 from bituslabs_ds.s3_utils import read_single_file
 
-MERGE_KEYS = ["user_id", "session_group", "agg_group"]
+MERGE_KEYS = ["user_id", "session_start_date", "session_group", "agg_group"]
 
 # Default S3 URIs for cluster label parquets (same as analysis_cluster_transition_stats)
 DEFAULT_CLUSTER_LABEL_URIS = [
@@ -85,7 +85,9 @@ def build_merged_with_transitions(
     merged = features_df.merge(cluster_df, on=keys, how="inner")
     merged = merged.drop_duplicates(subset=keys)
     merged = merged.sort_values(keys)
-    merged["next_cluster"] = merged.groupby(["user_id", "session_group"], group_keys=False)["cluster_label"].shift(-1)
+    merged["next_cluster"] = merged.groupby(["user_id", "session_start_date", "session_group"], group_keys=False)[
+        "cluster_label"
+    ].shift(-1)
     merged = merged.dropna(subset=["next_cluster"]).copy()
     merged["next_cluster"] = merged["next_cluster"].astype(int)
     merged["transition"] = "cluster" + merged["cluster_label"].astype(str) + ":" + merged["next_cluster"].astype(str)

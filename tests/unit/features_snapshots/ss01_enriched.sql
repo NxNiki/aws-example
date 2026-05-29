@@ -118,9 +118,15 @@ user_group AS (
         t.is_lose,
         t.prev_win,
         t.prev_lose,
-        SUM(CASE WHEN t.delta_t_seconds <= 604800 THEN 0 ELSE 1 END)
+        LAST_VALUE(
+            CASE
+                WHEN t.delta_t_seconds > 604800 OR t.delta_t_seconds IS NULL
+                    THEN t.min_created_at
+            END
+            IGNORE NULLS
+        )
             OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.min_created_at ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
-            AS session_group,
+            AS session_start_ts,
         SUM(CASE WHEN t.delta_t_seconds <= 200 THEN 0 ELSE 1 END)
             OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.min_created_at ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
             AS streak_group,
@@ -147,7 +153,12 @@ raw_stats AS (
     SELECT
         t.user_id,
         t.ai_group,
-        t.session_group,
+        CAST(t.session_start_ts AS DATE) AS session_start_date,
+        DENSE_RANK() OVER (
+            PARTITION BY t.user_id, CAST(t.session_start_ts AS DATE)
+            ORDER BY t.session_start_ts
+        ) - 1 AS session_group,
+        t.session_start_ts,
         t.min_created_at,
         t.max_created_at,
         CAST(t.min_created_at AS DATE) AS activity_date,
@@ -173,7 +184,7 @@ raw_stats AS (
             WHEN t.payout < t.bet_amount
                 THEN ROW_NUMBER() OVER (PARTITION BY t.user_id, t.lose_streak_group ORDER BY t.spin_id, t.min_created_at)
         END AS lose_streak,
-        ROUND((ROW_NUMBER() OVER (PARTITION BY t.user_id, t.session_group ORDER BY t.spin_id, t.min_created_at) - 1) / 40)
+        ROUND((ROW_NUMBER() OVER (PARTITION BY t.user_id, t.session_start_ts ORDER BY t.spin_id, t.min_created_at) - 1) / 40)
             AS agg_group
     FROM user_group AS t
 )

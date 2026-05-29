@@ -24,6 +24,7 @@ data_loader:
 
     data_types:
       user_id: "category"
+      session_start_date: "category"
       session_group: "category"
       agg_group: "category"
       rtp_mean: "float64"
@@ -153,6 +154,7 @@ data_loader:
 
     columns_to_read:  # Columns to read from original data files
       - "user_id"
+      - "session_start_date"
       - "session_group"
       - "agg_group"
       - "bet_amount"
@@ -166,7 +168,7 @@ data_loader:
       - "win_streak"
       - "lose_streak"
 
-  merge_on: ["user_id", "session_group", "agg_group"]  # Column used to attach cluster index to attach_data.
+  merge_on: ["user_id", "session_start_date", "session_group", "agg_group"]  # Column used to attach cluster index to attach_data.
 
 output:
   bucket: "bituslabs-team-ai"  # S3 bucket for output data
@@ -176,8 +178,9 @@ output:
     opset_version: 19  # ONNX opset version for model conversion
 
 features:
-  key_features:  
+  key_features:
     - "user_id"
+    - "session_start_date"
     - "session_group"
     - "agg_group"
   

@@ -96,7 +96,14 @@ class FeaturePipelineRunner:
         return ["user_id", "ai_group", *self.cfg.partition_cols, "spin_id"]
 
     def _grouped_key_cols(self) -> list[str]:
-        return ["user_id", "ai_group", *self.cfg.partition_cols, "session_group", "agg_group"]
+        return [
+            "user_id",
+            "ai_group",
+            *self.cfg.partition_cols,
+            "session_start_date",
+            "session_group",
+            "agg_group",
+        ]
 
     def _parse_args(self, argv: list[str] | None) -> argparse.Namespace:
         parser = argparse.ArgumentParser(
