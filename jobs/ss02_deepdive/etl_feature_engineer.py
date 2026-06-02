@@ -23,14 +23,14 @@ from bituslabs_ds.features import FeaturePipelineRunner, GameFeatureConfig
 CONFIG = GameFeatureConfig(
     game_id="SS02",
     output_prefix="output_ss02_feature_engineer",
-    date_start="2026-01-01",
-    date_end="2026-05-01",
+    date_start="2026-04-01",
+    date_end="2026-06-01",
     # SS02 has no AB_TEST partitions. Keep "AI" in ai_groups so the CASE +
     # WHERE filter properly bucket / exclude AI users.
     ai_groups=("AI", "Default"),
     selected_groups=("AI",),
     partition_cols=("math_table_id",),
-    session_length=100,
+    session_length=30,
 )
 
 

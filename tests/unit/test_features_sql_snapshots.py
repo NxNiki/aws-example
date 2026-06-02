@@ -58,12 +58,12 @@ SS01 = GameFeatureConfig(
 SS02 = GameFeatureConfig(
     game_id="SS02",
     output_prefix="output_ss02_feature_engineer",
-    date_start="2026-01-01",
-    date_end="2026-05-01",
+    date_start="2026-04-01",
+    date_end="2026-06-01",
     ai_groups=("AI", "Default"),
     selected_groups=("AI",),
     partition_cols=("math_table_id",),
-    session_length=100,
+    session_length=30,
 )
 
 SS03 = GameFeatureConfig(

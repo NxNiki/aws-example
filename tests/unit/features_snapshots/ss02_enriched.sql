@@ -21,8 +21,8 @@ WITH user_bets AS (
         END AS ai_group
     FROM public.fct_bet_orders AS t
     WHERE
-        t.created_at >= '2026-01-01'
-        AND t.created_at < '2026-05-01'
+        t.created_at >= '2026-04-01'
+        AND t.created_at < '2026-06-01'
         AND t.currency_type IN ('CNY')
         AND t.status = 'COMPLETED'
         AND t.game_id = 'SS02'
@@ -189,7 +189,7 @@ raw_stats AS (
             WHEN t.payout < t.bet_amount
                 THEN ROW_NUMBER() OVER (PARTITION BY t.user_id, t.lose_streak_group ORDER BY t.spin_id, t.min_created_at)
         END AS lose_streak,
-        ROUND((ROW_NUMBER() OVER (PARTITION BY t.user_id, t.session_start_ts ORDER BY t.spin_id, t.min_created_at) - 1) / 100)
+        ROUND((ROW_NUMBER() OVER (PARTITION BY t.user_id, t.session_start_ts ORDER BY t.spin_id, t.min_created_at) - 1) / 30)
             AS agg_group
     FROM user_group AS t
 )
