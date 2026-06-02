@@ -852,14 +852,19 @@ class ETLScheduler:
         # 3. Data Preparation & Partitioning
         # Ensure date_col is datetime objects for extraction
         df[date_col] = pd.to_datetime(df[date_col])
-        df["_processed_at"] = datetime.now()
 
+        # Add the bookkeeping + partition columns in a single concat rather than
+        # one assignment at a time: repeated df[col]=... inserts fragment a wide
+        # frame (these datasets have ~120 columns) and trigger pandas'
+        # PerformanceWarning. concat also returns a de-fragmented frame.
+        new_cols: dict[str, Any] = {"_processed_at": datetime.now()}
         if "year" in partition_cols:
-            df["year"] = df[date_col].dt.year
+            new_cols["year"] = df[date_col].dt.year
         if "month" in partition_cols:
-            df["month"] = df[date_col].dt.month
+            new_cols["month"] = df[date_col].dt.month
         if "day" in partition_cols:
-            df["day"] = df[date_col].dt.day
+            new_cols["day"] = df[date_col].dt.day
+        df = pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
         # --- Type Conversion and Error Handling ---
         for col in df.columns:

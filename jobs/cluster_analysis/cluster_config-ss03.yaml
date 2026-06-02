@@ -1,9 +1,11 @@
 # SS03 Mahjiang Streak Cluster Analysis Configuration
 # This file contains configuration specific to the ss03 clustering project.
-# Input files are produced by jobs/ss03_mahjiang_streak/etl_feature_engineer.py, which
-# writes timestamped parquet files into jobs/output_ss03_mahjiang_streak/ named
-# ss03_features_{grouped,enriched}_<groups_tag>_<YYYYMMDD_HHMMSS>.parquet.
-# Update the `local_cache` suffix below to match the specific ETL run you want to analyze.
+# Input files are produced by jobs/ss03_mahjiang_streak/etl_feature_engineer.py and
+# written by ETLScheduler to S3 under
+#   s3://bituslabs-team-ai/etl-results/jobs/output_ss03_feature_engineer/
+#     features_grouped/   (cluster_data below)
+#     features_enriched/  (attach_data below)
+# The pipeline pulls those S3 datasets and caches them locally under work_dir.
 
 project_name: "ss03_2026"  # Current analysis environment
 work_dir: "output_ss03_mahjiang_streak"  # Base working directory, where local cache of the input data will be saved.
@@ -11,20 +13,21 @@ s3_prefix: ""
 
 data_loader:
   cluster_data:  # data to train cluster model.
-    bucket: ""  # S3 bucket for input data
-    prefix: ""  # S3 prefix for input data
-    pattern: ''  # Pattern for grouped data files
+    bucket: "bituslabs-team-ai"  # S3 bucket for input data
+    prefix: "etl-results/jobs/output_ss03_feature_engineer/features_grouped/"  # S3 prefix for input data
+    pattern: '\.parquet$'  # Match every parquet file under the partitioned dataset
     row_filters:  # General row filtering; empty string / null / [] entries are skipped.
       currency: ""  # Filter to specific currency
       math_table_id: "normal_zero"  # Restrict to a single math table; scalar -> equality, list -> isin.
     outlier_threshold: 0  # z score to filter outliers
     clip_threshold: [.025, .975]
-    local_cache: "ss03_features_grouped_Default_20260512_163311.parquet"  # Update suffix to match ETL output.
+    local_cache: "ss03_features_grouped.parquet"  # Local cache of the merged S3 dataset.
 
     data_types:
       user_id: "category"
       ai_group: "category"
       math_table_id: "category"
+      session_start_date: "category"
       session_group: "category"
       agg_group: "category"
       rtp_mean: "float64"
@@ -144,19 +147,20 @@ data_loader:
       accum_withdraw_ratio: "float64"
 
   attach_data:  # data to attach cluster index.
-    bucket: ""  # S3 bucket for input data
-    prefix: ""  # S3 prefix for input data
-    pattern: ''  # Pattern for grouped data files
+    bucket: "bituslabs-team-ai"  # S3 bucket for input data
+    prefix: "etl-results/jobs/output_ss03_feature_engineer/features_enriched/"  # S3 prefix for input data
+    pattern: '\.parquet$'  # Match every parquet file under the partitioned dataset
     row_filters:  # General row filtering; empty string / null / [] entries are skipped.
       currency: ""  # Filter to specific currency
       math_table_id: "normal_zero"  # Restrict to a single math table; scalar -> equality, list -> isin.
     session_length: 100  # SS03 SESSION_LENGTH; rows whose (merge_on) group != session_length are dropped.
-    local_cache: "ss03_features_enriched_Default_20260513_162102.parquet"  # Update suffix to match ETL output.
+    local_cache: "ss03_features_enriched.parquet"  # Local cache of the merged S3 dataset.
 
     columns_to_read:  # Columns to read from original data files (match raw_stats CTE in etl_feature_engineer.py)
       - "user_id"
       - "ai_group"
       - "math_table_id"
+      - "session_start_date"
       - "session_group"
       - "agg_group"
       - "min_created_at"
@@ -174,7 +178,7 @@ data_loader:
 
     cluster_stats_columns: ["user_id", "min_created_at", "balance_after_bet", "bet_amount", "fg_rounds"]
 
-  merge_on: ["user_id", "ai_group", "math_table_id", "session_group", "agg_group"]  # Column used to attach cluster index to attach_data.
+  merge_on: ["user_id", "ai_group", "math_table_id", "session_start_date", "session_group", "agg_group"]  # Column used to attach cluster index to attach_data.
 
 output:
   bucket: "bituslabs-team-ai"  # S3 bucket for output data
@@ -188,6 +192,7 @@ features:
     - "user_id"
     - "ai_group"
     - "math_table_id"
+    - "session_start_date"
     - "session_group"
     - "agg_group"
 
