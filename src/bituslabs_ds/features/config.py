@@ -9,8 +9,9 @@ Adding a new game ideally requires only a new ``GameFeatureConfig``
 instance and a thin wrapper script — no new SQL.
 """
 
+import json
 import math
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 from bituslabs_ds.config import AB_TEST_GROUP_A, AB_TEST_GROUP_B, AI_GROUP_ID
 
@@ -24,6 +25,26 @@ AI_GROUP_PARTITION_IDS: dict[str, str] = {
 }
 
 _KNOWN_AI_GROUP_LABELS = set(AI_GROUP_PARTITION_IDS) | {"Default"}
+
+# Fields whose value determines what already-written rows *mean*. If any of
+# these changes, existing rows on S3 are incompatible with newly-computed rows
+# (e.g. agg_group buckets of 30 vs 100 bets), so an incremental append would
+# silently corrupt the dataset. The runner refuses to append on drift in these
+# fields and requires --overwrite. Cosmetic fields (date_start, output_prefix,
+# lookback_days) are deliberately excluded: changing them does not invalidate
+# rows already written.
+SEMANTIC_FIELDS: tuple[str, ...] = (
+    "game_id",
+    "ai_groups",
+    "selected_groups",
+    "partition_cols",
+    "session_length",
+    "max_session_interval_seconds",
+    "streak_threshold_seconds",
+    "max_session_gap_seconds",
+    "drop_incomplete_tail_groups",
+    "extra_where_clauses",
+)
 
 
 @dataclass(frozen=True)
@@ -125,3 +146,15 @@ class GameFeatureConfig:
         if self.lookback_days is not None:
             return self.lookback_days
         return math.ceil(self.max_session_interval_seconds / 86400) + 1
+
+    def to_dict(self) -> dict:
+        """Full config as a JSON-serializable dict (tuples become lists)."""
+        return json.loads(json.dumps(asdict(self)))
+
+    def semantic_signature(self) -> dict:
+        """Subset of the config (``SEMANTIC_FIELDS``) that, if changed, makes
+        already-written rows incompatible with new rows. Used by the runner's
+        drift guard to decide whether an incremental append is safe.
+        """
+        full = self.to_dict()
+        return {field: full[field] for field in SEMANTIC_FIELDS}
