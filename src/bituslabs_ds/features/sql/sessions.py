@@ -61,6 +61,13 @@ def build_user_group_cte(cfg: GameFeatureConfig) -> str:
             "        t.is_lose,",
             "        t.prev_win,",
             "        t.prev_lose,",
+            # session_start_ts: forward-fill the first bet's timestamp across the session.
+            # The CASE marks only session-start rows (gap > interval, or the user's first
+            # bet where delta_t IS NULL); every other row is NULL. LAST_VALUE(... IGNORE NULLS)
+            # over a CURRENT ROW-bounded frame carries the most recent marker forward, so each
+            # row gets its own session's start time. This is stable across incremental runs
+            # (unlike a cumulative session counter, whose value depends on how far back the
+            # query reached).
             "        LAST_VALUE(",
             "            CASE",
             f"                WHEN t.delta_t_seconds > {interval} OR t.delta_t_seconds IS NULL",
