@@ -2,13 +2,23 @@
 
 Adds the per-bet derived metrics that the grouped stats roll up:
 
+* ``session_start_date``: ``CAST(session_start_ts AS DATE)`` -- the date the
+  session began. Together with ``session_group`` it uniquely identifies a
+  session for a user (stable across runs).
+* ``session_group``: within-(user, session_start_date) ordinal starting at 0.
+  Mostly 0; only >=1 when a user has multiple sessions on the same calendar
+  date (rare with 7-day MAX_SESSION_INTERVAL; possible with the future 12-hour
+  threshold).
 * ``delta_t_seconds_nogap``: ``delta_t_seconds`` clamped (NULL above gap threshold)
 * ``profit``: ``payout - bet_amount``
 * ``deposit`` / ``withdraw``: split of ``balance_transaction``
 * ``streak`` / ``win_streak`` / ``lose_streak``: ROW_NUMBER within each *_group
-* ``agg_group``: floor((row - 1) / session_length) bucket id per session
-* ``activity_date``: ``CAST(min_created_at AS DATE)`` — used by ETLScheduler as
-  the watermark / partition column
+* ``agg_group``: floor((row - 1) / session_length) bucket id per session.
+  Partitions by ``session_start_ts`` (not by the within-date ordinal) so the
+  bucketing is stable across runs.
+* ``activity_date``: ``CAST(min_created_at AS DATE)`` -- ETLScheduler's
+  watermark / partition column. Note this is the bet's date, not the
+  session's start date.
 """
 
 from bituslabs_ds.features.config import GameFeatureConfig
@@ -30,7 +40,12 @@ def build_raw_stats_cte(cfg: GameFeatureConfig) -> str:
         lines.append(f"        t.{col},")
     lines.extend(
         [
-            "        t.session_group,",
+            "        CAST(t.session_start_ts AS DATE) AS session_start_date,",
+            "        DENSE_RANK() OVER (",
+            "            PARTITION BY t.user_id, CAST(t.session_start_ts AS DATE)",
+            "            ORDER BY t.session_start_ts",
+            "        ) - 1 AS session_group,",
+            "        t.session_start_ts,",
             "        t.min_created_at,",
             "        t.max_created_at,",
             "        CAST(t.min_created_at AS DATE) AS activity_date,",
@@ -56,7 +71,7 @@ def build_raw_stats_cte(cfg: GameFeatureConfig) -> str:
             "            WHEN t.payout < t.bet_amount",
             f"                THEN ROW_NUMBER() OVER (PARTITION BY t.user_id, t.lose_streak_group {_ORDER})",
             "        END AS lose_streak,",
-            f"        ROUND((ROW_NUMBER() OVER (PARTITION BY t.user_id, t.session_group {_ORDER}) - 1) / {n})",
+            f"        ROUND((ROW_NUMBER() OVER (PARTITION BY t.user_id, t.session_start_ts {_ORDER}) - 1) / {n})",
             "            AS agg_group",
             "    FROM user_group AS t",
             ")",

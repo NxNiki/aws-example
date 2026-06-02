@@ -8,6 +8,9 @@ for the grouped output).
 
 import argparse
 import logging
+from datetime import datetime, timezone
+
+from botocore.exceptions import ClientError
 
 from bituslabs_ds.config import (
     DEFAULT_BASTION_IP,
@@ -20,10 +23,37 @@ from bituslabs_ds.config import (
     setup_logging,
 )
 from bituslabs_ds.etl import DataLoader, ETLScheduler, RedshiftBackend
-from bituslabs_ds.features.config import GameFeatureConfig
+from bituslabs_ds.features.config import SEMANTIC_FIELDS, GameFeatureConfig
 from bituslabs_ds.features.sql.pipeline import compose_enriched_query, compose_grouped_query
+from bituslabs_ds.s3_utils import read_json_from_s3, write_json_to_s3
 
 logger = logging.getLogger(__name__)
+
+# Sidecar written at the dataset root (the output_prefix dir, parent of
+# features_enriched/ and features_grouped/). It records the config that produced
+# the dataset so a later run can detect incompatible-semantics drift. The name
+# starts with '_' and ends in .json so the cluster loaders' ``\.parquet$`` glob
+# never picks it up.
+_CONFIG_SIDECAR_NAME = "_feature_config.json"
+
+# S3 error codes that mean "sidecar not written yet" (first run / pre-sidecar
+# dataset) rather than a real failure.
+_MISSING_OBJECT_CODES = {"NoSuchKey", "404", "NoSuchBucket"}
+
+
+def _read_config_sidecar(sidecar_path: str) -> dict | None:
+    """Return the parsed sidecar dict, or None if it doesn't exist yet.
+
+    Re-raises any S3 error that isn't a missing-object error, so genuine
+    permission / connectivity problems aren't silently swallowed.
+    """
+    try:
+        return read_json_from_s3(sidecar_path)
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "")
+        if code in _MISSING_OBJECT_CODES:
+            return None
+        raise
 
 
 class FeaturePipelineRunner:
@@ -44,9 +74,10 @@ class FeaturePipelineRunner:
 
         if self.cfg.requires_full_history and not args.overwrite:
             logger.warning(
-                "%s feature pipeline requires full prior history for session/streak window "
-                "functions, but --overwrite was not passed. Session and streak values near "
-                "the watermark may be wrong. Re-run with --overwrite for the canonical result.",
+                "%s: requires_full_history=True but --overwrite was not passed. "
+                "Pass --overwrite when the SQL semantics have changed (new columns, "
+                "different thresholds, etc.) so the existing S3 dataset is recomputed "
+                "from scratch under the new logic.",
                 self.cfg.game_id,
             )
 
@@ -70,7 +101,18 @@ class FeaturePipelineRunner:
     # ------------------------------------------------------------------
     def run(self, loader: DataLoader, *, overwrite: bool = False) -> None:
         storage_root = f"{DEFAULT_ETL_OUTPUT}/jobs/{self.cfg.output_prefix}"
-        scheduler = ETLScheduler(loader, storage_root, lookback_days=3, overwrite=overwrite)
+        sidecar_path = f"{storage_root}/{_CONFIG_SIDECAR_NAME}"
+
+        # Fail fast (before any Redshift work) if the existing dataset was built
+        # with incompatible semantics and this isn't an --overwrite rebuild.
+        self._check_config_drift(sidecar_path, overwrite=overwrite)
+
+        scheduler = ETLScheduler(
+            loader,
+            storage_root,
+            lookback_days=self.cfg.effective_lookback_days(),
+            overwrite=overwrite,
+        )
         scheduler.default_start_date = self.cfg.date_start
 
         scheduler.run_incremental_job(
@@ -89,6 +131,58 @@ class FeaturePipelineRunner:
             partition_level="month",
         )
 
+        # Record the config that produced this dataset, for provenance and for
+        # the next run's drift check.
+        self._write_config_sidecar(sidecar_path)
+
+    # ------------------------------------------------------------------
+    # Config sidecar / drift guard
+    # ------------------------------------------------------------------
+    def _check_config_drift(self, sidecar_path: str, *, overwrite: bool) -> None:
+        """Hard-fail if the existing dataset's semantic config differs from the
+        current one and we're not doing an --overwrite rebuild.
+
+        No sidecar (first run, or a pre-sidecar dataset) -> no check. Pair the
+        initial run of a pre-sidecar dataset with --overwrite to re-seed it.
+        """
+        existing = _read_config_sidecar(sidecar_path)
+        if existing is None:
+            return
+
+        prev_cfg = existing.get("config", {})
+        diffs = {
+            field: {"existing": prev_cfg.get(field), "current": cur_value}
+            for field, cur_value in self.cfg.semantic_signature().items()
+            if prev_cfg.get(field) != cur_value
+        }
+        if not diffs:
+            return
+
+        if overwrite:
+            logger.warning(
+                "%s: feature config drift detected, but --overwrite was passed; "
+                "rebuilding the dataset from scratch under the new config. Changed: %s",
+                self.cfg.game_id,
+                diffs,
+            )
+            return
+
+        raise RuntimeError(
+            f"{self.cfg.game_id}: feature config drift vs the existing dataset at {sidecar_path}.\n"
+            f"Changed semantic fields (existing -> current): {diffs}\n"
+            "Rows already on S3 were produced under different semantics and cannot be "
+            "safely appended (e.g. agg_group buckets would mix different session_length "
+            "values). Re-run with --overwrite to rebuild the dataset from scratch."
+        )
+
+    def _write_config_sidecar(self, sidecar_path: str) -> None:
+        payload = {
+            "config": self.cfg.to_dict(),
+            "semantic_fields": list(SEMANTIC_FIELDS),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        write_json_to_s3(payload, sidecar_path)
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
@@ -96,7 +190,14 @@ class FeaturePipelineRunner:
         return ["user_id", "ai_group", *self.cfg.partition_cols, "spin_id"]
 
     def _grouped_key_cols(self) -> list[str]:
-        return ["user_id", "ai_group", *self.cfg.partition_cols, "session_group", "agg_group"]
+        return [
+            "user_id",
+            "ai_group",
+            *self.cfg.partition_cols,
+            "session_start_date",
+            "session_group",
+            "agg_group",
+        ]
 
     def _parse_args(self, argv: list[str] | None) -> argparse.Namespace:
         parser = argparse.ArgumentParser(
@@ -113,7 +214,8 @@ class FeaturePipelineRunner:
             action="store_true",
             help=(
                 "Overwrite existing S3 output (full reload from date_start). "
-                "Recommended for this job because session/streak window functions need full prior history."
+                "Use when SQL semantics changed (new columns, threshold changes) "
+                "so the dataset is recomputed from scratch."
             ),
         )
         return parser.parse_args(argv)

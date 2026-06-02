@@ -9,7 +9,9 @@ Adding a new game ideally requires only a new ``GameFeatureConfig``
 instance and a thin wrapper script — no new SQL.
 """
 
-from dataclasses import dataclass
+import json
+import math
+from dataclasses import asdict, dataclass
 
 from bituslabs_ds.config import AB_TEST_GROUP_A, AB_TEST_GROUP_B, AI_GROUP_ID
 
@@ -23,6 +25,26 @@ AI_GROUP_PARTITION_IDS: dict[str, str] = {
 }
 
 _KNOWN_AI_GROUP_LABELS = set(AI_GROUP_PARTITION_IDS) | {"Default"}
+
+# Fields whose value determines what already-written rows *mean*. If any of
+# these changes, existing rows on S3 are incompatible with newly-computed rows
+# (e.g. agg_group buckets of 30 vs 100 bets), so an incremental append would
+# silently corrupt the dataset. The runner refuses to append on drift in these
+# fields and requires --overwrite. Cosmetic fields (date_start, output_prefix,
+# lookback_days) are deliberately excluded: changing them does not invalidate
+# rows already written.
+SEMANTIC_FIELDS: tuple[str, ...] = (
+    "game_id",
+    "ai_groups",
+    "selected_groups",
+    "partition_cols",
+    "session_length",
+    "max_session_interval_seconds",
+    "streak_threshold_seconds",
+    "max_session_gap_seconds",
+    "drop_incomplete_tail_groups",
+    "extra_where_clauses",
+)
 
 
 @dataclass(frozen=True)
@@ -58,10 +80,15 @@ class GameFeatureConfig:
             ``agg_group`` per session is dropped.
         extra_where_clauses: additional AND-conjuncted WHERE clauses appended to
             ``user_bets`` (e.g. ``("t.script_id = 'giftShop'",)`` for ss01).
-        requires_full_history: when ``True``, the runner forces / warns about
-            ``--overwrite``. The window functions used here are not
-            incremental-safe -- rows near the watermark would compute session
-            and streak values from a truncated history.
+        requires_full_history: when ``True``, the runner emits a warning if
+            ``--overwrite`` was not passed. Set this when the SQL semantics
+            change (new columns, threshold updates) and existing data on S3
+            needs a full recomputation. With stable session IDs +
+            ``effective_lookback_days()`` the normal incremental run is safe,
+            so the default is ``False``.
+        lookback_days: explicit override for ETLScheduler lookback. ``None`` ->
+            derive from ``max_session_interval_seconds`` via
+            ``effective_lookback_days()``.
     """
 
     game_id: str
@@ -77,7 +104,10 @@ class GameFeatureConfig:
     max_session_gap_seconds: int = 60 * 60
     drop_incomplete_tail_groups: bool = False
     extra_where_clauses: tuple[str, ...] = ()
-    requires_full_history: bool = True
+    requires_full_history: bool = False
+    # Explicit override for ETLScheduler lookback. ``None`` -> derive from
+    # ``max_session_interval_seconds`` via ``effective_lookback_days()``.
+    lookback_days: int | None = None
 
     def __post_init__(self) -> None:
         if not self.ai_groups:
@@ -94,3 +124,37 @@ class GameFeatureConfig:
                 f"selected_groups contains labels not in ai_groups: {sorted(unknown_sel)}. "
                 f"ai_groups: {self.ai_groups}."
             )
+
+    def effective_lookback_days(self) -> int:
+        """ETLScheduler lookback derived from ``max_session_interval_seconds``.
+
+        Formula: ``ceil(max_session_interval_seconds / 86400) + 1`` -- one full
+        ``max_session_interval`` plus a one-day safety buffer. Examples:
+
+        * 12-hour ``max_session_interval_seconds`` -> 2 days
+        * 7-day ``max_session_interval_seconds`` -> 8 days
+
+        Any session that started within the lookback window has its first bet
+        captured by the query, so ``session_start_ts`` (and therefore
+        ``session_start_date`` + ``session_group``) is computed correctly.
+        Sessions that began *before* the lookback window are not re-queried;
+        their existing rows in S3 stay untouched.
+
+        ``lookback_days`` on the config overrides this if explicitly set
+        (e.g. for users known to bet continuously beyond the formula's buffer).
+        """
+        if self.lookback_days is not None:
+            return self.lookback_days
+        return math.ceil(self.max_session_interval_seconds / 86400) + 1
+
+    def to_dict(self) -> dict:
+        """Full config as a JSON-serializable dict (tuples become lists)."""
+        return json.loads(json.dumps(asdict(self)))
+
+    def semantic_signature(self) -> dict:
+        """Subset of the config (``SEMANTIC_FIELDS``) that, if changed, makes
+        already-written rows incompatible with new rows. Used by the runner's
+        drift guard to decide whether an incremental append is safe.
+        """
+        full = self.to_dict()
+        return {field: full[field] for field in SEMANTIC_FIELDS}
