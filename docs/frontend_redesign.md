@@ -281,7 +281,8 @@ The legacy Dash app keeps serving production until each tab reaches parity.
 **Phase 0 — Foundations (1–2 wks)** — *scaffolded in this PR*
 - ✅ `frontend/` scaffolded (Vite + React + TS + Tailwind, Zustand, ECharts) with a HelloDashboard smoke page driving the full stack.
 - ✅ `src/dashboard_api/` stood up with `/api/health`, `/api/data/configs`, `/api/data/config/{id}`, `/api/data/series`; `dashboard_api` poetry group + multi-stage Docker image (vite build → uvicorn).
-- ⬜ Remaining: generate the TS client from OpenAPI (replace the hand-written `frontend/src/api/types.ts`); add CI (lint/typecheck/test both sides — no `.github/` exists yet); ECS deploy wiring (`deploy_ecs.py`) + ALB `/v2` path beside the live app.
+- ✅ TS client generated from OpenAPI: `python -m dashboard_api.openapi` dumps the schema → `openapi-typescript` → `frontend/src/api/schema.d.ts`; typed `openapi-fetch` client in `client.ts`. One command: `make openapi`.
+- ⬜ Remaining: add CI (lint/typecheck/test both sides — no `.github/` exists yet); ECS deploy wiring (`deploy_ecs.py`) + ALB `/v2` path beside the live app.
 - Note: `/api/data/series` uses a placeholder per-date aggregation; user-row enrichment parity is Phase 1.
 
 **Phase 1 — First read-only tab (1–2 wks)**
