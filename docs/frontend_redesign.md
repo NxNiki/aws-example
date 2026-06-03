@@ -109,25 +109,27 @@ Node appears **only as a build-time tool** (`vite build`); it never runs in prod
 └───────────────────────────┬────────────────────────────────────-─┘
                   REST (JSON) + SSE (token / tool / action / clarify)
                             │
-┌───────────────────────────┴──────────────────────────────────────┐
-│  FastAPI backend (Python, uvicorn on ECS Fargate)                  │
-│                                                                    │
-│   /api/data/*      series + metadata (polars/S3) — returns DATA    │
-│   /api/agent/chat  streaming agent (SSE): tokens, tools, actions,  │
-│                    clarify questions                               │
-│   /api/agent/explain  per-chart contextual actions (SSE)           │
-│   /api/report/*    spec CRUD + regenerate + description/summary +  │
-│                    Confluence export                               │
-│   /api/skills      list agent skills (from skills.md)              │
-│                                                                    │
-│   ├── bituslabs_ds   (ETL, S3, polars)        ── unchanged         │
-│   ├── agent core     (LangGraph, tools)       ── from ai_agent     │
-│   ├── ReportSpec     (Pydantic schema)        ── NEW               │
-│   └── skills.md      (agent skill registry)   ── NEW               │
-└───────────────────────────┬──────────────────────────────────────┘
-                            │
-                    S3: parquet cache + saved Report Specs
+                   ALB (one origin, path-routed)
+              ┌─────────────┴──────────────┐
+   /api/agent/*│                            │ everything else
+┌──────────────┴────────────┐   ┌───────────┴───────────────────────────┐
+│  ai_agent (heavy, ECS)     │   │  dashboard_api (light, ECS)            │
+│  uvicorn + LangGraph       │   │  uvicorn, LLM-free, Plotly/kaleido-free│
+│                            │   │                                        │
+│  /api/agent/chat   (SSE)   │   │  /api/data/*    series+metadata (DATA) │
+│  /api/agent/explain(SSE)   │   │  /api/report/*  spec CRUD + regenerate │
+│  /api/report/desc & summary│◄──┤                 + export (client PNG)  │
+│    (LLM one-shot, called   │   │  /api/skills    list skills (skills.md)│
+│     by dashboard_api)      │   │  serves static SPA (frontend/dist)     │
+│  Slack bot                 │   │                                        │
+│  ├ agent core (LangGraph)  │   │  ├ bituslabs_ds (ETL/S3/polars)        │
+│  └ bituslabs_ds (direct)   │   │  └ ReportSpec + skills.md (NEW)        │
+└──────────────┬─────────────┘   └───────────┬────────────────────────────┘
+               └───────────────┬─────────────┘
+                    S3: parquet cache + versioned Report Specs
 ```
+
+Both services import the shared `bituslabs_ds` library directly (no HTTP hop for data). The single library-vs-service distinction: `bituslabs_ds` and the report-generation helpers are *libraries* both services import; the *service* boundary exists only for deploy/scaling/dependency isolation. The lone cross-service call is `dashboard_api` → `ai_agent` for LLM-bound description/summary generation during report regeneration.
 
 **The "agent drives the dashboard" loop:**
 1. The store holds canonical state: active game config, active tab, selected metrics, date ranges, figures, and the current Report Spec.
@@ -154,7 +156,7 @@ Single-sourced: FastAPI Pydantic models → OpenAPI → generated TS client. Bot
 | `/api/report/regenerate` | POST | Given a spec (+ optional period override), re-fetch data and return rendered figures + (re)generated descriptions/summary | optional SSE |
 | `/api/report/description` | POST | Generate/regenerate one figure description (existing logic, ported) | optional SSE |
 | `/api/report/summary` | POST | Generate the overall summary (existing) | optional SSE |
-| `/api/report/export` | POST | Export the rendered report to Confluence (existing exporter) | — |
+| `/api/report/export` | POST | Export to Confluence — client posts the ECharts-rendered PNG(s) + text; server embeds (no server-side chart rendering) | — |
 | `/api/skills` | GET | List agent skills parsed from `skills.md` (name, description, params) | — |
 | `/api/metadata/columns`, `/columns/{name}`, `/groups` | GET | Column/group metadata (existing) | — |
 | `/api/health` | GET | Health check | — |
@@ -252,20 +254,23 @@ frontend/                         # NEW — React + Vite + TS SPA
 │   └── components/  theme/
 └── tests/                        # Vitest + Playwright
 
-src/dashboard_api/                # NEW (or merged into ai_agent)
+src/dashboard_api/                # NEW — light service (LLM-free), serves the SPA
 ├── app.py                        # FastAPI app mounting the routers below
-├── routers/  data.py  agent.py  report.py  skills.py  metadata.py
+├── routers/  data.py  report.py  skills.py  metadata.py
 ├── schemas/
 │   ├── actions.py                # DashboardAction union (mirrors frontend)
 │   └── report_spec.py            # ReportSpec (mirrors frontend)
-└── skills.md                     # agent skill registry
+├── skills.md                     # agent skill registry
+└── (imports bituslabs_ds, confluence_client; calls ai_agent for LLM text)
 
-src/bituslabs_ds/                 # UNCHANGED — data layer
-src/ai_agent/                     # agent core reused (chat_agent, tools, metadata, exporter)
-infra/dashboard/                  # updated: vite build + serve static + FastAPI
+src/bituslabs_ds/                 # UNCHANGED — data layer (library, imported by both)
+src/ai_agent/                     # heavy service: streaming agent + Slack
+│   └── routers/ agent.py         # /api/agent/chat, /api/agent/explain (SSE)
+│       + report description/summary generation (LLM one-shot, reused)
+infra/dashboard/  infra/ai_agent/ # updated: dashboard builds vite + serves static
 ```
 
-Static serving (Phase 1): `vite build` → `frontend/dist`, served by FastAPI `StaticFiles` at `/` (single container, single ALB target). Revisit S3+CloudFront if bundle/CDN concerns arise.
+Static serving (Phase 1): `vite build` → `frontend/dist`, served by `dashboard_api` via FastAPI `StaticFiles` at `/`. Revisit S3+CloudFront if bundle/CDN concerns arise.
 
 ---
 
@@ -301,9 +306,9 @@ Rough estimate: ~10–14 weeks; each phase independently shippable.
 
 ## 9. Deployment changes
 
-- **Build**: multi-stage Docker — stage 1 `vite build` (Node *build-time only*), stage 2 the Python/uvicorn runtime serving the API + `frontend/dist`. Node never runs in prod.
-- **ECS**: same Fargate pattern; the consolidated API replaces/sits beside the current dashboard + ai_agent services; reuse `infra/shared/ecs_helpers.py`.
-- **ALB routing**: during migration, path-based (`/legacy` → Dash, `/` → React); single target after cutover.
+- **Build**: `dashboard_api` uses a multi-stage Docker build — stage 1 `vite build` (Node *build-time only*), stage 2 the Python/uvicorn runtime serving the API + `frontend/dist`. Node never runs in prod. `ai_agent` keeps its existing build.
+- **ECS**: two Fargate services — `dashboard_api` (light, replaces the old Dash service) and `ai_agent` (existing); reuse `infra/shared/ecs_helpers.py`. Net service count unchanged vs. today.
+- **ALB routing**: `/api/agent/*` → `ai_agent`, everything else → `dashboard_api`, so the SPA sees one origin. During migration, also `/legacy` → Dash; drop it after cutover.
 - **Scale-to-zero**: preserve the `Dashboard/UserRequestCount` CloudWatch emission (move the after-request hook into FastAPI middleware).
 - **Secrets/auth**: unchanged — `aws_secrets`, Confluence token, LLM keys via Secrets Manager; ALB behind SSO/VPN. New: S3 read/write for saved Report Specs (extend the task role).
 
@@ -325,12 +330,12 @@ Rough estimate: ~10–14 weeks; each phase independently shippable.
 
 ## 11. Open questions
 
-1. **Consolidate vs. two services** — fold the data API into `ai_agent`, or a separate `dashboard_api` that imports the agent core? (Leaning: one `dashboard_api` to avoid an extra hop.)
-2. **Report Spec storage** — flat JSON/YAML in S3 vs. a small DynamoDB table (for listing/versioning/per-user specs)? Start with S3 + prefix-per-report.
-3. **Skills format** — plain `skills.md` parsed by the backend vs. adopting a structured skills framework. Start with markdown + a light parser.
-4. **State store** — Zustand (leaning) vs. Redux Toolkit.
-5. **Agent-UI library** — adopt `assistant-ui`/Vercel AI SDK components vs. a thin custom chat UI over our SSE format (evaluate in Phase 3).
-6. **Auth** — does per-user report state / agent-action auditing warrant in-app auth, or stay ALB/SSO-only?
+1. **Skills format** — plain `skills.md` parsed by the backend vs. adopting a structured skills framework. Start with markdown + a light parser.
+2. **State store** — Zustand (leaning) vs. Redux Toolkit.
+3. **Agent-UI library** — adopt `assistant-ui`/Vercel AI SDK components vs. a thin custom chat UI over our SSE format (evaluate in Phase 3).
+4. **Auth** — does per-user report state / agent-action auditing warrant in-app auth, or stay ALB/SSO-only?
+
+*Resolved (see §12): service topology (two services behind one ALB origin) and Report Spec storage (S3 with versioning).*
 
 ---
 
@@ -340,3 +345,6 @@ Rough estimate: ~10–14 weeks; each phase independently shippable.
 - **2026-06-03** — **TypeScript over JavaScript** (compiler-enforced action + ReportSpec contracts, discriminated-union exhaustiveness, safer large rewrite).
 - **2026-06-03** — **ECharts** as the chart renderer, and the **backend returns data series, not figure specs** — decoupling the renderer so the agent can treat charts as data and chart types can be tuned/swapped without backend changes. Rejected `react-plotly.js` (unmaintained wrapper, full ~3 MB bundle, Plotly lock-in). Plotly-direct considered as a parity shortcut but dropped per the no-compromise directive.
 - **2026-06-03** — Adopted the **Report Spec** primitive ("data that can recover the report") + a markdown **skills** registry to deliver schema-driven report regeneration and NL-driven UI control with clarifying questions.
+- **2026-06-03** — **Two services behind one ALB origin**, not one consolidated service. A new lightweight `dashboard_api` (data + report orchestration + static SPA) and the existing `ai_agent` (streaming LangGraph agent + Slack). ALB path-routes `/api/agent/*` → `ai_agent`, everything else → `dashboard_api`, so the SPA sees one origin. Rationale: shared logic lives in libraries (`bituslabs_ds`, report generation) so the agent reaches data via direct imports, not HTTP hops; the only cross-service call is LLM-bound description/summary generation where a hop is negligible. Keeps the data service LLM-free (and Plotly/kaleido-free — see export note) for a small image + independent scaling/timeouts + smaller blast radius. Net service count is unchanged (the old Dash service is replaced by `dashboard_api`).
+- **2026-06-03** — **Report Spec storage = S3 with bucket versioning** (`report_specs/{id}.json`), not DynamoDB. Zero new infra (reuses the bucket, task role, and `s3_utils`); S3 object versioning gives free revert history that maps directly to the agent-edit/undo flow; the access pattern (load-by-id + list ~tens) needs no database. Concurrency handled by last-writer-wins, optionally a conditional `If-Match` write. Revisit DynamoDB only for per-user spec libraries with attribute queries at scale.
+- **2026-06-03** — **Confluence export sends a client-rendered PNG.** Because charts are now ECharts on the client, the browser exports the canvas (`getDataURL`) and POSTs the image to `/api/report/export`; the server embeds it. This removes server-side Plotly/kaleido entirely, keeping `dashboard_api` light.
