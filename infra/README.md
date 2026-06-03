@@ -7,7 +7,8 @@ operational details. Shared deploy plumbing lives in `shared/`.
 | Folder | Purpose | Entry points |
 | --- | --- | --- |
 | [`shared/`](shared/) | Common deploy helpers + base Docker image | `ecs_helpers.py`, `Dockerfile.base`, `build_base.sh` |
-| [`dashboard/`](dashboard/README.md) | Dash web app on ECS Fargate behind an ALB | `deploy_ecs.py`, `build.sh`, `Dockerfile` |
+| [`dashboard/`](dashboard/README.md) | Dash web app on ECS Fargate behind an ALB (legacy; being replaced) | `deploy_ecs.py`, `build.sh`, `Dockerfile` |
+| [`dashboard_api/`](dashboard_api/README.md) | New React SPA + data/report API (FastAPI) on ECS Fargate | `build.sh`, `Dockerfile` |
 | [`ai_agent/`](ai_agent/README.md) | FastAPI chat service + Slack bot on ECS Fargate | `deploy_ecs.py`, `build.sh`, `Dockerfile` |
 | [`rag_service/`](rag_service/) | RAG retrieval microservice on ECS Fargate | `deploy_ecs.py`, `build.sh`, `Dockerfile`, `docker-compose.opensearch.yml` |
 | [`etl/`](etl/README.md) | Fargate-scheduled ETL jobs (EventBridge → ECS) | `build.sh`, `setup_schedule.sh`, `ecs_task_def.json`, `Dockerfile` |
