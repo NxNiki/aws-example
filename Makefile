@@ -1,6 +1,6 @@
 # Makefile for bituslabs_ds project
 
-.PHONY: help install install-dev test test-unit test-integration test-coverage test-fast lint format clean build docs
+.PHONY: help install install-dev test test-unit test-integration test-coverage test-fast lint format clean build docs openapi
 
 # Default target
 help:
@@ -14,6 +14,7 @@ help:
 	@echo "  test-fast      Run fast tests (exclude slow tests)"
 	@echo "  lint           Run linting checks"
 	@echo "  format         Format code with black and isort"
+	@echo "  openapi        Regenerate the dashboard_api OpenAPI schema + frontend TS client"
 	@echo "  clean          Clean build artifacts"
 	@echo "  build          Build the package"
 	@echo "  docs           Build documentation"
@@ -54,6 +55,11 @@ lint:
 format:
 	poetry run black src/ tests/
 	poetry run isort src/ tests/
+
+# Regenerate the OpenAPI schema from dashboard_api and the frontend's typed
+# client from it. Run after changing any dashboard_api request/response model.
+openapi:
+	bash scripts/gen_openapi_client.sh
 
 # Build and clean
 clean:
