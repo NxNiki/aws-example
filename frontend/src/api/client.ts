@@ -1,30 +1,39 @@
+import createClient from "openapi-fetch";
+import type { paths } from "./schema";
 import type { ConfigDetail, ConfigList, SeriesRequest, SeriesResponse } from "./types";
 
-const BASE = import.meta.env.VITE_API_BASE ?? "";
+// Typed client generated from the OpenAPI schema: paths, params, request
+// bodies, and responses are all checked against dashboard_api's contract.
+const client = createClient<paths>({ baseUrl: import.meta.env.VITE_API_BASE ?? "" });
 
-async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`);
-  if (!res.ok) {
-    throw new Error(`GET ${path} failed: ${res.status} ${await res.text()}`);
-  }
-  return (await res.json()) as T;
-}
-
-async function postJson<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    throw new Error(`POST ${path} failed: ${res.status} ${await res.text()}`);
-  }
-  return (await res.json()) as T;
+function fail(path: string, error: unknown): never {
+  throw new Error(`${path} failed: ${JSON.stringify(error)}`);
 }
 
 export const api = {
-  health: () => getJson<{ status: string; service: string }>("/api/health"),
-  listConfigs: () => getJson<ConfigList>("/api/data/configs"),
-  getConfig: (id: string) => getJson<ConfigDetail>(`/api/data/config/${encodeURIComponent(id)}`),
-  series: (req: SeriesRequest) => postJson<SeriesResponse>("/api/data/series", req),
+  health: async (): Promise<Record<string, string>> => {
+    const { data, error } = await client.GET("/api/health");
+    if (error || !data) fail("GET /api/health", error);
+    return data as Record<string, string>;
+  },
+
+  listConfigs: async (): Promise<ConfigList> => {
+    const { data, error } = await client.GET("/api/data/configs");
+    if (error || !data) fail("GET /api/data/configs", error);
+    return data;
+  },
+
+  getConfig: async (id: string): Promise<ConfigDetail> => {
+    const { data, error } = await client.GET("/api/data/config/{config_id}", {
+      params: { path: { config_id: id } },
+    });
+    if (error || !data) fail(`GET /api/data/config/${id}`, error);
+    return data;
+  },
+
+  series: async (body: SeriesRequest): Promise<SeriesResponse> => {
+    const { data, error } = await client.POST("/api/data/series", { body });
+    if (error || !data) fail("POST /api/data/series", error);
+    return data;
+  },
 };
