@@ -191,6 +191,14 @@ class ClusterAnalysisPipeline:
         return val
 
     @property
+    def remove_short_sessions(self) -> bool:
+        return bool(self._config["data_loader"]["cluster_data"].get("remove_short_sessions", False))
+
+    @property
+    def session_count_column(self) -> str:
+        return self._config["data_loader"]["cluster_data"].get("session_count_column", "bet_rounds")
+
+    @property
     def cluster_stats_columns(self):
         return self._config["data_loader"]["attach_data"]["cluster_stats_columns"]
 
@@ -269,6 +277,10 @@ class ClusterAnalysisPipeline:
             files = self._cluster_data_files
             output_file = self._config["data_loader"]["cluster_data"]["local_cache"]
             columns = self.key_features + self.normal_features + self.skewed_features
+            # The session-count column (e.g. bet_rounds) is not a feature; read it so
+            # load_cluster_data can drop incomplete bins.
+            if self.remove_short_sessions and self.session_count_column not in columns:
+                columns = columns + [self.session_count_column]
             row_filters = self._config["data_loader"]["cluster_data"]["row_filters"]
             data_types = self.get_data_types("cluster_data")
         else:
@@ -352,14 +364,21 @@ class ClusterAnalysisPipeline:
             )
         else:
             data = self.load_raw_data(data_label="cluster_data")
-            data = data[data["group_num"] == self.session_length]
-            merge_ts = pd.to_datetime(data["start_time"], errors="coerce")
-            if isinstance(merge_ts, pd.DatetimeIndex):
-                merge_ts = pd.Series(merge_ts.to_numpy(), index=data.index, dtype="datetime64[ns]")
-            data["merge_date"] = merge_ts.dt.strftime("%Y_%m_%d")
-            # check if we have duplidated sample:
-            dup_subset = data.loc[:, ["group_id", "merge_date"]]
-            duplicated = dup_subset.duplicated()
+            # Drop incomplete bins: keep only the longest sessions (count == its max);
+            # shorter ones are partial sessions and would skew the per-group stats.
+            if self.remove_short_sessions:
+                col = self.session_count_column
+                max_count = data[col].max()
+                before = len(data)
+                data = data[data[col] >= max_count]
+                logger.info(
+                    f"remove_short_sessions: dropped {before - len(data)} of {before} rows "
+                    f"with {col} < {max_count}; {len(data)} rows remain"
+                )
+            # Drop duplicate samples: the merge_on tuple is the unique grouping grain,
+            # so the same group re-emitted across overlapping partition files is a dup.
+            merge_cols = [self.merge_features] if isinstance(self.merge_features, str) else list(self.merge_features)
+            duplicated = data.duplicated(subset=merge_cols)
             if duplicated.any():
                 logger.warning(f"duplicated samples found in cluster data: {duplicated.sum()} / {len(data)}")
                 # data = data.drop_duplicates(keep="first")

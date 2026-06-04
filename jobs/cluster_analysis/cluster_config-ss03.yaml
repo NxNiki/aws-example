@@ -7,20 +7,23 @@
 #     features_enriched/  (attach_data below)
 # The pipeline pulls those S3 datasets and caches them locally under work_dir.
 
-project_name: "ss03_2026"  # Current analysis environment
+project_name: "ss03_2026_06"  # Current analysis environment
 work_dir: "output_ss03_mahjiang_streak"  # Base working directory, where local cache of the input data will be saved.
 s3_prefix: ""
 
 data_loader:
   cluster_data:  # data to train cluster model.
     bucket: "bituslabs-team-ai"  # S3 bucket for input data
-    prefix: "etl-results/jobs/output_ss03_feature_engineer/features_grouped/"  # S3 prefix for input data
+    prefix: "etl-results/jobs/output_ss03_feature_engineer_group_binsize_50/features_grouped/"  # S3 prefix for input data
     pattern: '\.parquet$'  # Match every parquet file under the partitioned dataset
     row_filters:  # General row filtering; empty string / null / [] entries are skipped.
       currency: ""  # Filter to specific currency
       math_table_id: "normal_zero"  # Restrict to a single math table; scalar -> equality, list -> isin.
+      ai_group: "Default"
     outlier_threshold: 0  # z score to filter outliers
     clip_threshold: [.025, .975]
+    remove_short_sessions: true  # drop incomplete bins: keep only rows where session_count_column equals its max
+    session_count_column: "bet_rounds"  # per-group bet count; complete bins carry the max value
     local_cache: "ss03_features_grouped.parquet"  # Local cache of the merged S3 dataset.
 
     data_types:
@@ -148,12 +151,13 @@ data_loader:
 
   attach_data:  # data to attach cluster index.
     bucket: "bituslabs-team-ai"  # S3 bucket for input data
-    prefix: "etl-results/jobs/output_ss03_feature_engineer/features_enriched/"  # S3 prefix for input data
+    prefix: "etl-results/jobs/output_ss03_feature_engineer_group_binsize_50/features_enriched/"  # S3 prefix for input data
     pattern: '\.parquet$'  # Match every parquet file under the partitioned dataset
     row_filters:  # General row filtering; empty string / null / [] entries are skipped.
       currency: ""  # Filter to specific currency
       math_table_id: "normal_zero"  # Restrict to a single math table; scalar -> equality, list -> isin.
-    session_length: 100  # SS03 SESSION_LENGTH; rows whose (merge_on) group != session_length are dropped.
+      ai_group: "Default"
+    session_length: 50  # agg_group bin size (output_..._group_binsize_50); complete bins have bet_rounds == this. Rows whose (merge_on) group != session_length are dropped.
     local_cache: "ss03_features_enriched.parquet"  # Local cache of the merged S3 dataset.
 
     columns_to_read:  # Columns to read from original data files (match raw_stats CTE in etl_feature_engineer.py)
@@ -342,6 +346,6 @@ pipeline:
   elbow_method: true  # Run elbow method analysis
   cluster_analysis: true  # Run cluster analysis with selected features and n_clusters
   test_model: false  # Apply trained model to new data
-  attach_cluster_label: true  # Attach cluster indices to original data
-  get_cluster_stats: true 
-  upload_result_to_s3: true 
+  attach_cluster_label: false # Attach cluster indices to original data
+  get_cluster_stats: false 
+  upload_result_to_s3: false 
