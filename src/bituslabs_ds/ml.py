@@ -377,13 +377,13 @@ class ClusterAnalysisPipeline:
                 )
             # Drop duplicate samples: the merge_on tuple is the unique grouping grain,
             # so the same group re-emitted across overlapping partition files is a dup.
+            data = cast(pd.DataFrame, data)
             merge_cols = [self.merge_features] if isinstance(self.merge_features, str) else list(self.merge_features)
             duplicated = data.duplicated(subset=merge_cols)
             if duplicated.any():
                 logger.warning(f"duplicated samples found in cluster data: {duplicated.sum()} / {len(data)}")
-                # data = data.drop_duplicates(keep="first")
-                data = data[~duplicated]
-            data, _ = remove_outliers(cast(pd.DataFrame, data), self.outlier_threshold)
+                data = data.loc[~duplicated]
+            data, _ = remove_outliers(data, self.outlier_threshold)
             save_local_cache(cast(pd.DataFrame, data), local_cache_path)
 
         data = apply_row_filters(cast(pd.DataFrame, data), row_filters)
