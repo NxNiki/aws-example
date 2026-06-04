@@ -935,6 +935,7 @@ def read_files(
         logger.info(f"read files using {max_workers} workers")
         executor_cls: Callable = ThreadPoolExecutor if parallel_mode == "thread" else ProcessPoolExecutor
         dfs = []
+        errors: List[str] = []
         with executor_cls(max_workers=max_workers) as executor:
             future_to_file = {executor.submit(read_func, f): f for f in file_paths}  # pyright: ignore
             for future in as_completed(future_to_file):
@@ -943,6 +944,16 @@ def read_files(
                     dfs.append(future.result())
                 except Exception as e:
                     logger.error(f"Failed to read {file}: {e}")
+                    errors.append(f"{file}: {e!r}")
+        # Partial failures are tolerated (a bad partition shouldn't sink the whole load),
+        # but if EVERY read failed we must not fall through to an empty DataFrame: callers
+        # then hit misleading errors far downstream (e.g. KeyError on an expected column)
+        # that hide the real cause. Re-raise with the first underlying error instead.
+        if not dfs and errors:
+            raise RuntimeError(
+                f"read_files: all {len(errors)} file read(s) failed; first error -> {errors[0]} "
+                f"(remaining failures logged above)"
+            )
 
     if local_cache_path is not None and not lazy_load:
         # Write each chunk as a row group through a single pyarrow ParquetWriter. This

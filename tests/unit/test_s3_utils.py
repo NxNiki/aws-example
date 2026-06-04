@@ -379,6 +379,43 @@ class TestReadFiles:
         assert list(result.columns) == ["id", "value"]
         assert len(result) == 5
 
+    @mock_s3
+    def test_read_files_all_reads_fail_raises(self, sample_csv_content):
+        """When every parallel read fails, read_files must raise, not return an empty frame.
+
+        Regression guard: a silently-swallowed read error (e.g. a wrong-region or
+        ABI failure) used to fall through to an empty DataFrame, surfacing later as a
+        confusing KeyError on an expected column far from the real cause.
+        """
+        s3_client = boto3.client("s3", region_name="us-west-2")
+        s3_client.create_bucket(Bucket="test-bucket", CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
+        for i in range(3):
+            s3_client.put_object(Bucket="test-bucket", Key=f"data/file{i}.csv", Body=sample_csv_content)
+
+        # Force the multi-file parallel path; request a column no file has so every read fails.
+        files = [f"s3://test-bucket/data/file{i}.csv" for i in range(3)]
+        with pytest.raises(RuntimeError, match="all 3 file read"):
+            read_files(files, columns=["does_not_exist"])
+
+    @mock_s3
+    def test_read_files_partial_failure_tolerated(self, sample_csv_content):
+        """A single bad file is tolerated: the good files still load."""
+        s3_client = boto3.client("s3", region_name="us-west-2")
+        s3_client.create_bucket(Bucket="test-bucket", CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
+        s3_client.put_object(Bucket="test-bucket", Key="data/good0.csv", Body=sample_csv_content)
+        s3_client.put_object(Bucket="test-bucket", Key="data/good1.csv", Body=sample_csv_content)
+        s3_client.put_object(Bucket="test-bucket", Key="data/bad.csv", Body=b"not,parseable\nwith,wrong\ncols")
+
+        files = [
+            "s3://test-bucket/data/good0.csv",
+            "s3://test-bucket/data/good1.csv",
+            "s3://test-bucket/data/bad.csv",
+        ]
+        result = read_files(files, columns=["id", "value"])
+
+        assert isinstance(result, pd.DataFrame)
+        assert len(result) == 10  # 5 rows * 2 good files; bad file dropped
+
 
 class TestReadDataset:
     """Test the read_dataset function."""
