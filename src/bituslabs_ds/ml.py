@@ -324,10 +324,14 @@ class ClusterAnalysisPipeline:
             )
         else:
             data = self.load_raw_data(data_label="attach_data")
-            data["merge_date"] = pd.to_datetime(data["billtime"]).dt.strftime("%Y_%m_%d")
             merge_cols: List[str] = (
                 [self.merge_features] if isinstance(self.merge_features, str) else list(self.merge_features)
             )
+            # Legacy schema (wucaishen/deepdive) keys on a per-day column derived from `billtime`.
+            # ss03's merge_on doesn't include merge_date and its enriched data has no `billtime`
+            # column, so only build it when it's actually a merge key.
+            if "merge_date" in merge_cols:
+                data["merge_date"] = pd.to_datetime(data["billtime"]).dt.strftime("%Y_%m_%d")
             group_counts = data[merge_cols].value_counts(sort=False).reset_index(name="count")
             valid_groups = group_counts.loc[group_counts["count"] == self.session_length, merge_cols]
             data = data.merge(valid_groups, on=merge_cols, how="inner")
