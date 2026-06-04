@@ -168,6 +168,7 @@ data_loader:
       - "session_group"
       - "agg_group"
       - "min_created_at"
+      - "spin_id"
       - "fg_rounds"
       - "bet_amount"
       - "delta_bet_amount"
@@ -340,7 +341,7 @@ cluster_analysis:
   dbscan_eps: 3  # DBSCAN: neighborhood radius in scaled feature space; tune per dataset.
   dbscan_min_samples: 50  # DBSCAN: min samples in eps-neighborhood for a core point.
   n_clusters: 3  # Default number of clusters for K-means
-  top_features: 40  # Default number of top features to use
+  top_features: 35  # Default number of top features to use
 
 pipeline:
   elbow_method: true  # Run elbow method analysis
