@@ -26,7 +26,7 @@ data_loader:
       user_id: "category"
       session_start_date: "category"
       session_group: "category"
-      agg_group: "category"
+      agg_group: "int64"
       rtp_mean: "float64"
       rtp_min: "float64"
       rtp_max: "float64"
