@@ -26,7 +26,9 @@ DEFAULT_CLUSTER_LABEL_URIS = [
 
 # Default S3 location of the ss01 features_grouped dataset (written by the
 # feature engineer ETL via ETLScheduler).
-DEFAULT_FEATURES_GROUPED_URI = "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_feature_engineer/features_grouped/"
+DEFAULT_FEATURES_GROUPED_URI = (
+    "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_feature_engineer/features_grouped_binsize_40/"
+)
 
 
 def get_default_features_uri() -> str:

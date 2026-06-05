@@ -101,7 +101,7 @@ def build_stats_base_cte(cfg: GameFeatureConfig) -> str:
     if lines[-1].endswith(","):
         lines[-1] = lines[-1].rstrip(",")
 
-    lines.extend(["    FROM raw_stats AS t", "    GROUP BY", group_by])
+    lines.extend(["    FROM binned AS t", "    GROUP BY", group_by])
     if cfg.drop_incomplete_tail_groups:
         lines.append(f"    HAVING COUNT(t.user_id) = {cfg.bin_size}")
     lines.append(")")

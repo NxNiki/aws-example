@@ -1,10 +1,12 @@
 """Unit tests for FeaturePipelineRunner's bin_size fan-out + config validation.
 
-These cover the pure planning logic (``_per_bin_configs`` + ``bin_size``
-validation) without touching S3/Redshift.
+Covers the bin_size validation, the ``bin_sizes()`` normalization that drives
+the fan-out, and (with ETLScheduler mocked) the run plan: one shared enriched
+job + one grouped job per bin size. No S3/Redshift.
 """
 
 from dataclasses import replace
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -26,25 +28,39 @@ def _cfg(**overrides) -> GameFeatureConfig:
     return replace(_BASE, **overrides)
 
 
-def test_scalar_bin_size_is_suffixed():
-    """A scalar bin_size still gets the _binsize_{N} suffix (single run)."""
-    runner = FeaturePipelineRunner(_cfg(bin_size=100))
-    configs = runner._per_bin_configs()
-    assert [c.bin_size for c in configs] == [100]
-    assert [c.output_prefix for c in configs] == ["output_ss03_feature_engineer_binsize_100"]
+def test_bin_sizes_normalizes_scalar_and_list():
+    assert _cfg(bin_size=100).bin_sizes() == [100]
+    assert _cfg(bin_size=[30, 50, 70, 100]).bin_sizes() == [30, 50, 70, 100]
 
 
-def test_list_bin_size_fans_out():
-    """A list bin_size produces one scalar-bin_size config per size, each suffixed."""
-    runner = FeaturePipelineRunner(_cfg(bin_size=[50, 100]))
-    configs = runner._per_bin_configs()
-    assert [c.bin_size for c in configs] == [50, 100]
-    assert [c.output_prefix for c in configs] == [
-        "output_ss03_feature_engineer_binsize_50",
-        "output_ss03_feature_engineer_binsize_100",
-    ]
-    # every derived config carries a scalar bin_size (the SQL builders require it)
-    assert all(isinstance(c.bin_size, int) for c in configs)
+@pytest.mark.parametrize(
+    "bin_size,expected_jobs",
+    [
+        (100, ["features_enriched", "features_grouped_binsize_100"]),
+        (
+            [30, 50, 70, 100],
+            [
+                "features_enriched",
+                "features_grouped_binsize_30",
+                "features_grouped_binsize_50",
+                "features_grouped_binsize_70",
+                "features_grouped_binsize_100",
+            ],
+        ),
+    ],
+)
+def test_run_emits_one_enriched_plus_grouped_per_bin(bin_size, expected_jobs):
+    """Enriched is run once (shared); grouped once per bin under the same root."""
+    runner = FeaturePipelineRunner(_cfg(bin_size=bin_size))
+    with (
+        patch("bituslabs_ds.features.runner.ETLScheduler") as MockSched,
+        patch.object(FeaturePipelineRunner, "_check_config_drift"),
+        patch.object(FeaturePipelineRunner, "_write_config_sidecar"),
+    ):
+        scheduler = MockSched.return_value
+        runner.run(MagicMock())
+        job_names = [call.kwargs["job_name"] for call in scheduler.run_incremental_job.call_args_list]
+    assert job_names == expected_jobs
 
 
 @pytest.mark.parametrize("bad", [0, -5, [], [50, 0], [50, -1], 1.5, [50, 1.5], True, [True]])

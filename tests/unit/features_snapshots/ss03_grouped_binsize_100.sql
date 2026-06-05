@@ -191,9 +191,16 @@ raw_stats AS (
             WHEN t.payout < t.bet_amount
                 THEN ROW_NUMBER() OVER (PARTITION BY t.user_id, t.lose_streak_group ORDER BY t.spin_id, t.min_created_at)
         END AS lose_streak,
-        ROUND((ROW_NUMBER() OVER (PARTITION BY t.user_id, t.session_start_ts ORDER BY t.spin_id, t.min_created_at) - 1) / 50)
-            AS agg_group
+        ROW_NUMBER() OVER (PARTITION BY t.user_id, t.session_start_ts ORDER BY t.spin_id, t.min_created_at)
+            AS session_bet_index
     FROM user_group AS t
+),
+
+binned AS (
+    SELECT
+        t.*,
+        ROUND((t.session_bet_index - 1) / 100) AS agg_group
+    FROM raw_stats AS t
 ),
 
 perc_delta_t AS (
@@ -202,7 +209,7 @@ perc_delta_t AS (
         PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY delta_t_seconds) AS delta_t_seconds_p25,
         PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY delta_t_seconds) AS delta_t_seconds_median,
         PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY delta_t_seconds) AS delta_t_seconds_p75
-    FROM raw_stats
+    FROM binned
     GROUP BY user_id, ai_group, math_table_id, session_start_date, session_group, agg_group
 ),
 perc_delta_t_ng AS (
@@ -211,7 +218,7 @@ perc_delta_t_ng AS (
         PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY delta_t_seconds_nogap) AS delta_t_seconds_nogap_p25,
         PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY delta_t_seconds_nogap) AS delta_t_seconds_nogap_median,
         PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY delta_t_seconds_nogap) AS delta_t_seconds_nogap_p75
-    FROM raw_stats
+    FROM binned
     GROUP BY user_id, ai_group, math_table_id, session_start_date, session_group, agg_group
 ),
 perc_bet_amount AS (
@@ -220,7 +227,7 @@ perc_bet_amount AS (
         PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY bet_amount) AS bet_amount_p25,
         PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY bet_amount) AS bet_amount_median,
         PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY bet_amount) AS bet_amount_p75
-    FROM raw_stats
+    FROM binned
     GROUP BY user_id, ai_group, math_table_id, session_start_date, session_group, agg_group
 ),
 perc_delta_bet AS (
@@ -229,7 +236,7 @@ perc_delta_bet AS (
         PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY delta_bet_amount) AS delta_bet_amount_p25,
         PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY delta_bet_amount) AS delta_bet_amount_median,
         PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY delta_bet_amount) AS delta_bet_amount_p75
-    FROM raw_stats
+    FROM binned
     GROUP BY user_id, ai_group, math_table_id, session_start_date, session_group, agg_group
 ),
 perc_payout AS (
@@ -238,7 +245,7 @@ perc_payout AS (
         PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY payout) AS payout_p25,
         PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY payout) AS payout_median,
         PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY payout) AS payout_p75
-    FROM raw_stats
+    FROM binned
     GROUP BY user_id, ai_group, math_table_id, session_start_date, session_group, agg_group
 ),
 perc_rtp AS (
@@ -247,7 +254,7 @@ perc_rtp AS (
         PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY payout * 1.0 / NULLIF(bet_amount, 0)) AS rtp_p25,
         PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY payout * 1.0 / NULLIF(bet_amount, 0)) AS rtp_median,
         PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY payout * 1.0 / NULLIF(bet_amount, 0)) AS rtp_p75
-    FROM raw_stats
+    FROM binned
     GROUP BY user_id, ai_group, math_table_id, session_start_date, session_group, agg_group
 ),
 perc_profit AS (
@@ -256,7 +263,7 @@ perc_profit AS (
         PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY profit) AS profit_p25,
         PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY profit) AS profit_median,
         PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY profit) AS profit_p75
-    FROM raw_stats
+    FROM binned
     GROUP BY user_id, ai_group, math_table_id, session_start_date, session_group, agg_group
 ),
 perc_delta_payout AS (
@@ -265,7 +272,7 @@ perc_delta_payout AS (
         PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY delta_payout) AS delta_payout_p25,
         PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY delta_payout) AS delta_payout_median,
         PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY delta_payout) AS delta_payout_p75
-    FROM raw_stats
+    FROM binned
     GROUP BY user_id, ai_group, math_table_id, session_start_date, session_group, agg_group
 ),
 perc_balance AS (
@@ -274,7 +281,7 @@ perc_balance AS (
         PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY balance_after_bet) AS balance_after_bet_p25,
         PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY balance_after_bet) AS balance_after_bet_median,
         PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY balance_after_bet) AS balance_after_bet_p75
-    FROM raw_stats
+    FROM binned
     GROUP BY user_id, ai_group, math_table_id, session_start_date, session_group, agg_group
 ),
 perc_streak AS (
@@ -283,7 +290,7 @@ perc_streak AS (
         PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY streak) AS streak_p25,
         PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY streak) AS streak_median,
         PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY streak) AS streak_p75
-    FROM raw_stats
+    FROM binned
     GROUP BY user_id, ai_group, math_table_id, session_start_date, session_group, agg_group
 ),
 perc_win_streak AS (
@@ -292,7 +299,7 @@ perc_win_streak AS (
         PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY win_streak) AS win_streak_p25,
         PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY win_streak) AS win_streak_median,
         PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY win_streak) AS win_streak_p75
-    FROM raw_stats
+    FROM binned
     GROUP BY user_id, ai_group, math_table_id, session_start_date, session_group, agg_group
 ),
 perc_lose_streak AS (
@@ -301,7 +308,7 @@ perc_lose_streak AS (
         PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY lose_streak) AS lose_streak_p25,
         PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY lose_streak) AS lose_streak_median,
         PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY lose_streak) AS lose_streak_p75
-    FROM raw_stats
+    FROM binned
     GROUP BY user_id, ai_group, math_table_id, session_start_date, session_group, agg_group
 ),
 
@@ -375,7 +382,7 @@ stats_base AS (
         STDDEV(t.lose_streak) AS lose_streak_std,
         MIN(t.lose_streak) AS lose_streak_min,
         MAX(t.lose_streak) AS lose_streak_max
-    FROM raw_stats AS t
+    FROM binned AS t
     GROUP BY
         t.user_id,
         t.ai_group,

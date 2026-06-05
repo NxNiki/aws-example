@@ -13,9 +13,10 @@ Adds the per-bet derived metrics that the grouped stats roll up:
 * ``profit``: ``payout - bet_amount``
 * ``deposit`` / ``withdraw``: split of ``balance_transaction``
 * ``streak`` / ``win_streak`` / ``lose_streak``: ROW_NUMBER within each *_group
-* ``agg_group``: floor((row - 1) / bin_size) bucket id per session.
-  Partitions by ``session_start_ts`` (not by the within-date ordinal) so the
-  bucketing is stable across runs.
+* ``session_bet_index``: 1-based row number of the bet within its session
+  (partitioned by ``session_start_ts`` so it's stable across runs). This is
+  bin-independent; the grouped query derives ``agg_group = floor((idx-1)/bin_size)``
+  from it (see ``binned.py``), so the enriched output is shared across bin sizes.
 * ``activity_date``: ``CAST(min_created_at AS DATE)`` -- ETLScheduler's
   watermark / partition column. Note this is the bet's date, not the
   session's start date.
@@ -27,7 +28,6 @@ _ORDER = "ORDER BY t.spin_id, t.min_created_at"
 
 
 def build_raw_stats_cte(cfg: GameFeatureConfig) -> str:
-    n = cfg.bin_size
     gap = cfg.max_delta_t_gap_seconds
 
     lines: list[str] = [
@@ -71,8 +71,8 @@ def build_raw_stats_cte(cfg: GameFeatureConfig) -> str:
             "            WHEN t.payout < t.bet_amount",
             f"                THEN ROW_NUMBER() OVER (PARTITION BY t.user_id, t.lose_streak_group {_ORDER})",
             "        END AS lose_streak,",
-            f"        ROUND((ROW_NUMBER() OVER (PARTITION BY t.user_id, t.session_start_ts {_ORDER}) - 1) / {n})",
-            "            AS agg_group",
+            f"        ROW_NUMBER() OVER (PARTITION BY t.user_id, t.session_start_ts {_ORDER})",
+            "            AS session_bet_index",
             "    FROM user_group AS t",
             ")",
         ]

@@ -6,8 +6,8 @@ this file only declares the SS01 configuration and invokes the runner.
 
 Output (written via ETLScheduler):
     s3://bituslabs-team-ai/etl-results/jobs/output_ss01_feature_engineer/
-        features_enriched/   (per-bet raw stats)
-        features_grouped/    (per agg_group stats; tail-incomplete groups dropped)
+        features_enriched/              (per-bet raw stats; shared across bin sizes)
+        features_grouped_binsize_{N}/   (per agg_group stats, one per bin_size; tail-incomplete groups dropped)
 
 SS01 specifics vs SS02 / SS03:
 * No ``math_table_id`` in the aggregation key (``partition_cols=()``).

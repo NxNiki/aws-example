@@ -2,7 +2,6 @@ WITH user_bets AS (
     SELECT
         t.spin_id,
         t.user_id,
-        t.math_table_id,
         t.created_at,
         t.bet_type,
         -- ignore bet amount in free game (0). This will influence avg and std stats
@@ -21,13 +20,14 @@ WITH user_bets AS (
         END AS ai_group
     FROM public.fct_bet_orders AS t
     WHERE
-        t.created_at >= '2026-04-01'
-        AND t.created_at < '2026-06-01'
+        t.created_at >= '2025-11-24'
+        AND t.created_at < '2026-11-24'
         AND t.currency_type IN ('CNY')
         AND t.status = 'COMPLETED'
-        AND t.game_id = 'SS02'
+        AND t.game_id = 'SS01'
         AND t.op_code NOT IN ('B26', 'TST', 'TSB', 'TSO')
-        AND (t.partition_ab[0] = 'jojpin-9mokha-rexQug')
+        AND ((t.partition_ab[0] IS NULL OR t.partition_ab[0] NOT IN ('jojpin-9mokha-rexQug')))
+        AND (t.script_id = 'giftShop')
 ),
 
 free_game_group AS (
@@ -35,7 +35,6 @@ free_game_group AS (
         t.spin_id,
         t.user_id,
         t.ai_group,
-        t.math_table_id,
         t.created_at,
         t.bet_type,
         t.bet_amount,
@@ -55,7 +54,6 @@ agg_free_game AS (
     SELECT
         t.user_id,
         t.ai_group,
-        t.math_table_id,
         MIN(t.spin_id) AS spin_id,
         MIN(t.created_at) AS min_created_at,
         MAX(t.created_at) AS max_created_at,
@@ -66,14 +64,13 @@ agg_free_game AS (
         MIN(t.balance_after_bet) AS balance_after_bet,
         MAX(t.balance_after_payout) AS balance_after_payout
     FROM free_game_group AS t
-    GROUP BY t.user_id, t.ai_group, t.math_table_id, t.fg_group
+    GROUP BY t.user_id, t.ai_group, t.fg_group
 ),
 
 delta_stats AS (
     SELECT
         t.user_id,
         t.ai_group,
-        t.math_table_id,
         t.spin_id,
         t.min_created_at,
         t.max_created_at,
@@ -106,7 +103,6 @@ user_group AS (
     SELECT
         t.user_id,
         t.ai_group,
-        t.math_table_id,
         t.spin_id,
         t.min_created_at,
         t.max_created_at,
@@ -157,7 +153,6 @@ raw_stats AS (
     SELECT
         t.user_id,
         t.ai_group,
-        t.math_table_id,
         CAST(t.session_start_ts AS DATE) AS session_start_date,
         DENSE_RANK() OVER (
             PARTITION BY t.user_id, CAST(t.session_start_ts AS DATE)
@@ -189,8 +184,8 @@ raw_stats AS (
             WHEN t.payout < t.bet_amount
                 THEN ROW_NUMBER() OVER (PARTITION BY t.user_id, t.lose_streak_group ORDER BY t.spin_id, t.min_created_at)
         END AS lose_streak,
-        ROUND((ROW_NUMBER() OVER (PARTITION BY t.user_id, t.session_start_ts ORDER BY t.spin_id, t.min_created_at) - 1) / 30)
-            AS agg_group
+        ROW_NUMBER() OVER (PARTITION BY t.user_id, t.session_start_ts ORDER BY t.spin_id, t.min_created_at)
+            AS session_bet_index
     FROM user_group AS t
 )
 SELECT * FROM raw_stats;

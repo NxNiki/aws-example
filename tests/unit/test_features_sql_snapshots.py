@@ -82,26 +82,7 @@ SS03 = GameFeatureConfig(
 )
 
 
-# One snapshot per (game, bin_size, kind). A list ``bin_size`` fans out to one
-# scalar-bin_size query per size (mirroring FeaturePipelineRunner), so each size
-# gets its own golden file. Scalar configs simply yield a single bin.
-_SNAPSHOT_CASES = [
-    (cfg, n, kind) for cfg in (SS01, SS02, SS03) for n in cfg.bin_sizes() for kind in ("enriched", "grouped")
-]
-
-
-@pytest.mark.parametrize(
-    "config,bin_size,kind",
-    _SNAPSHOT_CASES,
-    ids=lambda v: v.game_id.lower() if isinstance(v, GameFeatureConfig) else str(v),
-)
-def test_sql_matches_snapshot(config: GameFeatureConfig, bin_size: int, kind: str) -> None:
-    scalar = replace(config, bin_size=bin_size)
-    composer = compose_enriched_query if kind == "enriched" else compose_grouped_query
-    actual = composer(scalar, scalar.date_start)
-
-    snapshot_path = SNAPSHOTS_DIR / f"{config.game_id.lower()}_binsize_{bin_size}_{kind}.sql"
-
+def _check_snapshot(actual: str, snapshot_path: Path, label: str) -> None:
     if os.environ.get("REGENERATE_SNAPSHOTS") == "1":
         SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
         snapshot_path.write_text(actual)
@@ -113,11 +94,33 @@ def test_sql_matches_snapshot(config: GameFeatureConfig, bin_size: int, kind: st
             "Run REGENERATE_SNAPSHOTS=1 pytest tests/unit/test_features_sql_snapshots.py to create it."
         )
 
-    expected = snapshot_path.read_text()
-    assert actual == expected, (
-        f"SQL for {config.game_id} {kind} drifted from snapshot {snapshot_path}. "
+    assert actual == snapshot_path.read_text(), (
+        f"SQL for {label} drifted from snapshot {snapshot_path}. "
         "If this is intentional, regenerate with REGENERATE_SNAPSHOTS=1."
     )
+
+
+# Enriched is bin-independent -> one snapshot per game (no bin in the name).
+@pytest.mark.parametrize("config", [SS01, SS02, SS03], ids=lambda c: c.game_id.lower())
+def test_enriched_snapshot(config: GameFeatureConfig) -> None:
+    actual = compose_enriched_query(config, config.date_start)
+    _check_snapshot(actual, SNAPSHOTS_DIR / f"{config.game_id.lower()}_enriched.sql", f"{config.game_id} enriched")
+
+
+# Grouped depends on bin_size -> one snapshot per (game, bin_size), composed from
+# a scalar-bin_size config (mirroring how FeaturePipelineRunner fans out).
+_GROUPED_CASES = [(cfg, n) for cfg in (SS01, SS02, SS03) for n in cfg.bin_sizes()]
+
+
+@pytest.mark.parametrize(
+    "config,bin_size",
+    _GROUPED_CASES,
+    ids=lambda v: v.game_id.lower() if isinstance(v, GameFeatureConfig) else str(v),
+)
+def test_grouped_snapshot(config: GameFeatureConfig, bin_size: int) -> None:
+    actual = compose_grouped_query(replace(config, bin_size=bin_size), config.date_start)
+    snapshot_path = SNAPSHOTS_DIR / f"{config.game_id.lower()}_grouped_binsize_{bin_size}.sql"
+    _check_snapshot(actual, snapshot_path, f"{config.game_id} grouped binsize={bin_size}")
 
 
 # ---------------------------------------------------------------------------

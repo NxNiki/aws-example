@@ -14,7 +14,7 @@ s3_prefix: ""
 data_loader:
   cluster_data:  # data to train cluster model.
     bucket: "bituslabs-team-ai"  # S3 bucket for input data
-    prefix: "etl-results/jobs/output_ss03_feature_engineer_group_binsize_50/features_grouped/"  # S3 prefix for input data
+    prefix: "etl-results/jobs/output_ss03_feature_engineer/features_grouped_binsize_50/"  # S3 prefix for input data
     pattern: '\.parquet$'  # Match every parquet file under the partitioned dataset
     row_filters:  # General row filtering; empty string / null / [] entries are skipped.
       currency: ""  # Filter to specific currency
@@ -151,7 +151,7 @@ data_loader:
 
   attach_data:  # data to attach cluster index.
     bucket: "bituslabs-team-ai"  # S3 bucket for input data
-    prefix: "etl-results/jobs/output_ss03_feature_engineer_group_binsize_50/features_enriched/"  # S3 prefix for input data
+    prefix: "etl-results/jobs/output_ss03_feature_engineer/features_enriched/"  # S3 prefix for input data
     pattern: '\.parquet$'  # Match every parquet file under the partitioned dataset
     row_filters:  # General row filtering; empty string / null / [] entries are skipped.
       currency: ""  # Filter to specific currency
@@ -166,7 +166,7 @@ data_loader:
       - "math_table_id"
       - "session_start_date"
       - "session_group"
-      - "agg_group"
+      - "session_bet_index"
       - "min_created_at"
       - "spin_id"
       - "fg_rounds"

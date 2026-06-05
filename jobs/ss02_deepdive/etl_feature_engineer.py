@@ -6,8 +6,8 @@ this file only declares the SS02 configuration and invokes the runner.
 
 Output (written via ETLScheduler):
     s3://bituslabs-team-ai/etl-results/jobs/output_ss02_feature_engineer/
-        features_enriched/   (per-bet raw stats)
-        features_grouped/    (per agg_group stats)
+        features_enriched/              (per-bet raw stats; shared across bin sizes)
+        features_grouped_binsize_{N}/   (per agg_group stats, one dataset per bin_size)
 
 Runs incrementally by default. ETLScheduler reads the existing S3 watermark
 and re-queries from ``max(activity_date) - effective_lookback_days()``; the

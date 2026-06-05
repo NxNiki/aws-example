@@ -191,8 +191,8 @@ raw_stats AS (
             WHEN t.payout < t.bet_amount
                 THEN ROW_NUMBER() OVER (PARTITION BY t.user_id, t.lose_streak_group ORDER BY t.spin_id, t.min_created_at)
         END AS lose_streak,
-        ROUND((ROW_NUMBER() OVER (PARTITION BY t.user_id, t.session_start_ts ORDER BY t.spin_id, t.min_created_at) - 1) / 30)
-            AS agg_group
+        ROW_NUMBER() OVER (PARTITION BY t.user_id, t.session_start_ts ORDER BY t.spin_id, t.min_created_at)
+            AS session_bet_index
     FROM user_group AS t
 )
 SELECT * FROM raw_stats;

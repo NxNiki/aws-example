@@ -54,8 +54,8 @@ class GameFeatureConfig:
     Required fields:
         game_id: e.g. ``"SS02"``. Inserted into the ``game_id = '...'`` WHERE clause.
         output_prefix: last path segment under ``DEFAULT_ETL_OUTPUT/jobs/``,
-            e.g. ``"output_ss02_feature_engineer"``. The runner appends
-            ``features_enriched/`` and ``features_grouped/`` for the two datasets.
+            e.g. ``"output_ss02_feature_engineer"``. The runner writes a shared
+            ``features_enriched/`` plus one ``features_grouped_binsize_{N}/`` per bin size.
         date_start: ``YYYY-MM-DD``; used as ``ETLScheduler.default_start_date``.
         date_end: ``YYYY-MM-DD``; exclusive upper bound on bet timestamps.
         ai_groups: tuple of labels the ``ai_group`` column can take for this

@@ -6,8 +6,8 @@ this file only declares the SS03 configuration and invokes the runner.
 
 Output (written via ETLScheduler):
     s3://bituslabs-team-ai/etl-results/jobs/output_ss03_feature_engineer/
-        features_enriched/   (per-bet raw stats)
-        features_grouped/    (per agg_group stats)
+        features_enriched/              (per-bet raw stats; shared across bin sizes)
+        features_grouped_binsize_{N}/   (per agg_group stats, one dataset per bin_size)
 
 SS03 has four partition_ab buckets (AI / AB_TEST_A / AB_TEST_B / Default).
 The script is configured to pull Default-only by default, matching the

@@ -327,6 +327,12 @@ class ClusterAnalysisPipeline:
             merge_cols: List[str] = (
                 [self.merge_features] if isinstance(self.merge_features, str) else list(self.merge_features)
             )
+            # Enriched is now bin-independent: it carries `session_bet_index` (1-based
+            # row within session) instead of `agg_group`. Derive the per-bin agg_group
+            # the same way the grouped SQL does (ROUND == integer division here), so the
+            # merge_on join to cluster labels (which key on agg_group) lines up.
+            if "agg_group" in merge_cols and "agg_group" not in data.columns:
+                data["agg_group"] = (data["session_bet_index"] - 1) // self.bin_size
             # Legacy schema (wucaishen/deepdive) keys on a per-day column derived from `billtime`.
             # ss03's merge_on doesn't include merge_date and its enriched data has no `billtime`
             # column, so only build it when it's actually a merge key.

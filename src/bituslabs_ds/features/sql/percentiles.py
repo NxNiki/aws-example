@@ -59,7 +59,7 @@ def _build_one_percentile_cte(family: PercentileFamily, cfg: GameFeatureConfig) 
         f"        PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY {e}) AS {p}_p25,\n"
         f"        PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY {e}) AS {p}_median,\n"
         f"        PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY {e}) AS {p}_p75\n"
-        f"    FROM raw_stats\n"
+        f"    FROM binned\n"
         f"    GROUP BY {key}\n"
         f")"
     )

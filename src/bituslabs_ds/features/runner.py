@@ -10,6 +10,7 @@ import argparse
 import logging
 from dataclasses import replace
 from datetime import datetime, timezone
+from functools import partial
 
 from botocore.exceptions import ClientError
 
@@ -31,7 +32,7 @@ from bituslabs_ds.s3_utils import read_json_from_s3, write_json_to_s3
 logger = logging.getLogger(__name__)
 
 # Sidecar written at the dataset root (the output_prefix dir, parent of
-# features_enriched/ and features_grouped/). It records the config that produced
+# features_enriched/ and the features_grouped_binsize_{N}/ datasets). It records the config that produced
 # the dataset so a later run can detect incompatible-semantics drift. The name
 # starts with '_' and ends in .json so the cluster loaders' ``\.parquet$`` glob
 # never picks it up.
@@ -101,64 +102,49 @@ class FeaturePipelineRunner:
     # Programmatic entry point (used by tests + custom drivers)
     # ------------------------------------------------------------------
     def run(self, loader: DataLoader, *, overwrite: bool = False) -> None:
-        configs = self._per_bin_configs()
-        if len(configs) > 1:
-            logger.info(
-                "%s: bin_size=%s -> running %d pipelines, one per size",
-                self.cfg.game_id,
-                self.cfg.bin_size,
-                len(configs),
-            )
-        for cfg in configs:
-            self._run_one(cfg, loader, overwrite=overwrite)
-
-    def _per_bin_configs(self) -> list[GameFeatureConfig]:
-        """One scalar-``bin_size`` config per requested bin size.
-
-        ``output_prefix`` is always suffixed ``_binsize_{N}`` (for both a scalar
-        and a list ``bin_size``), so each size gets its own dataset root + sidecar
-        and the SQL builders always see a single integer.
-        """
-        return [
-            replace(self.cfg, bin_size=n, output_prefix=f"{self.cfg.output_prefix}_binsize_{n}")
-            for n in self.cfg.bin_sizes()
-        ]
-
-    def _run_one(self, cfg: GameFeatureConfig, loader: DataLoader, *, overwrite: bool = False) -> None:
-        storage_root = f"{DEFAULT_ETL_OUTPUT}/jobs/{cfg.output_prefix}"
+        storage_root = f"{DEFAULT_ETL_OUTPUT}/jobs/{self.cfg.output_prefix}"
         sidecar_path = f"{storage_root}/{_CONFIG_SIDECAR_NAME}"
 
         # Fail fast (before any Redshift work) if the existing dataset was built
         # with incompatible semantics and this isn't an --overwrite rebuild.
-        self._check_config_drift(cfg, sidecar_path, overwrite=overwrite)
+        self._check_config_drift(self.cfg, sidecar_path, overwrite=overwrite)
 
         scheduler = ETLScheduler(
             loader,
             storage_root,
-            lookback_days=cfg.effective_lookback_days(),
+            lookback_days=self.cfg.effective_lookback_days(),
             overwrite=overwrite,
         )
-        scheduler.default_start_date = cfg.date_start
+        scheduler.default_start_date = self.cfg.date_start
 
+        # Enriched is bin-independent (carries session_bet_index, not agg_group),
+        # so it's a single shared dataset regardless of how many bin sizes we run.
         scheduler.run_incremental_job(
             job_name="features_enriched",
-            query_func=lambda sd: compose_enriched_query(cfg, sd),
-            key_cols=self._enriched_key_cols(cfg),
+            query_func=lambda sd: compose_enriched_query(self.cfg, sd),
+            key_cols=self._enriched_key_cols(self.cfg),
             date_col="activity_date",
             partition_level="month",
         )
 
-        scheduler.run_incremental_job(
-            job_name="features_grouped",
-            query_func=lambda sd: compose_grouped_query(cfg, sd),
-            key_cols=self._grouped_key_cols(cfg),
-            date_col="activity_date",
-            partition_level="month",
-        )
+        # Grouped depends on bin_size -> one dataset per size under the same root.
+        bin_sizes = self.cfg.bin_sizes()
+        if len(bin_sizes) > 1:
+            logger.info("%s: grouped fan-out over bin_size=%s", self.cfg.game_id, bin_sizes)
+        for n in bin_sizes:
+            cfg_n = replace(self.cfg, bin_size=n)
+            scheduler.run_incremental_job(
+                job_name=f"features_grouped_binsize_{n}",
+                # partial binds this bin's cfg, so the per-bin query is captured correctly.
+                query_func=partial(compose_grouped_query, cfg_n),
+                key_cols=self._grouped_key_cols(self.cfg),
+                date_col="activity_date",
+                partition_level="month",
+            )
 
         # Record the config that produced this dataset, for provenance and for
         # the next run's drift check.
-        self._write_config_sidecar(cfg, sidecar_path)
+        self._write_config_sidecar(self.cfg, sidecar_path)
 
     # ------------------------------------------------------------------
     # Config sidecar / drift guard

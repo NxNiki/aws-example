@@ -25,7 +25,9 @@ from bituslabs_ds.eda import DataProfiler, DataVisualizer
 # Config
 # -----------------------------------------------------------------------------
 JOBS_DIR = Path(__file__).resolve().parent.parent
-FEATURES_DATASET_URI = "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_feature_engineer/features_grouped/"
+FEATURES_DATASET_URI = (
+    "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_feature_engineer/features_grouped_binsize_40/"
+)
 OUTPUT_DIR = JOBS_DIR / "output_ss01_wucaishen" / "distribution_plots"
 
 EXCLUDE_COLUMNS = {"user_id", "session_group", "agg_group"}

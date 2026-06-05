@@ -12,6 +12,7 @@ and the final assembly SELECT.
 """
 
 from bituslabs_ds.features.config import GameFeatureConfig
+from bituslabs_ds.features.sql.binned import build_binned_cte
 from bituslabs_ds.features.sql.delta_stats import build_delta_stats_cte
 from bituslabs_ds.features.sql.final_select import build_final_select
 from bituslabs_ds.features.sql.free_game import build_agg_free_game_cte, build_free_game_group_cte
@@ -46,10 +47,32 @@ def compose_enriched_query(cfg: GameFeatureConfig, start_date: str) -> str:
 
 
 def compose_grouped_query(cfg: GameFeatureConfig, start_date: str) -> str:
-    """Per-agg-group rollup with percentiles + derived ratios."""
+    """Per-agg-group rollup with percentiles + derived ratios.
+
+    Requires a scalar ``cfg.bin_size`` (the runner composes this once per bin via
+    ``replace(cfg, bin_size=n)``); the ``binned`` CTE derives ``agg_group`` from the
+    bin-independent ``session_bet_index`` in ``raw_stats``.
+    """
+    if isinstance(cfg.bin_size, list):
+        raise ValueError(
+            f"compose_grouped_query needs a scalar bin_size, got list {cfg.bin_size!r}; "
+            "the runner should pass one bin per call."
+        )
     ctes = _preaggregation_ctes(cfg, start_date)
+    binned = build_binned_cte(cfg, cfg.bin_size)
     # build_percentile_ctes returns 12 already-comma-separated CTEs.
     percentile_block = build_percentile_ctes(cfg)
     stats_base = build_stats_base_cte(cfg)
     final = build_final_select(cfg)
-    return _join_ctes_with("WITH ", ctes) + ",\n\n" + percentile_block + ",\n\n" + stats_base + "\n" + final + "\n;\n"
+    return (
+        _join_ctes_with("WITH ", ctes)
+        + ",\n\n"
+        + binned
+        + ",\n\n"
+        + percentile_block
+        + ",\n\n"
+        + stats_base
+        + "\n"
+        + final
+        + "\n;\n"
+    )

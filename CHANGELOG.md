@@ -149,10 +149,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `--overwrite`) if a semantic field changed, so rows built under
     incompatible semantics (e.g. a different `bin_size`) can't be silently
     appended.
-  - **Multi-bin-size runs.** `bin_size` accepts an `int` or a `list[int]`;
-    the runner runs the pipeline once per size and always suffixes the output
-    prefix with `_binsize_{N}`, so each size lands in its own dataset root +
-    sidecar (e.g. `output_ss03_feature_engineer_binsize_50/`).
+  - **Multi-bin-size runs with a shared enriched dataset.** `bin_size` accepts an
+    `int` or a `list[int]`. `raw_stats` now emits a bin-independent
+    `session_bet_index` (the bet's row number within its session) instead of
+    `agg_group`, so `features_enriched/` is written **once** and shared across all
+    bin sizes; the runner derives `agg_group = floor((session_bet_index-1)/bin_size)`
+    in a per-bin `binned` CTE and writes one `features_grouped_binsize_{N}/` per size.
+    The cluster pipeline (`ml.py` + `cluster_config-*.yaml`) reads the shared enriched
+    and recomputes `agg_group` from `session_bet_index` for the label merge.
 - **ss03 clustering enhancements.** DBSCAN and subsampled-hierarchical model
   options alongside k-means in `ClusterAnalysisPipeline`; a shared
   `cluster_labels.parquet` (one column per model/feature/k run); config-driven
@@ -249,8 +253,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   derived incremental lookback drops to 2 days — a session-boundary (semantic)
   change, so the first run against existing data needs `--overwrite`.
 - **ss03 feature engineering now runs across `bin_size=[30, 50, 70, 100]`**
-  (was a single `100`), producing four datasets
-  `output_ss03_feature_engineer_binsize_{30,50,70,100}/`.
+  (was a single `100`): one shared `output_ss03_feature_engineer/features_enriched/`
+  plus four `features_grouped_binsize_{30,50,70,100}/` datasets under the same root.
 
 ### Fixed
 
