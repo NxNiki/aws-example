@@ -11,9 +11,9 @@ Output (written via ETLScheduler):
 
 SS01 specifics vs SS02 / SS03:
 * No ``math_table_id`` in the aggregation key (``partition_cols=()``).
-* Smaller ``session_length`` (40 vs 100) — every agg_group is a window of 40 bets.
+* Smaller ``bin_size`` (40 vs 100) — every agg_group is a window of 40 bets.
 * ``drop_incomplete_tail_groups=True`` — the final partial agg_group per session
-  is dropped via ``HAVING COUNT = session_length``.
+  is dropped via ``HAVING COUNT = bin_size``.
 * SS01 raw data has both AI and Default partitions; this job selects Default
   only (matching the historical SS01 cluster-analysis runs). The output's
   ``ai_group`` column will therefore be the constant ``'Default'``.
@@ -37,7 +37,7 @@ CONFIG = GameFeatureConfig(
     ai_groups=("AI", "Default"),
     selected_groups=("Default",),
     partition_cols=(),
-    session_length=40,
+    bin_size=40,
     drop_incomplete_tail_groups=True,
     extra_where_clauses=("t.script_id = 'giftShop'",),
 )

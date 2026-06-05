@@ -149,7 +149,7 @@ data_loader:
     pattern: '\.parquet$'  # Match every parquet file under the partitioned dataset
     row_filters:  # General row filtering (null to disable filtering)
       currency: ""  # Filter to specific currency
-    session_length: 40  # stats in grouped data are calculated based on consecutive sessions, sample will be removed if session length not equal to this value for both cluster and attach data.
+    bin_size: 40  # stats in grouped data are calculated based on consecutive sessions, sample will be removed if bin size not equal to this value for both cluster and attach data.
     local_cache: "ss01_features_enriched.parquet"  # Local cache of the merged S3 dataset.
 
     columns_to_read:  # Columns to read from original data files

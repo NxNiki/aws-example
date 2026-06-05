@@ -171,7 +171,7 @@ class FeaturePipelineRunner:
             f"{self.cfg.game_id}: feature config drift vs the existing dataset at {sidecar_path}.\n"
             f"Changed semantic fields (existing -> current): {diffs}\n"
             "Rows already on S3 were produced under different semantics and cannot be "
-            "safely appended (e.g. agg_group buckets would mix different session_length "
+            "safely appended (e.g. agg_group buckets would mix different bin_size "
             "values). Re-run with --overwrite to rebuild the dataset from scratch."
         )
 

@@ -173,8 +173,8 @@ class ClusterAnalysisPipeline:
         return self._config["cluster_analysis"]["top_features"]
 
     @property
-    def session_length(self):
-        return self._config["data_loader"]["attach_data"]["session_length"]
+    def bin_size(self):
+        return self._config["data_loader"]["attach_data"]["bin_size"]
 
     @property
     def n_clusters(self):
@@ -333,7 +333,7 @@ class ClusterAnalysisPipeline:
             if "merge_date" in merge_cols:
                 data["merge_date"] = pd.to_datetime(data["billtime"]).dt.strftime("%Y_%m_%d")
             group_counts = data[merge_cols].value_counts(sort=False).reset_index(name="count")
-            valid_groups = group_counts.loc[group_counts["count"] == self.session_length, merge_cols]
+            valid_groups = group_counts.loc[group_counts["count"] == self.bin_size, merge_cols]
             data = data.merge(valid_groups, on=merge_cols, how="inner")
             save_local_cache(data, local_cache_path)
         data = apply_row_filters(cast(pd.DataFrame, data), row_filters)
@@ -1041,7 +1041,7 @@ class ClusterAnalysisPipeline:
         """Attach cluster labels to enriched (attach) data and save per-cluster parquet files.
 
         Row removal can happen in two places:
-        1. load_attach_data(): keeps only (merge_features) groups with exactly session_length rows,
+        1. load_attach_data(): keeps only (merge_features) groups with exactly bin_size rows,
            so incomplete groups are already dropped before this method.
         2. Merge with cluster labels: cluster labels come from clustering output, which used
            cluster_data after dropna(how='any'). So any attach_data key that was dropped in

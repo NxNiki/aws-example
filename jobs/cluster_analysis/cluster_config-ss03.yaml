@@ -157,7 +157,7 @@ data_loader:
       currency: ""  # Filter to specific currency
       math_table_id: "normal_zero"  # Restrict to a single math table; scalar -> equality, list -> isin.
       ai_group: "Default"
-    session_length: 50  # agg_group bin size (output_..._group_binsize_50); complete bins have bet_rounds == this. Rows whose (merge_on) group != session_length are dropped.
+    bin_size: 50  # agg_group bin size (output_..._group_binsize_50); complete bins have bet_rounds == this. Rows whose (merge_on) group != bin_size are dropped.
     local_cache: "ss03_features_enriched.parquet"  # Local cache of the merged S3 dataset.
 
     columns_to_read:  # Columns to read from original data files (match raw_stats CTE in etl_feature_engineer.py)

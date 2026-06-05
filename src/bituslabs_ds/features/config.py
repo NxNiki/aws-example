@@ -38,10 +38,10 @@ SEMANTIC_FIELDS: tuple[str, ...] = (
     "ai_groups",
     "selected_groups",
     "partition_cols",
-    "session_length",
+    "bin_size",
     "max_session_interval_seconds",
     "streak_threshold_seconds",
-    "max_session_gap_seconds",
+    "max_delta_t_gap_seconds",
     "drop_incomplete_tail_groups",
     "extra_where_clauses",
 )
@@ -68,15 +68,15 @@ class GameFeatureConfig:
         partition_cols: extra GROUP BY / aggregation key columns beyond the
             baseline ``(user_id, ai_group, session_group, agg_group)``.
             ``("math_table_id",)`` for ss02/ss03; ``()`` for ss01.
-        session_length: rows per agg_group (``ROUND((rn - 1) / N)``).
+        bin_size: consecutive bets per agg_group (``ROUND((rn - 1) / N)``).
         max_session_interval_seconds: gap threshold that splits a user's bets
             into new session_groups.
         streak_threshold_seconds: gap threshold used by streak / win_streak /
             lose_streak window functions.
-        max_session_gap_seconds: ``delta_t_seconds_nogap`` excludes gaps above
+        max_delta_t_gap_seconds: ``delta_t_seconds_nogap`` excludes gaps above
             this value (defaults to 1 hour).
         drop_incomplete_tail_groups: when ``True``, ``stats_base`` adds
-            ``HAVING COUNT(user_id) = session_length`` so the final partial
+            ``HAVING COUNT(user_id) = bin_size`` so the final partial
             ``agg_group`` per session is dropped.
         extra_where_clauses: additional AND-conjuncted WHERE clauses appended to
             ``user_bets`` (e.g. ``("t.script_id = 'giftShop'",)`` for ss01).
@@ -98,10 +98,10 @@ class GameFeatureConfig:
     ai_groups: tuple[str, ...]
     selected_groups: tuple[str, ...]
     partition_cols: tuple[str, ...] = ()
-    session_length: int = 100
+    bin_size: int = 100
     max_session_interval_seconds: int = 60 * 60 * 24 * 7
     streak_threshold_seconds: int = 200
-    max_session_gap_seconds: int = 60 * 60
+    max_delta_t_gap_seconds: int = 60 * 60
     drop_incomplete_tail_groups: bool = False
     extra_where_clauses: tuple[str, ...] = ()
     requires_full_history: bool = False

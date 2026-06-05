@@ -5,7 +5,7 @@ with AVG / STDDEV / MIN / MAX for each per-bet metric, plus the SUM-with-
 condition accumulators (accum_pos_*, accum_neg_*) and the COUNT-based rate
 metrics (payout_rate, profit_rate).
 
-The optional ``HAVING COUNT(user_id) = session_length`` drops the final
+The optional ``HAVING COUNT(user_id) = bin_size`` drops the final
 incomplete agg_group per session when ``cfg.drop_incomplete_tail_groups``
 is True.
 """
@@ -103,6 +103,6 @@ def build_stats_base_cte(cfg: GameFeatureConfig) -> str:
 
     lines.extend(["    FROM raw_stats AS t", "    GROUP BY", group_by])
     if cfg.drop_incomplete_tail_groups:
-        lines.append(f"    HAVING COUNT(t.user_id) = {cfg.session_length}")
+        lines.append(f"    HAVING COUNT(t.user_id) = {cfg.bin_size}")
     lines.append(")")
     return "\n".join(lines)

@@ -50,7 +50,7 @@ SS01 = GameFeatureConfig(
     ai_groups=("AI", "Default"),
     selected_groups=("Default",),
     partition_cols=(),
-    session_length=40,
+    bin_size=40,
     drop_incomplete_tail_groups=True,
     extra_where_clauses=("t.script_id = 'giftShop'",),
 )
@@ -63,7 +63,7 @@ SS02 = GameFeatureConfig(
     ai_groups=("AI", "Default"),
     selected_groups=("AI",),
     partition_cols=("math_table_id",),
-    session_length=30,
+    bin_size=30,
 )
 
 SS03 = GameFeatureConfig(
@@ -74,7 +74,7 @@ SS03 = GameFeatureConfig(
     ai_groups=("AI", "AB_TEST_A", "AB_TEST_B", "Default"),
     selected_groups=("Default",),
     partition_cols=("math_table_id",),
-    session_length=100,
+    bin_size=100,
 )
 
 

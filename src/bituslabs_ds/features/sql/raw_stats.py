@@ -13,7 +13,7 @@ Adds the per-bet derived metrics that the grouped stats roll up:
 * ``profit``: ``payout - bet_amount``
 * ``deposit`` / ``withdraw``: split of ``balance_transaction``
 * ``streak`` / ``win_streak`` / ``lose_streak``: ROW_NUMBER within each *_group
-* ``agg_group``: floor((row - 1) / session_length) bucket id per session.
+* ``agg_group``: floor((row - 1) / bin_size) bucket id per session.
   Partitions by ``session_start_ts`` (not by the within-date ordinal) so the
   bucketing is stable across runs.
 * ``activity_date``: ``CAST(min_created_at AS DATE)`` -- ETLScheduler's
@@ -27,8 +27,8 @@ _ORDER = "ORDER BY t.spin_id, t.min_created_at"
 
 
 def build_raw_stats_cte(cfg: GameFeatureConfig) -> str:
-    n = cfg.session_length
-    gap = cfg.max_session_gap_seconds
+    n = cfg.bin_size
+    gap = cfg.max_delta_t_gap_seconds
 
     lines: list[str] = [
         "raw_stats AS (",
