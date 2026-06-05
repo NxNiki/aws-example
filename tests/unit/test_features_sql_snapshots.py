@@ -16,6 +16,7 @@ SQL change.
 
 import importlib.util
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -76,28 +77,30 @@ SS03 = GameFeatureConfig(
     ai_groups=("AI", "AB_TEST_A", "AB_TEST_B", "Default"),
     selected_groups=("Default",),
     partition_cols=("math_table_id",),
-    bin_size=100,
+    bin_size=[30, 50, 70, 100],
     session_break_threshold_seconds=60 * 60 * 12,
 )
 
 
-@pytest.mark.parametrize(
-    "config,kind",
-    [
-        (SS01, "enriched"),
-        (SS01, "grouped"),
-        (SS02, "enriched"),
-        (SS02, "grouped"),
-        (SS03, "enriched"),
-        (SS03, "grouped"),
-    ],
-    ids=lambda v: v if isinstance(v, str) else v.game_id.lower(),
-)
-def test_sql_matches_snapshot(config: GameFeatureConfig, kind: str) -> None:
-    composer = compose_enriched_query if kind == "enriched" else compose_grouped_query
-    actual = composer(config, config.date_start)
+# One snapshot per (game, bin_size, kind). A list ``bin_size`` fans out to one
+# scalar-bin_size query per size (mirroring FeaturePipelineRunner), so each size
+# gets its own golden file. Scalar configs simply yield a single bin.
+_SNAPSHOT_CASES = [
+    (cfg, n, kind) for cfg in (SS01, SS02, SS03) for n in cfg.bin_sizes() for kind in ("enriched", "grouped")
+]
 
-    snapshot_path = SNAPSHOTS_DIR / f"{config.game_id.lower()}_{kind}.sql"
+
+@pytest.mark.parametrize(
+    "config,bin_size,kind",
+    _SNAPSHOT_CASES,
+    ids=lambda v: v.game_id.lower() if isinstance(v, GameFeatureConfig) else str(v),
+)
+def test_sql_matches_snapshot(config: GameFeatureConfig, bin_size: int, kind: str) -> None:
+    scalar = replace(config, bin_size=bin_size)
+    composer = compose_enriched_query if kind == "enriched" else compose_grouped_query
+    actual = composer(scalar, scalar.date_start)
+
+    snapshot_path = SNAPSHOTS_DIR / f"{config.game_id.lower()}_binsize_{bin_size}_{kind}.sql"
 
     if os.environ.get("REGENERATE_SNAPSHOTS") == "1":
         SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)

@@ -32,7 +32,7 @@ CONFIG = GameFeatureConfig(
     ai_groups=("AI", "AB_TEST_A", "AB_TEST_B", "Default"),
     selected_groups=("Default",),
     partition_cols=("math_table_id",),
-    bin_size=100,
+    bin_size=[30, 50, 70, 100],
     session_break_threshold_seconds=60 * 60 * 12,
 )
 

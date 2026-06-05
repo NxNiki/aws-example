@@ -101,7 +101,7 @@ class GameFeatureConfig:
     # Consecutive bets per agg_group. A list runs the pipeline once per size;
     # FeaturePipelineRunner always suffixes output_prefix with ``_binsize_{N}``.
     bin_size: int | list[int] = 100
-    session_break_threshold_seconds: int = 60 * 60 * 24 * 7
+    session_break_threshold_seconds: int = 60 * 60 * 12
     streak_threshold_seconds: int = 200
     max_delta_t_gap_seconds: int = 60 * 60
     drop_incomplete_tail_groups: bool = False
