@@ -16,7 +16,7 @@ streak boundaries are correctly captured -- which is trivial for any sane
 incremental window.
 
 * ``session_start_ts``: ``min_created_at`` of the session's first bet.
-  A bet starts a new session when ``delta_t_seconds > max_session_interval_seconds``
+  A bet starts a new session when ``delta_t_seconds > session_break_threshold_seconds``
   or is NULL (the user's very first bet).
 * ``streak_group``: new whenever ``delta_t_seconds > streak_threshold_seconds``.
 * ``win_streak_group``: new whenever the previous bet wasn't a win, or the
@@ -33,7 +33,7 @@ _OVER = (
 
 
 def build_user_group_cte(cfg: GameFeatureConfig) -> str:
-    interval = cfg.max_session_interval_seconds
+    interval = cfg.session_break_threshold_seconds
     streak = cfg.streak_threshold_seconds
 
     lines: list[str] = [

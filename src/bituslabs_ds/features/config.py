@@ -39,7 +39,7 @@ SEMANTIC_FIELDS: tuple[str, ...] = (
     "selected_groups",
     "partition_cols",
     "bin_size",
-    "max_session_interval_seconds",
+    "session_break_threshold_seconds",
     "streak_threshold_seconds",
     "max_delta_t_gap_seconds",
     "drop_incomplete_tail_groups",
@@ -69,7 +69,7 @@ class GameFeatureConfig:
             baseline ``(user_id, ai_group, session_group, agg_group)``.
             ``("math_table_id",)`` for ss02/ss03; ``()`` for ss01.
         bin_size: consecutive bets per agg_group (``ROUND((rn - 1) / N)``).
-        max_session_interval_seconds: gap threshold that splits a user's bets
+        session_break_threshold_seconds: gap threshold that splits a user's bets
             into new session_groups.
         streak_threshold_seconds: gap threshold used by streak / win_streak /
             lose_streak window functions.
@@ -87,7 +87,7 @@ class GameFeatureConfig:
             ``effective_lookback_days()`` the normal incremental run is safe,
             so the default is ``False``.
         lookback_days: explicit override for ETLScheduler lookback. ``None`` ->
-            derive from ``max_session_interval_seconds`` via
+            derive from ``session_break_threshold_seconds`` via
             ``effective_lookback_days()``.
     """
 
@@ -99,14 +99,14 @@ class GameFeatureConfig:
     selected_groups: tuple[str, ...]
     partition_cols: tuple[str, ...] = ()
     bin_size: int = 100
-    max_session_interval_seconds: int = 60 * 60 * 24 * 7
+    session_break_threshold_seconds: int = 60 * 60 * 24 * 7
     streak_threshold_seconds: int = 200
     max_delta_t_gap_seconds: int = 60 * 60
     drop_incomplete_tail_groups: bool = False
     extra_where_clauses: tuple[str, ...] = ()
     requires_full_history: bool = False
     # Explicit override for ETLScheduler lookback. ``None`` -> derive from
-    # ``max_session_interval_seconds`` via ``effective_lookback_days()``.
+    # ``session_break_threshold_seconds`` via ``effective_lookback_days()``.
     lookback_days: int | None = None
 
     def __post_init__(self) -> None:
@@ -126,13 +126,13 @@ class GameFeatureConfig:
             )
 
     def effective_lookback_days(self) -> int:
-        """ETLScheduler lookback derived from ``max_session_interval_seconds``.
+        """ETLScheduler lookback derived from ``session_break_threshold_seconds``.
 
-        Formula: ``ceil(max_session_interval_seconds / 86400) + 1`` -- one full
+        Formula: ``ceil(session_break_threshold_seconds / 86400) + 1`` -- one full
         ``max_session_interval`` plus a one-day safety buffer. Examples:
 
-        * 12-hour ``max_session_interval_seconds`` -> 2 days
-        * 7-day ``max_session_interval_seconds`` -> 8 days
+        * 12-hour ``session_break_threshold_seconds`` -> 2 days
+        * 7-day ``session_break_threshold_seconds`` -> 8 days
 
         Any session that started within the lookback window has its first bet
         captured by the query, so ``session_start_ts`` (and therefore
@@ -145,7 +145,7 @@ class GameFeatureConfig:
         """
         if self.lookback_days is not None:
             return self.lookback_days
-        return math.ceil(self.max_session_interval_seconds / 86400) + 1
+        return math.ceil(self.session_break_threshold_seconds / 86400) + 1
 
     def to_dict(self) -> dict:
         """Full config as a JSON-serializable dict (tuples become lists)."""
