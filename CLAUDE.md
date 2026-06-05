@@ -171,7 +171,7 @@ Optional longer explanation if the why is non-obvious.
 
 ### How to split commits
 - One commit per logical concern. Ask: "would reverting this commit make sense on its own?"
-- All changes to a single file go in one commit — never split one file across commits.
+- Prefer keeping all of a single file's changes in one commit. Split a file across commits only when the concerns are genuinely independent AND each resulting commit still builds and passes its tests — otherwise keep the file whole. (Each commit must leave every file in a coherent, runnable state, so `git bisect`/`git revert` stay meaningful.) If one file repeatedly wants to live in two commits at once, treat that as a signal the file is too large and should be split.
 - Related changes across multiple files that serve the same purpose belong together (e.g., renaming a metric in three ETL jobs + the dashboard config that references it).
 - Unrelated changes that happen to land at the same time should be separate commits (e.g., a Dockerfile tweak is separate from an ETL query change).
 
