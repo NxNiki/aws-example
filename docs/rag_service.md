@@ -3,7 +3,7 @@
 The RAG service indexes Confluence documentation declared in
 [`config/rag_sources.yaml`](../src/rag_service/config/rag_sources.yaml)
 and exposes a retrieval HTTP endpoint at `POST /retrieve`. The chat
-agent (`dashboards.chat_agent`) calls it via `rag_service.client` so
+agent (`ai_agent.chat_agent`) calls it via `rag_service.client` so
 no vector-store details leak into the agent.
 
 The interaction is one-way: Confluence is the source of truth,

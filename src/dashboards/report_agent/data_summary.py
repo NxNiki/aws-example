@@ -87,11 +87,69 @@ def _round_matrix(matrix: Any) -> List[List[Any]]:
     return out
 
 
-def _trace_summary(trace: Dict[str, Any]) -> Dict[str, Any]:
+def _trace_subplot_index(trace: Dict[str, Any]) -> int:
+    """Return the 1-based subplot index for a trace.
+
+    ``make_subplots`` assigns each subplot its own xaxis numbered in
+    row-major order (``"x"``, ``"x2"``, ``"x3"``, …). A trace's ``xaxis``
+    attribute therefore encodes which subplot it belongs to. Returns 1
+    when the trace has no ``xaxis`` (single-subplot figure).
+    """
+    xaxis = trace.get("xaxis") or "x"
+    if xaxis == "x":
+        return 1
+    try:
+        return int(str(xaxis).lstrip("x"))
+    except ValueError:
+        return 1
+
+
+def _extract_subplot_titles(annotations: Sequence[Dict[str, Any]]) -> List[str]:
+    """Pull subplot titles out of ``layout.annotations`` in subplot order.
+
+    ``make_subplots(subplot_titles=[...])`` emits annotations with
+    ``xref=yref="paper"`` and ``showarrow=False``. We sort them
+    top-to-bottom (higher y first) then left-to-right (lower x first) so
+    the resulting list matches the row-major iteration that subplot
+    xaxis numbers follow. Annotations used for other purposes
+    (e.g. arrows, in-chart labels with ``xref="x"``) are filtered out.
+    """
+    titles: List[tuple] = []
+    for a in annotations or []:
+        if not isinstance(a, dict):
+            continue
+        if a.get("xref") != "paper" or a.get("yref") != "paper":
+            continue
+        if a.get("showarrow", True):
+            continue
+        text = a.get("text")
+        if not text:
+            continue
+        try:
+            y_val = float(a.get("y", 0) or 0)
+            x_val = float(a.get("x", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        # Sort key: top row first (negative y → smaller key), then left-to-right.
+        titles.append((-y_val, x_val, str(text)))
+    titles.sort()
+    return [t[2] for t in titles]
+
+
+def _trace_summary(trace: Dict[str, Any], subplot_titles: Optional[Sequence[str]] = None) -> Dict[str, Any]:
     out: Dict[str, Any] = {
         "name": trace.get("name") or "(unnamed)",
         "type": trace.get("type") or "scatter",
     }
+    # The metric/variable a multi-subplot trace belongs to. Without this
+    # the LLM can't tell which row of a make_subplots grid a trace
+    # represents — it just sees a list of group-labelled traces with
+    # x/y values and has to guess. Empty when the figure has no subplot
+    # titles (single-panel figure or non-make_subplots layout).
+    if subplot_titles:
+        idx = _trace_subplot_index(trace)
+        if 0 < idx <= len(subplot_titles):
+            out["subplot"] = subplot_titles[idx - 1]
     mode = trace.get("mode")
     if mode:
         out["mode"] = mode
@@ -148,11 +206,23 @@ def extract_data_summary(fig_dict: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
     title = layout.get("title")
     title_text = title.get("text") if isinstance(title, dict) else title
+
+    # Per-subplot titles (Plotly stores ``make_subplots`` subplot titles in
+    # layout.annotations rather than on the per-axis title). Pass them to
+    # ``_trace_summary`` so each trace also gets a ``subplot`` tag — the
+    # LLM can then tell which panel of a multi-metric figure each trace
+    # belongs to. ``None``/empty list → no per-trace ``subplot`` field.
+    subplot_titles = _extract_subplot_titles(layout.get("annotations") or [])
+
     summary: Dict[str, Any] = {
-        "traces": [_trace_summary(t) for t in data if isinstance(t, dict)],
+        "traces": [_trace_summary(t, subplot_titles) for t in data if isinstance(t, dict)],
     }
     if title_text:
         summary["title"] = str(title_text)
+    # Also surface the bare list of subplot titles so the LLM gets a
+    # quick overview of which panels exist before walking the traces.
+    if subplot_titles:
+        summary["subplot_titles"] = subplot_titles
     x_axis = _axis_summary(layout.get("xaxis"))
     y_axis = _axis_summary(layout.get("yaxis"))
     y2_axis = _axis_summary(layout.get("yaxis2"))

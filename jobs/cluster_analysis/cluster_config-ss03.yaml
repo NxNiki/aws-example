@@ -1,32 +1,38 @@
 # SS03 Mahjiang Streak Cluster Analysis Configuration
 # This file contains configuration specific to the ss03 clustering project.
-# Input files are produced by jobs/ss03_mahjiang_streak/etl_feature_engineer.py, which
-# writes timestamped parquet files into jobs/output_ss03_mahjiang_streak/ named
-# ss03_features_{grouped,enriched}_<groups_tag>_<YYYYMMDD_HHMMSS>.parquet.
-# Update the `local_cache` suffix below to match the specific ETL run you want to analyze.
+# Input files are produced by jobs/ss03_mahjiang_streak/etl_feature_engineer.py and
+# written by ETLScheduler to S3 under
+#   s3://bituslabs-team-ai/etl-results/jobs/output_ss03_feature_engineer/
+#     features_grouped/   (cluster_data below)
+#     features_enriched/  (attach_data below)
+# The pipeline pulls those S3 datasets and caches them locally under work_dir.
 
-project_name: "ss03_2026"  # Current analysis environment
+project_name: "ss03_2026_06"  # Current analysis environment
 work_dir: "output_ss03_mahjiang_streak"  # Base working directory, where local cache of the input data will be saved.
 s3_prefix: ""
 
 data_loader:
   cluster_data:  # data to train cluster model.
-    bucket: ""  # S3 bucket for input data
-    prefix: ""  # S3 prefix for input data
-    pattern: ''  # Pattern for grouped data files
+    bucket: "bituslabs-team-ai"  # S3 bucket for input data
+    prefix: "etl-results/jobs/output_ss03_feature_engineer/features_grouped_binsize_50/"  # S3 prefix for input data
+    pattern: '\.parquet$'  # Match every parquet file under the partitioned dataset
     row_filters:  # General row filtering; empty string / null / [] entries are skipped.
       currency: ""  # Filter to specific currency
       math_table_id: "normal_zero"  # Restrict to a single math table; scalar -> equality, list -> isin.
+      ai_group: "Default"
     outlier_threshold: 0  # z score to filter outliers
     clip_threshold: [.025, .975]
-    local_cache: "ss03_features_grouped_Default_20260512_163311.parquet"  # Update suffix to match ETL output.
+    remove_short_sessions: true  # drop incomplete bins: keep only rows where session_count_column equals its max
+    session_count_column: "bet_rounds"  # per-group bet count; complete bins carry the max value
+    local_cache: "ss03_features_grouped.parquet"  # Local cache of the merged S3 dataset.
 
     data_types:
       user_id: "category"
       ai_group: "category"
       math_table_id: "category"
+      session_start_date: "category"
       session_group: "category"
-      agg_group: "category"
+      agg_group: "int64"
       rtp_mean: "float64"
       rtp_min: "float64"
       rtp_max: "float64"
@@ -144,22 +150,25 @@ data_loader:
       accum_withdraw_ratio: "float64"
 
   attach_data:  # data to attach cluster index.
-    bucket: ""  # S3 bucket for input data
-    prefix: ""  # S3 prefix for input data
-    pattern: ''  # Pattern for grouped data files
+    bucket: "bituslabs-team-ai"  # S3 bucket for input data
+    prefix: "etl-results/jobs/output_ss03_feature_engineer/features_enriched/"  # S3 prefix for input data
+    pattern: '\.parquet$'  # Match every parquet file under the partitioned dataset
     row_filters:  # General row filtering; empty string / null / [] entries are skipped.
       currency: ""  # Filter to specific currency
       math_table_id: "normal_zero"  # Restrict to a single math table; scalar -> equality, list -> isin.
-    session_length: 100  # SS03 SESSION_LENGTH; rows whose (merge_on) group != session_length are dropped.
-    local_cache: "ss03_features_enriched_Default_20260513_162102.parquet"  # Update suffix to match ETL output.
+      ai_group: "Default"
+    bin_size: 50  # agg_group bin size (output_..._group_binsize_50); complete bins have bet_rounds == this. Rows whose (merge_on) group != bin_size are dropped.
+    local_cache: "ss03_features_enriched.parquet"  # Local cache of the merged S3 dataset.
 
     columns_to_read:  # Columns to read from original data files (match raw_stats CTE in etl_feature_engineer.py)
       - "user_id"
       - "ai_group"
       - "math_table_id"
+      - "session_start_date"
       - "session_group"
-      - "agg_group"
+      - "session_bet_index"
       - "min_created_at"
+      - "spin_id"
       - "fg_rounds"
       - "bet_amount"
       - "delta_bet_amount"
@@ -174,7 +183,7 @@ data_loader:
 
     cluster_stats_columns: ["user_id", "min_created_at", "balance_after_bet", "bet_amount", "fg_rounds"]
 
-  merge_on: ["user_id", "ai_group", "math_table_id", "session_group", "agg_group"]  # Column used to attach cluster index to attach_data.
+  merge_on: ["user_id", "ai_group", "math_table_id", "session_start_date", "session_group", "agg_group"]  # Column used to attach cluster index to attach_data.
 
 output:
   bucket: "bituslabs-team-ai"  # S3 bucket for output data
@@ -188,6 +197,7 @@ features:
     - "user_id"
     - "ai_group"
     - "math_table_id"
+    - "session_start_date"
     - "session_group"
     - "agg_group"
 
@@ -331,12 +341,12 @@ cluster_analysis:
   dbscan_eps: 3  # DBSCAN: neighborhood radius in scaled feature space; tune per dataset.
   dbscan_min_samples: 50  # DBSCAN: min samples in eps-neighborhood for a core point.
   n_clusters: 3  # Default number of clusters for K-means
-  top_features: 40  # Default number of top features to use
+  top_features: 35  # Default number of top features to use
 
 pipeline:
   elbow_method: true  # Run elbow method analysis
   cluster_analysis: true  # Run cluster analysis with selected features and n_clusters
   test_model: false  # Apply trained model to new data
-  attach_cluster_label: true  # Attach cluster indices to original data
-  get_cluster_stats: true 
-  upload_result_to_s3: true 
+  attach_cluster_label: false # Attach cluster indices to original data
+  get_cluster_stats: false 
+  upload_result_to_s3: false 

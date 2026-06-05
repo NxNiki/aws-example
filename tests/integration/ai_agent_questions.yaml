@@ -1,0 +1,116 @@
+# AI Agent Q&A test cases.
+#
+# Each entry below is fed to the chat agent by
+# tests/integration/test_ai_agent_questions.py. The test prints the
+# answer (and the list of tools the agent invoked) so you can review
+# them manually with:
+#
+#     poetry run pytest tests/integration/test_ai_agent_questions.py -v -s
+#
+# Required fields:
+#   id        — short stable identifier; shown in pytest output on
+#               failure, so make it greppable.
+#   question  — the user's question to the agent (any length, YAML
+#               literal blocks `|` work fine for multi-line).
+#
+# Optional fields:
+#   dashboard_config   — filename under src/dashboards/, e.g.
+#                        "dashboard_config-ss03.yaml". Controls which
+#                        metric/group metadata the agent loads.
+#   model              — model_key, e.g. "gemini:gemini-2.5-flash" or
+#                        "openai:gpt-4.1". Defaults to whatever
+#                        chat_agent._build_llm picks from env.
+#   must_contain       — list of substrings that MUST appear in the
+#                        answer (case-insensitive). Empty/missing = no
+#                        substring check; the test passes as long as
+#                        the agent responds.
+#   must_call_tools    — list of tool names the agent MUST invoke
+#                        somewhere in its trace. Empty/missing = no
+#                        tool-call check. Useful for behavior tests
+#                        (e.g. "did the agent reach for RAG vs.
+#                        live Confluence?").
+#   notes              — free-form comment for reviewers; ignored by
+#                        the test runner.
+#
+# Tip: keep one entry per logical question. Don't bundle several
+# questions into one entry — single-shot tests are easier to triage.
+#
+# RAG questions: the harness runs the chat agent in-process, but the
+# agent's `search_confluence_rag` tool calls the rag-service over HTTP.
+# Point local runs at the deployed ECS rag-service rather than spinning
+# one up locally — same service real users hit, catches deploy
+# regressions, no local faiss/embeddings/S3 setup. Set in `.env`:
+#
+#     RAG_SERVICE_URL=http://rag-service-alb-1946335648.us-west-2.elb.amazonaws.com
+#
+# Without it the client defaults to http://localhost:8052 and connection
+# refused → the agent falls back to live Confluence keyword search and
+# any `must_call_tools: [search_confluence_rag]` assertion will fail.
+
+cases:
+  - id: ss03_active_user_rtp_metric
+    question: What does active_user_rtp_less_0_4_ratio mean, and how is it computed?
+    dashboard_config: dashboard_config-ss03.yaml
+    model: gemini:gemini-2.5-flash
+    must_contain: []
+    must_call_tools: []
+    notes: |
+      Baseline grounded-in-metadata question — the agent should
+      describe the metric using the column_metadata.yaml entry and
+      ideally cite the ETL formula. Review the answer for clarity
+      and accuracy before adding strict assertions.
+
+  - id: confluence_ai_activity
+    question: 请介绍一下SS03的AI活动时间线
+    model: gemini:gemini-2.5-flash
+    must_contain: []
+    must_call_tools:
+      - search_confluence_rag
+    notes: |
+      Confluence question — the agent MUST start with search_confluence_rag
+      (the curated RAG index) per the system prompt; live search_confluence
+      / read_confluence_page are fallback-only. Needs RAG_SERVICE_URL in
+      .env pointing at the deployed rag-service ALB (see file header).
+
+  - id: fish_hunter_boost_pool_sql
+    question: show me the SQL query in the fish_hunter ETL source code that assigns the BOOST_POOL and BOOST_POOL_2 group labels.
+    dashboard_config: dashboard_config-fishhunter.yaml
+    model: gemini:gemini-2.5-flash
+    must_contain:
+      - BOOST_POOL_2
+      - strategy_name
+    must_call_tools: []
+    notes: |
+      Regression test for the codebase-tools deploy. The boost-pool /
+      boost-pool-2 strategy assignment lives in a CASE expression inside
+      jobs/fish_hunter/etl_game_stats_daily_by_user.py (`daily_group`).
+      Assertions chosen for stability: `BOOST_POOL_2` is the discriminating
+      label the agent cannot produce without reading the source (distinct
+      from `BOOST_POOL` only by the `_2` suffix); `strategy_name` is the
+      SQL column the CASE switches on. Avoided asserting on the partition
+      event ID literal — it rotates per campaign, so it would punish
+      correct behavior when the ETL is legitimately updated.
+      `must_call_tools` is intentionally empty: either `read_etl_source`
+      (metadata cache) or `grep_codebase` + `read_source_file` (live repo)
+      is an acceptable route.
+
+  - id: dashboard_clip_data_feature
+    question: how does the dashboard clip outlier values for display?
+    model: gemini:gemini-2.5-flash
+    must_contain:
+      - clip
+      - game_stats_monitor
+    must_call_tools:
+      - grep_codebase
+    notes: |
+      Regression test for the PRIORITY rule + grep query-strategy
+      improvements. The dashboard's clip-data UI is implemented in
+      src/dashboards/game_stats_monitor.py (element IDs `group-{id}-clip-*`
+      and `viz-{id}-clip-*`, plus the `pl.col(c).clip(lower_bound=lo,
+      upper_bound=hi)` transform applied before rendering). Previously the
+      agent went straight to Confluence on "how does X work in the
+      dashboard" phrasing, and when explicitly told to grep it queried for
+      the literal phrase "clip data" (zero matches) and gave up. After the
+      fix the agent should (a) skip Confluence because the subject is "the
+      dashboard", (b) grep for the single token "clip" rather than the
+      English phrase, and (c) surface game_stats_monitor.py in the answer.

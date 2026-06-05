@@ -18,7 +18,7 @@ A small in-process cache keys results by URL so a session that clicks
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from dashboards import confluence_client
 
@@ -96,25 +96,3 @@ def load_references(urls: List[str], *, max_chars: int = _MAX_CHARS_PER_REFERENC
 def clear_cache() -> None:
     """Drop the in-process cache. Useful between dashboard sessions in tests."""
     _REFERENCE_CACHE.clear()
-
-
-def format_for_prompt(refs: List[Dict[str, str]]) -> Optional[str]:
-    """Concatenate fetched references into the ``# Reference materials`` prompt block.
-
-    Returns ``None`` when the list is empty so the caller can skip the
-    section entirely. Each reference is labelled with its title and URL
-    so the LLM can cite specifically.
-    """
-    if not refs:
-        return None
-    parts: List[str] = []
-    for ref in refs:
-        title = ref.get("title") or ref.get("url") or "(unnamed)"
-        url = ref.get("url") or ""
-        body = ref.get("text") or ""
-        if not body:
-            err = ref.get("error") or "(no body fetched — external link)"
-            parts.append(f"--- {title} ({url}) ---\n[{err}]")
-        else:
-            parts.append(f"--- {title} ({url}) ---\n{body}")
-    return "\n\n".join(parts)

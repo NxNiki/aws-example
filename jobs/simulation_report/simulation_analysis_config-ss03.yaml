@@ -6,8 +6,8 @@ project_name: "ss03_simulation"  # Current analysis environment
 work_dir: "output_ss03_simulation"  # Base working directory, where local cache of the input data will be saved.
 
 data_loader:
-  bucket: "bituslabs-team-ai"  # S3 bucket for input data
-  prefix: "gail_simulator_data_raw/SS03/sim_15000_20260425/" # S3 prefix for input data
+  bucket: "slotmachine-ai-game-table"  # S3 bucket for input data
+  prefix: "dev/games/SS03/modules/script_tables/" # S3 prefix for input data
   pattern: "cluster.*_sessions_summary.csv$"  # Pattern for grouped data files
   local_cache: "ss03_simulation_sim_15000_20260425.parquet"
   row_filters:  # General row filtering (null to disable filtering)

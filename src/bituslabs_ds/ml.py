@@ -173,8 +173,8 @@ class ClusterAnalysisPipeline:
         return self._config["cluster_analysis"]["top_features"]
 
     @property
-    def session_length(self):
-        return self._config["data_loader"]["attach_data"]["session_length"]
+    def bin_size(self):
+        return self._config["data_loader"]["attach_data"]["bin_size"]
 
     @property
     def n_clusters(self):
@@ -189,6 +189,14 @@ class ClusterAnalysisPipeline:
     def clip_threshold(self):
         val = self._config["data_loader"]["cluster_data"].get("clip_threshold", np.nan)
         return val
+
+    @property
+    def remove_short_sessions(self) -> bool:
+        return bool(self._config["data_loader"]["cluster_data"].get("remove_short_sessions", False))
+
+    @property
+    def session_count_column(self) -> str:
+        return self._config["data_loader"]["cluster_data"].get("session_count_column", "bet_rounds")
 
     @property
     def cluster_stats_columns(self):
@@ -269,6 +277,10 @@ class ClusterAnalysisPipeline:
             files = self._cluster_data_files
             output_file = self._config["data_loader"]["cluster_data"]["local_cache"]
             columns = self.key_features + self.normal_features + self.skewed_features
+            # The session-count column (e.g. bet_rounds) is not a feature; read it so
+            # load_cluster_data can drop incomplete bins.
+            if self.remove_short_sessions and self.session_count_column not in columns:
+                columns = columns + [self.session_count_column]
             row_filters = self._config["data_loader"]["cluster_data"]["row_filters"]
             data_types = self.get_data_types("cluster_data")
         else:
@@ -312,12 +324,22 @@ class ClusterAnalysisPipeline:
             )
         else:
             data = self.load_raw_data(data_label="attach_data")
-            data["merge_date"] = pd.to_datetime(data["billtime"]).dt.strftime("%Y_%m_%d")
             merge_cols: List[str] = (
                 [self.merge_features] if isinstance(self.merge_features, str) else list(self.merge_features)
             )
+            # Enriched is now bin-independent: it carries `session_bet_index` (1-based
+            # row within session) instead of `agg_group`. Derive the per-bin agg_group
+            # the same way the grouped SQL does (ROUND == integer division here), so the
+            # merge_on join to cluster labels (which key on agg_group) lines up.
+            if "agg_group" in merge_cols and "agg_group" not in data.columns:
+                data["agg_group"] = (data["session_bet_index"] - 1) // self.bin_size
+            # Legacy schema (wucaishen/deepdive) keys on a per-day column derived from `billtime`.
+            # ss03's merge_on doesn't include merge_date and its enriched data has no `billtime`
+            # column, so only build it when it's actually a merge key.
+            if "merge_date" in merge_cols:
+                data["merge_date"] = pd.to_datetime(data["billtime"]).dt.strftime("%Y_%m_%d")
             group_counts = data[merge_cols].value_counts(sort=False).reset_index(name="count")
-            valid_groups = group_counts.loc[group_counts["count"] == self.session_length, merge_cols]
+            valid_groups = group_counts.loc[group_counts["count"] == self.bin_size, merge_cols]
             data = data.merge(valid_groups, on=merge_cols, how="inner")
             save_local_cache(data, local_cache_path)
         data = apply_row_filters(cast(pd.DataFrame, data), row_filters)
@@ -352,19 +374,26 @@ class ClusterAnalysisPipeline:
             )
         else:
             data = self.load_raw_data(data_label="cluster_data")
-            data = data[data["group_num"] == self.session_length]
-            merge_ts = pd.to_datetime(data["start_time"], errors="coerce")
-            if isinstance(merge_ts, pd.DatetimeIndex):
-                merge_ts = pd.Series(merge_ts.to_numpy(), index=data.index, dtype="datetime64[ns]")
-            data["merge_date"] = merge_ts.dt.strftime("%Y_%m_%d")
-            # check if we have duplidated sample:
-            dup_subset = data.loc[:, ["group_id", "merge_date"]]
-            duplicated = dup_subset.duplicated()
+            # Drop incomplete bins: keep only the longest sessions (count == its max);
+            # shorter ones are partial sessions and would skew the per-group stats.
+            if self.remove_short_sessions:
+                col = self.session_count_column
+                max_count = data[col].max()
+                before = len(data)
+                data = data[data[col] >= max_count]
+                logger.info(
+                    f"remove_short_sessions: dropped {before - len(data)} of {before} rows "
+                    f"with {col} < {max_count}; {len(data)} rows remain"
+                )
+            # Drop duplicate samples: the merge_on tuple is the unique grouping grain,
+            # so the same group re-emitted across overlapping partition files is a dup.
+            data = cast(pd.DataFrame, data)
+            merge_cols = [self.merge_features] if isinstance(self.merge_features, str) else list(self.merge_features)
+            duplicated = data.duplicated(subset=merge_cols)
             if duplicated.any():
                 logger.warning(f"duplicated samples found in cluster data: {duplicated.sum()} / {len(data)}")
-                # data = data.drop_duplicates(keep="first")
-                data = data[~duplicated]
-            data, _ = remove_outliers(cast(pd.DataFrame, data), self.outlier_threshold)
+                data = data.loc[~duplicated]
+            data, _ = remove_outliers(data, self.outlier_threshold)
             save_local_cache(cast(pd.DataFrame, data), local_cache_path)
 
         data = apply_row_filters(cast(pd.DataFrame, data), row_filters)
@@ -1018,7 +1047,7 @@ class ClusterAnalysisPipeline:
         """Attach cluster labels to enriched (attach) data and save per-cluster parquet files.
 
         Row removal can happen in two places:
-        1. load_attach_data(): keeps only (merge_features) groups with exactly session_length rows,
+        1. load_attach_data(): keeps only (merge_features) groups with exactly bin_size rows,
            so incomplete groups are already dropped before this method.
         2. Merge with cluster labels: cluster labels come from clustering output, which used
            cluster_data after dropna(how='any'). So any attach_data key that was dropped in

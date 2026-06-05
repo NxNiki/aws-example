@@ -1,0 +1,728 @@
+# =============================================================================
+# Column & Group Metadata for Dashboard AI Assistant
+# =============================================================================
+# This file is the single source of truth for business meaning of dashboard
+# columns, user groups, and game-specific terminology. The AI chatbot uses
+# this file — together with ETL-derived computation logic cached at runtime —
+# to answer user questions.
+#
+# Structure:
+#   groups:     How user segments are defined (new/old/beginner/…)
+#   games:      Game-specific context (game IDs, source tables, AB groups)
+#   columns:    Per-column metadata (description, formula hint, category)
+#   etl_files:  Paths to ETL scripts the metadata_builder can scan
+#
+# Interpretation convention:
+#   All profit / payout / bet / win / loss / RTP metrics are from the
+#   PLAYER's perspective. A negative profit means the player lost money
+#   (and the operator earned). Never describe these as "company profit",
+#   "casino profit", or "house earnings".
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# User group definitions (applies to all slot games: SS01, SS02, SS03)
+# ---------------------------------------------------------------------------
+groups:
+  user_group:
+    description: >
+      User lifecycle segment based on how many days since the user's first bet
+      in the game (first_bet_date from fct_bet_orders).
+    values:
+      new:
+        definition: "DATEDIFF('day', first_bet_date, activity_date) <= 3"
+        description: "Users whose first bet in this game was within the last 3 calendar days."
+      beginner:
+        definition: "DATEDIFF('day', first_bet_date, activity_date) BETWEEN 4 AND 7"
+        description: "Users whose first bet was 4–7 calendar days ago."
+      old:
+        definition: "DATEDIFF('day', first_bet_date, activity_date) > 7"
+        description: "Users whose first bet was more than 7 calendar days ago."
+
+  user_group2:
+    description: >
+      Alternative lifecycle segment with finer day-0 granularity.
+    values:
+      day0_user:
+        definition: "DATEDIFF('day', first_bet_date, activity_date) < 1"
+        description: "Brand-new users on the same calendar day as their very first bet."
+      day1-6_user:
+        definition: "DATEDIFF('day', first_bet_date, activity_date) BETWEEN 1 AND 6"
+        description: "Users 1–6 days after first bet."
+      day7+_user:
+        definition: "DATEDIFF('day', first_bet_date, activity_date) >= 7"
+        description: "Users 7 or more days after first bet."
+
+  ai_group:
+    description: >
+      AB-test partition from the bet_orders table (partition_ab[0]).
+      'AI' = users assigned to the AI strategy; 'Default' = control group.
+      Sub-groups like 'Default_<mathtable>' or individual math-table IDs
+      are also generated for deeper analysis.
+    values:
+      AI:
+        description: "Users in the AI-controlled AB group (partition_ab matches the AI group ID)."
+      Default:
+        description: "Users NOT in the AI group (control / default strategy)."
+      HG:
+        description: "Horizontal-group aggregate of ALL users regardless of AB partition."
+
+  daily_group:
+    description: >
+      Fish Hunter (FM01) grouping column — varies by config. Typically the
+      strategy_name or an AB-test partition.
+
+# ---------------------------------------------------------------------------
+# Game-specific context
+# ---------------------------------------------------------------------------
+games:
+  SS01:
+    full_name: "Wucaishen (酒馆宝藏)"
+    type: "Slot Machine"
+    source_table: "public.fct_bet_orders"
+    bet_types: ["BASE (background spin)", "FREE (foreground / free-game spin)"]
+    notes: >
+      Base game (bg) is the regular paid spin. Free game (fg) is a bonus round
+      triggered by the base game. fg bets use the triggering base-game bet amount.
+
+  SS02:
+    full_name: "Deep Dive"
+    type: "Slot Machine"
+    source_table: "public.fct_bet_orders"
+    bet_types: ["BASE", "FREE"]
+
+  SS03:
+    full_name: "Mahjong Streak (麻将连庄)"
+    type: "Slot Machine"
+    source_table: "public.fct_bet_orders"
+    bet_types: ["BASE", "FREE"]
+
+  FM01:
+    full_name: "Fish Hunter (捕鱼大师)"
+    type: "Fishing Game"
+    source_table: "public.bullet"
+    notes: >
+      Each row in the bullet table represents one bullet fired. Fish have
+      value tiers: low (<=10), medium (<=130), high (<=200), ultra (>200).
+
+# ---------------------------------------------------------------------------
+# Column definitions — shared across games unless noted
+# ---------------------------------------------------------------------------
+columns:
+  # === Identifiers & Dimensions ===
+  activity_date:
+    category: dimension
+    description: "Calendar date of the activity, truncated to day in Shanghai timezone (UTC+8)."
+
+  ai_group:
+    category: dimension
+    description: "AB-test group assignment. See 'groups.ai_group' for value definitions."
+
+  user_id:
+    category: dimension
+    description: "Unique player identifier."
+
+  user_group:
+    category: dimension
+    description: "User lifecycle segment (new / beginner / old). See 'groups.user_group'."
+
+  user_group2:
+    category: dimension
+    description: "Alternative lifecycle segment (day0_user / day1-6_user / day7+_user). See 'groups.user_group2'."
+
+  # === User-Level Raw Metrics (one row per user per day) ===
+  user_num_bets:
+    category: user_metric
+    description: "Total number of bet orders placed by a single user in the period."
+    formula: "COUNT(user_id) per user per activity_date"
+
+  user_num_bets_bg:
+    category: user_metric
+    description: "Number of BASE (background / regular) bets by the user."
+    formula: "COUNT(CASE WHEN bet_type='BASE')"
+
+  user_num_bets_fg:
+    category: user_metric
+    description: "Number of FREE (foreground / free-game) bets by the user."
+    formula: "COUNT(CASE WHEN bet_type='FREE')"
+
+  user_total_bet:
+    category: user_metric
+    description: "Total wagered amount by the user in the period."
+    formula: "SUM(bet_amount)"
+
+  user_total_bet_bg:
+    category: user_metric
+    description: "Total wagered amount on BASE spins only."
+    formula: "SUM(CASE WHEN bet_type='BASE' THEN bet_amount)"
+
+  user_avg_bet_amount:
+    category: user_metric
+    description: >
+      Mean stake per bet row in the period (day / week / month per activity_date grain):
+      average over all wager rows for that user and period (slots: AVG(bet_amount); fish: AVG(bet)).
+    formula: "AVG(line bet); slots use bet_amount, fish hunter uses bullet bet"
+
+  user_total_payout:
+    category: user_metric
+    description: "Total payout received by the user."
+    formula: "SUM(actual_payout)"
+
+  user_total_payout_bg:
+    category: user_metric
+    description: "Total payout from BASE spins only."
+
+  user_total_payout_fg:
+    category: user_metric
+    description: "Total payout from FREE (bonus) spins only."
+
+  user_total_bet_fg:
+    category: user_metric
+    description: >
+      Total bet attributed to free-game sessions. Uses the triggering BASE
+      bet amount (fg_session_trigger_bet) rather than the free-spin bet,
+      because free spins reuse the base bet amount.
+
+  user_num_bets_with_payout:
+    category: user_metric
+    description: "Number of bets where the user received any payout (payout > 0)."
+
+  user_num_bets_bg_with_payout:
+    category: user_metric
+    description: "Number of BASE bets with non-zero payout."
+
+  user_num_bets_fg_with_payout:
+    category: user_metric
+    description: "Number of FREE bets with non-zero payout."
+
+  user_rtp:
+    category: user_metric
+    description: >
+      Return to Player for a single user: total payout / total bet.
+      A value of 0.95 means the user got back 95% of what they wagered.
+    formula: "user_total_payout / NULLIF(user_total_bet, 0)"
+
+  user_rtp_bg:
+    category: user_metric
+    description: "User-level RTP from BASE spins only (payout_bg / total_bet)."
+
+  user_rtp_fg:
+    category: user_metric
+    description: "User-level RTP from FREE spins (payout_fg / bet_fg)."
+
+  user_hit_rate:
+    category: user_metric
+    description: "Fraction of all bets that had a non-zero payout."
+    formula: "user_num_bets_with_payout / user_num_bets"
+
+  user_hit_rate_bg:
+    category: user_metric
+    description: "Hit rate on BASE bets only."
+
+  user_hit_rate_fg:
+    category: user_metric
+    description: "Hit rate on FREE bets only."
+
+  user_fg_ratio:
+    category: user_metric
+    description: "Fraction of total bets that are FREE (bonus) spins."
+    formula: "user_num_bets_fg / user_num_bets"
+
+  user_total_profit:
+    category: user_metric
+    description: >
+      Net profit for the individual user, from the PLAYER's perspective:
+      user_total_payout - user_total_bet. Positive = the player won money
+      net on the day; negative = the player lost money (the operator
+      earned that amount on the player's bets). Never frame this as
+      company / casino / house profit.
+    formula: "user_total_payout - user_total_bet"
+
+  user_avg_delta_t_seconds_bg:
+    category: user_metric
+    description: >
+      Average time between consecutive BASE game bets by the user, in seconds
+      (slot games SS01 / SS02 / SS03). Only BASE-to-BASE transitions are
+      included; the first BASE bet after a free game (or any non-BASE
+      predecessor) is treated as a new session and excluded.
+      Inter-bet intervals greater than `ETL_DELTA_T_MAX_SECONDS` are excluded
+      as session breaks. Non-positive intervals (timestamp ties / ordering
+      anomalies in the source data) are floored to `ETL_DELTA_T_MIN_SECONDS`
+      via `GREATEST(...)` so those rows still contribute to the average rather
+      than being dropped. Both the upper bound and the floor are read from
+      `bituslabs_ds.config` at ETL build time; for the current numeric values
+      consult that module rather than this description (the description is
+      intentionally value-free so it remains correct when the config changes).
+    formula: >
+      AVG(CASE WHEN bet_type='BASE' AND prev_bet_type='BASE' AND
+      EXTRACT(EPOCH FROM delta_t) <= ETL_DELTA_T_MAX_SECONDS
+      THEN GREATEST(EXTRACT(EPOCH FROM delta_t), ETL_DELTA_T_MIN_SECONDS) END)
+
+  user_mathtable_change:
+    category: user_metric
+    description: >
+      Number of times the math table (script_id) changed between
+      consecutive bets for this user. Indicates strategy switches by the AI system.
+
+  user_avg_remaining_bet_amount:
+    category: user_metric
+    description: >
+      Average bet amount on bets the user made AFTER their last bet on the
+      ai_group's math table. Only populated for AI per-mathtable ai_groups
+      (where ai_group equals the math_table_id); NULL for combined groups
+      (Default, AI, HG, AB_TEST_*) and Default_<mathtable> per-mathtable groups.
+
+  user_accu_pos_delta_bet:
+    category: user_metric
+    description: >
+      Sum of positive bet-amount changes for a user in the period.
+      delta_bet = bet_amount − prev_bet_amount (per consecutive bet pair).
+      Only increments (user raised their bet) are included.
+    formula: "SUM(CASE WHEN bet_amount - prev_bet_amount > 0 THEN bet_amount - prev_bet_amount END)"
+
+  user_accu_neg_delta_bet:
+    category: user_metric
+    description: >
+      Sum of negative bet-amount changes for a user in the period.
+      Only decrements (user lowered their bet) are included; values are negative.
+    formula: "SUM(CASE WHEN bet_amount - prev_bet_amount < 0 THEN bet_amount - prev_bet_amount END)"
+
+  user_accu_pos_delta_bet_avg:
+    category: user_metric
+    description: >
+      Average size of bet-amount increases for a user in the period.
+      Only positive deltas (raises) are averaged.
+    formula: "AVG(CASE WHEN bet_amount - prev_bet_amount > 0 THEN bet_amount - prev_bet_amount END)"
+
+  user_accu_neg_delta_bet_avg:
+    category: user_metric
+    description: >
+      Average size of bet-amount decreases for a user in the period.
+      Only negative deltas (cuts) are averaged; result is negative.
+    formula: "AVG(CASE WHEN bet_amount - prev_bet_amount < 0 THEN bet_amount - prev_bet_amount END)"
+
+  user_accu_delta_bet:
+    category: user_metric
+    description: >
+      Net sum of all bet-amount changes for a user in the period (positive + negative).
+      Represents the overall drift in bet sizing.
+    formula: "SUM(bet_amount - prev_bet_amount)"
+
+  user_accu_delta_bet_avg:
+    category: user_metric
+    description: >
+      Average bet-amount change across all consecutive bet pairs for a user.
+      Positive means the user tends to raise bets; negative means they tend to lower them.
+    formula: "AVG(bet_amount - prev_bet_amount)"
+
+  user_pos_delta_bet_num:
+    category: user_metric
+    description: "Number of bets where the user raised their bet relative to the previous bet (delta_bet > 0)."
+    formula: "COUNT(CASE WHEN bet_amount - prev_bet_amount > 0 THEN 1 END)"
+
+  user_neg_delta_bet_num:
+    category: user_metric
+    description: "Number of bets where the user lowered their bet relative to the previous bet (delta_bet < 0)."
+    formula: "COUNT(CASE WHEN bet_amount - prev_bet_amount < 0 THEN 1 END)"
+
+  # === Group-Level Aggregate Metrics (DataMetrics) ===
+  num_active_users:
+    category: aggregate_metric
+    description: >
+      Number of distinct users with at least 40 bets in the period
+      (ACTIVE_USER_MIN_BETS = 40). This is the 'active' DAU count.
+    formula: "COUNT(DISTINCT user_id) WHERE user_num_bets >= 40"
+
+  num_new_users:
+    category: aggregate_metric
+    description: "Number of distinct users in the 'new' user_group segment."
+
+  total_num_bets:
+    category: aggregate_metric
+    description: "Sum of user_num_bets across all users in the group."
+
+  total_num_bets_bg:
+    category: aggregate_metric
+    description: "Sum of BASE bet counts across all users."
+
+  total_num_bets_fg:
+    category: aggregate_metric
+    description: "Sum of FREE bet counts across all users."
+
+  total_bet:
+    category: aggregate_metric
+    description: "Sum of all wagers across all users in the group."
+
+  total_bet_bg:
+    category: aggregate_metric
+    description: "Sum of BASE-spin wagers."
+
+  total_bet_fg:
+    category: aggregate_metric
+    description: "Sum of attributed free-game wagers."
+
+  total_payout:
+    category: aggregate_metric
+    description: "Sum of all payouts across all users."
+
+  total_payout_bg:
+    category: aggregate_metric
+    description: "Sum of BASE-spin payouts."
+
+  total_payout_fg:
+    category: aggregate_metric
+    description: "Sum of FREE-spin payouts."
+
+  total_num_bets_with_payout:
+    category: aggregate_metric
+    description: "Total number of bets with non-zero payout across all users."
+
+  total_num_bets_bg_with_payout:
+    category: aggregate_metric
+    description: "Total BASE bets with payout across all users."
+
+  total_num_bets_fg_with_payout:
+    category: aggregate_metric
+    description: "Total FREE bets with payout across all users."
+
+  total_num_bets_per_user:
+    category: aggregate_metric
+    description: "Average bets per user: total_num_bets / num_users."
+
+  total_bet_per_user:
+    category: aggregate_metric
+    description: "Average wager per user: total_bet / num_users."
+
+  total_profit:
+    category: aggregate_metric
+    description: >
+      Aggregate net profit for the group, from the PLAYER's perspective:
+      total_payout - total_bet. Negative = players in this group lost
+      money (and the operator earned that amount); positive = players won.
+      Never frame this as company / casino / house profit.
+
+  total_profit_per_user:
+    category: aggregate_metric
+    description: >
+      Average net profit per user in the group, from the PLAYER's
+      perspective (total_profit / num_users). Negative = the typical
+      player in this group lost money on the day. Never frame as
+      company / casino / house earnings per user.
+
+  rtp:
+    category: aggregate_metric
+    description: >
+      Group-level Return to Player: total_payout / total_bet.
+      This is the house-level RTP, not the average of individual user RTPs.
+    formula: "SUM(user_total_payout) / SUM(user_total_bet)"
+
+  rtp_bg:
+    category: aggregate_metric
+    description: "Group-level RTP from BASE spins only."
+
+  rtp_fg:
+    category: aggregate_metric
+    description: "Group-level RTP from FREE spins only."
+
+  fg_ratio:
+    category: aggregate_metric
+    description: "Group-level fraction of bets that are FREE spins."
+
+  hit_rate:
+    category: aggregate_metric
+    description: "Group-level fraction of all bets with non-zero payout."
+
+  hit_rate_bg:
+    category: aggregate_metric
+    description: "Group-level hit rate on BASE bets."
+
+  hit_rate_fg:
+    category: aggregate_metric
+    description: "Group-level hit rate on FREE bets."
+
+  active_user_no_fg_ratio:
+    category: aggregate_metric
+    description: >
+      Fraction of users who placed zero free-game bets (never triggered
+      a bonus round in the period).
+
+  num_active_user_0_rtp:
+    category: aggregate_metric
+    description: "Number of users with zero total payout (complete loss)."
+
+  active_user_0_rtp_ratio:
+    category: aggregate_metric
+    description: "Fraction of users who received zero payout."
+
+  active_user_rtp_less_0_1_ratio:
+    category: aggregate_metric
+    description: >
+      Fraction of users whose personal RTP is below 0.1 (10%). These users
+      lost more than 90% of their wagers.
+    formula: "COUNT(user_rtp < 0.1 AND user_total_bet > 0) / COUNT(DISTINCT user_id)"
+
+  active_user_rtp_less_0_2_ratio:
+    category: aggregate_metric
+    description: "Fraction of users with personal RTP below 0.2 (20%)."
+
+  active_user_rtp_less_0_3_ratio:
+    category: aggregate_metric
+    description: "Fraction of users with personal RTP below 0.3 (30%)."
+
+  active_user_rtp_less_0_4_ratio:
+    category: aggregate_metric
+    description: >
+      Fraction of users with personal RTP below 0.4 (40%). Monitors the
+      share of players experiencing heavy losses (lost >60% of wagers).
+
+  active_user_rtp_less_0_5_ratio:
+    category: aggregate_metric
+    description: "Fraction of users with personal RTP below 0.5 (50%)."
+
+  user_rtp_median:
+    category: aggregate_metric
+    description: >
+      Median of individual user RTPs (user_total_payout / user_total_bet)
+      across all users with non-zero bets. Reflects the 'typical' player
+      experience, unlike the group-level rtp which is bet-weighted.
+
+  user_rtp_ultilization_ratio:
+    category: aggregate_metric
+    description: >
+      Ratio of median user RTP to group-level RTP (user_rtp_median / rtp).
+      Values near 1.0 mean payouts are evenly distributed across players.
+      Values << 1.0 suggest a few high-rollers capture most of the payout.
+
+  # === Retention Metrics ===
+  day0_num_users:
+    category: retention
+    description: >
+      Total distinct users on the cohort date (day 0). This is the retention
+      cohort size — all users who appeared, regardless of bet count (no
+      ACTIVE_USER_MIN_BETS threshold).
+
+  day1_num_users:
+    category: retention
+    description: "Number of day-0 cohort users who also appeared 1 day later."
+
+  day2_num_users:
+    category: retention
+    description: "Number of day-0 cohort users who also appeared 2 days later."
+
+  day3_num_users:
+    category: retention
+    description: "Number of day-0 cohort users who also appeared 3 days later."
+
+  retention_rate_day1:
+    category: retention
+    description: "Day-1 retention rate: day1_num_users / day0_num_users."
+
+  retention_rate_day3:
+    category: retention
+    description: "Day-3 retention rate: day3_num_users / day0_num_users."
+
+  # === Fish Hunter (FM01) Specific ===
+  user_killed_fish:
+    category: fish_hunter
+    description: "Binary flag (0/1) — whether the user killed at least one fish in the period."
+
+  user_max_profit:
+    category: fish_hunter
+    description: "Maximum single-bullet profit achieved by the user."
+
+  user_bullet_avg_profit:
+    category: fish_hunter
+    description: "Average profit per bullet fired."
+
+  user_bullet_kill_avg_profit:
+    category: fish_hunter
+    description: "Average profit per bullet that actually killed a fish."
+
+  user_num_streak_sessions:
+    category: fish_hunter
+    description: >
+      Number of 'streak sessions' — continuous sequences of kills with
+      inter-kill time below STREAK_SESSION_THRESH (600 seconds).
+
+  user_avg_streak_length:
+    category: fish_hunter
+    description: "Average number of consecutive kills in a streak session."
+
+  user_max_streak_length:
+    category: fish_hunter
+    description: "Longest streak session (most consecutive kills)."
+
+  user_min_streak_length:
+    category: fish_hunter
+    description: "Shortest streak session."
+
+  user_avg_delta_t_seconds:
+    category: fish_hunter
+    description: >
+      Fish Hunter (FM01) parity column for the slot games' `user_avg_delta_t_seconds_bg`.
+      Average time between consecutive bullets fired by the user, in seconds.
+      Inter-bullet intervals greater than `ETL_DELTA_T_MAX_SECONDS` are excluded
+      as session breaks. Non-positive intervals are floored to
+      `ETL_DELTA_T_MIN_SECONDS_FISH_HUNTER` (a sub-second floor, since bullets
+      fire much faster than a slot spin) so those rows still contribute to the
+      average. Both bounds are read from `bituslabs_ds.config` at ETL build
+      time; for the current numeric values consult that module rather than
+      this description (the description is intentionally value-free so it
+      remains correct when the config changes).
+    formula: >
+      AVG(CASE WHEN EXTRACT(EPOCH FROM (bet_time - prev_bet_time)) <= ETL_DELTA_T_MAX_SECONDS
+      THEN GREATEST(EXTRACT(EPOCH FROM (bet_time - prev_bet_time)), ETL_DELTA_T_MIN_SECONDS_FISH_HUNTER) END)
+
+  user_seconds_to_kill_fish:
+    category: fish_hunter
+    description: "Average seconds between consecutive kills (all tiers)."
+
+  user_seconds_to_kill_fish_low:
+    category: fish_hunter
+    description: "Average seconds to kill a low-tier fish (value <= 10)."
+
+  user_seconds_to_kill_fish_medium:
+    category: fish_hunter
+    description: "Average seconds to kill a medium-tier fish (value 11–130)."
+
+  user_seconds_to_kill_fish_high:
+    category: fish_hunter
+    description: "Average seconds to kill a high-tier fish (value 131–200)."
+
+  user_seconds_to_kill_fish_ultra:
+    category: fish_hunter
+    description: "Average seconds to kill an ultra-tier fish (value > 200)."
+
+  user_bets_to_kill_fish:
+    category: fish_hunter
+    description: "Average number of bullets fired between kills (all tiers)."
+
+  user_bets_to_kill_fish_low:
+    category: fish_hunter
+    description: "Average bullets to kill a low-tier fish."
+
+  user_bets_to_kill_fish_medium:
+    category: fish_hunter
+    description: "Average bullets to kill a medium-tier fish."
+
+  user_bets_to_kill_fish_high:
+    category: fish_hunter
+    description: "Average bullets to kill a high-tier fish."
+
+  user_bets_to_kill_fish_ultra:
+    category: fish_hunter
+    description: "Average bullets to kill an ultra-tier fish."
+
+  user_avg_fish_value:
+    category: fish_hunter
+    description: "Average fish_value of all fish encountered by the user."
+
+  user_avg_fish_value_20_200:
+    category: fish_hunter
+    description: "Average fish_value only for fish in the 20–200 value range."
+
+  user_avg_killed_fish_value:
+    category: fish_hunter
+    description: "Average fish_value of fish the user actually killed."
+
+  user_avg_killed_fish_value_20_200:
+    category: fish_hunter
+    description: "Average killed fish_value in 20–200 range."
+
+  user_num_killed_bullets:
+    category: fish_hunter
+    description: "Number of bullets that successfully killed a fish."
+
+  user_bullet_kill_ratio:
+    category: fish_hunter
+    description: "Fraction of bullets that killed a fish: user_num_killed_bullets / user_num_bets."
+
+  user_num_rooms:
+    category: fish_hunter
+    description: "Number of distinct rooms the user played in."
+
+  user_profit_coef_var:
+    category: fish_hunter
+    description: "Coefficient of variation of per-bullet profit (std / mean). Higher = more volatile."
+
+  user_killed_fish_low_ratio:
+    category: fish_hunter
+    description: "Fraction of killed fish that were low-tier."
+
+  user_killed_fish_medium_ratio:
+    category: fish_hunter
+    description: "Fraction of killed fish that were medium-tier."
+
+  user_killed_fish_high_ratio:
+    category: fish_hunter
+    description: "Fraction of killed fish that were high-tier."
+
+  user_killed_fish_ultra_ratio:
+    category: fish_hunter
+    description: "Fraction of killed fish that were ultra-tier."
+
+  user_hits_fish_low_ratio:
+    category: fish_hunter
+    description: "Fraction of all hits (payout > 0) targeting low-tier fish."
+
+  user_hits_fish_medium_ratio:
+    category: fish_hunter
+    description: "Fraction of hits targeting medium-tier fish."
+
+  user_hits_fish_high_ratio:
+    category: fish_hunter
+    description: "Fraction of hits targeting high-tier fish."
+
+  user_hits_fish_ultra_ratio:
+    category: fish_hunter
+    description: "Fraction of hits targeting ultra-tier fish."
+
+  user_max_kill_streak:
+    category: fish_hunter
+    description: "Longest consecutive kill streak (all fish tiers)."
+
+  user_max_kill_streak_low:
+    category: fish_hunter
+    description: "Longest kill streak on low-tier fish."
+
+  user_max_kill_streak_medium:
+    category: fish_hunter
+    description: "Longest kill streak on medium-tier fish."
+
+  user_max_kill_streak_high:
+    category: fish_hunter
+    description: "Longest kill streak on high-tier fish."
+
+  user_max_kill_streak_ultra:
+    category: fish_hunter
+    description: "Longest kill streak on ultra-tier fish."
+
+  user_avg_kill_streak:
+    category: fish_hunter
+    description: "Average kill streak length (all tiers)."
+
+  user_avg_kill_streak_low:
+    category: fish_hunter
+    description: "Average kill streak length on low-tier fish."
+
+  user_avg_kill_streak_medium:
+    category: fish_hunter
+    description: "Average kill streak length on medium-tier fish."
+
+  user_avg_kill_streak_high:
+    category: fish_hunter
+    description: "Average kill streak length on high-tier fish."
+
+  user_avg_kill_streak_ultra:
+    category: fish_hunter
+    description: "Average kill streak length on ultra-tier fish."
+
+# ---------------------------------------------------------------------------
+# ETL source files (metadata_builder scans these for computation logic)
+# ---------------------------------------------------------------------------
+etl_files:
+  - jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py
+  - jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py
+  - jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py
+  - jobs/fish_hunter/etl_game_stats_daily_by_user.py
+  - jobs/operation_daily_report/etl_game_stats_daily_by_group.py
+  - jobs/operation_daily_report/etl_weekly_report_all_games.py

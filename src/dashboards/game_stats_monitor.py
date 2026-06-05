@@ -936,6 +936,14 @@ class GameStatsDashboard:
                 dcc.Store(id="tab-viz-p2-state", data=None),
                 dcc.Store(id="tab-bet-state", data=None),
                 dcc.Store(id="dashboard-load-trigger", data=None),
+                # Two-step config-load plumbing — see load_config_select +
+                # apply_pending_load. `pending-load-payload` carries the
+                # restored per-tab Store values across the config switch;
+                # `config-applied-signal` is set by ``update_config`` at the
+                # very end and is what fires step 2 so it can never observe
+                # the pre-reset state.
+                dcc.Store(id="pending-load-payload", data=None),
+                dcc.Store(id="config-applied-signal", data=None),
                 dcc.Store(id="chat-history", data=[]),
                 dcc.Store(id="chat-pending-request", data=None),
                 html.Div(
@@ -1002,7 +1010,23 @@ class GameStatsDashboard:
         return html.Span("", style=base)
 
     def _layout_report_tab(self) -> html.Div:
-        """Report tab: collects figures, generates descriptions/summary, exports to Confluence."""
+        """Build the "Report" tab layout.
+
+        Dashboard feature: "Report" tab — the user-curated multi-figure
+        report. Top bar exposes the Confluence target URL
+        (``report-doc-link``), language selector, and the "Export to
+        Confluence" button (``report-export-btn``). Body shows one panel
+        per added figure (each with its own LLM-generated description
+        editor), an overall summary editor, and a Confluence-reference
+        list users can attach for grounding.
+
+        Behavior: pure layout — no LLM or HTTP work happens here. The
+        three ``dcc.Store``s (``report-figures``, ``report-summary``,
+        ``report-references``) are the persistent state; everything in
+        the rest of the tab reads/writes those Stores via the callbacks
+        registered in ``_register_report_tab_callbacks``. Figures arrive
+        via the "Add to Report" button on each chart in other tabs.
+        """
         return html.Div(
             [
                 dcc.Store(id="report-figures", data=[]),
@@ -1147,7 +1171,7 @@ class GameStatsDashboard:
                             id="report-summary-display",
                             placeholder=(
                                 "(No summary yet — click 'Generate summary'. You can edit "
-                                "the result, or add lines like  /prompt: tighten the second "
+                                "the result, or add lines like  /prompt tighten the second "
                                 "paragraph  to instruct the next regenerate.)"
                             ),
                             style={
@@ -1337,6 +1361,25 @@ class GameStatsDashboard:
         ]
 
     def _layout_stats_by_date(self) -> html.Div:
+        """Build the "Stats by Date" tab layout.
+
+        Dashboard feature: "Stats by Date" tab — time-series charts of
+        metrics over a single date range, optionally segmented by 1–2
+        user-group columns. Header bar (one row, no per-panel controls)
+        hosts the date picker (``date-picker-range``), the granularity
+        toggle (``date-granularity`` — daily/weekly/monthly), and the
+        cascading user-group column selectors (``date-ug-col-1`` /
+        ``date-ug-col-2``) plus their value pickers
+        (``date-show-ug-1`` / ``date-show-ug-2``). Below the header is
+        a single chart driven by ``update_date_plot``.
+
+        Behavior: pure layout. Headers default to the loaded data's
+        full date range and the first granularity in
+        ``date_files_config``; ``_loaded_group_date_ranges`` (set by
+        Load) is respected when present. Subsequent interactivity (date
+        change, granularity change, group filters) goes through the
+        callbacks registered in ``_register_callbacks``.
+        """
         min_date, max_date = self.date_range
 
         col1 = self.df_user_group_cols[0] if self.df_user_group_cols else None
@@ -1490,6 +1533,27 @@ class GameStatsDashboard:
         )
 
     def _layout_stats_by_group(self) -> html.Div:
+        """Build the "Stats by Group" tab layout.
+
+        Dashboard feature: "Stats by Group" tab — multi-panel comparison
+        view where each metric panel renders the same metric over up to
+        THREE independent date ranges side-by-side. Header bar hosts the
+        three date pickers (``date-picker-range1`` / ``range2`` /
+        ``range3``), per-range visibility toggles (``show-range-1`` /
+        ``-2`` / ``-3``), and the cascading user-group column selectors
+        (``ug-col-1`` / ``ug-col-2``). One panel per metric configured
+        in the active dashboard YAML's ``stats_by_date.group{i}_columns``
+        groups; each panel ships its own metric dropdown, display-mode
+        radio, and "Clip data" toggle (``group-{group_id}-clip-enable``
+        / ``-min`` / ``-max``).
+
+        Behavior: pure layout. Date defaults come from a loaded config
+        (``_loaded_group_date_ranges``) when present, else from
+        ``_compute_group_date_ranges`` which spreads the loaded data
+        across three windows. Subsequent interactivity flows through
+        ``update_group_plot_combined_factory`` (one callback factory
+        instance per panel).
+        """
         # Use ranges from a loaded config if available; otherwise compute defaults
         ranges = self._loaded_group_date_ranges or self._compute_group_date_ranges()
 
@@ -1759,11 +1823,26 @@ class GameStatsDashboard:
     _VIZ_SM_DEFAULT_FILLED: int = 2
 
     def _layout_stats_visualization(self) -> html.Div:
-        """Layout for the 'Stats Deepdive' tab.
+        """Build the "Stats Deepdive" (Visualization) tab layout.
 
-        Header mirrors ``stats_by_group`` (3 date pickers + 2 group-column selectors).
-        Two plotting panels — DataMetrics-derived and user-level raw — share the same
-        controls (metrics multi-select, display mode, range/group toggles, clipping).
+        Dashboard feature: "Stats Deepdive" tab — exploratory
+        distribution view. Header mirrors Stats by Group (3 date
+        pickers ``viz-date-picker-range{1,2,3}`` + per-range toggles +
+        cascading user-group selectors ``viz-ug-col-1`` /
+        ``viz-ug-col-2``). Body has TWO plotting panels stacked
+        vertically: a "derived metrics" panel (DataMetrics aggregates)
+        and a "user metrics" panel (raw per-user values). Each panel
+        exposes its own metrics multi-select, display-mode radio
+        (Histogram / Heatmap / Pair Plot / Scatter Grid), "Clip data"
+        toggle (``viz-{panel_id}-clip-enable`` / ``-min`` / ``-max``),
+        outlier-removal threshold (z-score), and chart-type-specific
+        knobs (nbins, log-y, scatter-axis log/symlog, heatmap log).
+
+        Behavior: pure layout. The two panels feed
+        ``update_viz_plot_factory`` which dispatches to
+        ``_viz_build_histogram`` / ``_viz_build_heatmap`` /
+        ``_viz_build_scatter_pair`` / ``_viz_build_scatter_grid``
+        depending on display_mode and metric count.
         """
         ranges = self._loaded_group_date_ranges or self._compute_group_date_ranges()
 
@@ -2174,6 +2253,32 @@ class GameStatsDashboard:
         )
 
     def _layout_weekly_report(self) -> html.Div:
+        """Build the "Weekly Report" tab layout.
+
+        Dashboard feature: "Weekly Report" tab — period-vs-period
+        operational summary, email-ready. Controls: end-date picker
+        (``weekly-report-end-date``) bounded by the date range of the
+        loaded report parquet, and a metric dropdown
+        (``weekly-report-metric``) listing the per-game metrics defined
+        in ``weekly_report.METRICS_BY_GAME``. Body shows the time-series
+        chart for the selected metric (``weekly-report-graph``), a
+        metric-summary card (``weekly-report-summary-card``) with the
+        current value, previous-period value, % change, and a colored
+        trend indicator, plus a "Subject draft" line
+        (``weekly-report-subject-line``) and rendered email body
+        (``weekly-report-draft``) — both ready to copy into Outlook.
+
+        Behavior: pure layout. The parquet is loaded once at startup
+        via ``_load_weekly_report_data`` (read from S3 path configured
+        in ``weekly_report.files``); the per-tab data flows through a
+        ``dcc.Store(id="weekly-report-store")`` that the chart
+        callback (``update_weekly_report_chart``) and the draft
+        callback (``update_weekly_report_subject_draft``) both read
+        from. If ``weekly_report`` is not configured for this game,
+        the body renders a guidance message pointing at the ETL job
+        that produces the parquet
+        (``jobs/operation_daily_report/etl_weekly_report_all_games.py``).
+        """
         wr = self.config.get("weekly_report") or {}
         game_id = wr.get("game_id")
         if not game_id:
@@ -2262,6 +2367,27 @@ class GameStatsDashboard:
         )
 
     def _layout_stats_by_bet(self) -> html.Div:
+        """Build the "Stats by Bet" tab layout.
+
+        Dashboard feature: "Stats by Bet" tab — per-bet-index metric
+        breakdown within a single playing session (used primarily for
+        Fish Hunter analysis). Left sidebar hosts the session selector
+        (``session-dropdown``), the strategy multi-select for grouping
+        (``strategy-checklist``), the metric multi-selects for the
+        left/right Y-axes (``bet-left-metrics`` / ``bet-right-metrics``),
+        per-axis share-Y toggles, log-scale + threshold controls
+        (``bet-log-scale`` / ``bet-log-thresh``), and a bet-count
+        cap-filter (``bet-filter-check`` / ``bet-filter-thresh``) that
+        truncates the X-axis to the first N bets. Main pane is a
+        single dual-axis Plotly figure (``bet-graph``) driven by
+        ``update_bet_plot``.
+
+        Behavior: pure layout. The bet-level parquet is loaded lazily
+        on first tab activation via ``_load_bet_data``. Strategy
+        coloring matches the global ``Styles.STRATEGY_COLORS`` map so
+        BOOST_POOL / DYNAMIC_RTP / DEFAULT_FALLBACK render
+        consistently across the dashboard.
+        """
         return html.Div(
             [
                 # --- LEFT SIDEBAR ---
@@ -2431,6 +2557,10 @@ class GameStatsDashboard:
             Output("tab-viz-p1-state", "data", allow_duplicate=True),
             Output("tab-viz-p2-state", "data", allow_duplicate=True),
             Output("tab-bet-state", "data", allow_duplicate=True),
+            # Fires step 2 of the two-step config-load — see apply_pending_load.
+            # Always set, even for user-initiated config switches: step 2 is
+            # a no-op when ``pending-load-payload`` is None.
+            Output("config-applied-signal", "data", allow_duplicate=True),
             Input("config-dropdown", "value"),
             prevent_initial_call=True,
         )
@@ -2454,6 +2584,7 @@ class GameStatsDashboard:
                 None,  # tab-viz-p1-state
                 None,  # tab-viz-p2-state
                 None,  # tab-bet-state
+                datetime.now().isoformat(),  # config-applied-signal — fires step 2
             )
 
         @self.app.callback(
@@ -2487,6 +2618,27 @@ class GameStatsDashboard:
             metric_key: Optional[str],
             end_date_iso: Optional[str],
         ):
+            """Render the chart + metric-summary card for the "Weekly Report" tab.
+
+            Dashboard feature: chart (``weekly-report-graph``) and
+            metric-summary card (``weekly-report-summary-card``) of the
+            Weekly Report tab. Fires on changes to the loaded data
+            store (``weekly-report-store``), the metric dropdown
+            (``weekly-report-metric``), or the end-date picker
+            (``weekly-report-end-date``).
+
+            Behavior: deserializes the per-game DataFrame out of the
+            split-JSON store, slices it to ``end_date_iso`` (and the
+            fixed lookback window for that game), looks up the
+            ``MetricSpec`` for the selected metric in
+            ``weekly_report.METRICS_BY_GAME``, computes the current-vs-
+            previous-period comparison via ``compare_metric``, and
+            returns the time-series chart plus a colored summary card
+            (green / red on the change direction respecting whether
+            the metric is "reverse" — i.e. lower-is-better — per
+            ``is_reverse_metric``). Returns "暂无数据" placeholders if
+            any input is missing.
+            """
             if not store_json or not metric_key or not end_date_iso:
                 return empty_figure("Select a metric or load data."), html.Div(
                     "暂无数据",
@@ -3208,6 +3360,13 @@ class GameStatsDashboard:
             State("date-g3-log", "value"),
             State("date-g3-thresh", "value"),
             State("tab-bet-state", "data"),
+            # Report tab — included in the save so AI-generated descriptions,
+            # the overall summary, and the user's attached reference URLs
+            # all round-trip through the JSON. Weekly Report is intentionally
+            # omitted (a few clicks to regenerate from S3 cache).
+            State("report-figures", "data"),
+            State("report-summary", "data"),
+            State("report-references", "data"),
             prevent_initial_call=True,
         )
         def save_config_confirm(
@@ -3246,6 +3405,9 @@ class GameStatsDashboard:
             date_g3_log: Any,
             date_g3_thresh: Any,
             bet: Optional[Dict],
+            report_figures: Optional[List[Dict[str, Any]]],
+            report_summary: Optional[str],
+            report_references: Optional[List[Dict[str, Any]]],
         ):
             if not n_clicks:
                 return no_update, no_update, no_update
@@ -3367,6 +3529,11 @@ class GameStatsDashboard:
                     "p2": _group_tab_panel_for_config(viz_tab_p2_state),
                 },
                 "tab_bet": bet,
+                "tab_report": {
+                    "figures": report_figures or [],
+                    "summary": report_summary or "",
+                    "references": report_references or [],
+                },
             }
             normalized = _normalize_dates_in_state(payload)
             payload = normalized if normalized is not None else payload
@@ -3398,26 +3565,26 @@ class GameStatsDashboard:
                 opts = []
             return {"display": "block", "marginLeft": "8px", "minWidth": "200px"}, opts, None
 
-        # Load config: apply when user selects a file (populate stores + trigger restore)
+        # Load config — step 1: switch the dashboard's config (which fires
+        # update_config and rebuilds every tab + resets every per-tab Store),
+        # and stash the rest of the saved JSON in ``pending-load-payload``
+        # for step 2 to apply once the rebuild settles.
+        #
+        # Outputs are intentionally minimal — just config-dropdown,
+        # navigator-tabs, the load-dropdown reset, and the payload stash.
+        # Writing to per-tab Stores here would race update_config's reset.
+        # ``apply_pending_load`` (next callback) does the per-tab writes
+        # after ``config-applied-signal`` fires.
         @self.app.callback(
             Output("config-dropdown", "value", allow_duplicate=True),
             Output("navigator-tabs", "value", allow_duplicate=True),
             Output("load-config-dropdown", "value", allow_duplicate=True),
-            Output("tab-date-g1-state", "data", allow_duplicate=True),
-            Output("tab-date-g2-state", "data", allow_duplicate=True),
-            Output("tab-date-g3-state", "data", allow_duplicate=True),
-            Output("tab-group-g1-state", "data", allow_duplicate=True),
-            Output("tab-group-g2-state", "data", allow_duplicate=True),
-            Output("tab-group-g3-state", "data", allow_duplicate=True),
-            Output("tab-viz-p1-state", "data", allow_duplicate=True),
-            Output("tab-viz-p2-state", "data", allow_duplicate=True),
-            Output("tab-bet-state", "data", allow_duplicate=True),
-            Output("dashboard-load-trigger", "data", allow_duplicate=True),
+            Output("pending-load-payload", "data", allow_duplicate=True),
             Input("load-config-dropdown", "value"),
             prevent_initial_call=True,
         )
         def load_config_select(s3_uri: Optional[str]):
-            nothing = (no_update,) * 13
+            nothing = (no_update,) * 4
             if not s3_uri:
                 return nothing
             try:
@@ -3541,24 +3708,96 @@ class GameStatsDashboard:
                 p1_out = _p_with_dates("p1")
                 p2_out = _p_with_dates("p2")
 
+                # Report tab — figures (with AI-generated descriptions),
+                # overall summary, attached references. Missing for older
+                # JSONs saved before the Report tab was supported; default
+                # to empty containers so the dashboard renders normally.
+                tab_report = data.get("tab_report") or {}
+                report_figures = tab_report.get("figures") or []
+                report_summary = tab_report.get("summary") or ""
+                report_references = tab_report.get("references") or []
+
+                # Everything step 2 needs goes into the payload Store. Step 2
+                # picks each key out and writes to the matching Store after
+                # update_config has finished rebuilding the tab content.
+                pending_payload: Dict[str, Any] = {
+                    "tab_date": {"g1": d1_out, "g2": d2_out, "g3": d3_out},
+                    "tab_group": {"g1": g1_out, "g2": g2_out, "g3": g3_out},
+                    "tab_viz": {"p1": p1_out, "p2": p2_out},
+                    "tab_bet": tab_bet,
+                    "tab_report": {
+                        "figures": report_figures,
+                        "summary": report_summary,
+                        "references": report_references,
+                    },
+                }
+
                 return (
-                    config_file,
-                    current_tab,
-                    None,
-                    d1_out,
-                    d2_out,
-                    d3_out,
-                    g1_out,
-                    g2_out,
-                    g3_out,
-                    p1_out,
-                    p2_out,
-                    tab_bet,
-                    datetime.now().isoformat(),
+                    config_file,  # config-dropdown — fires update_config
+                    current_tab,  # navigator-tabs
+                    None,  # load-config-dropdown — clear selection
+                    pending_payload,  # pending-load-payload — step 2 reads this
                 )
             except Exception as e:
                 logger.error(f"Failed to load config: {e}")
-            return (no_update,) * 13
+            return (no_update,) * 4
+
+        # Load config — step 2: applies the stashed payload to each per-tab
+        # Store and trips ``dashboard-load-trigger`` so ``restore_dashboard_state``
+        # can splat the values onto the UI components. Fires from
+        # ``config-applied-signal`` which ``update_config`` writes at the
+        # very end of its body, so by the time this runs the rebuild + reset
+        # have already finished — no race with update_config.
+        #
+        # No-op when ``pending-load-payload`` is None (= the config switch
+        # came from the user picking a different config in the dropdown,
+        # not from a JSON load). That keeps the user-initiated path
+        # unchanged.
+        @self.app.callback(
+            Output("tab-date-g1-state", "data", allow_duplicate=True),
+            Output("tab-date-g2-state", "data", allow_duplicate=True),
+            Output("tab-date-g3-state", "data", allow_duplicate=True),
+            Output("tab-group-g1-state", "data", allow_duplicate=True),
+            Output("tab-group-g2-state", "data", allow_duplicate=True),
+            Output("tab-group-g3-state", "data", allow_duplicate=True),
+            Output("tab-viz-p1-state", "data", allow_duplicate=True),
+            Output("tab-viz-p2-state", "data", allow_duplicate=True),
+            Output("tab-bet-state", "data", allow_duplicate=True),
+            Output("report-figures", "data", allow_duplicate=True),
+            Output("report-summary", "data", allow_duplicate=True),
+            Output("report-references", "data", allow_duplicate=True),
+            Output("dashboard-load-trigger", "data", allow_duplicate=True),
+            Output("pending-load-payload", "data", allow_duplicate=True),
+            Input("config-applied-signal", "data"),
+            State("pending-load-payload", "data"),
+            prevent_initial_call=True,
+        )
+        def apply_pending_load(signal: Any, payload: Optional[Dict[str, Any]]):
+            if not payload:
+                # Normal config switch (user picked a different config) —
+                # nothing to apply. Leave every Store as update_config
+                # already reset it.
+                return (no_update,) * 14
+            td = payload.get("tab_date") or {}
+            tg = payload.get("tab_group") or {}
+            tv = payload.get("tab_viz") or {}
+            tr = payload.get("tab_report") or {}
+            return (
+                td.get("g1"),
+                td.get("g2"),
+                td.get("g3"),
+                tg.get("g1"),
+                tg.get("g2"),
+                tg.get("g3"),
+                tv.get("p1"),
+                tv.get("p2"),
+                payload.get("tab_bet"),
+                tr.get("figures") or [],
+                tr.get("summary") or "",
+                tr.get("references") or [],
+                datetime.now().isoformat(),  # dashboard-load-trigger — fires restore_dashboard_state
+                None,  # clear pending-load-payload
+            )
 
         # Restore: apply loaded state to all UI components when load-trigger fires
         @self.app.callback(
@@ -3688,8 +3927,19 @@ class GameStatsDashboard:
             Output("linear-thresh", "value", allow_duplicate=True),
             Output("filter-check", "value", allow_duplicate=True),
             Output("filter-thresh", "value", allow_duplicate=True),
+            # Two firing triggers:
+            #   1. tab-date-content rebuilds (config switch path — the trigger
+            #      is None here, so the trigger-guard short-circuits)
+            #   2. dashboard-load-trigger changes (config-load path — fired by
+            #      apply_pending_load AFTER update_config finished rebuilding,
+            #      so the per-tab State Stores below already hold the saved
+            #      values)
+            # Promoting the previous State("dashboard-load-trigger") to an
+            # Input is what unblocks the load — without this second Input,
+            # restore_dashboard_state never fires once update_config has
+            # already rebuilt the tabs.
             Input("tab-date-content", "children"),
-            State("dashboard-load-trigger", "data"),
+            Input("dashboard-load-trigger", "data"),
             State("tab-date-g1-state", "data"),
             State("tab-date-g2-state", "data"),
             State("tab-date-g3-state", "data"),
@@ -3716,9 +3966,15 @@ class GameStatsDashboard:
         ):
             if trigger is None:
                 return (no_update,) * 246
-            # Keep the load trigger token so default-picker callbacks don't recompute
-            # and clamp restored DatePickerRange values.
-            out: List[Any] = [trigger]
+            # Don't write the trigger Output back to its own value — the
+            # trigger is already set by ``apply_pending_load`` (which now
+            # also serves as this callback's Input), so leaving the Output
+            # as no_update keeps the value pinned without creating a
+            # self-firing loop (Input → fires callback → writes Output to
+            # same Store → fires callback again …). The trigger keeps the
+            # default-picker callbacks from recomputing + clamping
+            # restored DatePickerRange values.
+            out: List[Any] = [no_update]
             sd = d1 or {}
             out.extend(
                 [
@@ -4105,6 +4361,38 @@ class GameStatsDashboard:
         val = str(user_group_filter).strip() if user_group_filter is not None else ""
         return f" ({val})" if val and val.lower() not in ("all", "") else ""
 
+    @staticmethod
+    def _add_week_stripes(fig: go.Figure, start_dt: datetime, end_dt: datetime) -> None:
+        """Shade alternating Mon→Sun calendar weeks behind the date chart.
+
+        Dashboard feature: week-range vertical bands on the
+        Stats-by-Date chart (``date-graph``). Light-gray fill is
+        applied to every other ISO week (Monday→Sunday) and drawn
+        beneath the traces so users can see at a glance which points
+        belong to the same calendar week.
+
+        Behavior: walks Monday-aligned 7-day strides from the Monday
+        on/before ``start_dt`` up through ``end_dt``, adding a
+        ``vrect`` on odd-indexed weeks. The first visible week is
+        intentionally left unshaded so shading starts from the second
+        week, making the alternation obvious even on short windows.
+        """
+        monday = start_dt - timedelta(days=start_dt.weekday())
+        idx = 0
+        while monday <= end_dt:
+            next_monday = monday + timedelta(days=7)
+            if idx % 2 == 1:
+                fig.add_vrect(
+                    x0=monday,
+                    x1=next_monday,
+                    fillcolor="lightgray",
+                    opacity=0.18,
+                    line_width=0,
+                    layer="below",
+                )
+            monday = next_monday
+            idx += 1
+
     def update_date_plot(
         self,
         left_metrics: Any,
@@ -4119,6 +4407,25 @@ class GameStatsDashboard:
         show_ug_1: Any = None,
         show_ug_2: Any = None,
     ) -> go.Figure:
+        """Render the chart for the "Stats by Date" tab.
+
+        Dashboard feature: chart output (``date-graph``) of the
+        Stats-by-Date tab. Fires on any change to the metric multi-
+        selects (``date-left-metrics`` / ``date-right-metrics``), the
+        date picker, the granularity toggle, the log-scale toggle +
+        threshold, or either user-group cascading selector.
+
+        Behavior: loads the parquet for the chosen ``date_granularity``
+        (daily / weekly / monthly) from ``lfs_by_date``, filters to the
+        date window (extended by ``RETENTION_LOAD_EXTRA_DAYS`` if any
+        selected metric is retention-derived so cohorts have room to
+        mature), splits rows by the user-group selection, then plots
+        one trace per (left/right axis × selected metric × user-group)
+        on a dual-axis subplot. Log scale uses the project's hybrid
+        log/linear transform (``hybrid_transform``) so values near zero
+        stay readable. Returns an empty ``go.Figure`` if no metrics
+        are selected or the date range yields no rows.
+        """
         if not left_metrics and not right_metrics:
             return go.Figure()
 
@@ -4296,6 +4603,10 @@ class GameStatsDashboard:
         ug2_lbl = _label_from_vals(clean_ug2) if effective_col2 else ""
         ug_label = " " + " ".join(p for p in [ug1_lbl, ug2_lbl] if p) if (ug1_lbl or ug2_lbl) else ""
         # ug_label = (ug_label + " [all groups combined]").strip()
+
+        if str(date_granularity or "day").lower() in ("day", "daily", "d"):
+            self._add_week_stripes(fig, start_dt, end_dt)
+
         fig.update_layout(
             title=f"{metrics_label}{ug_label}" if metrics_label else None,
             height=400,
@@ -4340,6 +4651,25 @@ class GameStatsDashboard:
         filter_check,
         filter_thresh,
     ):
+        """Render the chart for the "Stats by Bet" tab.
+
+        Dashboard feature: chart output (``bet-graph``) of the
+        Stats-by-Bet tab. Fires on changes to the session selector,
+        strategy checklist, left/right metric multi-selects, the
+        share-Y toggles, log-scale + threshold, and the bet-count
+        cap filter.
+
+        Behavior: loads the per-bet parquet on first call via
+        ``_load_bet_data`` (deferred to avoid paying the cost on
+        startup for users who never open this tab), filters to the
+        chosen session and (optionally) the first N bets, splits rows
+        by strategy (BOOST_POOL / DYNAMIC_RTP / DEFAULT_FALLBACK), and
+        plots one trace per (strategy × metric × axis) on a single
+        dual-axis subplot titled ``"Metrics by Strategies: {session}"``.
+        Shared-Y options force a common axis range across strategies
+        so visual comparisons are honest. Strategy colors come from
+        the global Styles map for cross-tab consistency.
+        """
         self._load_bet_data()
         if self.lf_bet.collect_schema().len() == 0 or not self.sessions:
             return go.Figure()
@@ -4471,9 +4801,26 @@ class GameStatsDashboard:
         fig.update_yaxes(range=y_range, row=1, col=1, secondary_y=is_right)
 
     def update_group_plot_combined_factory(self, group_id: str) -> Callable[..., Any]:
-        """
-        Callback factory: Plots date-group stats for a metric, for three date ranges, in a single figure.
-        Now supports optional data clipping, range toggle, and no redundant legend.
+        """Build the chart callback for one panel of the "Stats by Group" tab.
+
+        Dashboard feature: chart output (``group-{group_id}-graph``) of
+        a single Stats-by-Group panel. Each panel built by
+        ``_layout_stats_by_group`` gets its own callback instance via
+        this factory (closing over ``group_id``). Fires on changes to
+        the panel's metric dropdown, display-mode radio, the three
+        global date pickers and per-range toggles, the panel's "Clip
+        data" controls (``group-{group_id}-clip-{enable|min|max}``), or
+        either global user-group cascading selector.
+
+        Behavior: for each visible range, slices the date-granularity
+        parquet to the range window, splits by user-group selection,
+        optionally clips the metric values to [clip_min, clip_max]
+        before plotting (the "Clip data" toggle pins outliers to the
+        bound — values are NOT removed, just capped for display so
+        one extreme reading doesn't squash the y-axis range), then
+        renders all (range × user-group) traces on a single subplot.
+        Returns an empty ``go.Figure`` if no metric is selected or
+        the first range is empty.
         """
 
         def callback(
@@ -4776,11 +5123,29 @@ class GameStatsDashboard:
         show_ug_1: Any,
         show_ug_2: Any,
     ) -> List[Tuple[str, pl.DataFrame]]:
-        """Collect one DataFrame per (range × g1 × g2) combo with the selected metric columns.
+        """Collect per-(range × user-group) slices for a Visualization panel, applying the "Clip data" transform.
 
-        For ``panel_id == "p1"`` (derived metrics) rows are at (date, date_group_col) granularity,
-        joined from ``DataMetrics[metric]`` for each selected metric.  For ``panel_id == "p2"``
-        (user-level metrics) rows are kept at the per-user granularity.
+        Dashboard feature: the data layer underneath each Visualization
+        panel — *this is where the "Clip data" toggle takes effect*.
+        For each visible range × g1 × g2 combo, returns a (label, df)
+        tuple consumed by ``update_viz_plot_factory``'s downstream
+        builders (histogram / heatmap / pair / scatter grid).
+
+        Behavior:
+        * Panel ``"p1"`` (derived metrics) — rows are at (date,
+          date_group_col) granularity, with one column per selected
+          metric joined from ``DataMetrics[metric]``.
+        * Panel ``"p2"`` (user metrics) — rows are at per-user-per-day
+          granularity, raw ``user_*`` columns.
+        * **Clip data**: when the panel's clip toggle is on, EACH
+          selected metric column is passed through
+          ``pl.col(c).cast(Float64).clip(lower_bound=lo, upper_bound=hi)``
+          right before it's returned. Values outside [clip_min,
+          clip_max] are PINNED to the bound — not removed — so a single
+          outlier doesn't squash the visible range while every data
+          point still contributes to histograms / heatmaps / etc. The
+          original parquet rows are untouched; clipping is purely a
+          per-callback display transformation.
         """
         if not metrics:
             return []
@@ -4910,10 +5275,30 @@ class GameStatsDashboard:
         return out
 
     def update_viz_plot_factory(self, panel_id: str) -> Callable[..., Any]:
-        """Callback factory for the Stats Deepdive tab.
+        """Build the chart callback for one panel of the "Stats Deepdive" (Visualization) tab.
 
-        Dispatches to histogram / heatmap / pairplot based on ``display_mode`` and the number
-        of selected metrics.
+        Dashboard feature: chart output (``viz-{panel_id}-graph``) of a
+        single Visualization panel ("derived" or "user"). Fires on
+        every panel control: metrics multi-select, display-mode radio
+        (Histogram / Heatmap / Pair Plot / Scatter Grid), the three
+        global date pickers + per-range toggles, the panel's "Clip
+        data" controls, the outlier z-score threshold, and the chart-
+        type-specific knobs (nbins, log-y, scatter axis log/symlog,
+        heatmap log).
+
+        Behavior: pulls per-range, per-user-group slices via
+        ``_viz_collect_panel_data`` (which applies the clip-data
+        transform), optionally drops outliers via
+        ``_viz_drop_outliers`` (per-column z-score threshold), then
+        DISPATCHES to one of four builders based on
+        ``display_mode`` × metric count:
+          * Histogram: 1 metric → ``_viz_build_histogram``
+          * Heatmap (correlation): 2+ metrics → ``_viz_build_heatmap``
+            (uses ``_viz_corr_with_significance`` for p-value stars)
+          * Pair Plot: 2 metrics → ``_viz_build_scatter_pair``
+          * Scatter Grid: 3+ metrics → ``_viz_build_scatter_grid``
+        Returns an empty ``go.Figure`` for invalid combinations
+        (e.g. Pair Plot with 1 metric).
         """
 
         def callback(
@@ -5121,12 +5506,23 @@ class GameStatsDashboard:
 
     @staticmethod
     def _viz_drop_outliers(pdf: pd.DataFrame, threshold: Optional[float]) -> pd.DataFrame:
-        """Drop rows where any column's absolute z-score exceeds ``threshold``.
+        """Drop rows whose z-score exceeds the user-configured threshold (Visualization tab).
 
-        Operates per-column: a row is kept only when every selected metric stays within
-        ``threshold`` standard deviations of that metric's mean.  A column with zero / NaN
-        std is ignored (no rows removed on its account).  ``threshold is None`` returns ``pdf``
-        unchanged.
+        Dashboard feature: the "Remove outliers" control in each
+        Visualization panel (``viz-{panel_id}-outliers-enable`` /
+        ``-std``). Users toggle outlier removal and pick the cutoff
+        in standard deviations (default ``3``). Distinct from the
+        "Clip data" toggle on the same panel, which *pins* outliers
+        to a bound instead of removing them.
+
+        Behavior: operates per-column. A row is kept only when every
+        selected metric stays within ``threshold`` standard deviations
+        of that metric's mean. A column with zero or NaN std is
+        ignored (no rows removed on its account, otherwise an
+        all-equal column would drop every row). ``threshold is None``
+        returns ``pdf`` unchanged. Applied AFTER ``_viz_collect_panel_data``
+        but BEFORE the histogram / heatmap / scatter builders, so
+        every downstream chart sees the same filtered population.
         """
         if threshold is None or pdf.empty:
             return pdf
@@ -5562,7 +5958,27 @@ class GameStatsDashboard:
     # ------------------------------------------------------------------
 
     def _layout_chat_dialog(self) -> html.Div:
-        """Build the floating, draggable, resizable AI chat dialog."""
+        """Build the floating "AI Assistant" chat dialog.
+
+        Dashboard feature: floating, draggable, resizable chat panel
+        opened via the toolbar button (``chat-toggle-btn``) and
+        minimized / closed via the title-bar buttons
+        (``chat-minimize-btn`` / ``chat-close-btn``). Body has the
+        message scroll area (``chat-messages-container``), a model
+        provider dropdown (``chat-provider``), a multi-line input
+        (``chat-input``), and Send / Clear buttons (``chat-send-btn``
+        / ``chat-clear-btn``). State is held in two ``dcc.Store``s
+        (``chat-history`` and ``chat-pending-request``).
+
+        Behavior: pure layout. The dialog itself doesn't talk to the
+        ai_agent; ``handle_chat_submit`` packages the user message +
+        history + model_key into ``chat-pending-request``, then the
+        async ``handle_chat_response`` callback POSTs to the ai_agent
+        ALB at ``CHAT_API_URL/api/chat`` (env var, defaults to
+        ``http://localhost:8051``) and renders the response. The
+        chat is per-user and ephemeral — history lives only in the
+        ``dcc.Store``, not in any backend.
+        """
         return html.Div(
             id="chat-dialog",
             children=[
@@ -5781,6 +6197,20 @@ class GameStatsDashboard:
             dialog_style: dict,
             body_style: dict,
         ) -> Any:
+            """Open / close / minimize the AI chat dialog.
+
+            Dashboard feature: window-control callback for the floating
+            "AI Assistant" dialog. Wired to three buttons:
+            ``chat-toggle-btn`` (toolbar opener), ``chat-close-btn``
+            (title-bar X), and ``chat-minimize-btn`` (title-bar dash).
+
+            Behavior: dispatches on the triggering element id. Close
+            hides the dialog by setting ``display:none``. Minimize
+            stashes the current height in ``_prevHeight`` and collapses
+            the body; the next minimize click restores it. Toggle is
+            a show/hide flip. Returns ``(no_update, no_update)`` when
+            the trigger doesn't match (defensive).
+            """
             ctx = callback_context
             if not ctx.triggered:
                 return no_update, no_update
@@ -5882,6 +6312,25 @@ class GameStatsDashboard:
             config_path: str,
             provider: str,
         ) -> Any:
+            """Step 1 of the chat round-trip: queue the user's message for the ai_agent.
+
+            Dashboard feature: handler for the Send button
+            (``chat-send-btn``), the Enter-key submit on the input
+            box (``chat-input``), and the Clear button
+            (``chat-clear-btn``). Does NOT itself call the agent —
+            that's the second-step async callback
+            ``handle_chat_response``.
+
+            Behavior: on Clear, wipes the message UI, history store,
+            and pending-request store. Otherwise, appends the user
+            message to history, renders a "Thinking..." placeholder
+            bubble, and writes the request payload (message + prior
+            history + dashboard config path + selected model_key) to
+            ``chat-pending-request``. The presence of that store
+            triggers ``handle_chat_response`` to fire the HTTP call,
+            so the UI stays responsive instead of blocking on the
+            LLM response.
+            """
             ctx = callback_context
             if not ctx.triggered:
                 return no_update, no_update, no_update, no_update, no_update
@@ -5918,6 +6367,26 @@ class GameStatsDashboard:
             prevent_initial_call=True,
         )
         def handle_chat_response(pending: Optional[dict]) -> Any:
+            """Step 2 of the chat round-trip: call the ai_agent and render its answer.
+
+            Dashboard feature: async completion handler for the AI
+            chat dialog. Fires whenever ``chat-pending-request`` is
+            written by ``handle_chat_submit`` — splitting the work
+            into two callbacks keeps the UI responsive (the Thinking
+            bubble shows up immediately, then this callback replaces
+            it when the LLM returns).
+
+            Behavior: POSTs the pending payload to
+            ``{CHAT_API_URL}/api/chat`` (env var, defaults to
+            ``http://localhost:8051``; in prod points at the agent
+            ALB) with a 120s urllib timeout. On success, appends the
+            assistant message to history and re-renders the message
+            list. On HTTP error or timeout, surfaces the error in the
+            ``chat-status`` element so users see WHY the agent didn't
+            answer instead of a silent failure. Errors are logged via
+            ``logger.exception`` so CloudWatch keeps a trace for
+            triage.
+            """
             import json as _json
             import urllib.error
             import urllib.request
@@ -5946,7 +6415,7 @@ class GameStatsDashboard:
                 response = (
                     f"Cannot reach the AI Agent at `{_CHAT_API_URL}`.\n\n"
                     "**Local dev:** start the agent first:\n"
-                    "```\nPYTHONPATH=src uvicorn dashboards.chat_api:app --port 8051\n```\n\n"
+                    "```\nPYTHONPATH=src uvicorn ai_agent.chat_api:app --port 8051\n```\n\n"
                     "**ECS:** ensure the ai-chat-agent service is running and "
                     "`CHAT_API_URL` is set to its ALB URL."
                 )
@@ -6138,7 +6607,7 @@ class GameStatsDashboard:
                                 value=description,
                                 placeholder=(
                                     "Click 'Generate description' to draft. You can edit "
-                                    "the response, or add lines like  /prompt: focus on "
+                                    "the response, or add lines like  /prompt focus on "
                                     "the spike on Apr 15  to instruct the next regenerate."
                                 ),
                                 style={
@@ -6167,7 +6636,7 @@ class GameStatsDashboard:
             Output({"type": "report-desc-status", "fig_id": ALL}, "children"),
             Input({"type": "report-generate-desc-btn", "fig_id": ALL}, "n_clicks"),
             State({"type": "report-generate-desc-btn", "fig_id": ALL}, "id"),
-            # Textarea state, so unblurred edits and any /prompt: lines the
+            # Textarea state, so unblurred edits and any /prompt lines the
             # user just typed reach the LLM even if the blur-time persist
             # callback runs out of order with this one.
             State({"type": "report-figure-desc-text", "fig_id": ALL}, "id"),
@@ -6217,8 +6686,11 @@ class GameStatsDashboard:
             except StopIteration:
                 pass
 
+            import json as _json
+            import urllib.error
+            import urllib.request
+
             try:
-                from dashboards.report_agent.description import generate_description
                 from dashboards.report_agent.references import load_references
             except ImportError as exc:
                 statuses[btn_idx] = html.Span(f"Missing dep: {exc}", style={"color": "#c00"})
@@ -6232,22 +6704,46 @@ class GameStatsDashboard:
                 logger.exception("Reference load failed; continuing without refs")
                 fetched_refs = []
 
+            # LLM generation runs in the ai_agent service. Send the
+            # already-fetched references so ai_agent doesn't need to do
+            # Confluence I/O itself.
+            payload = {
+                "data_summary": figures[fig_idx].get("data_summary") or {},
+                "existing_description": latest_description,
+                "references": fetched_refs,
+                "language": language or "en",
+            }
             try:
-                text = generate_description(
-                    data_summary=figures[fig_idx].get("data_summary") or {},
-                    language=language or "en",
-                    existing_description=latest_description,
-                    references=fetched_refs,
+                req = urllib.request.Request(
+                    f"{_CHAT_API_URL}/api/report/description",
+                    data=_json.dumps(payload).encode(),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
                 )
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    body = _json.loads(resp.read().decode())
+            except urllib.error.URLError:
+                logger.exception("Report description: ai_agent unreachable at %s", _CHAT_API_URL)
+                statuses[btn_idx] = html.Span(f"AI agent unreachable at {_CHAT_API_URL}", style={"color": "#c00"})
+                return no_update, statuses
             except Exception as exc:
                 logger.exception("Generate description failed for fig_id=%s", target_fig_id)
                 statuses[btn_idx] = html.Span(f"Failed: {exc}", style={"color": "#c00"})
                 return no_update, statuses
 
+            text = body.get("text", "")
+            status = body.get("status", "generated")
+            message = body.get("message", "Updated.")
+
+            if status == "no_instructions":
+                # No LLM call happened on the server; leave the Store untouched and surface the hint.
+                statuses[btn_idx] = html.Span(message, style={"color": "#888"})
+                return no_update, statuses
+
             updated = dict(figures[fig_idx])
             updated["description"] = text
             figures[fig_idx] = updated
-            statuses[btn_idx] = html.Span("Updated.", style={"color": "#2a7a2a"})
+            statuses[btn_idx] = html.Span(message, style={"color": "#2a7a2a"})
             return figures, statuses
 
         @self.app.callback(
@@ -6299,8 +6795,11 @@ class GameStatsDashboard:
             figures = figures or []
             if not figures:
                 return no_update, html.Span("Add figures first.", style={"color": "#c00"})
+            import json as _json
+            import urllib.error
+            import urllib.request
+
             try:
-                from dashboards.report_agent.description import generate_summary
                 from dashboards.report_agent.references import load_references
             except ImportError as exc:
                 return no_update, html.Span(f"Missing dep: {exc}", style={"color": "#c00"})
@@ -6311,17 +6810,41 @@ class GameStatsDashboard:
             except Exception:
                 logger.exception("Reference load failed; continuing without refs")
                 fetched_refs = []
+
+            # Strip figure store entries down to what /api/report/summary needs
+            # — the full Store entry has UI fields (id, traces, etc.) that the
+            # LLM doesn't see anyway.
+            figures_payload = [
+                {"data_summary": f.get("data_summary") or {}, "description": f.get("description")} for f in figures
+            ]
+            payload = {
+                "figures": figures_payload,
+                "existing_summary": current_summary_text or None,
+                "references": fetched_refs,
+                "language": language or "en",
+            }
             try:
-                text = generate_summary(
-                    figures=figures,
-                    language=language or "en",
-                    existing_summary=current_summary_text or None,
-                    references=fetched_refs,
+                req = urllib.request.Request(
+                    f"{_CHAT_API_URL}/api/report/summary",
+                    data=_json.dumps(payload).encode(),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
                 )
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    body = _json.loads(resp.read().decode())
+            except urllib.error.URLError:
+                logger.exception("Report summary: ai_agent unreachable at %s", _CHAT_API_URL)
+                return no_update, html.Span(f"AI agent unreachable at {_CHAT_API_URL}", style={"color": "#c00"})
             except Exception as exc:
                 logger.exception("Generate summary failed")
                 return no_update, html.Span(f"Failed: {exc}", style={"color": "#c00"})
-            return text, html.Span("Updated.", style={"color": "#2a7a2a"})
+
+            text = body.get("text", "")
+            status = body.get("status", "generated")
+            message = body.get("message", "Updated.")
+            if status == "no_instructions":
+                return no_update, html.Span(message, style={"color": "#888"})
+            return text, html.Span(message, style={"color": "#2a7a2a"})
 
         @self.app.callback(
             Output("report-summary-display", "value"),

@@ -65,13 +65,16 @@ class TestSetupLogging:
         log_file = log_dir / log_filename
         assert log_file.exists()
 
-    def test_setup_logging_with_dot_path(self, temp_dir):
+    def test_setup_logging_with_dot_path(self, temp_dir, monkeypatch):
         """Test setting up logging with '.' path."""
-        with patch("os.getcwd", return_value=str(temp_dir)):
-            setup_logging(".", "test.log")
+        # Use chdir, not patch("os.getcwd"): the function calls os.makedirs("./log")
+        # which uses the real cwd (not the Python-level getcwd mock), so patching
+        # getcwd creates a path mismatch between makedirs and FileHandler.
+        monkeypatch.chdir(temp_dir)
+        setup_logging(".", "test.log")
 
-            log_file = temp_dir / ".log" / "test.log"
-            assert log_file.exists()
+        log_file = temp_dir / "log" / "test.log"
+        assert log_file.exists()
 
     def test_setup_logging_auto_filename(self, temp_dir):
         """Test setting up logging with auto-generated filename."""

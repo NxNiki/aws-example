@@ -17,6 +17,8 @@ from urllib.parse import urlparse
 import boto3
 import pandas as pd
 import polars as pl
+import pyarrow as pa
+import pyarrow.parquet as pq
 from botocore.config import Config
 from botocore.exceptions import NoCredentialsError
 from pyarrow import fs
@@ -61,6 +63,9 @@ def parse_bucket_name(bucket: str) -> str:
     if bucket.startswith("s3a://"):
         logger.info(f"remove 's3a://' from {bucket}")
         bucket = bucket[len("s3a://") :]
+    if bucket.startswith("s3n://"):
+        logger.info(f"remove 's3n://' from {bucket}")
+        bucket = bucket[len("s3n://") :]
     if bucket.startswith("s3://"):
         logger.info(f"remove 's3://' from {bucket}")
         bucket = bucket[len("s3://") :]
@@ -114,6 +119,21 @@ def apply_row_filters(df: pd.DataFrame, row_filters: Optional[Dict[str, Any]]) -
     return df
 
 
+def _present_dtypes(data_types: Optional[Mapping[str, Any]], available: List[str]) -> Dict[Any, Any]:
+    """Restrict a dtype mapping to columns that were actually read.
+
+    ``data_types`` from a config is a full per-column schema, while a given read
+    often requests only a subset of columns (e.g. a feature list with some
+    columns commented out). Casting a key that wasn't read raises in pandas
+    (``astype``) and polars (``cast``), so silently drop dtype keys whose column
+    isn't present.
+    """
+    if not data_types:
+        return {}
+    cols = set(available)
+    return {k: v for k, v in data_types.items() if k in cols}
+
+
 def read_to_pandas_df(
     bucket: str,
     key: str,
@@ -141,8 +161,9 @@ def read_to_pandas_df(
         s3_path = f"{bucket}/{key}"
         with s3.open_input_file(s3_path) as f:
             data = pd.read_parquet(f, columns=columns)
-            if data_types:
-                data = data.astype(data_types)
+            present = _present_dtypes(data_types, list(data.columns))
+            if present:
+                data = data.astype(present)
     else:
         raise ValueError(f"Unsupported file extension for S3 object: {key}")
 
@@ -396,9 +417,10 @@ def _read_lazy(path: Path, columns: Optional[List[str]], data_types: Optional[Di
 
     # 3. Handle Types (Cast Decimals and User Types)
     # Note: Polars handles Decimals natively, but if you strictly need Float:
-    if data_types:
+    present = _present_dtypes(data_types, lf.collect_schema().names())
+    if present:
         # Convert Python types to Polars DataType if needed, or rely on string names
-        lf = lf.cast(data_types)
+        lf = lf.cast(present)
 
     return lf
 
@@ -421,8 +443,9 @@ def _read_eager(path: Path, columns: Optional[List[str]], data_types: Optional[D
             if len(data) > 0 and isinstance(data[col].iloc[0], Decimal):
                 data[col] = data[col].astype(float)
 
-    if data_types:
-        data = data.astype(data_types)
+    present = _present_dtypes(data_types, list(data.columns))
+    if present:
+        data = data.astype(present)
 
     logger.info("Read data finished.")
     logger.debug(f"Head:\n{data.head(5)}")
@@ -440,8 +463,9 @@ def _read_s3_lazy(s3_uri: str, columns: Optional[List[str]], data_types: Optiona
         raise ValueError(f"Unsupported file type for S3 lazy load: {ext}")
     if columns:
         lf = lf.select(columns)
-    if data_types:
-        lf = lf.cast(data_types)
+    present = _present_dtypes(data_types, lf.collect_schema().names())
+    if present:
+        lf = lf.cast(present)
     return lf
 
 
@@ -804,6 +828,15 @@ def save_local_cache(data: pd.DataFrame, local_cache_path: str, append: bool = F
         mode = "a" if append else "w"
         data.to_csv(local_cache_path, index=False, mode=mode, header=not append)
     elif local_cache_path.endswith(".parquet"):
+        # fastparquet's append writer crashes on categorical (dictionary) columns
+        # (UnboundLocalError in its convert()), and a pyarrow-written dictionary
+        # column doesn't line up with a fastparquet append anyway. Persist
+        # categoricals as their plain underlying dtype on both the initial and
+        # append writes so the schema stays consistent; callers re-apply
+        # `data_types` on read.
+        cat_cols = data.select_dtypes(include=["category"]).columns
+        if len(cat_cols):
+            data = data.astype({col: data[col].cat.categories.dtype for col in cat_cols})
         if append:
             data.to_parquet(local_cache_path, index=False, engine="fastparquet", append=append)
         else:
@@ -844,12 +877,22 @@ def read_files(
 
     if local_cache_path is not None and os.path.exists(local_cache_path) and not reload:
         logger.info(f"Found local cache at {local_cache_path}")
-        data = read_local_cache(local_cache_path, columns, data_types, lazy_load=lazy_load)
-        if return_as_list and lazy_load:
-            return [cast(pl.LazyFrame, data)]
-        if not lazy_load:
-            logger.info("first 5 rows of dataframe: \n%s", _preview_df_for_log(cast(pd.DataFrame, data)))
-        return data
+        try:
+            data = read_local_cache(local_cache_path, columns, data_types, lazy_load=lazy_load)
+            if return_as_list and lazy_load:
+                return [cast(pl.LazyFrame, data)]
+            if not lazy_load:
+                logger.info("first 5 rows of dataframe: \n%s", _preview_df_for_log(cast(pd.DataFrame, data)))
+            return data
+        except Exception as e:
+            # A crash mid-write (e.g. an interrupted incremental cache build) can leave a
+            # truncated parquet with no footer. Drop the unreadable cache and reload from source
+            # instead of wedging every subsequent run on the corrupt file.
+            logger.warning(f"Local cache at {local_cache_path} is unreadable ({e}); removing and reloading.")
+            try:
+                os.remove(local_cache_path)
+            except OSError:
+                pass
 
     logger.info(f"read data with data types spec: {data_types}")
     if isinstance(files, str):
@@ -892,6 +935,7 @@ def read_files(
         logger.info(f"read files using {max_workers} workers")
         executor_cls: Callable = ThreadPoolExecutor if parallel_mode == "thread" else ProcessPoolExecutor
         dfs = []
+        errors: List[str] = []
         with executor_cls(max_workers=max_workers) as executor:
             future_to_file = {executor.submit(read_func, f): f for f in file_paths}  # pyright: ignore
             for future in as_completed(future_to_file):
@@ -900,22 +944,55 @@ def read_files(
                     dfs.append(future.result())
                 except Exception as e:
                     logger.error(f"Failed to read {file}: {e}")
+                    errors.append(f"{file}: {e!r}")
+        # Partial failures are tolerated (a bad partition shouldn't sink the whole load),
+        # but if EVERY read failed we must not fall through to an empty DataFrame: callers
+        # then hit misleading errors far downstream (e.g. KeyError on an expected column)
+        # that hide the real cause. Re-raise with the first underlying error instead.
+        if not dfs and errors:
+            raise RuntimeError(
+                f"read_files: all {len(errors)} file read(s) failed; first error -> {errors[0]} "
+                f"(remaining failures logged above)"
+            )
 
     if local_cache_path is not None and not lazy_load:
-        # Write incrementally to cache to avoid memory issues with large concatenation
+        # Write each chunk as a row group through a single pyarrow ParquetWriter. This
+        # avoids one big concat copy (memory-safe: one chunk held at a time) while keeping
+        # a single, consistent schema. The earlier pyarrow-first + fastparquet-append mix
+        # broke on date/categorical columns whose physical encodings the two writers
+        # disagree on; one writer side-steps that entirely.
         logger.info(f"save data to local cache incrementally: {local_cache_path}")
         os.makedirs(os.path.dirname(local_cache_path), exist_ok=True)
 
-        for i in range(len(dfs)):
-            append = i != 0
-            df = cast(pd.DataFrame, dfs[i])
-            if add_file_source:
-                df["source_file"] = os.path.basename(file_paths[i])
+        col_order: Optional[List[str]] = None
+        writer: Optional[pq.ParquetWriter] = None
+        try:
+            for i in range(len(dfs)):
+                df = cast(pd.DataFrame, dfs[i])
+                if df is None:
+                    continue
+                if add_file_source:
+                    df["source_file"] = os.path.basename(file_paths[i])
 
-            save_local_cache(df, local_cache_path, append)
-            logger.info(f"Written {len(df)} rows to cache (file {i+1}/{len(dfs)})")
-            dfs[i] = None  # pyright: ignore
-            gc.collect()
+                # Align columns to the first chunk so every row group shares one schema.
+                if col_order is None:
+                    col_order = list(df.columns)
+                else:
+                    df = df.reindex(columns=col_order)
+
+                table = pa.Table.from_pandas(df, preserve_index=False)
+                if writer is None:
+                    writer = pq.ParquetWriter(local_cache_path, table.schema)
+                elif not table.schema.equals(writer.schema):
+                    table = table.cast(writer.schema)
+                writer.write_table(table)
+                logger.info(f"Written {len(df)} rows to cache (file {i+1}/{len(dfs)})")
+                dfs[i] = None  # pyright: ignore
+                del df, table
+                gc.collect()
+        finally:
+            if writer is not None:
+                writer.close()
 
         # Read the final cached file and return
         data = cast(pd.DataFrame, read_local_cache(local_cache_path, lazy_load=False))

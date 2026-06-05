@@ -9,6 +9,7 @@ log
 **/*.pkl
 **/*.onnx
 **/features/
+!src/bituslabs_ds/features/
 **/figures/
 **/model_output/
 **/output/
@@ -24,3 +25,11 @@ dist/
 .mypy_cache/
 .idea/
 .vscode/
+
+# Claude Code — personal/runtime files (keep .claude/settings.json shared)
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/.credentials.json
+
+# Dashboard metadata builder cache — regenerated locally on first run.
+**/.metadata_cache/

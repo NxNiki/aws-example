@@ -65,7 +65,7 @@ def _resolve_tinyurl_via_http(url: str) -> Optional[str]:
     try:
         import requests
 
-        from dashboards.secrets import get_secret as _get_secret
+        from dashboards.aws_secrets import get_secret as _get_secret
     except ImportError:
         return None
 
@@ -188,7 +188,7 @@ def _get_client():
             "Install with:  poetry add atlassian-python-api"
         )
 
-    from dashboards.secrets import get_secret as _get_secret
+    from dashboards.aws_secrets import get_secret as _get_secret
 
     url = _get_secret("CONFLUENCE_URL")
     email = _get_secret("CONFLUENCE_EMAIL")
@@ -216,7 +216,7 @@ def _v2_session():
     except ImportError as exc:
         raise ImportError("The 'requests' package is required for Confluence v2 API calls.") from exc
 
-    from dashboards.secrets import get_secret as _get_secret
+    from dashboards.aws_secrets import get_secret as _get_secret
 
     url = _get_secret("CONFLUENCE_URL")
     email = _get_secret("CONFLUENCE_EMAIL")

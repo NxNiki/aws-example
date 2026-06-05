@@ -111,7 +111,7 @@ data_loader:
     pattern: 'wucaishen_enriched_output_24\d{2}/part.*\.csv$'  # Pattern for grouped data files
     row_filters:  # General row filtering (null to disable filtering)
       currency: "CNY"  # Filter to specific currency
-    session_length: 40  # stats in grouped data are calculated based on consecutive sessions, sample will be removed if session length not equal to this value for both cluster and attach data.
+    bin_size: 40  # stats in grouped data are calculated based on consecutive sessions, sample will be removed if bin size not equal to this value for both cluster and attach data.
     local_cache: "wucaishen_enriched_data_2024.parquet"
 
     columns_to_read:  # Columns to read from original data files

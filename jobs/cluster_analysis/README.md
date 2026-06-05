@@ -85,6 +85,30 @@ Logs are written under `jobs/log/` (see `setup_logging` in the script).
 
 ---
 
+## Attach output (`attach_cluster_label`) & `spin_id` flow-through
+
+When `pipeline.attach_cluster_label: true`, the trained cluster labels are joined back onto the
+per-bet **attach (enriched)** data and written as one parquet per cluster:
+
+```
+<work_dir>/<project_name>/<model>/output/enriched_data_cluster_{0..k-1}.parquet
+```
+
+- **Which per-bet columns are carried through** is controlled by
+  `data_loader.attach_data.columns_to_read`. `spin_id` is included there, so every labeled bet
+  keeps its spin identifier — i.e. a cluster label can be joined back to raw spin-level events
+  downstream.
+- **Row accounting**: `load_attach_data` keeps only `merge_on` groups with exactly `bin_size`
+  rows (complete bins), and the label join is an inner merge on `merge_on`. Rows are therefore
+  conserved — no duplication; any group with no label is dropped (and logged).
+
+**ss03 end-to-end verification (2026-06-05):** with `spin_id` in `columns_to_read` and
+`bin_size: 50`, an attach run (`reload=True`) produced 3 cluster files totalling
+**10,442,300** rows (= 208,846 complete groups × 50 bets), `spin_id` present in every file, and
+**0 groups dropped** in the label merge (`attach keys == label keys == 208,846`).
+
+---
+
 ## Other scripts in this folder
 
 | Script | Role |

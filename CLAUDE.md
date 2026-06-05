@@ -37,9 +37,11 @@ poetry run python jobs/<script>.py
 
 ## Architecture
 
-**Two source packages** (both under `src/`, configured in pyproject.toml):
+**Four source packages** (all under `src/`, configured in pyproject.toml):
 - `bituslabs_ds` — Core library: ETL, S3 utilities, ML, EDA, Athena, PySpark helpers
-- `dashboards` — Dash web apps for game analytics with AI chat integration
+- `dashboards` — Dash web app (game stats, Report tab UI) + a small set of shared utilities (`confluence_client.py`, `secrets.py`, `user_stats_aggregates.py`) that the ai_agent and rag_service also import
+- `ai_agent` — FastAPI chat service: LangChain ReAct agent, Slack bot, metadata cache, Report-tab LLM endpoints
+- `rag_service` — FastAPI retrieval microservice: Confluence loader, embeddings, Faiss/OpenSearch backed retriever
 
 **Data flow:**
 ```
@@ -57,11 +59,11 @@ Redshift (prod) → SSH bastion tunnel → DataLoader (etl.py) → S3 parquet ca
 **Entry points:**
 - `jobs/run_scheduled_etl_jobs.py` — Master ETL orchestrator (EventBridge/Fargate)
 - `entry_points/etl_dispatcher.py` — Dynamic job runner
-- `infra/deploy_dashboard_ecs.py` — Dashboard deployment to ECS
-- `infra/deploy_ai_agent_ecs.py` — AI agent deployment to ECS
-- `infra/deploy_emr.py` — EMR cluster management
+- `infra/dashboard/deploy_ecs.py` — Dashboard deployment to ECS
+- `infra/ai_agent/deploy_ecs.py` — AI agent deployment to ECS
+- `infra/emr/deploy.py` — EMR cluster management
 
-**Infrastructure:** Five Dockerfiles in `infra/` (base, dashboard, etl, ai_agent, sagemaker) with corresponding build scripts.
+**Infrastructure:** `infra/` is organized one subfolder per service — `dashboard/`, `ai_agent/`, `rag_service/`, `etl/`, `sagemaker/`, `operation_report/`, `emr/` — each containing its own `Dockerfile`, `build.sh`, deploy script, and README where relevant. Shared deploy plumbing (base Docker image, ECS helpers) lives in `infra/shared/`. See `infra/README.md` for the index.
 
 ## Code Style
 
@@ -70,6 +72,69 @@ Redshift (prod) → SSH bastion tunnel → DataLoader (etl.py) → S3 parquet ca
 - **mypy**: `--ignore-missing-imports`
 - **Pre-commit hooks** run black, isort, mypy on every commit
 - Pyright `extraPaths = ["src"]` for import resolution
+
+## Comments
+
+Default to writing no comments. Only add one when the WHY is non-obvious: a
+hidden constraint, a subtle invariant, a workaround for a specific bug,
+behavior that would surprise a reader. Don't restate what well-named code
+already conveys. Don't reference the current task, PR, or callers — those
+belong in commit messages and rot fast.
+
+**Narrow exception — user-facing feature surfaces.** Functions that
+implement a user-facing feature *do* get a purpose docstring, because they
+sit on a vocabulary boundary: a user asks about "clip data", the AI agent
+greps the repo, and without a comment naming the feature, neither the
+agent nor a new engineer can bridge the user's words to the code. This
+applies to:
+
+- Dashboard callbacks / panel builders / chart controls (`src/dashboards/`)
+- AI-agent API endpoints + tool functions (`src/ai_agent/`)
+- ETL jobs producing named dashboard metrics (`jobs/*/etl_*.py`)
+- Scheduled jobs invoked from `jobs/run_scheduled_etl_jobs.py`
+
+It does NOT apply to: private helpers, internal data-plumbing utilities,
+boilerplate callback wiring, or anything purely internal whose name is
+already self-explanatory.
+
+### Docstring template for user-facing features
+
+```python
+def _apply_outlier_clipping(df: pl.DataFrame, lo: float, hi: float) -> pl.DataFrame:
+    """Clip per-row metric values to a user-configured [min, max] for display.
+
+    Dashboard feature: "Clip data" toggle in each chart's controls
+    (element IDs ``group-{group_id}-clip-{enable|min|max}`` in
+    Group/Range mode, ``viz-{panel_id}-clip-{enable|min|max}`` in
+    Viz mode).
+
+    Behavior: when the toggle is on, values outside [lo, hi] are pinned
+    to the bound — NOT removed. This stops a single outlier from
+    squashing the visible y-axis range without dropping data points.
+    The original values stay intact upstream; clipping is purely a
+    display transformation applied right before the figure is rendered.
+    """
+```
+
+Structure to follow (skip a section if it genuinely doesn't apply):
+
+1. **One-line summary** in user/UX vocabulary, not code vocabulary.
+2. **`Dashboard feature:`** (or `API endpoint:` / `ETL job:`) line naming
+   the feature as users / dashboards / API callers refer to it, plus
+   *where it surfaces* — the panel/tab/control IDs, the URL path, the
+   output table/column, whichever is the searchable handle. This is what
+   lets the AI agent's `grep_codebase` connect a question like
+   *"how does the clip data toggle work?"* to this function.
+3. **`Behavior:`** 2-4 lines on *what it does and why*, including the
+   trigger (button click, config toggle, scheduled run) and any
+   non-obvious invariant. Skip what well-named code already conveys.
+4. **`Inputs:`** only if a parameter's meaning isn't obvious from its
+   name + type (e.g. units, ranges, what it represents in dashboard
+   terms).
+
+Style: keep it tight. A user-facing-feature docstring should usually be
+6–15 lines. If it grows past 20, the function is probably doing two
+features and should be split.
 
 ## Testing
 
@@ -106,7 +171,7 @@ Optional longer explanation if the why is non-obvious.
 
 ### How to split commits
 - One commit per logical concern. Ask: "would reverting this commit make sense on its own?"
-- All changes to a single file go in one commit — never split one file across commits.
+- Prefer keeping all of a single file's changes in one commit. Split a file across commits only when the concerns are genuinely independent AND each resulting commit still builds and passes its tests — otherwise keep the file whole. (Each commit must leave every file in a coherent, runnable state, so `git bisect`/`git revert` stay meaningful.) If one file repeatedly wants to live in two commits at once, treat that as a signal the file is too large and should be split.
 - Related changes across multiple files that serve the same purpose belong together (e.g., renaming a metric in three ETL jobs + the dashboard config that references it).
 - Unrelated changes that happen to land at the same time should be separate commits (e.g., a Dockerfile tweak is separate from an ETL query change).
 
@@ -125,4 +190,4 @@ Optional longer explanation if the why is non-obvious.
 
 ## Poetry Dependency Groups
 
-All optional groups: `ds` (scipy, pymc), `ml` (scikit-learn, sagemaker), `dl` (pytorch), `dashboard` (dash, plotly, polars), `ai_agent` (langchain, fastapi), `etl` (redshift, paramiko, slack), `spark` (pyspark — do NOT bundle when deploying to EMR).
+All optional groups: `ds` (scipy, pymc), `ml` (scikit-learn, sagemaker), `dl` (pytorch), `dashboard` (dash, plotly, polars, kaleido), `llm` (langchain, langgraph — ai_agent-only now), `confluence` (atlassian-python-api, requests — shared by dashboard + ai_agent + rag_service), `ai_agent` (fastapi, uvicorn, slack-bolt, aiohttp — install with `llm,confluence`), `rag_service` (faiss-cpu, opensearch-py, openai, google-generativeai), `etl` (redshift, paramiko, slack), `spark` (pyspark — do NOT bundle when deploying to EMR).

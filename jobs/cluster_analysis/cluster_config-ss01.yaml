@@ -1,5 +1,11 @@
-# Deepdive Cluster Analysis Configuration
-# This file contains configuration specific to the deepdive clustering project
+# SS01 Wucaishen Cluster Analysis Configuration
+# This file contains configuration specific to the SS01 clustering project.
+# Input files are produced by jobs/ss01_wucaishen/etl_feature_engineer.py and
+# written by ETLScheduler to S3 under
+#   s3://bituslabs-team-ai/etl-results/jobs/output_ss01_feature_engineer/
+#     features_grouped/   (cluster_data below)
+#     features_enriched/  (attach_data below)
+# The pipeline pulls those S3 datasets and caches them locally under work_dir.
 
 project_name: "ss01_2026"  # Current analysis environment
 work_dir: "output_ss01_wucaishen"  # Base working directory, where local cache of the input data will be saved.
@@ -7,19 +13,20 @@ s3_prefix: ""
 
 data_loader:
   cluster_data:  # data to train cluster model.
-    bucket: ""  # S3 bucket for input data
-    prefix: ""  # S3 prefix for input data
-    pattern: ''  # Pattern for grouped data files
+    bucket: "bituslabs-team-ai"  # S3 bucket for input data
+    prefix: "etl-results/jobs/output_ss01_feature_engineer/features_grouped_binsize_40/"  # S3 prefix for input data
+    pattern: '\.parquet$'  # Match every parquet file under the partitioned dataset
     row_filters:  # General row filtering (null to disable filtering)
       currency: ""  # Filter to specific currency
     outlier_threshold: 0  # z score to filter outliers
     clip_threshold: [.25, .75]
-    local_cache: "ss01_features_grouped.parquet"
+    local_cache: "ss01_features_grouped.parquet"  # Local cache of the merged S3 dataset.
 
     data_types:
       user_id: "category"
+      session_start_date: "category"
       session_group: "category"
-      agg_group: "category"
+      agg_group: "int64"
       rtp_mean: "float64"
       rtp_min: "float64"
       rtp_max: "float64"
@@ -137,18 +144,19 @@ data_loader:
       accum_withdraw_ratio: "float64"
 
   attach_data:  # data to attach cluster index.
-    bucket: ""  # S3 bucket for input data
-    prefix: ""  # S3 prefix for input data
-    pattern: ''  # Pattern for grouped data files
+    bucket: "bituslabs-team-ai"  # S3 bucket for input data
+    prefix: "etl-results/jobs/output_ss01_feature_engineer/features_enriched/"  # S3 prefix for input data
+    pattern: '\.parquet$'  # Match every parquet file under the partitioned dataset
     row_filters:  # General row filtering (null to disable filtering)
       currency: ""  # Filter to specific currency
-    session_length: 40  # stats in grouped data are calculated based on consecutive sessions, sample will be removed if session length not equal to this value for both cluster and attach data.
-    local_cache: "ss01_features_enriched.parquet"
+    bin_size: 40  # stats in grouped data are calculated based on consecutive sessions, sample will be removed if bin size not equal to this value for both cluster and attach data.
+    local_cache: "ss01_features_enriched.parquet"  # Local cache of the merged S3 dataset.
 
     columns_to_read:  # Columns to read from original data files
       - "user_id"
+      - "session_start_date"
       - "session_group"
-      - "agg_group"
+      - "session_bet_index"
       - "bet_amount"
       - "payout"
       - "basepoint"
@@ -160,7 +168,7 @@ data_loader:
       - "win_streak"
       - "lose_streak"
 
-  merge_on: ["user_id", "session_group", "agg_group"]  # Column used to attach cluster index to attach_data.
+  merge_on: ["user_id", "session_start_date", "session_group", "agg_group"]  # Column used to attach cluster index to attach_data.
 
 output:
   bucket: "bituslabs-team-ai"  # S3 bucket for output data
@@ -170,8 +178,9 @@ output:
     opset_version: 19  # ONNX opset version for model conversion
 
 features:
-  key_features:  
+  key_features:
     - "user_id"
+    - "session_start_date"
     - "session_group"
     - "agg_group"
   

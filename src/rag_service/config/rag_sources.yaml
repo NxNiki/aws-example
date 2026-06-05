@@ -46,20 +46,26 @@
 sources:
   - name: data_slot_games
     page_urls:
-      - https://bituslabs.atlassian.net/wiki/spaces/hub/folder/122421319?atlOrigin=eyJpIjoiNGZjNzY4MmZlNTAzNDRhZmE4NDkyZWU4MGY4MTYyODIiLCJwIjoiYyJ9
+      - https://bituslabs.atlassian.net/wiki/spaces/hub/folder/122421319
     include_children: true
 
   - name: data_fish_hunter
     page_urls:
-      - https://bituslabs.atlassian.net/wiki/spaces/hub/folder/122421321?atlOrigin=eyJpIjoiYWZlODE3ODU0MDM5NDk4YmI2M2E5MDg2ODI3OGFlYmUiLCJwIjoiYyJ9
+      - https://bituslabs.atlassian.net/wiki/spaces/hub/folder/122421321
     include_children: true
 
   - name: model_slot_games
     page_urls:
-      - https://bituslabs.atlassian.net/wiki/spaces/hub/folder/91619342?atlOrigin=eyJpIjoiMTQ2ZTZkY2MxZDhjNGQ5NTg4YTcyNTgzMTNjNTFlMGEiLCJwIjoiYyJ9
+      - https://bituslabs.atlassian.net/wiki/spaces/hub/folder/91619342
     include_children: true
 
   - name: model_fish_hunter
     page_urls:
       - []
     include_children: true
+
+  - name: ai_summary_pages
+    page_urls:
+      - https://bituslabs.atlassian.net/wiki/spaces/hub/pages/627179541/AI
+      - https://bituslabs.atlassian.net/wiki/spaces/hub/pages/718012441/AI
+    include_children: false

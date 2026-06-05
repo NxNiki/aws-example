@@ -330,6 +330,70 @@ pytest --pdb
 pytest tests/unit/test_utils.py::TestGetDataFromUrl::test_download_and_extract_success --pdb
 ```
 
+## AI Agent Q&A tests
+
+`tests/integration/test_ai_agent_questions.py` is a manual-review
+harness for the chat agent. The questions themselves live in
+`tests/integration/ai_agent_questions.yaml` so you can iterate on the
+test set without touching Python.
+
+### Adding a question
+
+Open `tests/integration/ai_agent_questions.yaml` and append an entry
+under `cases:`:
+
+```yaml
+  - id: my_new_question
+    question: |
+      What does active_user_rtp_less_0_4_ratio mean?
+    dashboard_config: dashboard_config-ss03.yaml     # optional
+    model: gemini:gemini-2.5-flash                   # optional
+    must_contain: []                                 # optional, list[str]
+    must_call_tools: []                              # optional, list[str]
+    notes: |
+      Reviewer hints — ignored by the runner.
+```
+
+Only `id` and `question` are required. With both assertion lists empty,
+the test passes as long as the agent responds — useful for **manual
+review**: read the answer in the pytest output, then promote interesting
+checks into `must_contain` / `must_call_tools` once the expected shape
+is stable.
+
+### Running
+
+```bash
+# All Q&A cases (skipped if no OPENAI_API_KEY / GOOGLE_API_KEY in env):
+poetry run pytest tests/integration/test_ai_agent_questions.py -v
+
+# A single case by id (uses pytest -k against the yaml `id`):
+poetry run pytest tests/integration/test_ai_agent_questions.py -v -k ss03_active_user_rtp_metric
+
+# Skip in fast suites — they're marked `slow` + `integration` + `aws`:
+poetry run pytest -m "not slow"
+```
+
+The runner logs the question, the model, the tools the agent invoked,
+the elapsed time, and the full answer to the terminal (via pytest's
+`log_cli` config, no `-s` needed).
+
+### When assertions fire
+
+| Field | Behavior when present | Behavior when missing/empty |
+|---|---|---|
+| `must_contain` | Each substring must appear in the answer (case-insensitive) — failures show every missing string + the full answer. | No substring check. Test passes on any non-empty response. |
+| `must_call_tools` | Every listed tool name must appear in the agent's tool-call trace. Useful for "did the agent reach for RAG vs. a live Confluence call?" behavior tests. | No tool-call check. |
+
+### What it costs
+
+Each parametrized case invokes the real LLM. A `gemini-2.5-flash` run
+is fractions of a cent; an `openai:gpt-4.1` run is more like a few
+cents. The harness picks the model from each entry's `model` field
+(falling back to `CHAT_PROVIDER` / `CHAT_MODEL` env vars), so default
+to a cheap model when you're iterating on a question.
+
+---
+
 ## Contributing
 
 When adding new tests:

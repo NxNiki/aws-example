@@ -73,7 +73,7 @@ def mock_s3_client():
     """Mock S3 client for testing."""
     with mock_s3():
         client = boto3.client("s3", region_name="us-west-2")
-        client.create_bucket(Bucket="test-bucket")
+        client.create_bucket(Bucket="test-bucket", CreateBucketConfiguration={"LocationConstraint": "us-west-2"})
         yield client
 
 

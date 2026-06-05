@@ -28,15 +28,15 @@ Confluence doc is a pushed snapshot. Nothing reads the doc back.
    section.
 5. **Generate descriptions.** Per-figure button calls the LLM with the
    figure's data summary, the textarea contents (treated as a *prior
-   draft to refine*), any `/prompt:` instruction lines, and the
+   draft to refine*), any `/prompt` instruction lines, and the
    reference bodies. Returns 2–3 paragraphs in the selected language.
    Re-clicking regenerates.
 6. **Edit and iterate.** Type directly into the description textarea
-   or insert `/prompt: ...` lines to push instructions into the next
+   or insert `/prompt ...` lines to push instructions into the next
    regenerate. Same for the summary textarea. Edits persist on blur.
 7. **Generate summary.** Top-level button calls the LLM with every
    staged figure's description + data summary, the summary textarea
-   contents, any `/prompt:` lines in it, and the references. Returns
+   contents, any `/prompt` lines in it, and the references. Returns
    a 2–3-paragraph overview.
 8. **Export to Doc.** Renders each figure to PNG, attaches the PNGs
    to the target Confluence page, and writes a `Dashboard Report`
@@ -96,6 +96,31 @@ not read-only HTML. The user's editing surface is the dashboard;
 Confluence is still snapshot-only (the export pushes the latest
 textarea contents and never reads back).
 
+### LLM lives in the ai_agent service
+
+LLM generation runs in the **ai_agent** service, not in the dashboard
+process. The dashboard sends `POST` requests to two endpoints on
+`{CHAT_API_URL}`:
+
+* `POST /api/report/description` — one figure's description
+* `POST /api/report/summary` — overall report summary
+
+Both wrap the same `generate_description` / `generate_summary` functions
+in `dashboards/report_agent/description.py`, which is mounted into the
+ai_agent Docker image. The dashboard image no longer needs LangChain /
+LangGraph — `pyproject.toml` keeps the `llm` group (ai_agent-only) and
+a separate `confluence` group (shared with the dashboard for reference
+fetching + Confluence PNG export).
+
+**Reference fetching stays in the dashboard.** Each Generate request
+sends *pre-fetched* reference bodies (via `references.load_references`)
+to the ai_agent, so the ai_agent never does Confluence I/O on the
+hot path. This also keeps the per-session reference cache local to
+the dashboard process where it belongs.
+
+Prompt and behavior tweaks (system prompts, the four-case logic) now
+only require redeploying ai_agent — no dashboard rebuild needed.
+
 - Edit prose directly in the textarea. On blur the value persists into
   `report-figures[i].description` or `report-summary` via dedicated
   callbacks (`persist_description_edits`, `persist_summary_edits`).
@@ -104,29 +129,47 @@ textarea contents and never reads back).
   refine, preserving any user edits*. The system prompt instructs the
   model to keep user-shaped tweaks intact when possible.
 - The Generate callbacks read the **live** textarea value (via Dash
-  `State`) so unblurred edits and just-typed `/prompt:` lines reach
+  `State`) so unblurred edits and just-typed `/prompt` lines reach
   the LLM even if Dash schedules the blur-time persist callback after
   the regenerate one.
 
-### `/prompt:` syntax
+### `/prompt` syntax
 
-Lines that start with `/prompt:` (case-insensitive, leading whitespace
+Lines that start with `/prompt` (case-insensitive, leading whitespace
 allowed, one per line) are user instructions, not prose to preserve.
-The parser in `description.py:_split_prompts` lifts them out and routes
-them into a separate *User instructions to follow* section of the LLM
-prompt. The model is instructed to never echo `/prompt:` lines back
-into the regenerated output.
+A legacy form with a trailing colon (`/prompt:`) is also accepted —
+both parse identically. The trigger must be at the **start of the
+line** (after optional indentation); mid-line occurrences of `/prompt`
+in prose are not stripped.
+
+### Generate behavior (four cases)
+
+Clicking Generate is intent-driven — it does not blindly overwrite
+manual edits. The parser in `description.py:_split_at_first_prompt`
+inspects the textarea and the regenerate branches on its state:
+
+| Textarea state | What happens | Status |
+| --- | --- | --- |
+| **Empty / whitespace only** | LLM produces a first draft from the data summary. | `STATUS_GENERATED` |
+| **Non-empty, no `/prompt` lines** | **No LLM call.** The textarea is left exactly as-is. A small status hint tells the user nothing happened and how to trigger a regenerate. | `STATUS_NO_INSTRUCTIONS` |
+| **Non-empty, `/prompt` at the very start (no prose above it)** | Full regenerate from scratch using the `/prompt` instructions + data summary. | `STATUS_REGENERATED` |
+| **Non-empty, `/prompt` after some prose** | The prose *before* the first `/prompt` is preserved byte-for-byte (the LLM never sees it as something to rewrite — it's passed as read-only context). The LLM generates 1–2 additional paragraphs based on the instructions, and the caller concatenates: `preserved + "\n\n" + new_paragraphs`. | `STATUS_APPENDED` |
+
+The append case uses a separate `_DESCRIPTION_APPEND_SYSTEM_PROMPT` /
+`_SUMMARY_APPEND_SYSTEM_PROMPT` that explicitly forbids the model from
+echoing or rewriting the preserved prose, so manual edits in that
+region are guaranteed safe.
 
 ```text
 The DAU spike on Apr 15 is consistent with the marketing push.
 
-/prompt: also compare with the Q1 baseline
-/prompt: emphasize the cohort that re-activated
+/prompt also compare with the Q1 baseline
+/prompt emphasize the cohort that re-activated
 ```
 
-After clicking Generate, the prose stays (possibly refined), the
-`/prompt:` lines disappear, and the regenerated text reflects the
-new instructions.
+In this example, the first paragraph is preserved verbatim; the LLM
+generates new paragraphs covering the Q1 baseline comparison and the
+re-activated cohort, which are appended below.
 
 
 ## References
@@ -253,12 +296,12 @@ snapshot:
 | Concern | Module |
 | --- | --- |
 | Plotly figure → JSON data summary for LLM prompts (incl. heatmap z, Plotly 6.x binary-array decoding) | `src/dashboards/report_agent/data_summary.py` |
-| LLM helpers for per-figure description and overall summary; `/prompt:` parsing; references plumbing | `src/dashboards/report_agent/description.py` |
+| LLM helpers for per-figure description and overall summary; `/prompt` parsing; references plumbing | `src/ai_agent/report_agent/description.py` |
 | User-curated reference loader: URL → Confluence page → stripped, truncated body; cached | `src/dashboards/report_agent/references.py` |
 | Render PNGs, attach, write the snapshot region (with trailing References section) | `src/dashboards/report_agent/exporter.py` |
 | Report tab layout + callbacks (add/render/describe/remove figure, summarize, persist edits, add/remove/persist/render reference, export) | `src/dashboards/game_stats_monitor.py` (`_layout_report_tab`, `_register_report_tab_callbacks`) |
 | Confluence read / attach / update API wrapper, tinyurl decoding, HTTP redirect fallback | `src/dashboards/confluence_client.py` |
-| LLM factory used by description/summary; auto-mode provider pick | `src/dashboards/chat_agent.py:_build_llm` |
+| LLM factory used by description/summary; auto-mode provider pick | `src/ai_agent/chat_agent.py:_build_llm` |
 
 
 ## Authentication

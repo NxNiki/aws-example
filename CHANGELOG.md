@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-05
+
 ### Added
 
 - **Report tab in the dashboard.** New tab that turns rendered figures
@@ -19,11 +21,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Editable descriptions and summary.** Both render as textareas;
     edits persist on blur and are sent to the LLM as a "prior draft to
     refine, preserving any user edits" on the next regenerate.
-  - **`/prompt:` instruction syntax.** Lines starting with `/prompt:`
-    anywhere in a textarea are extracted as explicit instructions to
-    the next LLM call (routed into a separate prompt section) and
-    stripped from the regenerated output. Lets users iterate without
-    rewriting prose by hand.
+  - **`/prompt` instruction syntax + intent-driven Generate.** Lines
+    starting with `/prompt` (legacy `/prompt:` also accepted) at the
+    start of a textarea line are extracted as explicit instructions
+    to the next LLM call. Generate is now safe to click — it never
+    silently overwrites manual edits:
+    * Empty textarea → first draft from the data summary.
+    * Non-empty + no `/prompt` → **no-op**; a status hint tells the
+      user nothing happened.
+    * Non-empty + `/prompt` at the very start → full regenerate from
+      instructions.
+    * Non-empty + `/prompt` after some prose → prose before the first
+      `/prompt` is preserved byte-for-byte; the LLM produces only
+      additional paragraphs and the caller concatenates the two.
+      Uses a dedicated `*_APPEND_SYSTEM_PROMPT` that forbids the
+      model from echoing or rewriting the preserved region.
   - **Per-figure data summary.** The LLM receives a JSON summary of
     each figure's traces, axes, error bars, and heatmap z-matrix —
     not the rendered PNG — so descriptions cite exact values instead
@@ -64,10 +76,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `tool_calls` so the "agent isn't actually calling the RAG" class
     of bug fails the suite before it ships.
 - **Deploy script for the RAG service**
-  (`infra/deploy_rag_service_ecs.py`) — public ALB on the shared
+  (`infra/rag_service/deploy_ecs.py`) — public ALB on the shared
   ECS cluster, IAM scoped to S3 read of the Faiss artifact plus
   Secrets Manager read of `GOOGLE_API_KEY`.
-- **`infra/ecs_helpers.py`** consolidates the helpers that were
+- **RAG source: `ai_summary_pages`.** New entry in
+  `src/rag_service/config/rag_sources.yaml` pointing at the
+  `spaces/hub/pages/627179541/AI` Confluence page (no recursion).
+  Picked up by the next daily index rebuild.
+- **`infra/shared/ecs_helpers.py`** consolidates the helpers that were
   duplicated across the three deploy scripts (account ID lookup,
   default VPC/subnet discovery, ECR repo idempotent create, ECS task
   execution role ensure) plus `ECS_CLUSTER_NAME`. Removes ≈210 lines
@@ -76,9 +92,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lookup module extracted from `chat_agent.py`. Lets the slim
   rag-service Docker image use `_get_secret` without dragging
   `langchain_core` into its dependency closure.
+- **Report-agent LLM moved to the ai_agent service.** Two new endpoints
+  on the ai_agent FastAPI app — `POST /api/report/description` and
+  `POST /api/report/summary` — wrap the existing `generate_description`
+  / `generate_summary` functions. The dashboard's Report tab now calls
+  these over HTTP instead of running LangChain in-process. The four-case
+  generate semantics (empty / no-`/prompt` no-op / `/prompt` at start /
+  preserved + append) are preserved verbatim and reported as a typed
+  status string in the response body. Reference fetching stays in the
+  dashboard — pre-fetched bodies ship in the request payload, so the
+  ai_agent never does Confluence I/O on the hot path. Effect: prompt
+  and behavior tweaks redeploy only the ai_agent; dashboard rebuilds
+  drop from ~5–10 min to never-needed for report-agent iteration.
+  Poetry's `confluence` group splits out of `llm` so the dashboard
+  image can install Confluence integration without the LangChain stack.
+- **Slack bot integration for the AI agent.** New `POST /slack/events`
+  endpoint on the ai_agent FastAPI service that responds to Slack
+  `app_mention` events (DMs and untagged channel messages are ignored
+  on purpose — heavyweight LLM calls only fire when the bot is
+  explicitly tagged). Replies post in-thread, with the prior 20 thread
+  messages pulled back as history so follow-up @-mentions have
+  context. The handler dispatches the LLM call as an `asyncio` task
+  so the Bolt adapter can ack inside Slack's 3-second deadline, and
+  dedupes on `event_id` to swallow Slack's cold-start retries. The
+  endpoint is opt-in — mounted only when `SLACK_BOT_TOKEN` +
+  `SLACK_SIGNING_SECRET` are present in env or Secrets Manager, so
+  local dev without Slack credentials still boots cleanly. Fronted by
+  a CloudFront distribution that exposes the HTTP-only ALB over
+  `https://*.cloudfront.net` (Slack requires HTTPS for Event
+  Subscriptions URLs). See `docs/ai_agent.md` for the design spec,
+  request flow, CloudFront configuration reference (for recovery),
+  Slack app setup steps, and a troubleshooting table covering the
+  scope-mismatch and missing-`aiohttp` gotchas hit while wiring this
+  up.
+- **Unified per-bet feature-engineering pipeline (`bituslabs_ds.features`).**
+  A single SQL-composition engine driven by a per-game `GameFeatureConfig`
+  replaces the previously copy-pasted per-game ETL scripts. CTE builders
+  (`user_bets` → `delta_stats` → `user_group` → `raw_stats` → percentiles →
+  `stats_base` → final select) consume the config; each game
+  (`jobs/ss0{1,2,3}/etl_feature_engineer.py`) just constructs a
+  `GameFeatureConfig` and hands it to `FeaturePipelineRunner`. Ships
+  character-for-character SQL **snapshot tests** with per-game job-config
+  parity checks (`tests/unit/test_features_sql_snapshots.py`).
+  - **Stable session IDs.** `session_start_ts` is forward-filled from each
+    session's first bet via `LAST_VALUE(... IGNORE NULLS)` over a local gap
+    marker, so the same logical session keeps the same id no matter how much
+    history a run scans — making incremental appends safe. Downstream
+    `session_start_date` + a within-date `session_group` ordinal identify a
+    session.
+  - **Config-driven incremental lookback.** `effective_lookback_days()`
+    derives the ETLScheduler lookback from `session_break_threshold_seconds`
+    (`ceil(threshold/86400)+1`), so each in-window session's first bet is
+    always captured.
+  - **Config sidecar + drift guard.** Each run writes a `_feature_config.json`
+    sidecar recording the semantic config; the next run hard-fails (unless
+    `--overwrite`) if a semantic field changed, so rows built under
+    incompatible semantics (e.g. a different `bin_size`) can't be silently
+    appended.
+  - **Multi-bin-size runs with a shared enriched dataset.** `bin_size` accepts an
+    `int` or a `list[int]`. `raw_stats` now emits a bin-independent
+    `session_bet_index` (the bet's row number within its session) instead of
+    `agg_group`, so `features_enriched/` is written **once** and shared across all
+    bin sizes; the runner derives `agg_group = floor((session_bet_index-1)/bin_size)`
+    in a per-bin `binned` CTE and writes one `features_grouped_binsize_{N}/` per size.
+    The cluster pipeline (`ml.py` + `cluster_config-*.yaml`) reads the shared enriched
+    and recomputes `agg_group` from `session_bet_index` for the label merge.
+- **ss03 clustering enhancements.** DBSCAN and subsampled-hierarchical model
+  options alongside k-means in `ClusterAnalysisPipeline`; a shared
+  `cluster_labels.parquet` (one column per model/feature/k run); config-driven
+  removal of incomplete bins (`remove_short_sessions` + `session_count_column`);
+  and `spin_id` carried through `attach_cluster_label`'s per-cluster output so
+  cluster labels can be joined back to spin-level events. See
+  `jobs/cluster_analysis/README.md`.
 
 ### Changed
 
+- Renamed `src/dashboards/secrets.py` → `src/dashboards/aws_secrets.py`
+  to avoid shadowing the Python stdlib ``secrets`` module. Running any
+  module under ``src/dashboards/`` as a path (e.g. ``python
+  src/dashboards/game_stats_monitor.py``) used to put the directory on
+  ``sys.path[0]`` and break numpy's ``bit_generator`` import
+  (``cannot import name randbits``). All importers updated:
+  ``ai_agent.chat_agent``, ``ai_agent.slack_handler``,
+  ``dashboards.confluence_client``, ``rag_service.embeddings``, plus
+  the ``COPY`` lines in ``infra/ai_agent/Dockerfile`` and
+  ``infra/rag_service/Dockerfile``.
 - `chat_agent._build_llm` defaults `CHAT_PROVIDER` to `auto`, picking
   OpenAI if `OPENAI_API_KEY` is set or Gemini if
   `GOOGLE_API_KEY` / `GEMINI_API_KEY` is. Previously the default
@@ -89,9 +187,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   legacy 6-char base64 tinyurl format (`/wiki/x/Z4AfOw`) offline and
   newer Cloud short codes via authenticated HTTP redirect, with a
   graceful fallback when neither path matches.
-- Bumped `kaleido` constraint to `>=1.0` (was `^0.2.1`) so Apple
-  Silicon / Python 3.12 environments can install a wheel —
-  `0.2.1.post1` had no `arm64` build.
+- Pinned `kaleido` to `0.2.1` (briefly tried `>=1.0` for arm64 wheel
+  availability, then reverted): 1.x rewrote its renderer to drive an
+  *external* Chrome via DevTools Protocol and fails with
+  `Kaleido requires Google Chrome to be installed` on the slim ECS
+  image used for the dashboard. 0.2.1 ships a self-contained
+  Chromium wheel (~70 MB) that works in slim containers — much
+  smaller than installing system Chrome (~150–250 MB). Affects the
+  Report tab's PNG export of figures into Confluence.
 - `_viz_derived_metric_options` is now schema-aware (see Fixed below);
   this changes the **Stats Deepdive** dropdown contents per-game.
 - `chat_agent` tool docstrings and `_SYSTEM_PROMPT` rewritten to make
@@ -101,13 +204,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   literally "No Confluence passages found" or "RAG service
   unavailable". Gemini 2.5 Flash was previously prone to picking the
   live keyword tool first.
-- `infra/deploy_dashboard_ecs.py` drops the `--cluster-name`
-  CLI argument; cluster name comes from `infra/ecs_helpers.py` so
+- `infra/dashboard/deploy_ecs.py` drops the `--cluster-name`
+  CLI argument; cluster name comes from `infra/shared/ecs_helpers.py` so
   all three deploy scripts share one source of truth.
-- `infra/deploy_ai_agent_ecs.py` auto-detects the rag-service ALB at
+- `infra/ai_agent/deploy_ecs.py` auto-detects the rag-service ALB at
   deploy time and injects `RAG_SERVICE_URL` into the task environment
   (mirrors how the dashboard deploy auto-detects the ai-chat-agent's
   ALB for `CHAT_API_URL`).
+- **Promoted ai_agent service modules out of `src/dashboards/` into a
+  new `src/ai_agent/` package.** Moved: `chat_agent.py`, `chat_api.py`,
+  `slack_handler.py`, `metadata_builder.py`, `column_metadata.yaml`,
+  `report_agent/description.py`. Stays in `dashboards/` (shared or
+  dashboard-only): `confluence_client.py`, `secrets.py`,
+  `user_stats_aggregates.py`, `report_agent/{references,exporter,
+  data_summary}.py`, dashboard configs. uvicorn entrypoint:
+  `dashboards.chat_api:app` → `ai_agent.chat_api:app`. `Dockerfile.ai_agent`
+  swaps 6 per-file COPYs for one `COPY src/ai_agent ./src/ai_agent`.
+  External code referencing `dashboards.chat_agent` /
+  `dashboards.chat_api` / `dashboards.slack_handler` /
+  `dashboards.metadata_builder` / `dashboards.report_agent.description`
+  must update to `ai_agent.X`; all in-tree call sites + 6 doc files
+  + the dashboard's "AI agent unreachable" UI message updated together.
+- **Migrated chat agent off the deprecated `langgraph.prebuilt.create_react_agent`**
+  to `langchain.agents.create_agent`. Same first two positional args,
+  so the call site is unchanged (import is aliased to
+  `_create_langchain_agent` to avoid colliding with the local
+  `create_agent()` helper). Removes the `LangGraphDeprecatedSinceV10`
+  warning. The new `CompiledStateGraph.invoke` / `ainvoke` type their
+  input as a private `_InputAgentState` TypedDict; the plain
+  `{"messages": […]}` dict gets a targeted `# type: ignore[arg-type]`
+  at the three call sites — runtime unaffected, just silences pyright
+  without coupling to a private symbol.
+- **Feature-engineering config field renames** (clarity; pure renames — values
+  and generated SQL unchanged): `session_length` → `bin_size` (consecutive bets
+  per `agg_group`, not a session length); `max_session_gap_seconds` →
+  `max_delta_t_gap_seconds` (only clamps `delta_t` for the `*_nogap` metric — not
+  a session boundary); `max_session_interval_seconds` →
+  `session_break_threshold_seconds` (the gap that starts a new session,
+  paralleling `streak_threshold_seconds`). The cluster-analysis YAMLs + `ml.py`'s
+  `bin_size` property were renamed to match. Because the config sidecar is keyed
+  by field name, the first run after this against an existing dataset needs
+  `--overwrite` (or a one-time key rename in the sidecar).
+- `GameFeatureConfig.requires_full_history` now defaults to `False` — the
+  stable-session-id incremental run is canonical; set it only when SQL semantics
+  change.
+- **`session_break_threshold_seconds` default is now 12 hours** (was 7 days);
+  ss01/ss02/ss03 also set it explicitly. Sessions split on any gap > 12h and the
+  derived incremental lookback drops to 2 days — a session-boundary (semantic)
+  change, so the first run against existing data needs `--overwrite`.
+- **ss03 feature engineering now runs across `bin_size=[30, 50, 70, 100]`**
+  (was a single `100`): one shared `output_ss03_feature_engineer/features_enriched/`
+  plus four `features_grouped_binsize_{30,50,70,100}/` datasets under the same root.
 
 ### Fixed
 
@@ -149,6 +296,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `_reset_state` now also clears `self.sessions`, restoring symmetry with
   `self.lf_bet` and tightening the early-return guard inside
   `_load_bet_data`.
+- **`read_files` silently returned an empty DataFrame when every parallel read
+  failed**, which surfaced far downstream as a confusing `KeyError` on an
+  expected column. It now raises `RuntimeError` with the first underlying error
+  when all reads fail; partial failures are still tolerated. Covered by new tests.
+- **`load_attach_data` raised `KeyError: 'billtime'` when ss03 attach was
+  enabled.** `merge_date` (derived from `billtime`) is a legacy-schema artifact
+  used only by the wucaishen/deepdive `merge_on`; it is now built only when
+  `merge_date` is actually a merge key, so ss03 (which has no `billtime` column)
+  is unaffected.
+- **Resilient local parquet cache.** A crash mid-write (e.g. an interrupted
+  incremental cache build) left a footer-less parquet that wedged every later
+  run; the reader now drops an unreadable cache and reloads from source.
+- **ETL partition columns are built in a single concat** rather than inserted
+  one at a time, avoiding pandas DataFrame-fragmentation warnings.
 
 ## [0.2.0] - 2026-05-06
 
