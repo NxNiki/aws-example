@@ -22,8 +22,8 @@ SS01 specifics vs SS02 / SS03:
 Runs incrementally by default. ``session_start_date`` / ``session_group``
 are stable across runs, so the lookback-window merge is safe. Default
 lookback is derived from MAX_SESSION_INTERVAL via
-``GameFeatureConfig.effective_lookback_days()`` (8 days here, since
-SS01 keeps the 7-day MAX_SESSION_INTERVAL); pass ``--overwrite`` only
+``GameFeatureConfig.effective_lookback_days()`` (2 days here, from the
+12-hour session-break threshold); pass ``--overwrite`` only
 when the SQL semantics change.
 """
 
@@ -38,6 +38,7 @@ CONFIG = GameFeatureConfig(
     selected_groups=("Default",),
     partition_cols=(),
     bin_size=40,
+    session_break_threshold_seconds=60 * 60 * 12,
     drop_incomplete_tail_groups=True,
     extra_where_clauses=("t.script_id = 'giftShop'",),
 )

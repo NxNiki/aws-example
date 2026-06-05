@@ -244,6 +244,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `GameFeatureConfig.requires_full_history` now defaults to `False` — the
   stable-session-id incremental run is canonical; set it only when SQL semantics
   change.
+- **ss01/ss02/ss03 now use a 12-hour `session_break_threshold_seconds`** (set
+  explicitly in each `jobs/ss0x/etl_feature_engineer.py`), down from the 7-day
+  default. Sessions now split on any gap > 12h, and the derived incremental
+  lookback drops to 2 days. This changes session boundaries (a semantic field),
+  so the first run against existing data needs `--overwrite`.
 
 ### Fixed
 

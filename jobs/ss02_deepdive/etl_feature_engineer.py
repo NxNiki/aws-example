@@ -11,8 +11,8 @@ Output (written via ETLScheduler):
 
 Runs incrementally by default. ETLScheduler reads the existing S3 watermark
 and re-queries from ``max(activity_date) - effective_lookback_days()``; the
-dataclass derives an 8-day lookback from the 7-day MAX_SESSION_INTERVAL, which
-is the shortest window that guarantees any active session's first bet is
+dataclass derives a 2-day lookback from the 12-hour session-break threshold,
+which is the shortest window that guarantees any active session's first bet is
 visible. ``session_start_date`` / ``session_group`` are stable across runs,
 so the new rows merge cleanly with existing rows on the lookback boundary.
 Pass ``--overwrite`` only when the SQL semantics change.
@@ -31,6 +31,7 @@ CONFIG = GameFeatureConfig(
     selected_groups=("AI",),
     partition_cols=("math_table_id",),
     bin_size=30,
+    session_break_threshold_seconds=60 * 60 * 12,
 )
 
 

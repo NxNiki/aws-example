@@ -120,7 +120,7 @@ user_group AS (
         t.prev_lose,
         LAST_VALUE(
             CASE
-                WHEN t.delta_t_seconds > 604800 OR t.delta_t_seconds IS NULL
+                WHEN t.delta_t_seconds > 43200 OR t.delta_t_seconds IS NULL
                     THEN t.min_created_at
             END
             IGNORE NULLS

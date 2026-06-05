@@ -17,9 +17,9 @@ to materialise other slices.
 
 Runs incrementally by default. ``session_start_date`` / ``session_group``
 are stable across runs, so the lookback-window merge is safe. Default
-lookback is derived from MAX_SESSION_INTERVAL via
-``GameFeatureConfig.effective_lookback_days()``; pass ``--overwrite``
-only when the SQL semantics change.
+lookback is derived from ``session_break_threshold_seconds`` via
+``GameFeatureConfig.effective_lookback_days()`` (2 days for the 12-hour
+threshold); pass ``--overwrite`` only when the SQL semantics change.
 """
 
 from bituslabs_ds.features import FeaturePipelineRunner, GameFeatureConfig
@@ -33,6 +33,7 @@ CONFIG = GameFeatureConfig(
     selected_groups=("Default",),
     partition_cols=("math_table_id",),
     bin_size=100,
+    session_break_threshold_seconds=60 * 60 * 12,
 )
 
 
