@@ -8,6 +8,7 @@ for the grouped output).
 
 import argparse
 import logging
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from botocore.exceptions import ClientError
@@ -100,45 +101,69 @@ class FeaturePipelineRunner:
     # Programmatic entry point (used by tests + custom drivers)
     # ------------------------------------------------------------------
     def run(self, loader: DataLoader, *, overwrite: bool = False) -> None:
-        storage_root = f"{DEFAULT_ETL_OUTPUT}/jobs/{self.cfg.output_prefix}"
+        configs = self._per_bin_configs()
+        if len(configs) > 1:
+            logger.info(
+                "%s: bin_size=%s -> running %d pipelines, one per size",
+                self.cfg.game_id,
+                self.cfg.bin_size,
+                len(configs),
+            )
+        for cfg in configs:
+            self._run_one(cfg, loader, overwrite=overwrite)
+
+    def _per_bin_configs(self) -> list[GameFeatureConfig]:
+        """One scalar-``bin_size`` config per requested bin size.
+
+        ``output_prefix`` is always suffixed ``_binsize_{N}`` (for both a scalar
+        and a list ``bin_size``), so each size gets its own dataset root + sidecar
+        and the SQL builders always see a single integer.
+        """
+        return [
+            replace(self.cfg, bin_size=n, output_prefix=f"{self.cfg.output_prefix}_binsize_{n}")
+            for n in self.cfg.bin_sizes()
+        ]
+
+    def _run_one(self, cfg: GameFeatureConfig, loader: DataLoader, *, overwrite: bool = False) -> None:
+        storage_root = f"{DEFAULT_ETL_OUTPUT}/jobs/{cfg.output_prefix}"
         sidecar_path = f"{storage_root}/{_CONFIG_SIDECAR_NAME}"
 
         # Fail fast (before any Redshift work) if the existing dataset was built
         # with incompatible semantics and this isn't an --overwrite rebuild.
-        self._check_config_drift(sidecar_path, overwrite=overwrite)
+        self._check_config_drift(cfg, sidecar_path, overwrite=overwrite)
 
         scheduler = ETLScheduler(
             loader,
             storage_root,
-            lookback_days=self.cfg.effective_lookback_days(),
+            lookback_days=cfg.effective_lookback_days(),
             overwrite=overwrite,
         )
-        scheduler.default_start_date = self.cfg.date_start
+        scheduler.default_start_date = cfg.date_start
 
         scheduler.run_incremental_job(
             job_name="features_enriched",
-            query_func=lambda sd: compose_enriched_query(self.cfg, sd),
-            key_cols=self._enriched_key_cols(),
+            query_func=lambda sd: compose_enriched_query(cfg, sd),
+            key_cols=self._enriched_key_cols(cfg),
             date_col="activity_date",
             partition_level="month",
         )
 
         scheduler.run_incremental_job(
             job_name="features_grouped",
-            query_func=lambda sd: compose_grouped_query(self.cfg, sd),
-            key_cols=self._grouped_key_cols(),
+            query_func=lambda sd: compose_grouped_query(cfg, sd),
+            key_cols=self._grouped_key_cols(cfg),
             date_col="activity_date",
             partition_level="month",
         )
 
         # Record the config that produced this dataset, for provenance and for
         # the next run's drift check.
-        self._write_config_sidecar(sidecar_path)
+        self._write_config_sidecar(cfg, sidecar_path)
 
     # ------------------------------------------------------------------
     # Config sidecar / drift guard
     # ------------------------------------------------------------------
-    def _check_config_drift(self, sidecar_path: str, *, overwrite: bool) -> None:
+    def _check_config_drift(self, cfg: GameFeatureConfig, sidecar_path: str, *, overwrite: bool) -> None:
         """Hard-fail if the existing dataset's semantic config differs from the
         current one and we're not doing an --overwrite rebuild.
 
@@ -152,7 +177,7 @@ class FeaturePipelineRunner:
         prev_cfg = existing.get("config", {})
         diffs = {
             field: {"existing": prev_cfg.get(field), "current": cur_value}
-            for field, cur_value in self.cfg.semantic_signature().items()
+            for field, cur_value in cfg.semantic_signature().items()
             if prev_cfg.get(field) != cur_value
         }
         if not diffs:
@@ -162,22 +187,22 @@ class FeaturePipelineRunner:
             logger.warning(
                 "%s: feature config drift detected, but --overwrite was passed; "
                 "rebuilding the dataset from scratch under the new config. Changed: %s",
-                self.cfg.game_id,
+                cfg.game_id,
                 diffs,
             )
             return
 
         raise RuntimeError(
-            f"{self.cfg.game_id}: feature config drift vs the existing dataset at {sidecar_path}.\n"
+            f"{cfg.game_id}: feature config drift vs the existing dataset at {sidecar_path}.\n"
             f"Changed semantic fields (existing -> current): {diffs}\n"
             "Rows already on S3 were produced under different semantics and cannot be "
             "safely appended (e.g. agg_group buckets would mix different bin_size "
             "values). Re-run with --overwrite to rebuild the dataset from scratch."
         )
 
-    def _write_config_sidecar(self, sidecar_path: str) -> None:
+    def _write_config_sidecar(self, cfg: GameFeatureConfig, sidecar_path: str) -> None:
         payload = {
-            "config": self.cfg.to_dict(),
+            "config": cfg.to_dict(),
             "semantic_fields": list(SEMANTIC_FIELDS),
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -186,14 +211,14 @@ class FeaturePipelineRunner:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-    def _enriched_key_cols(self) -> list[str]:
-        return ["user_id", "ai_group", *self.cfg.partition_cols, "spin_id"]
+    def _enriched_key_cols(self, cfg: GameFeatureConfig) -> list[str]:
+        return ["user_id", "ai_group", *cfg.partition_cols, "spin_id"]
 
-    def _grouped_key_cols(self) -> list[str]:
+    def _grouped_key_cols(self, cfg: GameFeatureConfig) -> list[str]:
         return [
             "user_id",
             "ai_group",
-            *self.cfg.partition_cols,
+            *cfg.partition_cols,
             "session_start_date",
             "session_group",
             "agg_group",

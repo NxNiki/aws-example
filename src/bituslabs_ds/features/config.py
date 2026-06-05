@@ -98,7 +98,9 @@ class GameFeatureConfig:
     ai_groups: tuple[str, ...]
     selected_groups: tuple[str, ...]
     partition_cols: tuple[str, ...] = ()
-    bin_size: int = 100
+    # Consecutive bets per agg_group. A list runs the pipeline once per size;
+    # FeaturePipelineRunner always suffixes output_prefix with ``_binsize_{N}``.
+    bin_size: int | list[int] = 100
     session_break_threshold_seconds: int = 60 * 60 * 24 * 7
     streak_threshold_seconds: int = 200
     max_delta_t_gap_seconds: int = 60 * 60
@@ -124,6 +126,16 @@ class GameFeatureConfig:
                 f"selected_groups contains labels not in ai_groups: {sorted(unknown_sel)}. "
                 f"ai_groups: {self.ai_groups}."
             )
+        sizes = self.bin_size if isinstance(self.bin_size, list) else [self.bin_size]
+        # bool is an int subclass; reject it so True/False can't slip in as a size.
+        if not sizes or any(isinstance(s, bool) or not isinstance(s, int) or s <= 0 for s in sizes):
+            raise ValueError(
+                f"bin_size must be a positive int or non-empty list of positive ints, got {self.bin_size!r}"
+            )
+
+    def bin_sizes(self) -> list[int]:
+        """Normalize ``bin_size`` to a list (a scalar becomes a one-element list)."""
+        return list(self.bin_size) if isinstance(self.bin_size, list) else [self.bin_size]
 
     def effective_lookback_days(self) -> int:
         """ETLScheduler lookback derived from ``session_break_threshold_seconds``.

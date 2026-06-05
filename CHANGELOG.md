@@ -149,6 +149,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `--overwrite`) if a semantic field changed, so rows built under
     incompatible semantics (e.g. a different `bin_size`) can't be silently
     appended.
+  - **Multi-bin-size runs.** `bin_size` accepts an `int` or a `list[int]`;
+    the runner runs the pipeline once per size and always suffixes the output
+    prefix with `_binsize_{N}`, so each size lands in its own dataset root +
+    sidecar (e.g. `output_ss03_feature_engineer_binsize_50/`).
 - **ss03 clustering enhancements.** DBSCAN and subsampled-hierarchical model
   options alongside k-means in `ClusterAnalysisPipeline`; a shared
   `cluster_labels.parquet` (one column per model/feature/k run); config-driven
