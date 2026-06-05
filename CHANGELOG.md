@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-05
+
 ### Added
 
 - **Report tab in the dashboard.** New tab that turns rendered figures
@@ -123,6 +125,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Slack app setup steps, and a troubleshooting table covering the
   scope-mismatch and missing-`aiohttp` gotchas hit while wiring this
   up.
+- **Unified per-bet feature-engineering pipeline (`bituslabs_ds.features`).**
+  A single SQL-composition engine driven by a per-game `GameFeatureConfig`
+  replaces the previously copy-pasted per-game ETL scripts. CTE builders
+  (`user_bets` → `delta_stats` → `user_group` → `raw_stats` → percentiles →
+  `stats_base` → final select) consume the config; each game
+  (`jobs/ss0{1,2,3}/etl_feature_engineer.py`) just constructs a
+  `GameFeatureConfig` and hands it to `FeaturePipelineRunner`. Ships
+  character-for-character SQL **snapshot tests** with per-game job-config
+  parity checks (`tests/unit/test_features_sql_snapshots.py`).
+  - **Stable session IDs.** `session_start_ts` is forward-filled from each
+    session's first bet via `LAST_VALUE(... IGNORE NULLS)` over a local gap
+    marker, so the same logical session keeps the same id no matter how much
+    history a run scans — making incremental appends safe. Downstream
+    `session_start_date` + a within-date `session_group` ordinal identify a
+    session.
+  - **Config-driven incremental lookback.** `effective_lookback_days()`
+    derives the ETLScheduler lookback from `session_break_threshold_seconds`
+    (`ceil(threshold/86400)+1`), so each in-window session's first bet is
+    always captured.
+  - **Config sidecar + drift guard.** Each run writes a `_feature_config.json`
+    sidecar recording the semantic config; the next run hard-fails (unless
+    `--overwrite`) if a semantic field changed, so rows built under
+    incompatible semantics (e.g. a different `bin_size`) can't be silently
+    appended.
+- **ss03 clustering enhancements.** DBSCAN and subsampled-hierarchical model
+  options alongside k-means in `ClusterAnalysisPipeline`; a shared
+  `cluster_labels.parquet` (one column per model/feature/k run); config-driven
+  removal of incomplete bins (`remove_short_sessions` + `session_count_column`);
+  and `spin_id` carried through `attach_cluster_label`'s per-cluster output so
+  cluster labels can be joined back to spin-level events. See
+  `jobs/cluster_analysis/README.md`.
 
 ### Changed
 
@@ -194,6 +227,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `{"messages": […]}` dict gets a targeted `# type: ignore[arg-type]`
   at the three call sites — runtime unaffected, just silences pyright
   without coupling to a private symbol.
+- **Feature-engineering config field renames** (clarity; pure renames — values
+  and generated SQL unchanged): `session_length` → `bin_size` (consecutive bets
+  per `agg_group`, not a session length); `max_session_gap_seconds` →
+  `max_delta_t_gap_seconds` (only clamps `delta_t` for the `*_nogap` metric — not
+  a session boundary); `max_session_interval_seconds` →
+  `session_break_threshold_seconds` (the gap that starts a new session,
+  paralleling `streak_threshold_seconds`). The cluster-analysis YAMLs + `ml.py`'s
+  `bin_size` property were renamed to match. Because the config sidecar is keyed
+  by field name, the first run after this against an existing dataset needs
+  `--overwrite` (or a one-time key rename in the sidecar).
+- `GameFeatureConfig.requires_full_history` now defaults to `False` — the
+  stable-session-id incremental run is canonical; set it only when SQL semantics
+  change.
 
 ### Fixed
 
@@ -235,6 +281,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `_reset_state` now also clears `self.sessions`, restoring symmetry with
   `self.lf_bet` and tightening the early-return guard inside
   `_load_bet_data`.
+- **`read_files` silently returned an empty DataFrame when every parallel read
+  failed**, which surfaced far downstream as a confusing `KeyError` on an
+  expected column. It now raises `RuntimeError` with the first underlying error
+  when all reads fail; partial failures are still tolerated. Covered by new tests.
+- **`load_attach_data` raised `KeyError: 'billtime'` when ss03 attach was
+  enabled.** `merge_date` (derived from `billtime`) is a legacy-schema artifact
+  used only by the wucaishen/deepdive `merge_on`; it is now built only when
+  `merge_date` is actually a merge key, so ss03 (which has no `billtime` column)
+  is unaffected.
+- **Resilient local parquet cache.** A crash mid-write (e.g. an interrupted
+  incremental cache build) left a footer-less parquet that wedged every later
+  run; the reader now drops an unreadable cache and reloads from source.
+- **ETL partition columns are built in a single concat** rather than inserted
+  one at a time, avoiding pandas DataFrame-fragmentation warnings.
 
 ## [0.2.0] - 2026-05-06
 
