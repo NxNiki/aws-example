@@ -35,7 +35,7 @@ export function buildHistogramOption(series: HistogramSeries[], opts: { logY: bo
       const data = s.counts.map((c, i) => [s.bin_edges[i], s.bin_edges[i + 1], c]);
       return {
         type: "custom",
-        name: `${s.cohort} · R${s.range_index + 1}`,
+        name: `${s.cohort} · ${s.range_label}`,
         dimensions: ["x0", "x1", "count"],
         encode: { x: [0, 1], y: 2 },
         data,

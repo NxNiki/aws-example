@@ -11,6 +11,7 @@ import type {
   Granularity,
   GroupStat,
   HistogramSeries,
+  ScatterSeries,
   Series,
 } from "../api/types";
 
@@ -39,11 +40,15 @@ export interface DeepdivePanelState {
   mode: DeepdiveMode;
   metrics: string[];
   nbins: number;
-  logY: boolean;
+  logY: boolean; // histogram count axis (display)
   normalize: boolean;
   clip: ClipOpts;
+  outliersStd: number | null; // scatter: drop rows beyond N std (null = off)
+  scatterLogX: boolean; // scatter x axis (display)
+  scatterLogY: boolean; // scatter y axis (display)
   histograms: HistogramSeries[];
   heatmaps: CorrMatrix[];
+  scatters: ScatterSeries[];
   missing: string[];
 }
 
@@ -78,8 +83,12 @@ const emptyDeepdivePanel = (): DeepdivePanelState => ({
   logY: false,
   normalize: false,
   clip: noClip(),
+  outliersStd: null,
+  scatterLogX: false,
+  scatterLogY: false,
   histograms: [],
   heatmaps: [],
+  scatters: [],
   missing: [],
 });
 
@@ -345,7 +354,10 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         panels.map(async (panel) => {
           const p = deepdive[panel];
           if (p.metrics.length === 0) {
-            return [panel, { histograms: [] as HistogramSeries[], heatmaps: [] as CorrMatrix[], missing: [] as string[] }] as const;
+            return [
+              panel,
+              { histograms: [] as HistogramSeries[], heatmaps: [] as CorrMatrix[], scatters: [] as ScatterSeries[], missing: [] as string[] },
+            ] as const;
           }
           const resp = await api.deepdive({
             config: configId,
@@ -358,8 +370,12 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
             clip: p.clip,
             nbins: p.nbins,
             normalize: p.normalize,
+            outliers_std: p.outliersStd,
           });
-          return [panel, { histograms: resp.histograms, heatmaps: resp.heatmaps, missing: resp.missing }] as const;
+          return [
+            panel,
+            { histograms: resp.histograms, heatmaps: resp.heatmaps, scatters: resp.scatters, missing: resp.missing },
+          ] as const;
         }),
       );
       set((s) => {
