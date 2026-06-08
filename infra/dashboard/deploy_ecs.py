@@ -55,11 +55,19 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from infra.shared.ecs_helpers import (  # noqa: E402
     ECS_CLUSTER_NAME,
     ECS_TASK_EXECUTION_ROLE_NAME,
+    create_or_update_service,
+    ensure_alb,
     ensure_ecr_repo,
     ensure_ecs_task_execution_role,
+    ensure_http_listener,
+    ensure_log_group,
+    ensure_service_security_groups,
+    ensure_target_group,
     get_account_id,
     get_default_vpc_id,
     get_default_vpc_subnets,
+    register_task_definition,
+    wait_for_service_stable,
 )
 
 # Defaults from config
@@ -232,196 +240,40 @@ def main() -> None:
                 raise
 
     # 3. Log group
-    log_group = f"/ecs/{args.service_name}"
-    print(f"\n3. Log group: {log_group}")
-    try:
-        logs.create_log_group(logGroupName=log_group)
-        print(f"  Created log group: {log_group}")
-    except ClientError as e:
-        if e.response["Error"]["Code"] != "ResourceAlreadyExistsException":
-            raise
-        print(f"  Log group exists: {log_group}")
+    print(f"\n3. Log group: /ecs/{args.service_name}")
+    log_group = ensure_log_group(logs, f"/ecs/{args.service_name}")
 
     # 4. Security groups
     print("\n4. Security groups...")
-    vpc = ec2.describe_vpcs(VpcIds=[vpc_id])["Vpcs"][0]
-    sg_name_alb = f"{args.service_name}-alb-sg"
-    sg_name_task = f"{args.service_name}-task-sg"
-
-    try:
-        sg_alb = ec2.create_security_group(
-            GroupName=sg_name_alb,
-            Description="ALB for dashboard",
-            VpcId=vpc_id,
-        )
-        sg_alb_id = sg_alb["GroupId"]
-        print(f"  Created ALB security group: {sg_alb_id}")
-    except ClientError as e:
-        if "InvalidGroup.Duplicate" not in str(e):
-            raise
-        sg_alb_id = ec2.describe_security_groups(
-            Filters=[
-                {"Name": "vpc-id", "Values": [vpc_id]},
-                {"Name": "group-name", "Values": [sg_name_alb]},
-            ]
-        )["SecurityGroups"][0]["GroupId"]
-        print(f"  ALB security group exists: {sg_alb_id}")
-
-    try:
-        ec2.authorize_security_group_ingress(
-            GroupId=sg_alb_id,
-            IpPermissions=[
-                {
-                    "IpProtocol": "tcp",
-                    "FromPort": 80,
-                    "ToPort": 80,
-                    "IpRanges": [{"CidrIp": "0.0.0.0/0", "Description": "HTTP public"}],
-                }
-            ],
-        )
-        print("  Added ALB inbound rule (HTTP 80)")
-    except ClientError as e:
-        if "Duplicate" not in str(e):
-            raise
-
-    try:
-        sg_task = ec2.create_security_group(
-            GroupName=sg_name_task,
-            Description="ECS tasks for dashboard",
-            VpcId=vpc_id,
-        )
-        sg_task_id = sg_task["GroupId"]
-        print(f"  Created task security group: {sg_task_id}")
-    except ClientError as e:
-        if "InvalidGroup.Duplicate" not in str(e):
-            raise
-        sg_task_id = ec2.describe_security_groups(
-            Filters=[
-                {"Name": "vpc-id", "Values": [vpc_id]},
-                {"Name": "group-name", "Values": [sg_name_task]},
-            ]
-        )["SecurityGroups"][0]["GroupId"]
-        print(f"  Task security group exists: {sg_task_id}")
-
-    try:
-        ec2.authorize_security_group_ingress(
-            GroupId=sg_task_id,
-            IpPermissions=[
-                {
-                    "IpProtocol": "tcp",
-                    "FromPort": DASHBOARD_PORT,
-                    "ToPort": DASHBOARD_PORT,
-                    "UserIdGroupPairs": [{"GroupId": sg_alb_id, "Description": "From ALB"}],
-                }
-            ],
-        )
-        print("  Added task inbound rule (8050 from ALB)")
-    except ClientError as e:
-        if "Duplicate" not in str(e):
-            raise
-
-    try:
-        ec2.authorize_security_group_egress(
-            GroupId=sg_task_id,
-            IpPermissions=[
-                {
-                    "IpProtocol": "-1",
-                    "IpRanges": [{"CidrIp": "0.0.0.0/0", "Description": "All outbound"}],
-                }
-            ],
-        )
-    except ClientError as e:
-        if "Duplicate" not in str(e):
-            raise
-        print("  Task outbound rule already exists, skipping")
+    sg_alb_id, sg_task_id = ensure_service_security_groups(
+        ec2,
+        vpc_id,
+        args.service_name,
+        DASHBOARD_PORT,
+        alb_description="ALB for dashboard",
+        task_description="ECS tasks for dashboard",
+    )
 
     # 5. Application Load Balancer
     print("\n5. Application Load Balancer...")
-    lb_name = f"{args.service_name}-alb"
-    try:
-        alb = elbv2.create_load_balancer(
-            Name=lb_name,
-            Subnets=subnet_ids,
-            SecurityGroups=[sg_alb_id],
-            Scheme="internet-facing",
-            Type="application",
-            Tags=[{"Key": "Name", "Value": lb_name}],
-        )
-        alb_arn = alb["LoadBalancers"][0]["LoadBalancerArn"]
-        alb_dns = alb["LoadBalancers"][0]["DNSName"]
-        alb_hosted_zone_id = alb["LoadBalancers"][0]["CanonicalHostedZoneId"]
-        print(f"  Created ALB: {alb_dns}")
-    except ClientError as e:
-        if "DuplicateLoadBalancerName" not in str(e):
-            raise
-        albs = elbv2.describe_load_balancers(Names=[lb_name])["LoadBalancers"]
-        alb_arn = albs[0]["LoadBalancerArn"]
-        alb_dns = albs[0]["DNSName"]
-        alb_hosted_zone_id = albs[0]["CanonicalHostedZoneId"]
-        print(f"  ALB exists: {alb_dns}")
-
-    # Wait for ALB to be active
-    waiter = elbv2.get_waiter("load_balancer_available")
-    waiter.wait(LoadBalancerArns=[alb_arn])
-    print("  ALB is active")
+    alb_arn, alb_dns = ensure_alb(elbv2, f"{args.service_name}-alb", subnet_ids, sg_alb_id)
 
     # 6. Target group
     print("\n6. Target group...")
-    tg_name = f"{args.service_name}-tg"
-    try:
-        tg = elbv2.create_target_group(
-            Name=tg_name,
-            Protocol="HTTP",
-            Port=DASHBOARD_PORT,
-            VpcId=vpc_id,
-            TargetType="ip",
-            HealthCheckProtocol="HTTP",
-            HealthCheckPath=HEALTH_CHECK_PATH,
-            HealthCheckIntervalSeconds=TG_HEALTH_CHECK_INTERVAL,
-            HealthyThresholdCount=TG_HEALTHY_THRESHOLD,
-            UnhealthyThresholdCount=3,
-        )
-        tg_arn = tg["TargetGroups"][0]["TargetGroupArn"]
-        print(f"  Created target group: {tg_arn}")
-    except ClientError as e:
-        if "DuplicateTargetGroupName" not in str(e):
-            raise
-        tgs = elbv2.describe_target_groups(Names=[tg_name])["TargetGroups"]
-        tg_arn = tgs[0]["TargetGroupArn"]
-        print(f"  Target group exists: {tg_arn}")
-
-    elbv2.modify_target_group(
-        TargetGroupArn=tg_arn,
-        HealthCheckPath=HEALTH_CHECK_PATH,
-        HealthCheckIntervalSeconds=TG_HEALTH_CHECK_INTERVAL,
-        HealthyThresholdCount=TG_HEALTHY_THRESHOLD,
-    )
-    elbv2.modify_target_group_attributes(
-        TargetGroupArn=tg_arn,
-        Attributes=[
-            {"Key": "deregistration_delay.timeout_seconds", "Value": str(TG_DEREGISTRATION_DELAY)},
-        ],
+    tg_arn = ensure_target_group(
+        elbv2,
+        f"{args.service_name}-tg",
+        vpc_id,
+        DASHBOARD_PORT,
+        health_check_path=HEALTH_CHECK_PATH,
+        health_check_interval=TG_HEALTH_CHECK_INTERVAL,
+        healthy_threshold=TG_HEALTHY_THRESHOLD,
+        deregistration_delay=TG_DEREGISTRATION_DELAY,
     )
 
     # 7. Listener
     print("\n7. Listener...")
-    try:
-        elbv2.create_listener(
-            LoadBalancerArn=alb_arn,
-            Protocol="HTTP",
-            Port=80,
-            DefaultActions=[
-                {
-                    "Type": "forward",
-                    "TargetGroupArn": tg_arn,
-                }
-            ],
-        )
-        print("  Created HTTP listener on port 80")
-    except ClientError as e:
-        if "Duplicate" not in str(e) and "ResourceInUse" not in str(e):
-            raise
-        print("  Listener exists")
+    ensure_http_listener(elbv2, alb_arn, tg_arn)
 
     # 7b. Ensure ECS task execution role exists with correct trust policy,
     # then layer on dashboard-specific S3 read/write + CloudWatch metric access.
@@ -500,69 +352,21 @@ def main() -> None:
         ],
     }
 
-    resp_td = ecs.register_task_definition(**task_def)
-    new_revision = resp_td["taskDefinition"]["taskDefinitionArn"]
-    print(f"  Registered task definition: {args.service_name} (revision {resp_td['taskDefinition']['revision']})")
-
-    # Deregister old revisions (keep only the new one)
-    old_revisions = ecs.list_task_definitions(familyPrefix=args.service_name, status="ACTIVE")["taskDefinitionArns"]
-    for old_arn in old_revisions:
-        if old_arn != new_revision:
-            ecs.deregister_task_definition(taskDefinition=old_arn)
-            rev = old_arn.split(":")[-1]
-            print(f"  Deregistered old revision: {rev}")
+    register_task_definition(ecs, task_def)
 
     # 9. ECS service
     print("\n9. ECS service...")
-    try:
-        ecs.create_service(
-            cluster=ECS_CLUSTER_NAME,
-            serviceName=args.service_name,
-            taskDefinition=args.service_name,
-            desiredCount=args.desired_count,
-            launchType="FARGATE",
-            deploymentConfiguration={
-                "minimumHealthyPercent": 100,
-                "maximumPercent": 200,
-            },
-            networkConfiguration={
-                "awsvpcConfiguration": {
-                    "subnets": subnet_ids,
-                    "securityGroups": [sg_task_id],
-                    "assignPublicIp": "ENABLED",
-                }
-            },
-            loadBalancers=[
-                {
-                    "targetGroupArn": tg_arn,
-                    "containerName": "dashboard",
-                    "containerPort": DASHBOARD_PORT,
-                }
-            ],
-        )
-        print(f"  Created service: {args.service_name}")
-    except ClientError as e:
-        err = e.response.get("Error", {})
-        code, msg = err.get("Code", ""), err.get("Message", "")
-        if "ClusterNotFoundException" in str(e):
-            raise RuntimeError(f"Cluster {ECS_CLUSTER_NAME} not found") from e
-        if "ServiceAlreadyExists" in str(e) or (
-            code == "InvalidParameterException" and "not idempotent" in (msg or "").lower()
-        ):
-            ecs.update_service(
-                cluster=ECS_CLUSTER_NAME,
-                service=args.service_name,
-                taskDefinition=args.service_name,
-                desiredCount=args.desired_count,
-                deploymentConfiguration={
-                    "minimumHealthyPercent": 100,
-                    "maximumPercent": 200,
-                },
-                forceNewDeployment=True,
-            )
-            print(f"  Updated existing service: {args.service_name}")
-        else:
-            raise
+    create_or_update_service(
+        ecs,
+        cluster=ECS_CLUSTER_NAME,
+        service_name=args.service_name,
+        container_name="dashboard",
+        container_port=DASHBOARD_PORT,
+        tg_arn=tg_arn,
+        subnet_ids=subnet_ids,
+        sg_task_id=sg_task_id,
+        desired_count=args.desired_count,
+    )
 
     # 9b. Application Auto Scaling (scale to 0 when idle)
     if args.scale_to_zero:
@@ -669,18 +473,7 @@ def main() -> None:
     if args.skip_wait:
         print("\nSkipping wait (--skip-wait). Check ECS console and CloudWatch logs if tasks fail.")
     else:
-        print("\nWaiting for service to stabilize (up to 5 min)...")
-        try:
-            waiter = ecs.get_waiter("services_stable")
-            waiter.wait(
-                cluster=ECS_CLUSTER_NAME,
-                services=[args.service_name],
-                WaiterConfig={"Delay": 10, "MaxAttempts": 30},
-            )
-            print("  Service is stable")
-        except Exception as e:
-            print(f"\n  Warning: Service did not stabilize: {e}")
-            print("  Run with --skip-wait next time. Debug: ECS Console → Service → Events + Logs.")
+        wait_for_service_stable(ecs, ECS_CLUSTER_NAME, args.service_name)
 
     print("\n" + "=" * 60)
     print("Dashboard deployed successfully!")
