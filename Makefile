@@ -1,6 +1,6 @@
 # Makefile for bituslabs_ds project
 
-.PHONY: help install install-dev test test-unit test-integration test-coverage test-fast lint format clean build docs openapi
+.PHONY: help install install-dev test test-unit test-integration test-coverage test-fast lint lint-new format clean build docs openapi
 
 # Default target
 help:
@@ -51,6 +51,18 @@ lint:
 	poetry run mypy src/
 	poetry run black --check src/ tests/
 	poetry run isort --check-only src/ tests/
+
+# CI lint scope (Phase 0): the new/migrated React-redesign surfaces only. The
+# legacy tree has pre-existing flake8 debt (see .flake8) and is NOT gated yet;
+# add paths here as the rewrite ports each module so the gate tightens tab by
+# tab. `make lint` above still covers the whole repo for local cleanup work.
+LINT_PATHS_NEW = src/dashboard_api tests/unit/test_dashboard_api.py
+
+lint-new:
+	poetry run flake8 $(LINT_PATHS_NEW)
+	poetry run mypy $(LINT_PATHS_NEW)
+	poetry run black --check $(LINT_PATHS_NEW)
+	poetry run isort --check-only $(LINT_PATHS_NEW)
 
 format:
 	poetry run black src/ tests/
