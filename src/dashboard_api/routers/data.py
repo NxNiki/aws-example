@@ -20,6 +20,7 @@ from dashboard_api.schemas.data import (
     GroupStat,
     GroupValues,
     HistogramSeries,
+    ScatterSeries,
     Series,
     SeriesRequest,
     SeriesResponse,
@@ -180,7 +181,7 @@ def post_deepdive(req: DeepdiveRequest) -> DeepdiveResponse:
     if cfg is None:
         raise HTTPException(status_code=404, detail=f"Unknown config '{req.config}'")
     try:
-        histograms, heatmaps, missing = load_deepdive(
+        histograms, heatmaps, scatters, missing = load_deepdive(
             cfg,
             req.granularity,
             req.panel,
@@ -193,6 +194,7 @@ def post_deepdive(req: DeepdiveRequest) -> DeepdiveResponse:
             req.clip.max,
             req.nbins,
             req.normalize,
+            req.outliers_std,
         )
     except SeriesError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -207,6 +209,7 @@ def post_deepdive(req: DeepdiveRequest) -> DeepdiveResponse:
         mode=req.mode,
         histograms=[HistogramSeries(**h) for h in histograms],
         heatmaps=[CorrMatrix(**m) for m in heatmaps],
+        scatters=[ScatterSeries(**s) for s in scatters],
         missing=missing,
     )
 

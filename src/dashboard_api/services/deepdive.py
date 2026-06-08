@@ -1,14 +1,15 @@
-"""Histogram + correlation data for the Deep Dive tab.
+"""Histogram, correlation, and scatter data for the Deep Dive tab.
 
-Parity with the legacy Dash tab (``game_stats_monitor.py`` ~L5105-5684), scoped
-to the histogram and heatmap modes (scatter deferred). Two panels: ``derived``
-reads group-level ``DataMetrics`` values (one per date), ``user`` reads raw
-``user_*`` per-user rows. We compute aggregates server-side so payloads stay
-small: histograms are pre-binned (``np.histogram``) and the heatmap is a Pearson
-correlation matrix (``np.corrcoef``).
+Parity with the legacy Dash tab (``game_stats_monitor.py`` ~L5105-5920). Two
+panels: ``derived`` reads group-level ``DataMetrics`` values (one per date),
+``user`` reads raw ``user_*`` per-user rows. Aggregates are computed server-side
+so payloads stay small: histograms are pre-binned (``np.histogram``), the heatmap
+is a Pearson correlation matrix (``np.corrcoef``), and scatter points are
+outlier-filtered and down-sampled to a cap.
 
-Deferred vs legacy (need scipy, intentionally absent from the light image):
-p-value significance stars and the Yeo-Johnson per-metric transform.
+Deferred vs legacy (need scipy/sklearn, intentionally absent from the light
+image): heatmap p-value stars, the Yeo-Johnson per-metric transform, and symlog
+axes. Scatter supports z-score outlier removal and log axes (frontend).
 """
 
 from __future__ import annotations
@@ -24,6 +25,10 @@ from dashboard_api.services.common import SeriesError, iter_cohorts, load_lazy, 
 from dashboards.user_stats_aggregates import RETENTION_LOAD_EXTRA_DAYS, DataMetrics
 
 logger = logging.getLogger(__name__)
+
+# Cap points shipped per scatter series; sampled deterministically so the plot
+# is stable across refetches. Legacy ships all points (client-side Plotly).
+MAX_SCATTER_POINTS = 5000
 
 
 def _clip(vals: np.ndarray, enable: bool, lo: Optional[float], hi: Optional[float]) -> np.ndarray:
@@ -41,8 +46,9 @@ def _metric_values(
     start_dt: datetime,
     end_dt: datetime,
 ) -> Optional[np.ndarray]:
-    """Values of one metric within a (cohort, range) window. Derived metrics come
-    from DataMetrics (group-level); user metrics are raw columns of df_win."""
+    """Values of one metric within a (cohort, range) window — for histograms.
+    Derived metrics come from DataMetrics (group-level); user metrics are raw
+    columns of df_win."""
     if panel == "derived":
         if dm is None:
             return None
@@ -54,6 +60,46 @@ def _metric_values(
     if metric not in df_win.columns:
         return None
     return df_win.get_column(metric).drop_nulls().to_numpy().astype(float)
+
+
+def _observation_frame(
+    panel: str,
+    cols: list[str],
+    dm: Optional[DataMetrics],
+    df_win: pl.DataFrame,
+    date_col: str,
+    start_dt: datetime,
+    end_dt: datetime,
+) -> Optional[pl.DataFrame]:
+    """A frame with one column per metric and one row per aligned observation
+    (date for derived, user row for user). Shared by heatmap + scatter so both
+    see the same rows. Columns absent from the data are dropped."""
+    if panel == "derived":
+        frame: Optional[pl.DataFrame] = None
+        for m in cols:
+            mdf = dm[m] if dm is not None else None
+            if mdf is None:
+                continue
+            w = mdf.filter((pl.col(date_col) >= start_dt) & (pl.col(date_col) <= end_dt)).select([date_col, m])
+            frame = w if frame is None else frame.join(w, on=date_col, how="inner")
+        if frame is None:
+            return None
+        return frame.select([c for c in cols if c in frame.columns])
+    present = [c for c in cols if c in df_win.columns]
+    return df_win.select(present) if present else None
+
+
+def _outlier_mask(arr: np.ndarray, threshold: float) -> np.ndarray:
+    """Keep rows within `threshold` std of the mean on EVERY column (columns with
+    zero/NaN std are ignored). Mirrors the legacy _viz_drop_outliers."""
+    mask = np.ones(arr.shape[0], dtype=bool)
+    mean = arr.mean(axis=0)
+    std = arr.std(axis=0)
+    for k in range(arr.shape[1]):
+        if not np.isfinite(std[k]) or std[k] == 0:
+            continue
+        mask &= np.abs(arr[:, k] - mean[k]) / std[k] <= threshold
+    return mask
 
 
 def load_deepdive(
@@ -69,8 +115,9 @@ def load_deepdive(
     clip_max: Optional[float] = None,
     nbins: int = 50,
     normalize: bool = False,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
-    """Return (histograms, heatmaps, missing)."""
+    outliers_std: Optional[float] = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[str]]:
+    """Return (histograms, heatmaps, scatters, missing)."""
     group_values = group_values or {}
     sd = stats_by_date_cfg(cfg)
     lf, date_col = load_lazy(cfg, granularity)
@@ -84,7 +131,7 @@ def load_deepdive(
         if start and end:
             parsed.append((i, datetime.fromisoformat(start), datetime.fromisoformat(end), f"{start} → {end}"))
     if not parsed:
-        return [], [], list(metrics)
+        return [], [], [], list(metrics)
 
     overall_start = min(s for _, s, _, _ in parsed)
     overall_end = max(e for _, _, e, _ in parsed)
@@ -93,10 +140,11 @@ def load_deepdive(
 
     df_raw = lf.filter((pl.col(date_col) >= overall_start) & (pl.col(date_col) <= load_end)).collect()
     if df_raw.is_empty():
-        return [], [], list(metrics)
+        return [], [], [], list(metrics)
 
     histograms: list[dict[str, Any]] = []
     heatmaps: list[dict[str, Any]] = []
+    scatters: list[dict[str, Any]] = []
     produced: set[str] = set()
 
     for label, df_c in iter_cohorts(cfg, df_raw, group_values):
@@ -110,17 +158,13 @@ def load_deepdive(
             if df_win.is_empty():
                 continue
 
-            # Collect each metric's values once; reused by both modes.
-            per_metric: dict[str, np.ndarray] = {}
-            for m in metrics:
-                vals = _metric_values(panel, m, dm, df_win, date_col, start_dt, end_dt)
-                if vals is None or len(vals) == 0:
-                    continue
-                per_metric[m] = _clip(vals, clip_enable, clip_min, clip_max)
-                produced.add(m)
-
             if mode == "histogram":
-                for m, vals in per_metric.items():
+                for m in metrics:
+                    vals = _metric_values(panel, m, dm, df_win, date_col, start_dt, end_dt)
+                    if vals is None or len(vals) == 0:
+                        continue
+                    produced.add(m)
+                    vals = _clip(vals, clip_enable, clip_min, clip_max)
                     counts, edges = np.histogram(vals, bins=nbins, density=normalize)
                     histograms.append(
                         {
@@ -132,56 +176,54 @@ def load_deepdive(
                             "counts": [float(x) for x in counts.tolist()],
                         }
                     )
-            else:  # heatmap: Pearson correlation across metrics with aligned observations
-                cols = [m for m in metrics if m in per_metric]
-                matrix = _correlation_matrix(panel, cols, dm, df_win, date_col, start_dt, end_dt)
-                if matrix is not None:
-                    heatmaps.append(
-                        {
-                            "cohort": label,
-                            "range_label": range_label,
-                            "range_index": range_index,
-                            "metrics": cols,
-                            "corr": matrix,
-                        }
-                    )
-
-    return histograms, heatmaps, [m for m in metrics if m not in produced]
-
-
-def _correlation_matrix(
-    panel: str,
-    cols: list[str],
-    dm: Optional[DataMetrics],
-    df_win: pl.DataFrame,
-    date_col: str,
-    start_dt: datetime,
-    end_dt: datetime,
-) -> Optional[list[list[Optional[float]]]]:
-    """Pearson correlation matrix across `cols`, on observations aligned by the
-    natural row key (date for derived, user row for user). None if < 2 metrics."""
-    if len(cols) < 2:
-        return None
-    if panel == "derived":
-        frame: Optional[pl.DataFrame] = None
-        for m in cols:
-            mdf = dm[m] if dm is not None else None
-            if mdf is None:
                 continue
-            w = mdf.filter((pl.col(date_col) >= start_dt) & (pl.col(date_col) <= end_dt)).select([date_col, m])
-            frame = w if frame is None else frame.join(w, on=date_col, how="inner")
-        if frame is None:
-            return None
-        obs = frame.select(cols)
-    else:
-        obs = df_win.select([c for c in cols if c in df_win.columns])
 
-    obs = obs.drop_nulls()
-    if obs.height < 2 or obs.width < 2:
-        return None
-    arr = obs.to_numpy().astype(float)
-    corr = np.corrcoef(arr, rowvar=False)
-    return [[None if np.isnan(v) or np.isinf(v) else float(v) for v in row] for row in corr]
+            # heatmap + scatter both need an aligned observation frame.
+            obs = _observation_frame(panel, metrics, dm, df_win, date_col, start_dt, end_dt)
+            if obs is None:
+                continue
+            obs = obs.drop_nulls()
+            cols = obs.columns
+            if obs.height < 2 or len(cols) < 2:
+                continue
+            produced.update(cols)
+            arr = obs.to_numpy().astype(float)
+            if clip_enable and (clip_min is not None or clip_max is not None):
+                arr = np.clip(
+                    arr, clip_min if clip_min is not None else -np.inf, clip_max if clip_max is not None else np.inf
+                )
+
+            if mode == "heatmap":
+                corr = np.corrcoef(arr, rowvar=False)
+                heatmaps.append(
+                    {
+                        "cohort": label,
+                        "range_label": range_label,
+                        "range_index": range_index,
+                        "metrics": cols,
+                        "corr": [[None if not np.isfinite(v) else float(v) for v in row] for row in corr],
+                    }
+                )
+            else:  # scatter
+                if outliers_std is not None:
+                    arr = arr[_outlier_mask(arr, outliers_std)]
+                arr = arr[np.isfinite(arr).all(axis=1)]
+                if arr.shape[0] == 0:
+                    continue
+                if arr.shape[0] > MAX_SCATTER_POINTS:
+                    idx = np.sort(np.random.default_rng(0).choice(arr.shape[0], MAX_SCATTER_POINTS, replace=False))
+                    arr = arr[idx]
+                scatters.append(
+                    {
+                        "cohort": label,
+                        "range_label": range_label,
+                        "range_index": range_index,
+                        "metrics": cols,
+                        "points": [[float(v) for v in row] for row in arr],
+                    }
+                )
+
+    return histograms, heatmaps, scatters, [m for m in metrics if m not in produced]
 
 
 def load_deepdive_metrics(cfg: dict[str, Any], granularity: str) -> tuple[list[str], list[str]]:

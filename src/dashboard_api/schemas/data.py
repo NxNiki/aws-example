@@ -146,7 +146,7 @@ class GroupDistributionResponse(BaseModel):
 
 
 DeepdivePanel = Literal["derived", "user"]  # group-level metrics vs raw user_* columns
-DeepdiveMode = Literal["histogram", "heatmap"]
+DeepdiveMode = Literal["histogram", "heatmap", "scatter"]
 
 
 class DeepdiveRequest(BaseModel):
@@ -160,6 +160,7 @@ class DeepdiveRequest(BaseModel):
     clip: ClipOpts = Field(default_factory=ClipOpts)
     nbins: int = 50  # histogram only
     normalize: bool = False  # histogram only: density vs counts
+    outliers_std: Optional[float] = None  # scatter only: drop rows beyond N std (None = off)
 
 
 # One histogram (server-binned) for a (metric × cohort × range).
@@ -181,6 +182,17 @@ class CorrMatrix(BaseModel):
     corr: list[list[Optional[float]]]
 
 
+# Outlier-filtered, down-sampled points for one (cohort × range). `points` rows
+# are aligned to `metrics` (point[k] = value of metrics[k]); the frontend builds
+# the pair plot or scatter matrix from these.
+class ScatterSeries(BaseModel):
+    cohort: str
+    range_label: str
+    range_index: int
+    metrics: list[str]
+    points: list[list[float]]
+
+
 class DeepdiveResponse(BaseModel):
     config: str
     granularity: Granularity
@@ -188,6 +200,7 @@ class DeepdiveResponse(BaseModel):
     mode: DeepdiveMode
     histograms: list[HistogramSeries]
     heatmaps: list[CorrMatrix]
+    scatters: list[ScatterSeries]
     missing: list[str]  # requested metrics with no data
 
 
