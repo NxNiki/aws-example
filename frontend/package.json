@@ -8,6 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "gen:types": "openapi-typescript openapi.json -o src/api/schema.d.ts"
   },
   "dependencies": {
@@ -26,6 +28,7 @@
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.6.3",
-    "vite": "^5.4.11"
+    "vite": "^5.4.11",
+    "vitest": "^2.1.9"
   }
 }
