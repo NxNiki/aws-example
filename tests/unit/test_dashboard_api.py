@@ -24,3 +24,8 @@ def test_openapi_exposes_data_routes():
     assert "/api/data/series" in paths
     assert "/api/data/configs" in paths
     assert "/api/data/config/{config_id}" in paths
+    assert "/api/data/group-values" in paths
+    assert "/api/data/date-bounds" in paths
+    assert "/api/data/group-distribution" in paths
+    assert "/api/data/deepdive" in paths
+    assert "/api/data/deepdive-metrics" in paths
