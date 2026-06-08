@@ -34,19 +34,25 @@ export function Panel(props: {
       <h3 className="text-sm font-semibold text-gray-700 mb-2">{group.label}</h3>
       <div className="flex gap-4">
         {/* Controls sidebar: left/right axis metric pickers, then log scale. */}
-        <div className="flex flex-col gap-3 w-72 shrink-0">
-          <MetricCheckList
-            label="Left axis"
-            options={group.metrics}
-            selected={panel.left}
-            onChange={(next) => props.onSetMetrics("left", next)}
-          />
-          <MetricCheckList
-            label="Right axis"
-            options={group.metrics}
-            selected={panel.right}
-            onChange={(next) => props.onSetMetrics("right", next)}
-          />
+        <div className="flex flex-col gap-3 shrink-0">
+          <div className="flex gap-3">
+            <MetricCheckList
+              className="w-56"
+              maxHeightClass="max-h-96"
+              label="Left axis"
+              options={group.metrics}
+              selected={panel.left}
+              onChange={(next) => props.onSetMetrics("left", next)}
+            />
+            <MetricCheckList
+              className="w-56"
+              maxHeightClass="max-h-96"
+              label="Right axis"
+              options={group.metrics}
+              selected={panel.right}
+              onChange={(next) => props.onSetMetrics("right", next)}
+            />
+          </div>
 
           <label className="flex items-center gap-2 text-xs text-gray-600">
             <input type="checkbox" checked={panel.log} onChange={(e) => props.onSetLog(e.target.checked)} />
