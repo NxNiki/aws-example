@@ -52,6 +52,119 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/data/date-bounds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Date Bounds
+         * @description API endpoint: GET /api/data/date-bounds — min/max date in the source data.
+         *
+         *     The Stats-by-Date tab seeds its default window (last 30 days) from ``max``.
+         */
+        get: operations["get_date_bounds_api_data_date_bounds_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/data/deepdive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Deepdive
+         * @description API endpoint: POST /api/data/deepdive — Deep Dive tab.
+         *
+         *     Pre-binned histograms or a Pearson correlation matrix over the selected
+         *     metrics, per (cohort × date-range), for the derived or user-level panel.
+         */
+        post: operations["post_deepdive_api_data_deepdive_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/data/deepdive-metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Deepdive Metrics
+         * @description API endpoint: GET /api/data/deepdive-metrics — metric lists for the Deep
+         *     Dive panel pickers (derived = group-level DataMetrics, user = raw user_* columns).
+         */
+        get: operations["get_deepdive_metrics_api_data_deepdive_metrics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/data/group-distribution": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Group Distribution
+         * @description API endpoint: POST /api/data/group-distribution — Stats-by-Group tab.
+         *
+         *     Per (cohort × date-range), the metric's distribution as a 5-number summary +
+         *     mean/bootstrap-CI, so the frontend renders a box plot or a bar chart.
+         */
+        post: operations["post_group_distribution_api_data_group_distribution_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/data/group-values": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Group Values
+         * @description API endpoint: GET /api/data/group-values — distinct cohort values per
+         *     user-group column, for the Stats-by-Date cohort pickers.
+         *
+         *     Returns ``{}`` when the config defines no user_group columns. Reads the same
+         *     user-level parquet as ``/series``.
+         */
+        get: operations["get_group_values_api_data_group_values_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/data/series": {
         parameters: {
             query?: never;
@@ -100,6 +213,18 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** ClipOpts */
+        ClipOpts: {
+            /**
+             * Enable
+             * @default false
+             */
+            enable: boolean;
+            /** Max */
+            max?: number | null;
+            /** Min */
+            min?: number | null;
+        };
         /** ConfigDetail */
         ConfigDetail: {
             /** Date Col */
@@ -131,10 +256,218 @@ export interface components {
             /** Title */
             title: string;
         };
+        /** CorrMatrix */
+        CorrMatrix: {
+            /** Cohort */
+            cohort: string;
+            /** Corr */
+            corr: (number | null)[][];
+            /** Metrics */
+            metrics: string[];
+            /** Range Index */
+            range_index: number;
+            /** Range Label */
+            range_label: string;
+        };
+        /** DateBounds */
+        DateBounds: {
+            /** Config */
+            config: string;
+            /**
+             * Granularity
+             * @enum {string}
+             */
+            granularity: "day" | "week" | "month";
+            /** Max */
+            max: string | null;
+            /** Min */
+            min: string | null;
+        };
+        /** DateRange */
+        DateRange: {
+            /** End */
+            end?: string | null;
+            /** Start */
+            start?: string | null;
+        };
+        /** DeepdiveMetrics */
+        DeepdiveMetrics: {
+            /** Config */
+            config: string;
+            /** Derived */
+            derived: string[];
+            /**
+             * Granularity
+             * @enum {string}
+             */
+            granularity: "day" | "week" | "month";
+            /** User */
+            user: string[];
+        };
+        /** DeepdiveRequest */
+        DeepdiveRequest: {
+            clip?: components["schemas"]["ClipOpts"];
+            /** Config */
+            config: string;
+            /**
+             * Granularity
+             * @default day
+             * @enum {string}
+             */
+            granularity: "day" | "week" | "month";
+            /** Group Values */
+            group_values?: {
+                [key: string]: string[];
+            };
+            /** Metrics */
+            metrics: string[];
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "histogram" | "heatmap";
+            /**
+             * Nbins
+             * @default 50
+             */
+            nbins: number;
+            /**
+             * Normalize
+             * @default false
+             */
+            normalize: boolean;
+            /**
+             * Panel
+             * @enum {string}
+             */
+            panel: "derived" | "user";
+            /** Ranges */
+            ranges: components["schemas"]["DateRange"][];
+        };
+        /** DeepdiveResponse */
+        DeepdiveResponse: {
+            /** Config */
+            config: string;
+            /**
+             * Granularity
+             * @enum {string}
+             */
+            granularity: "day" | "week" | "month";
+            /** Heatmaps */
+            heatmaps: components["schemas"]["CorrMatrix"][];
+            /** Histograms */
+            histograms: components["schemas"]["HistogramSeries"][];
+            /** Missing */
+            missing: string[];
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "histogram" | "heatmap";
+            /**
+             * Panel
+             * @enum {string}
+             */
+            panel: "derived" | "user";
+        };
+        /** GroupDistributionRequest */
+        GroupDistributionRequest: {
+            clip?: components["schemas"]["ClipOpts"];
+            /** Config */
+            config: string;
+            /**
+             * Granularity
+             * @default day
+             * @enum {string}
+             */
+            granularity: "day" | "week" | "month";
+            /** Group Values */
+            group_values?: {
+                [key: string]: string[];
+            };
+            /** Metric */
+            metric: string;
+            /** Ranges */
+            ranges: components["schemas"]["DateRange"][];
+        };
+        /** GroupDistributionResponse */
+        GroupDistributionResponse: {
+            /** Config */
+            config: string;
+            /**
+             * Granularity
+             * @enum {string}
+             */
+            granularity: "day" | "week" | "month";
+            /** Metric */
+            metric: string;
+            /** Missing */
+            missing: boolean;
+            /** Stats */
+            stats: components["schemas"]["GroupStat"][];
+        };
+        /** GroupStat */
+        GroupStat: {
+            /** Ci Lower */
+            ci_lower: number | null;
+            /** Ci Upper */
+            ci_upper: number | null;
+            /** Cohort */
+            cohort: string;
+            /** Max */
+            max: number | null;
+            /** Mean */
+            mean: number | null;
+            /** Median */
+            median: number | null;
+            /** Min */
+            min: number | null;
+            /** N */
+            n: number;
+            /** Q1 */
+            q1: number | null;
+            /** Q3 */
+            q3: number | null;
+            /** Range Index */
+            range_index: number;
+            /** Range Label */
+            range_label: string;
+            /** Std */
+            std: number | null;
+        };
+        /** GroupValues */
+        GroupValues: {
+            /** Config */
+            config: string;
+            /**
+             * Granularity
+             * @enum {string}
+             */
+            granularity: "day" | "week" | "month";
+            /** Values */
+            values: {
+                [key: string]: string[];
+            };
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** HistogramSeries */
+        HistogramSeries: {
+            /** Bin Edges */
+            bin_edges: number[];
+            /** Cohort */
+            cohort: string;
+            /** Counts */
+            counts: number[];
+            /** Metric */
+            metric: string;
+            /** Range Index */
+            range_index: number;
+            /** Range Label */
+            range_label: string;
         };
         /** MetricGroup */
         MetricGroup: {
@@ -147,8 +480,23 @@ export interface components {
         };
         /** Series */
         Series: {
-            /** Name */
-            name: string;
+            /** Additive */
+            additive: boolean;
+            /** Cohort */
+            cohort: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "computed" | "user" | "raw";
+            /** Lower */
+            lower: (number | null)[];
+            /** Metric */
+            metric: string;
+            /** Upper */
+            upper: (number | null)[];
+            /** X */
+            x: string[];
             /** Y */
             y: (number | null)[];
         };
@@ -166,6 +514,10 @@ export interface components {
              * @enum {string}
              */
             granularity: "day" | "week" | "month";
+            /** Group Values */
+            group_values?: {
+                [key: string]: string[];
+            };
             /** Metrics */
             metrics: string[];
         };
@@ -184,8 +536,6 @@ export interface components {
             missing: string[];
             /** Series */
             series: components["schemas"]["Series"][];
-            /** X */
-            x: (string | null)[];
         };
         /** ValidationError */
         ValidationError: {
@@ -252,6 +602,168 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConfigList"];
+                };
+            };
+        };
+    };
+    get_date_bounds_api_data_date_bounds_get: {
+        parameters: {
+            query: {
+                config: string;
+                granularity?: "day" | "week" | "month";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DateBounds"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_deepdive_api_data_deepdive_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeepdiveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeepdiveResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_deepdive_metrics_api_data_deepdive_metrics_get: {
+        parameters: {
+            query: {
+                config: string;
+                granularity?: "day" | "week" | "month";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeepdiveMetrics"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_group_distribution_api_data_group_distribution_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GroupDistributionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GroupDistributionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_group_values_api_data_group_values_get: {
+        parameters: {
+            query: {
+                config: string;
+                granularity?: "day" | "week" | "month";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GroupValues"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

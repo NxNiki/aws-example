@@ -1,6 +1,39 @@
 {
   "components": {
     "schemas": {
+      "ClipOpts": {
+        "properties": {
+          "enable": {
+            "default": false,
+            "title": "Enable",
+            "type": "boolean"
+          },
+          "max": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max"
+          },
+          "min": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min"
+          }
+        },
+        "title": "ClipOpts",
+        "type": "object"
+      },
       "ConfigDetail": {
         "properties": {
           "date_col": {
@@ -100,6 +133,577 @@
         "title": "ConfigSummary",
         "type": "object"
       },
+      "CorrMatrix": {
+        "properties": {
+          "cohort": {
+            "title": "Cohort",
+            "type": "string"
+          },
+          "corr": {
+            "items": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "title": "Corr",
+            "type": "array"
+          },
+          "metrics": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Metrics",
+            "type": "array"
+          },
+          "range_index": {
+            "title": "Range Index",
+            "type": "integer"
+          },
+          "range_label": {
+            "title": "Range Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cohort",
+          "range_label",
+          "range_index",
+          "metrics",
+          "corr"
+        ],
+        "title": "CorrMatrix",
+        "type": "object"
+      },
+      "DateBounds": {
+        "properties": {
+          "config": {
+            "title": "Config",
+            "type": "string"
+          },
+          "granularity": {
+            "enum": [
+              "day",
+              "week",
+              "month"
+            ],
+            "title": "Granularity",
+            "type": "string"
+          },
+          "max": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max"
+          },
+          "min": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min"
+          }
+        },
+        "required": [
+          "config",
+          "granularity",
+          "min",
+          "max"
+        ],
+        "title": "DateBounds",
+        "type": "object"
+      },
+      "DateRange": {
+        "properties": {
+          "end": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start"
+          }
+        },
+        "title": "DateRange",
+        "type": "object"
+      },
+      "DeepdiveMetrics": {
+        "properties": {
+          "config": {
+            "title": "Config",
+            "type": "string"
+          },
+          "derived": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Derived",
+            "type": "array"
+          },
+          "granularity": {
+            "enum": [
+              "day",
+              "week",
+              "month"
+            ],
+            "title": "Granularity",
+            "type": "string"
+          },
+          "user": {
+            "items": {
+              "type": "string"
+            },
+            "title": "User",
+            "type": "array"
+          }
+        },
+        "required": [
+          "config",
+          "granularity",
+          "derived",
+          "user"
+        ],
+        "title": "DeepdiveMetrics",
+        "type": "object"
+      },
+      "DeepdiveRequest": {
+        "properties": {
+          "clip": {
+            "$ref": "#/components/schemas/ClipOpts"
+          },
+          "config": {
+            "title": "Config",
+            "type": "string"
+          },
+          "granularity": {
+            "default": "day",
+            "enum": [
+              "day",
+              "week",
+              "month"
+            ],
+            "title": "Granularity",
+            "type": "string"
+          },
+          "group_values": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Group Values",
+            "type": "object"
+          },
+          "metrics": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Metrics",
+            "type": "array"
+          },
+          "mode": {
+            "enum": [
+              "histogram",
+              "heatmap"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "nbins": {
+            "default": 50,
+            "title": "Nbins",
+            "type": "integer"
+          },
+          "normalize": {
+            "default": false,
+            "title": "Normalize",
+            "type": "boolean"
+          },
+          "panel": {
+            "enum": [
+              "derived",
+              "user"
+            ],
+            "title": "Panel",
+            "type": "string"
+          },
+          "ranges": {
+            "items": {
+              "$ref": "#/components/schemas/DateRange"
+            },
+            "minItems": 1,
+            "title": "Ranges",
+            "type": "array"
+          }
+        },
+        "required": [
+          "config",
+          "panel",
+          "mode",
+          "metrics",
+          "ranges"
+        ],
+        "title": "DeepdiveRequest",
+        "type": "object"
+      },
+      "DeepdiveResponse": {
+        "properties": {
+          "config": {
+            "title": "Config",
+            "type": "string"
+          },
+          "granularity": {
+            "enum": [
+              "day",
+              "week",
+              "month"
+            ],
+            "title": "Granularity",
+            "type": "string"
+          },
+          "heatmaps": {
+            "items": {
+              "$ref": "#/components/schemas/CorrMatrix"
+            },
+            "title": "Heatmaps",
+            "type": "array"
+          },
+          "histograms": {
+            "items": {
+              "$ref": "#/components/schemas/HistogramSeries"
+            },
+            "title": "Histograms",
+            "type": "array"
+          },
+          "missing": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing",
+            "type": "array"
+          },
+          "mode": {
+            "enum": [
+              "histogram",
+              "heatmap"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "panel": {
+            "enum": [
+              "derived",
+              "user"
+            ],
+            "title": "Panel",
+            "type": "string"
+          }
+        },
+        "required": [
+          "config",
+          "granularity",
+          "panel",
+          "mode",
+          "histograms",
+          "heatmaps",
+          "missing"
+        ],
+        "title": "DeepdiveResponse",
+        "type": "object"
+      },
+      "GroupDistributionRequest": {
+        "properties": {
+          "clip": {
+            "$ref": "#/components/schemas/ClipOpts"
+          },
+          "config": {
+            "title": "Config",
+            "type": "string"
+          },
+          "granularity": {
+            "default": "day",
+            "enum": [
+              "day",
+              "week",
+              "month"
+            ],
+            "title": "Granularity",
+            "type": "string"
+          },
+          "group_values": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Group Values",
+            "type": "object"
+          },
+          "metric": {
+            "title": "Metric",
+            "type": "string"
+          },
+          "ranges": {
+            "items": {
+              "$ref": "#/components/schemas/DateRange"
+            },
+            "minItems": 1,
+            "title": "Ranges",
+            "type": "array"
+          }
+        },
+        "required": [
+          "config",
+          "metric",
+          "ranges"
+        ],
+        "title": "GroupDistributionRequest",
+        "type": "object"
+      },
+      "GroupDistributionResponse": {
+        "properties": {
+          "config": {
+            "title": "Config",
+            "type": "string"
+          },
+          "granularity": {
+            "enum": [
+              "day",
+              "week",
+              "month"
+            ],
+            "title": "Granularity",
+            "type": "string"
+          },
+          "metric": {
+            "title": "Metric",
+            "type": "string"
+          },
+          "missing": {
+            "title": "Missing",
+            "type": "boolean"
+          },
+          "stats": {
+            "items": {
+              "$ref": "#/components/schemas/GroupStat"
+            },
+            "title": "Stats",
+            "type": "array"
+          }
+        },
+        "required": [
+          "config",
+          "granularity",
+          "metric",
+          "stats",
+          "missing"
+        ],
+        "title": "GroupDistributionResponse",
+        "type": "object"
+      },
+      "GroupStat": {
+        "properties": {
+          "ci_lower": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ci Lower"
+          },
+          "ci_upper": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ci Upper"
+          },
+          "cohort": {
+            "title": "Cohort",
+            "type": "string"
+          },
+          "max": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max"
+          },
+          "mean": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean"
+          },
+          "median": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Median"
+          },
+          "min": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min"
+          },
+          "n": {
+            "title": "N",
+            "type": "integer"
+          },
+          "q1": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Q1"
+          },
+          "q3": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Q3"
+          },
+          "range_index": {
+            "title": "Range Index",
+            "type": "integer"
+          },
+          "range_label": {
+            "title": "Range Label",
+            "type": "string"
+          },
+          "std": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Std"
+          }
+        },
+        "required": [
+          "cohort",
+          "range_label",
+          "range_index",
+          "n",
+          "min",
+          "q1",
+          "median",
+          "q3",
+          "max",
+          "mean",
+          "std",
+          "ci_lower",
+          "ci_upper"
+        ],
+        "title": "GroupStat",
+        "type": "object"
+      },
+      "GroupValues": {
+        "properties": {
+          "config": {
+            "title": "Config",
+            "type": "string"
+          },
+          "granularity": {
+            "enum": [
+              "day",
+              "week",
+              "month"
+            ],
+            "title": "Granularity",
+            "type": "string"
+          },
+          "values": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Values",
+            "type": "object"
+          }
+        },
+        "required": [
+          "config",
+          "granularity",
+          "values"
+        ],
+        "title": "GroupValues",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -111,6 +715,50 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HistogramSeries": {
+        "properties": {
+          "bin_edges": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Bin Edges",
+            "type": "array"
+          },
+          "cohort": {
+            "title": "Cohort",
+            "type": "string"
+          },
+          "counts": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Counts",
+            "type": "array"
+          },
+          "metric": {
+            "title": "Metric",
+            "type": "string"
+          },
+          "range_index": {
+            "title": "Range Index",
+            "type": "integer"
+          },
+          "range_label": {
+            "title": "Range Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "metric",
+          "cohort",
+          "range_label",
+          "range_index",
+          "bin_edges",
+          "counts"
+        ],
+        "title": "HistogramSeries",
         "type": "object"
       },
       "MetricGroup": {
@@ -141,9 +789,61 @@
       },
       "Series": {
         "properties": {
-          "name": {
-            "title": "Name",
+          "additive": {
+            "title": "Additive",
+            "type": "boolean"
+          },
+          "cohort": {
+            "title": "Cohort",
             "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "computed",
+              "user",
+              "raw"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "lower": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Lower",
+            "type": "array"
+          },
+          "metric": {
+            "title": "Metric",
+            "type": "string"
+          },
+          "upper": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Upper",
+            "type": "array"
+          },
+          "x": {
+            "items": {
+              "type": "string"
+            },
+            "title": "X",
+            "type": "array"
           },
           "y": {
             "items": {
@@ -161,8 +861,14 @@
           }
         },
         "required": [
-          "name",
-          "y"
+          "metric",
+          "cohort",
+          "kind",
+          "additive",
+          "x",
+          "y",
+          "lower",
+          "upper"
         ],
         "title": "Series",
         "type": "object"
@@ -204,6 +910,16 @@
             ],
             "title": "Granularity",
             "type": "string"
+          },
+          "group_values": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Group Values",
+            "type": "object"
           },
           "metrics": {
             "items": {
@@ -253,27 +969,12 @@
             },
             "title": "Series",
             "type": "array"
-          },
-          "x": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "title": "X",
-            "type": "array"
           }
         },
         "required": [
           "config",
           "granularity",
           "date_col",
-          "x",
           "series",
           "missing"
         ],
@@ -381,6 +1082,264 @@
           }
         },
         "summary": "List Configs",
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/api/data/date-bounds": {
+      "get": {
+        "description": "API endpoint: GET /api/data/date-bounds \u2014 min/max date in the source data.\n\nThe Stats-by-Date tab seeds its default window (last 30 days) from ``max``.",
+        "operationId": "get_date_bounds_api_data_date_bounds_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "config",
+            "required": true,
+            "schema": {
+              "title": "Config",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "granularity",
+            "required": false,
+            "schema": {
+              "default": "day",
+              "enum": [
+                "day",
+                "week",
+                "month"
+              ],
+              "title": "Granularity",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DateBounds"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Date Bounds",
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/api/data/deepdive": {
+      "post": {
+        "description": "API endpoint: POST /api/data/deepdive \u2014 Deep Dive tab.\n\nPre-binned histograms or a Pearson correlation matrix over the selected\nmetrics, per (cohort \u00d7 date-range), for the derived or user-level panel.",
+        "operationId": "post_deepdive_api_data_deepdive_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeepdiveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeepdiveResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Deepdive",
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/api/data/deepdive-metrics": {
+      "get": {
+        "description": "API endpoint: GET /api/data/deepdive-metrics \u2014 metric lists for the Deep\nDive panel pickers (derived = group-level DataMetrics, user = raw user_* columns).",
+        "operationId": "get_deepdive_metrics_api_data_deepdive_metrics_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "config",
+            "required": true,
+            "schema": {
+              "title": "Config",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "granularity",
+            "required": false,
+            "schema": {
+              "default": "day",
+              "enum": [
+                "day",
+                "week",
+                "month"
+              ],
+              "title": "Granularity",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeepdiveMetrics"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Deepdive Metrics",
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/api/data/group-distribution": {
+      "post": {
+        "description": "API endpoint: POST /api/data/group-distribution \u2014 Stats-by-Group tab.\n\nPer (cohort \u00d7 date-range), the metric's distribution as a 5-number summary +\nmean/bootstrap-CI, so the frontend renders a box plot or a bar chart.",
+        "operationId": "post_group_distribution_api_data_group_distribution_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupDistributionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupDistributionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Group Distribution",
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/api/data/group-values": {
+      "get": {
+        "description": "API endpoint: GET /api/data/group-values \u2014 distinct cohort values per\nuser-group column, for the Stats-by-Date cohort pickers.\n\nReturns ``{}`` when the config defines no user_group columns. Reads the same\nuser-level parquet as ``/series``.",
+        "operationId": "get_group_values_api_data_group_values_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "config",
+            "required": true,
+            "schema": {
+              "title": "Config",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "granularity",
+            "required": false,
+            "schema": {
+              "default": "day",
+              "enum": [
+                "day",
+                "week",
+                "month"
+              ],
+              "title": "Granularity",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupValues"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Group Values",
         "tags": [
           "data"
         ]
