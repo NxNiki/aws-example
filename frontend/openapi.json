@@ -336,7 +336,8 @@
           "mode": {
             "enum": [
               "histogram",
-              "heatmap"
+              "heatmap",
+              "scatter"
             ],
             "title": "Mode",
             "type": "string"
@@ -350,6 +351,17 @@
             "default": false,
             "title": "Normalize",
             "type": "boolean"
+          },
+          "outliers_std": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outliers Std"
           },
           "panel": {
             "enum": [
@@ -417,7 +429,8 @@
           "mode": {
             "enum": [
               "histogram",
-              "heatmap"
+              "heatmap",
+              "scatter"
             ],
             "title": "Mode",
             "type": "string"
@@ -429,6 +442,13 @@
             ],
             "title": "Panel",
             "type": "string"
+          },
+          "scatters": {
+            "items": {
+              "$ref": "#/components/schemas/ScatterSeries"
+            },
+            "title": "Scatters",
+            "type": "array"
           }
         },
         "required": [
@@ -438,6 +458,7 @@
           "mode",
           "histograms",
           "heatmaps",
+          "scatters",
           "missing"
         ],
         "title": "DeepdiveResponse",
@@ -785,6 +806,48 @@
           "metrics"
         ],
         "title": "MetricGroup",
+        "type": "object"
+      },
+      "ScatterSeries": {
+        "properties": {
+          "cohort": {
+            "title": "Cohort",
+            "type": "string"
+          },
+          "metrics": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Metrics",
+            "type": "array"
+          },
+          "points": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "title": "Points",
+            "type": "array"
+          },
+          "range_index": {
+            "title": "Range Index",
+            "type": "integer"
+          },
+          "range_label": {
+            "title": "Range Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cohort",
+          "range_label",
+          "range_index",
+          "metrics",
+          "points"
+        ],
+        "title": "ScatterSeries",
         "type": "object"
       },
       "Series": {

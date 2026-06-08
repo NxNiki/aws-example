@@ -30,5 +30,6 @@ export type DeepdivePanel = DeepdiveRequest["panel"];
 export type DeepdiveMode = DeepdiveRequest["mode"];
 export type HistogramSeries = Schemas["HistogramSeries"];
 export type CorrMatrix = Schemas["CorrMatrix"];
+export type ScatterSeries = Schemas["ScatterSeries"];
 export type DeepdiveResponse = Schemas["DeepdiveResponse"];
 export type DeepdiveMetrics = Schemas["DeepdiveMetrics"];

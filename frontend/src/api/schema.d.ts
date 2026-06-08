@@ -325,7 +325,7 @@ export interface components {
              * Mode
              * @enum {string}
              */
-            mode: "histogram" | "heatmap";
+            mode: "histogram" | "heatmap" | "scatter";
             /**
              * Nbins
              * @default 50
@@ -336,6 +336,8 @@ export interface components {
              * @default false
              */
             normalize: boolean;
+            /** Outliers Std */
+            outliers_std?: number | null;
             /**
              * Panel
              * @enum {string}
@@ -363,12 +365,14 @@ export interface components {
              * Mode
              * @enum {string}
              */
-            mode: "histogram" | "heatmap";
+            mode: "histogram" | "heatmap" | "scatter";
             /**
              * Panel
              * @enum {string}
              */
             panel: "derived" | "user";
+            /** Scatters */
+            scatters: components["schemas"]["ScatterSeries"][];
         };
         /** GroupDistributionRequest */
         GroupDistributionRequest: {
@@ -477,6 +481,19 @@ export interface components {
             label: string;
             /** Metrics */
             metrics: string[];
+        };
+        /** ScatterSeries */
+        ScatterSeries: {
+            /** Cohort */
+            cohort: string;
+            /** Metrics */
+            metrics: string[];
+            /** Points */
+            points: number[][];
+            /** Range Index */
+            range_index: number;
+            /** Range Label */
+            range_label: string;
         };
         /** Series */
         Series: {
