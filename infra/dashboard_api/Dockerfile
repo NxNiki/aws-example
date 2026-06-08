@@ -36,8 +36,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf 
 COPY --from=builder /app/.venv /app/.venv
 COPY src/bituslabs_ds ./src/bituslabs_ds
 COPY src/dashboard_api ./src/dashboard_api
-# Only the YAML configs are needed (not the legacy Dash app code).
+# From the legacy dashboards package we need only the YAML configs and the
+# self-contained DataMetrics engine (numpy/polars only), which the data API
+# reuses to compute group-level metrics from user rows — not the Dash app.
 COPY src/dashboards/dashboard_config-*.yaml ./src/dashboards/
+COPY src/dashboards/__init__.py src/dashboards/user_stats_aggregates.py ./src/dashboards/
 COPY --from=spa /frontend/dist ./frontend/dist
 
 ENV DASHBOARD_CONFIG_DIR=/app/src/dashboards \
