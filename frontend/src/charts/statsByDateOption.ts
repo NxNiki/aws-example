@@ -67,16 +67,22 @@ export function buildStatsByDateOption(series: Series[], opts: BuildOpts): EChar
   const cohorts: string[] = [];
   for (const s of series) if (!cohorts.includes(s.cohort)) cohorts.push(s.cohort);
 
-  const axisIndexFor = (metric: string) => (rightMetrics.includes(metric) && !leftMetrics.includes(metric) ? 1 : 0);
-
   const echSeries: LineSeriesOption[] = [];
   const legendNames: string[] = [];
   let bandId = 0;
 
   series.forEach((s) => {
+    // Assign left-first; drop series whose metric is no longer selected on
+    // either axis. Without this, a metric just removed from one axis would, until
+    // the (debounced) refetch drops it, fall through to the left axis instead of
+    // disappearing — the "unselect right → jumps to left" glitch.
+    const onLeft = leftMetrics.includes(s.metric);
+    const onRight = rightMetrics.includes(s.metric);
+    if (!onLeft && !onRight) return;
+    const yAxisIndex = onLeft ? 0 : 1;
+
     const color = colorForIndex(Math.max(0, cohorts.indexOf(s.cohort)));
     const dash = dashForIndex(Math.max(0, metricOrder.indexOf(s.metric)));
-    const yAxisIndex = axisIndexFor(s.metric);
     const name = `${s.cohort}: ${s.metric}`;
     legendNames.push(name);
 
