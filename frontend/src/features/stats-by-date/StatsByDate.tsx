@@ -49,7 +49,7 @@ export function StatsByDate() {
   return (
     <div className="p-6 pt-0 w-full">
       {/* Pinned below the sticky header + tab bar while the charts scroll underneath. */}
-      <div className="sticky top-[100px] z-20 -mx-6 mb-6 border-b bg-gray-50 px-6 py-3">
+      <div className="sticky top-[6.25rem] z-20 -mx-6 mb-6 border-b bg-gray-50 px-6 py-3">
         <Controls
           granularity={c.granularity}
           granularities={s.config?.granularities ?? ["day"]}

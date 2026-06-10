@@ -26,8 +26,8 @@ function GroupPanel(props: {
   );
   return (
     <div className="border rounded p-3 mb-6">
-      <div className="flex gap-4">
-        <div className="flex flex-col gap-3 w-72 shrink-0">
+      <div className="flex flex-col gap-4 lg:flex-row">
+        <div className="flex w-full flex-col gap-3 lg:w-72 lg:shrink-0">
           <h3 className="text-base font-semibold text-gray-700">{group.label}</h3>
           <label className="flex flex-col text-base">
             <span className="text-gray-500 mb-1">Metric</span>
@@ -88,7 +88,7 @@ export function StatsByGroup() {
   return (
     <div className="p-6 pt-0 w-full">
       {/* Pinned below the sticky header + tab bar (see App.tsx height comment). */}
-      <div className="sticky top-[100px] z-20 -mx-6 mb-6 flex flex-wrap gap-6 items-start border-b bg-gray-50 px-6 py-3">
+      <div className="sticky top-[6.25rem] z-20 -mx-6 mb-6 flex flex-wrap gap-6 items-start border-b bg-gray-50 px-6 py-3">
         <label className="flex flex-col text-base">
           <span className="text-gray-600 mb-1">Granularity</span>
           <select

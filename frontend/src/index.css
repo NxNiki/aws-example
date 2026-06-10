@@ -8,3 +8,12 @@ body,
   height: 100%;
   margin: 0;
 }
+
+/* Fluid scaling: Tailwind sizes are rem-based, so scaling the root font-size
+   scales text AND spacing coherently with the window — ~13px at 1000px wide up
+   to the full 16px at 1600px+. The sticky header/nav/controls offsets are all
+   rem-based (h-14 / top-14 / top-[6.25rem]), so the pinned stack stays aligned
+   at any scale. */
+html {
+  font-size: clamp(13px, 8px + 0.5vw, 16px);
+}

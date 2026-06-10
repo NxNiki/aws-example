@@ -32,9 +32,9 @@ export function Panel(props: {
   return (
     <div className="border rounded p-3 mb-6">
       <h3 className="text-base font-semibold text-gray-700 mb-2">{group.label}</h3>
-      <div className="flex gap-4">
+      <div className="flex flex-col gap-4 lg:flex-row">
         {/* Controls sidebar: combined metric/axis picker, then log scale. */}
-        <div className="flex flex-col gap-3 shrink-0 w-80">
+        <div className="flex w-full flex-col gap-3 lg:w-80 lg:shrink-0">
           <AxisMetricPicker
             options={group.metrics}
             left={panel.left}

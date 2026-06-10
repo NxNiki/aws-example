@@ -36,17 +36,23 @@ export default function App() {
     // ECharts re-sizes via its ResizeObserver when the panel opens/resizes.
     <div className="min-h-full bg-gray-50 text-gray-900" style={{ paddingRight: chatOpen ? chatWidth : 0 }}>
       {/* Sticky stack: header (top-0, h-14) → tab bar (top-14, h-11) → per-tab
-          controls (top-[100px] = 56 + 44). Keep the heights in sync. */}
+          controls (top-[6.25rem] = 3.5 + 2.75rem). Keep the heights in sync. */}
       <header className="sticky top-0 z-40 flex h-14 items-center justify-between border-b bg-white px-4">
-        <div className="flex items-center gap-3">
-          <h1 className="text-lg font-semibold">Game Stats Dashboard</h1>
-          {loading && <span className="text-base text-blue-600 animate-pulse">● {status ?? "loading…"}</span>}
+        <div className="flex min-w-0 items-center gap-3">
+          {/* Full title on wide windows; compact glyph below lg. */}
+          <h1 className="hidden truncate text-lg font-semibold lg:block">Game Stats Dashboard</h1>
+          <h1 className="text-lg font-semibold lg:hidden">📊</h1>
+          {loading && (
+            <span className="hidden truncate text-sm text-blue-600 animate-pulse md:inline-block md:max-w-36 xl:max-w-none xl:text-base">
+              ● {status ?? "loading…"}
+            </span>
+          )}
         </div>
-        <div className="flex items-center gap-4 text-base">
+        <div className="flex items-center gap-2 text-base xl:gap-4">
           <label className="flex items-center gap-2">
-            <span className="text-gray-600">Game config</span>
+            <span className="hidden text-gray-600 xl:inline">Game config</span>
             <select
-              className="border rounded px-3 py-2 min-w-56"
+              className="w-36 rounded border px-2 py-2 xl:w-auto xl:min-w-56 xl:max-w-md xl:px-3"
               value={configId ?? ""}
               onChange={(e) => void selectConfig(e.target.value)}
             >
@@ -59,9 +65,9 @@ export default function App() {
           </label>
 
           {/* Saved views: recover a dashboard setting (legacy save/load config). */}
-          <div className="flex items-center gap-2 border-l pl-4">
+          <div className="flex items-center gap-2 border-l pl-2 xl:pl-4">
             <select
-              className="border rounded px-2 py-2 w-56"
+              className="w-32 rounded border px-2 py-2 xl:w-56"
               value=""
               onChange={(e) => {
                 if (e.target.value) {
@@ -78,13 +84,13 @@ export default function App() {
               ))}
             </select>
             <input
-              className="border rounded px-2 py-2 w-56"
+              className="w-28 rounded border px-2 py-2 xl:w-56"
               placeholder="view name"
               value={viewName}
               onChange={(e) => setViewName(e.target.value)}
             />
             <button
-              className="border rounded px-5 py-2 bg-blue-600 text-white disabled:opacity-40 whitespace-nowrap"
+              className="whitespace-nowrap rounded border bg-blue-600 px-3 py-2 text-white disabled:opacity-40 xl:px-5"
               disabled={!viewName.trim()}
               onClick={() => {
                 const name = viewName.trim();
@@ -93,7 +99,7 @@ export default function App() {
                 void saveView(name);
               }}
             >
-              Save view
+              Save<span className="hidden xl:inline"> view</span>
             </button>
           </div>
 
@@ -103,7 +109,7 @@ export default function App() {
             }`}
             onClick={toggleChat}
           >
-            🤖 AI Assistant
+            🤖<span className="hidden xl:inline"> AI Assistant</span>
           </button>
         </div>
       </header>

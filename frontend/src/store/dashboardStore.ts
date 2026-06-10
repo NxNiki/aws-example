@@ -520,7 +520,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
 
         return runExclusive(
           key,
-          "Loading metrics…",
+          "loading metrics…",
           set,
           async (signal): Promise<Series[]> => {
             const resp = await api.series(
@@ -568,7 +568,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         if (_panelSig[key] === sig) return;
         return runExclusive(
           key,
-          "Computing distributions (bootstrap CI)…",
+          "CI bootstrapping…",
           set,
           async (signal) => {
             if (!p.metric) return { stats: [] as GroupStat[], missing: false };
@@ -721,10 +721,10 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         if (_panelSig[key] === sig) return;
         const label =
           p.mode === "histogram"
-            ? "Binning histograms…"
+            ? "binning histograms…"
             : p.mode === "heatmap"
-              ? "Computing correlations…"
-              : "Sampling points…";
+              ? "computing correlations…"
+              : "sampling points…";
         return runExclusive(
           key,
           label,

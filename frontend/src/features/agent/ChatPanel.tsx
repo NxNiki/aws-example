@@ -63,7 +63,7 @@ export function ChatPanel() {
   return (
     <div
       className="fixed right-0 top-14 bottom-0 z-40 flex flex-col border-l bg-white shadow-lg"
-      style={{ width: chat.width }}
+      style={{ width: chat.width, maxWidth: "85vw" }}
     >
       <div
         className="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-blue-300/60"
