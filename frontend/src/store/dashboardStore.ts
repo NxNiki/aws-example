@@ -15,6 +15,43 @@ import type {
   Series,
 } from "../api/types";
 
+// ── Per-tab shared controls ────────────────────────────────────────────────
+// Each tab owns its granularity, date window(s), and cohort selection — they
+// are NOT shared across tabs (changing the Deep Dive range must not move the
+// Stats-by-Group comparison).
+
+export interface DateTabControls {
+  granularity: Granularity;
+  dateFrom: string | null;
+  dateTo: string | null;
+  cohortSelection: Record<string, string[]>;
+}
+
+export interface RangeTabControls {
+  granularity: Granularity;
+  ranges: RangeState[]; // up to 3 comparable windows
+  cohortSelection: Record<string, string[]>;
+}
+
+export interface TabControls {
+  date: DateTabControls;
+  group: RangeTabControls;
+  viz: RangeTabControls;
+}
+export type TabKey = keyof TabControls;
+
+const defaultRanges = (): RangeState[] => [
+  { start: null, end: null, show: true },
+  { start: null, end: null, show: false },
+  { start: null, end: null, show: false },
+];
+
+const defaultControls = (): TabControls => ({
+  date: { granularity: "day", dateFrom: null, dateTo: null, cohortSelection: {} },
+  group: { granularity: "day", ranges: defaultRanges(), cohortSelection: {} },
+  viz: { granularity: "day", ranges: defaultRanges(), cohortSelection: {} },
+});
+
 // ── Per-panel state ────────────────────────────────────────────────────────
 
 // Stats-by-Date: which metrics go on each axis + the hybrid-log toggle.
@@ -54,11 +91,6 @@ export interface DeepdivePanelState {
 
 const DEFAULT_THRESHOLD = 10;
 const noClip = (): ClipOpts => ({ enable: false, min: null, max: null });
-const defaultRanges = (): RangeState[] => [
-  { start: null, end: null, show: true },
-  { start: null, end: null, show: false },
-  { start: null, end: null, show: false },
-];
 
 function defaultPanels(config: ConfigDetail): Record<string, PanelState> {
   const panels: Record<string, PanelState> = {};
@@ -94,17 +126,41 @@ const emptyDeepdivePanel = (): DeepdivePanelState => ({
 
 // A serializable snapshot of the dashboard's UI selections (NOT fetched data /
 // figures) — the React-era "save/load config". Persisted opaquely to S3.
+// v2 stores per-tab `controls`; v1 snapshots (global granularity/dates/cohorts)
+// are migrated on load by `snapshotControls`.
 export interface ViewSnapshot {
   version: number;
   configId: string | null;
-  granularity: Granularity;
-  dateFrom: string | null;
-  dateTo: string | null;
-  ranges: RangeState[];
-  cohortSelection: Record<string, string[]>;
+  controls?: TabControls;
+  // v1 legacy fields (still read for migration):
+  granularity?: Granularity;
+  dateFrom?: string | null;
+  dateTo?: string | null;
+  ranges?: RangeState[];
+  cohortSelection?: Record<string, string[]>;
   panels: Record<string, PanelState>;
   group: Record<string, GroupPanelState>;
   deepdive: Record<DeepdivePanel, DeepdivePanelState>;
+}
+
+function snapshotControls(snap: ViewSnapshot): TabControls {
+  const dc = defaultControls();
+  if (snap.controls) {
+    return {
+      date: { ...dc.date, ...(snap.controls.date ?? {}) },
+      group: { ...dc.group, ...(snap.controls.group ?? {}) },
+      viz: { ...dc.viz, ...(snap.controls.viz ?? {}) },
+    };
+  }
+  // v1: one global set of controls — apply it to every tab.
+  const granularity = snap.granularity ?? "day";
+  const cohortSelection = snap.cohortSelection ?? {};
+  const ranges = snap.ranges ?? defaultRanges();
+  return {
+    date: { granularity, dateFrom: snap.dateFrom ?? null, dateTo: snap.dateTo ?? null, cohortSelection },
+    group: { granularity, ranges, cohortSelection },
+    viz: { granularity, ranges, cohortSelection },
+  };
 }
 
 // Last-30-days window (inclusive) ending at the data's max date.
@@ -121,12 +177,10 @@ interface DashboardState {
   configId: string | null;
   config: ConfigDetail | null;
 
-  granularity: Granularity;
-  dateFrom: string | null; // Stats-by-Date single window
-  dateTo: string | null;
-  ranges: RangeState[]; // Stats-by-Group + Deep Dive: up to 3 windows
-  groupValues: Record<string, string[]>;
-  cohortSelection: Record<string, string[]>;
+  controls: TabControls;
+  // Available cohort values per granularity (the data can differ by
+  // granularity, and tabs can sit on different granularities).
+  groupValuesByGran: Partial<Record<Granularity, Record<string, string[]>>>;
 
   panels: Record<string, PanelState>; // Stats-by-Date
   group: Record<string, GroupPanelState>; // Stats-by-Group
@@ -141,15 +195,14 @@ interface DashboardState {
 
   loadConfigs: () => Promise<void>;
   selectConfig: (id: string) => Promise<void>;
-  setGranularity: (g: Granularity) => void;
-  setDateRange: (from: string | null, to: string | null) => void;
-  setRange: (index: number, range: RangeState) => void;
-  setCohort: (col: string, values: string[]) => void;
+  patchControls: <K extends TabKey>(tab: K, patch: Partial<TabControls[K]>) => void;
+  setTabCohort: (tab: TabKey, col: string, values: string[]) => void;
+  setTabRange: (tab: "group" | "viz", index: number, range: RangeState) => void;
+  ensureGroupValues: (gran: Granularity) => Promise<void>;
 
   // Stats-by-Date
   setPanelMetrics: (panelId: string, side: "left" | "right", metrics: string[]) => void;
   setPanelLog: (panelId: string, log: boolean, threshold?: number) => void;
-  loadGroupValues: () => Promise<void>;
   loadDateBounds: () => Promise<void>;
   loadAllSeries: () => Promise<void>;
 
@@ -238,12 +291,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   configs: [],
   configId: null,
   config: null,
-  granularity: "day",
-  dateFrom: null,
-  dateTo: null,
-  ranges: defaultRanges(),
-  groupValues: {},
-  cohortSelection: {},
+  controls: defaultControls(),
+  groupValuesByGran: {},
   panels: {},
   group: {},
   deepdiveMetrics: { derived: [], user: [] },
@@ -270,19 +319,26 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   },
 
   selectConfig: async (id: string) => {
-    set({
+    set((s) => ({
       loading: true,
       error: null,
       configId: id,
-      cohortSelection: {},
-      groupValues: {},
+      groupValuesByGran: {},
       deepdiveMetrics: { derived: [], user: [] },
       deepdive: { derived: emptyDeepdivePanel(), user: emptyDeepdivePanel() },
-    });
+      // Keep each tab's granularity/windows; cohort values are config-specific.
+      controls: {
+        date: { ...s.controls.date, cohortSelection: {} },
+        group: { ...s.controls.group, cohortSelection: {} },
+        viz: { ...s.controls.viz, cohortSelection: {} },
+      },
+    }));
     try {
       const config = await api.getConfig(id);
       set({ config, panels: defaultPanels(config), group: defaultGroupPanels(config) });
-      await get().loadGroupValues();
+      const c = get().controls;
+      const grans = [...new Set([c.date.granularity, c.group.granularity, c.viz.granularity])];
+      await Promise.all(grans.map((g) => get().ensureGroupValues(g)));
       await get().loadDeepdiveMetrics();
       await get().loadDateBounds();
       await get().loadAllSeries();
@@ -293,11 +349,38 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     }
   },
 
-  setGranularity: (g) => set({ granularity: g }),
-  setDateRange: (from, to) => set({ dateFrom: from, dateTo: to }),
-  setRange: (index, range) =>
-    set((s) => ({ ranges: s.ranges.map((r, i) => (i === index ? range : r)) })),
-  setCohort: (col, values) => set((s) => ({ cohortSelection: { ...s.cohortSelection, [col]: values } })),
+  patchControls: (tab, patch) =>
+    set((s) => ({ controls: { ...s.controls, [tab]: { ...s.controls[tab], ...patch } } })),
+
+  setTabCohort: (tab, col, values) =>
+    set((s) => ({
+      controls: {
+        ...s.controls,
+        [tab]: { ...s.controls[tab], cohortSelection: { ...s.controls[tab].cohortSelection, [col]: values } },
+      },
+    })),
+
+  setTabRange: (tab, index, range) =>
+    set((s) => ({
+      controls: {
+        ...s.controls,
+        [tab]: { ...s.controls[tab], ranges: s.controls[tab].ranges.map((r, i) => (i === index ? range : r)) },
+      },
+    })),
+
+  ensureGroupValues: async (gran) => {
+    const { configId, groupValuesByGran } = get();
+    if (!configId || groupValuesByGran[gran]) return;
+    try {
+      const { values } = await api.groupValues(configId, gran);
+      set((s) => ({ groupValuesByGran: { ...s.groupValuesByGran, [gran]: values } }));
+    } catch (e) {
+      // Toast (not just the transient error field): a later successful load
+      // clears `error`, so the toast is what reliably surfaces this failure.
+      set({ error: String(e) });
+      get().notify("error", `Failed to load cohort values: ${e}`);
+    }
+  },
 
   setPanelMetrics: (panelId, side, metrics) =>
     set((s) => {
@@ -313,32 +396,20 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       return { panels: { ...s.panels, [panelId]: { ...panel, log, threshold: threshold ?? panel.threshold } } };
     }),
 
-  loadGroupValues: async () => {
-    const { configId, granularity } = get();
-    if (!configId) return;
-    try {
-      const { values } = await api.groupValues(configId, granularity);
-      set({ groupValues: values });
-    } catch (e) {
-      // Toast (not just the transient error field): a later successful
-      // loadAllSeries in selectConfig/applyView clears `error`, so the toast is
-      // what reliably surfaces this failure.
-      set({ error: String(e) });
-      get().notify("error", `Failed to load cohort values: ${e}`);
-    }
-  },
-
   loadDateBounds: async () => {
-    const { configId, granularity } = get();
+    const { configId, controls } = get();
     if (!configId) return;
     try {
-      const { max } = await api.dateBounds(configId, granularity);
+      const { max } = await api.dateBounds(configId, controls.date.granularity);
       if (max) {
         const { from, to } = lastThirtyDays(max);
+        const seed = (ranges: RangeState[]) => ranges.map((r, i) => (i === 0 ? { ...r, start: from, end: to } : r));
         set((s) => ({
-          dateFrom: from,
-          dateTo: to,
-          ranges: s.ranges.map((r, i) => (i === 0 ? { ...r, start: from, end: to } : r)),
+          controls: {
+            date: { ...s.controls.date, dateFrom: from, dateTo: to },
+            group: { ...s.controls.group, ranges: seed(s.controls.group.ranges) },
+            viz: { ...s.controls.viz, ranges: seed(s.controls.viz.ranges) },
+          },
         }));
       }
     } catch (e) {
@@ -353,8 +424,9 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   // (instant re-add). A context change (config/granularity/dates/cohorts) reloads
   // the whole panel. Each panel has its own cancellation key.
   loadAllSeries: async () => {
-    const { configId, granularity, dateFrom, dateTo, cohortSelection, panels } = get();
+    const { configId, controls, panels } = get();
     if (!configId) return;
+    const { granularity, dateFrom, dateTo, cohortSelection } = controls.date;
     const ctxSig = JSON.stringify({ configId, granularity, dateFrom, dateTo, cohortSelection });
     await Promise.all(
       Object.entries(panels).map(([panelId, panel]) => {
@@ -414,8 +486,9 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     set((s) => (s.group[panelId] ? { group: { ...s.group, [panelId]: { ...s.group[panelId], clip } } } : {})),
 
   loadGroupDistribution: async () => {
-    const { configId, granularity, ranges, cohortSelection, group } = get();
+    const { configId, controls, group } = get();
     if (!configId) return;
+    const { granularity, ranges, cohortSelection } = controls.group;
     const reqRanges = activeRanges(ranges);
     if (reqRanges.length === 0) return;
     await Promise.all(
@@ -449,10 +522,10 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   },
 
   loadDeepdiveMetrics: async () => {
-    const { configId, granularity } = get();
+    const { configId, controls } = get();
     if (!configId) return;
     try {
-      const { derived, user } = await api.deepdiveMetrics(configId, granularity);
+      const { derived, user } = await api.deepdiveMetrics(configId, controls.viz.granularity);
       set({ deepdiveMetrics: { derived, user } });
     } catch (e) {
       set({ error: String(e) });
@@ -467,13 +540,9 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   captureView: () => {
     const s = get();
     return {
-      version: 1,
+      version: 2,
       configId: s.configId,
-      granularity: s.granularity,
-      dateFrom: s.dateFrom,
-      dateTo: s.dateTo,
-      ranges: s.ranges,
-      cohortSelection: s.cohortSelection,
+      controls: s.controls,
       panels: Object.fromEntries(Object.entries(s.panels).map(([k, v]) => [k, { ...v, series: [] }])),
       group: Object.fromEntries(Object.entries(s.group).map(([k, v]) => [k, { ...v, stats: [], missing: false }])),
       deepdive: {
@@ -485,20 +554,18 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
 
   // Restore a snapshot: load the config (for group/granularity metadata), merge
   // saved selections over fresh defaults (so renamed/added groups still work),
-  // then let the tabs refetch.
+  // then let the tabs refetch. v1 snapshots are migrated by snapshotControls.
   applyView: async (snap) => {
     if (!snap?.configId) return false;
     set({ loading: true, error: null });
     try {
       const config = await api.getConfig(snap.configId);
+      const controls = snapshotControls(snap);
       set({
         configId: snap.configId,
         config,
-        granularity: snap.granularity ?? "day",
-        dateFrom: snap.dateFrom ?? null,
-        dateTo: snap.dateTo ?? null,
-        ranges: snap.ranges ?? defaultRanges(),
-        cohortSelection: snap.cohortSelection ?? {},
+        controls,
+        groupValuesByGran: {},
         panels: { ...defaultPanels(config), ...(snap.panels ?? {}) },
         group: { ...defaultGroupPanels(config), ...(snap.group ?? {}) },
         deepdive: {
@@ -506,7 +573,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
           user: { ...emptyDeepdivePanel(), ...(snap.deepdive?.user ?? {}) },
         },
       });
-      await get().loadGroupValues();
+      const grans = [...new Set([controls.date.granularity, controls.group.granularity, controls.viz.granularity])];
+      await Promise.all(grans.map((g) => get().ensureGroupValues(g)));
       await get().loadDeepdiveMetrics();
       await get().loadAllSeries();
       return true;
@@ -558,8 +626,9 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   dismissNotification: (id) => set((s) => ({ notifications: s.notifications.filter((n) => n.id !== id) })),
 
   loadDeepdive: async () => {
-    const { configId, granularity, ranges, cohortSelection, deepdive } = get();
+    const { configId, controls, deepdive } = get();
     if (!configId) return;
+    const { granularity, ranges, cohortSelection } = controls.viz;
     const reqRanges = activeRanges(ranges);
     if (reqRanges.length === 0) return;
     const panels: DeepdivePanel[] = ["derived", "user"];

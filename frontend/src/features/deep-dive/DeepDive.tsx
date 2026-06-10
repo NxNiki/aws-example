@@ -34,9 +34,9 @@ function DeepdivePanelView(props: {
   // scatter, diagonal labels the metric). All cells reuse the same points.
   const renderScatter = () => {
     const sc = panel.scatters;
-    if (sc.length === 0) return <div className="text-sm text-gray-400 p-6">No scatter data.</div>;
+    if (sc.length === 0) return <div className="text-base text-gray-400 p-6">No scatter data.</div>;
     const sm = sc[0].metrics;
-    if (sm.length < 2) return <div className="text-sm text-gray-400 p-6">Select at least 2 metrics.</div>;
+    if (sm.length < 2) return <div className="text-base text-gray-400 p-6">Select at least 2 metrics.</div>;
     const axes = { logX: panel.scatterLogX, logY: panel.scatterLogY };
     const PAIR = 600; // square px for the single pair plot
     const CELL = 260; // square px per matrix cell
@@ -60,7 +60,7 @@ function DeepdivePanelView(props: {
               i === j ? (
                 <div
                   key={`${i}-${j}`}
-                  className="flex items-center justify-center border rounded text-xs font-medium text-gray-600 text-center p-1"
+                  className="flex items-center justify-center border rounded text-base font-medium text-gray-600 text-center p-1"
                   style={{ width: CELL, height: CELL }}
                 >
                   {sm[i]}
@@ -88,10 +88,10 @@ function DeepdivePanelView(props: {
 
   return (
     <div className="border rounded p-3 mb-6">
-      <h3 className="text-sm font-semibold text-gray-700 mb-2">{props.title}</h3>
+      <h3 className="text-base font-semibold text-gray-700 mb-2">{props.title}</h3>
       <div className="flex gap-4">
         <div className="flex flex-col gap-3 w-72 shrink-0">
-          <div className="flex gap-3 text-xs text-gray-600">
+          <div className="flex gap-3 text-base text-gray-600">
             {(["histogram", "heatmap", "scatter"] as const).map((m) => (
               <label key={m} className="flex items-center gap-1 cursor-pointer">
                 <input type="radio" checked={panel.mode === m} onChange={() => props.onPatch({ mode: m })} />
@@ -107,7 +107,7 @@ function DeepdivePanelView(props: {
             maxHeightClass="max-h-72"
           />
           {panel.mode === "histogram" && (
-            <div className="flex flex-col gap-2 text-xs text-gray-600">
+            <div className="flex flex-col gap-2 text-base text-gray-600">
               <label className="flex items-center gap-2">
                 bins
                 <select
@@ -137,7 +137,7 @@ function DeepdivePanelView(props: {
             </div>
           )}
           {panel.mode === "scatter" && (
-            <div className="flex flex-col gap-2 text-xs text-gray-600">
+            <div className="flex flex-col gap-2 text-base text-gray-600">
               <label className="flex items-center gap-2">
                 <input
                   type="checkbox"
@@ -178,24 +178,24 @@ function DeepdivePanelView(props: {
           )}
           <ClipControls clip={panel.clip} onChange={(clip) => props.onPatch({ clip })} />
           {panel.missing.length > 0 && (
-            <span className="text-xs text-amber-600">No data: {panel.missing.join(", ")}</span>
+            <span className="text-base text-amber-600">No data: {panel.missing.join(", ")}</span>
           )}
           {panel.mode === "heatmap" && (
-            <span className="text-[11px] text-gray-400">Pearson r (significance/transform deferred)</span>
+            <span className="text-base text-gray-400">Pearson r (significance/transform deferred)</span>
           )}
           {panel.mode === "scatter" && (
-            <span className="text-[11px] text-gray-400">≤5k sampled points/series (symlog deferred)</span>
+            <span className="text-base text-gray-400">≤5k sampled points/series (symlog deferred)</span>
           )}
         </div>
 
         <div className="flex-1 min-w-0">
           {panel.metrics.length === 0 ? (
-            <div className="text-sm text-gray-400 p-6">Select one or more metrics.</div>
+            <div className="text-base text-gray-400 p-6">Select one or more metrics.</div>
           ) : panel.mode === "histogram" ? (
             <div className="grid grid-cols-2 gap-4">
               {Object.entries(histsByMetric).map(([metric, series]) => (
                 <div key={metric}>
-                  <div className="text-xs text-gray-500 mb-1">{metric}</div>
+                  <div className="text-base text-gray-500 mb-1">{metric}</div>
                   <EChart option={buildHistogramOption(series, { logY: panel.logY, normalize: panel.normalize })} height={380} />
                 </div>
               ))}
@@ -206,7 +206,7 @@ function DeepdivePanelView(props: {
                 const { width, height } = heatmapSize(m.metrics.length);
                 return (
                   <div key={i} className="overflow-x-auto">
-                    <div className="text-xs text-gray-500 mb-1">
+                    <div className="text-base text-gray-500 mb-1">
                       {m.cohort} · {m.range_label}
                     </div>
                     <EChart option={buildHeatmapOption(m)} width={width} height={height} />
@@ -225,14 +225,15 @@ function DeepdivePanelView(props: {
 
 export function DeepDive() {
   const s = useDashboardStore();
+  const c = s.controls.viz; // this tab's own granularity / ranges / cohorts
 
   // Refetch on config / granularity / range / cohort / per-panel
   // mode/metrics/nbins/normalize/clip/outliers changes (log axes are display-only).
   const fetchKey = JSON.stringify({
     cfg: s.configId,
-    gran: s.granularity,
-    ranges: s.ranges.map((r) => [r.start, r.end, r.show]),
-    cohorts: s.cohortSelection,
+    gran: c.granularity,
+    ranges: c.ranges.map((r) => [r.start, r.end, r.show]),
+    cohorts: c.cohortSelection,
     panels: (["derived", "user"] as PanelId[]).map((id) => {
       const p = s.deepdive[id];
       return [id, p.mode, p.metrics, p.nbins, p.normalize, p.clip, p.outliersStd];
@@ -240,7 +241,10 @@ export function DeepDive() {
   });
   const debouncedKey = useDebouncedValue(fetchKey);
   useEffect(() => {
-    if (s.configId) void s.loadDeepdive();
+    if (s.configId) {
+      void s.ensureGroupValues(c.granularity);
+      void s.loadDeepdive();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedKey]);
 
@@ -248,12 +252,12 @@ export function DeepDive() {
     <div className="p-6 pt-0 w-full">
       {/* Pinned below the sticky header + tab bar (see App.tsx height comment). */}
       <div className="sticky top-[100px] z-20 -mx-6 mb-6 flex flex-wrap gap-6 items-start border-b bg-gray-50 px-6 py-3">
-        <label className="flex flex-col text-sm">
+        <label className="flex flex-col text-base">
           <span className="text-gray-600 mb-1">Granularity</span>
           <select
             className="border rounded px-3 py-2"
-            value={s.granularity}
-            onChange={(e) => s.setGranularity(e.target.value as Granularity)}
+            value={c.granularity}
+            onChange={(e) => s.patchControls("viz", { granularity: e.target.value as Granularity })}
           >
             {(s.config?.granularities ?? ["day"]).map((g) => (
               <option key={g} value={g}>
@@ -262,11 +266,15 @@ export function DeepDive() {
             ))}
           </select>
         </label>
-        <DateRanges ranges={s.ranges} onChange={s.setRange} />
-        <CohortSelect groupValues={s.groupValues} selection={s.cohortSelection} onSetCohort={s.setCohort} />
+        <DateRanges ranges={c.ranges} onChange={(i, r) => s.setTabRange("viz", i, r)} />
+        <CohortSelect
+          groupValues={s.groupValuesByGran[c.granularity] ?? {}}
+          selection={c.cohortSelection}
+          onSetCohort={(col, values) => s.setTabCohort("viz", col, values)}
+        />
       </div>
 
-      {s.error && <div className="mb-4 rounded bg-red-50 text-red-700 text-sm px-3 py-2">{s.error}</div>}
+      {s.error && <div className="mb-4 rounded bg-red-50 text-red-700 text-base px-3 py-2">{s.error}</div>}
 
       <DeepdivePanelView
         title="Derived metrics (group-level)"

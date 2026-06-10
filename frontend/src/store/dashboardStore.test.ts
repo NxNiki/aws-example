@@ -14,6 +14,7 @@ vi.mock("../api/client", () => ({
 
 import { api } from "../api/client";
 import { useDashboardStore } from "./dashboardStore";
+import type { RangeState } from "../components/DateRanges";
 
 const mockApi = api as unknown as {
   listConfigs: ReturnType<typeof vi.fn>;
@@ -38,24 +39,34 @@ const CONFIG = {
   tabs: ["stats-by-date"],
 };
 
-const initialState = {
+const freshRanges = (): RangeState[] => [
+  { start: null, end: null, show: true },
+  { start: null, end: null, show: false },
+  { start: null, end: null, show: false },
+];
+
+// Per-tab controls (each tab owns granularity / window(s) / cohorts).
+const freshControls = () => ({
+  date: { granularity: "day" as const, dateFrom: null, dateTo: null, cohortSelection: {} },
+  group: { granularity: "day" as const, ranges: freshRanges(), cohortSelection: {} },
+  viz: { granularity: "day" as const, ranges: freshRanges(), cohortSelection: {} },
+});
+
+const initialState = () => ({
   configs: [],
   configId: null,
   config: null,
-  granularity: "day" as const,
-  dateFrom: null,
-  dateTo: null,
-  groupValues: {},
-  cohortSelection: {},
+  controls: freshControls(),
+  groupValuesByGran: {},
   panels: {},
   loading: false,
   error: null,
-};
+});
 
 describe("dashboardStore", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    useDashboardStore.setState(initialState);
+    useDashboardStore.setState(initialState());
     mockApi.getConfig.mockResolvedValue(CONFIG);
     mockApi.groupValues.mockResolvedValue({ config: "ss01", granularity: "day", values: { user_group: ["new", "old"] } });
     mockApi.dateBounds.mockResolvedValue({ config: "ss01", granularity: "day", min: "2025-01-01", max: "2025-01-30" });
@@ -73,10 +84,14 @@ describe("dashboardStore", () => {
     // panels are seeded from config.groups, first metric on the left axis.
     expect(Object.keys(s.panels)).toEqual(["group1", "group2"]);
     expect(s.panels.group1.left).toEqual(["num_active_users"]);
-    expect(s.groupValues).toEqual({ user_group: ["new", "old"] });
-    // Default window is the last 30 days ending at the data's max date.
-    expect(s.dateTo).toBe("2025-01-30");
-    expect(s.dateFrom).toBe("2025-01-01");
+    // cohort values are cached per granularity now.
+    expect(s.groupValuesByGran.day).toEqual({ user_group: ["new", "old"] });
+    // Default window (per-tab): last 30 days ending at the data's max date,
+    // seeded into the date tab and range 1 of the group/viz tabs.
+    expect(s.controls.date.dateTo).toBe("2025-01-30");
+    expect(s.controls.date.dateFrom).toBe("2025-01-01");
+    expect(s.controls.group.ranges[0].start).toBe("2025-01-01");
+    expect(s.controls.viz.ranges[0].end).toBe("2025-01-30");
     expect(mockApi.series).toHaveBeenCalledTimes(2); // one fetch per panel
     expect(s.error).toBeNull();
   });
@@ -98,10 +113,24 @@ describe("dashboardStore", () => {
     expect(useDashboardStore.getState().panels.group1.left).toEqual(["a"]);
   });
 
-  it("loadAllSeries requests each panel's combined metric set with the cohort selection", async () => {
+  it("per-tab controls are independent: changing the Deep Dive range leaves Stats-by-Group alone", () => {
+    useDashboardStore.getState().setTabRange("viz", 0, { start: "2025-02-01", end: "2025-02-10", show: true });
+    useDashboardStore.getState().setTabCohort("viz", "user_group", ["new"]);
+    const s = useDashboardStore.getState();
+    expect(s.controls.viz.ranges[0].start).toBe("2025-02-01");
+    expect(s.controls.viz.cohortSelection).toEqual({ user_group: ["new"] });
+    expect(s.controls.group.ranges[0].start).toBeNull();
+    expect(s.controls.group.cohortSelection).toEqual({});
+    expect(s.controls.date.cohortSelection).toEqual({});
+  });
+
+  it("loadAllSeries requests each panel's combined metric set with the DATE tab's controls", async () => {
     useDashboardStore.setState({
       configId: "ss01",
-      cohortSelection: { user_group: ["new"] },
+      controls: {
+        ...freshControls(),
+        date: { granularity: "day", dateFrom: null, dateTo: null, cohortSelection: { user_group: ["new"] } },
+      },
       panels: { group1: { left: ["num_active_users"], right: ["rtp"], log: false, threshold: 10, series: [] } },
     });
     await useDashboardStore.getState().loadAllSeries();
