@@ -8,7 +8,11 @@ Endpoints:
     GET  /health                     liveness check + index status
     GET  /sources                    show what rag_sources.yaml lists
     POST /retrieve                   {query, top_k} → ranked passages
-    POST /reindex                    rebuild the OpenSearch index from sources
+
+Index (re)builds are NOT served here — they run out-of-band via
+``jobs/build_rag_index.py`` (daily Fargate task, see
+infra/rag_service/setup_reindex_schedule.sh) so a multi-minute embed
+never blocks this service's event loop. Locally, run that script directly.
 """
 
 from __future__ import annotations
@@ -23,8 +27,7 @@ from pydantic import BaseModel, Field
 
 from rag_service.config import RagSettings, load_settings
 from rag_service.embeddings import resolved_embedding_dim
-from rag_service.indexer import build_index
-from rag_service.retriever import Passage, reload_faiss_store, retrieve
+from rag_service.retriever import Passage, retrieve
 
 logger = logging.getLogger(__name__)
 
@@ -73,14 +76,6 @@ class SourceOut(BaseModel):
 
 class SourcesResponse(BaseModel):
     sources: List[SourceOut]
-
-
-class ReindexResponse(BaseModel):
-    status: str
-    pages: int
-    chunks: int
-    indexed: int
-    elapsed_ms: int
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +146,7 @@ def create_app() -> FastAPI:
         from rag_service.opensearch_client import get_client
 
         client = get_client(settings)
-        exists = client.indices.exists(settings.index_name)
+        exists = client.indices.exists(index=settings.index_name)
         count: Optional[int] = None
         if exists:
             try:
@@ -198,21 +193,6 @@ def create_app() -> FastAPI:
             passages=[PassageOut(**p.__dict__) for p in passages],
             elapsed_ms=elapsed,
         )
-
-    @app.post("/reindex", response_model=ReindexResponse)
-    async def post_reindex() -> ReindexResponse:
-        t0 = time.monotonic()
-        try:
-            counts = build_index(settings)
-        except Exception as exc:
-            logger.exception("Reindex failed")
-            raise HTTPException(status_code=500, detail=str(exc))
-        if settings.backend == "faiss":
-            # Drop the cached store so the next /retrieve picks up the
-            # freshly written artifact instead of the old in-memory copy.
-            reload_faiss_store(settings)
-        elapsed = int((time.monotonic() - t0) * 1000)
-        return ReindexResponse(status="ok", **counts, elapsed_ms=elapsed)
 
     return app
 

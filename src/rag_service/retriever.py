@@ -35,20 +35,12 @@ class Passage:
 
 _RRF_K = 60  # standard RRF dampening constant
 
-# Module-level Faiss store cache. Loaded lazily on first retrieve and
-# refreshed via reload_faiss_store() after a rebuild.
+# Module-level Faiss store cache. Loaded lazily on first retrieve. A rebuilt
+# index is picked up by restarting the service (the daily reindex task force-
+# redeploys rag-service), not by an in-process reload.
 _faiss_store: Optional[object] = None
 _faiss_store_uri: Optional[str] = None
 _faiss_lock = threading.Lock()
-
-
-def reload_faiss_store(settings: Optional[RagSettings] = None) -> None:
-    """Force a reload of the cached Faiss store (call after a rebuild)."""
-    global _faiss_store, _faiss_store_uri
-    cfg = settings or load_settings()
-    with _faiss_lock:
-        _faiss_store = None
-        _faiss_store_uri = cfg.index_uri
 
 
 def _get_faiss_store(uri: str):
