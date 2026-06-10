@@ -20,6 +20,7 @@ POST /api/metadata/rebuild           — Force-rebuild the metadata cache
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -29,9 +30,18 @@ from typing import Any, AsyncIterator, Dict, List, Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from langchain_core.messages import SystemMessage
 from pydantic import BaseModel, Field
 
-from ai_agent.chat_agent import achat, init_metadata
+from ai_agent.chat_agent import (
+    _build_messages,
+    _ensure_metadata,
+    achat,
+    create_agent,
+    init_metadata,
+)
+from ai_agent.dashboard_actions import ACTION_TOOL_NAMES, ACTION_TOOLS, CLARIFY_TOOL_NAME
 from ai_agent.metadata_builder import build_metadata
 from ai_agent.report_agent.description import (
     STATUS_APPENDED,
@@ -80,6 +90,20 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     response: str
     elapsed_ms: int = Field(..., description="Server-side processing time in milliseconds")
+
+
+class AgentChatRequest(ChatRequest):
+    """Request for the streaming /api/agent/chat endpoint (the React dashboard).
+
+    Extends ChatRequest with a snapshot of the dashboard's UI state so the
+    agent can drive it with action tools (which config/tab is active, which
+    panels/metrics exist, current date windows).
+    """
+
+    dashboard_state: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Opaque UI-state snapshot from the React dashboard store",
+    )
 
 
 class ColumnInfo(BaseModel):
@@ -194,6 +218,66 @@ class GenerateResponse(BaseModel):
 _DASHBOARD_DIR = Path(__file__).resolve().parent
 
 
+def _sse(event: str, data: Dict[str, Any]) -> str:
+    """One Server-Sent-Events frame."""
+    return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
+
+
+def _chunk_text(content: Any) -> str:
+    """Plain text of one STREAMED chunk, whitespace preserved.
+
+    Unlike ``_stringify_ai_content`` (which strips — fine for a final message),
+    chunks are mid-word fragments: stripping them deletes the spaces/newlines at
+    chunk boundaries ("RTP group" + " assignment" → "RTP groupassignment").
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        out: List[str] = []
+        for block in content:
+            if isinstance(block, str):
+                out.append(block)
+            elif isinstance(block, dict):
+                t = block.get("text")
+                if t is not None:
+                    out.append(str(t))
+        return "".join(out)
+    return str(content)
+
+
+# Instructions appended (as a second system message) when the agent has the
+# dashboard-action tools. Kept separate from the main system prompt so /api/chat
+# and Slack behavior is unchanged.
+_ACTION_GUIDE = """You are embedded in the game-stats dashboard and can OPERATE it with these tools:
+load_config, navigate_tab, set_metrics, set_date_range, set_granularity, ask_user.
+
+Rules:
+- When the user asks to SEE data (a metric, a comparison, a trend), drive the
+  dashboard: switch config/tab if needed, then set the right panel's metrics.
+  Choose the panel whose available metrics contain the requested metric.
+- Use ONLY config ids, tab names, panel ids, and metric names that appear in
+  the DASHBOARD STATE below. Never invent metric names — if unsure, check the
+  panels' available metrics, or use the metadata tools.
+- If the request is ambiguous (which game? by date or by group? which metric
+  variant?), call ask_user with 2-4 concrete options, then END your turn.
+- After dispatching actions, reply with one short sentence describing what you
+  changed. Keep prose minimal when actions carry the answer.
+- For pure knowledge questions (what does a column mean, how is RTP computed),
+  just answer — no dashboard actions.
+
+DASHBOARD STATE (current UI):
+"""
+
+
+def _agent_context_message(dashboard_state: Dict[str, Any]) -> SystemMessage:
+    state_json = json.dumps(dashboard_state or {}, default=str)
+    if len(state_json) > 8000:  # keep the prompt bounded; panels carry the bulk
+        state_json = state_json[:8000] + "…(truncated)"
+    return SystemMessage(content=_ACTION_GUIDE + state_json)
+
+
 def create_chat_app(*, prefix: str = "") -> FastAPI:
     """
     Create the FastAPI app for the chat API.
@@ -263,6 +347,113 @@ def create_chat_app(*, prefix: str = "") -> FastAPI:
 
         elapsed = int((time.monotonic() - t0) * 1000)
         return ChatResponse(response=response_text, elapsed_ms=elapsed)
+
+    # --- Streaming agent endpoint (React dashboard chat panel) ---
+    @app.post("/api/agent/chat")
+    async def post_agent_chat(req: AgentChatRequest) -> StreamingResponse:
+        """API endpoint: POST /api/agent/chat — streaming agent turn (SSE).
+
+        Powers the React dashboard's chat panel. Streams the agent run as
+        Server-Sent Events: ``token`` (text chunks), ``tool_start``/``tool_end``
+        (knowledge tools), ``action`` (dashboard-driving tool calls the frontend
+        dispatcher applies), ``clarify`` (quick-reply question), then ``done`` or
+        ``error``. The blocking /api/chat stays for the legacy Dash app + Slack.
+        """
+        config_path: Optional[Path] = None
+        if req.dashboard_config:
+            candidate = _DASHBOARD_DIR / req.dashboard_config
+            if candidate.exists():
+                config_path = candidate
+
+        history = [{"role": m.role, "content": m.content} for m in req.history]
+        model_key = req.model
+
+        def _merge_system(messages: List[Any]) -> List[Any]:
+            # MERGE the action contract + UI snapshot into the base system
+            # prompt. Gemini supports only ONE system instruction — a second
+            # SystemMessage makes gemini-2.5-flash return an empty response
+            # (finish_reason STOP, no content, no tool calls).
+            ctx = _agent_context_message(req.dashboard_state)
+            messages[0] = SystemMessage(content=f"{messages[0].content}\n\n{ctx.content}")
+            return messages
+
+        async def run_stream(agent: Any, messages: List[Any]) -> AsyncIterator[tuple[str, bool]]:
+            """Yield (sse_frame, meaningful) for one agent run; `meaningful` marks
+            frames that prove the model actually produced something."""
+            async for ev in agent.astream_events({"messages": messages}, version="v2"):
+                kind = ev.get("event")
+                data = ev.get("data") or {}
+                if kind == "on_chat_model_stream":
+                    chunk = data.get("chunk")
+                    text = _chunk_text(getattr(chunk, "content", "")) if chunk is not None else ""
+                    if text:
+                        yield _sse("token", {"text": text}), True
+                elif kind == "on_tool_start":
+                    name = ev.get("name", "")
+                    tool_input = data.get("input") or {}
+                    if not isinstance(tool_input, dict):
+                        tool_input = {"input": str(tool_input)}
+                    if name == CLARIFY_TOOL_NAME:
+                        yield _sse(
+                            "clarify",
+                            {
+                                "question": tool_input.get("question", ""),
+                                "options": tool_input.get("options") or [],
+                            },
+                        ), True
+                    elif name in ACTION_TOOL_NAMES:
+                        yield _sse("action", {"type": name, **tool_input}), True
+                    else:
+                        yield _sse(
+                            "tool_start", {"name": name, "input": json.dumps(tool_input, default=str)[:400]}
+                        ), True
+                elif kind == "on_tool_end":
+                    name = ev.get("name", "")
+                    if name not in ACTION_TOOL_NAMES:
+                        yield _sse("tool_end", {"name": name, "output": str(data.get("output", ""))[:400]}), False
+
+        async def gen() -> AsyncIterator[str]:
+            t0 = time.monotonic()
+            try:
+                _ensure_metadata(dashboard_config_path=config_path)
+                agent = create_agent(model_key=model_key, extra_tools=ACTION_TOOLS)
+
+                produced = False
+                messages = _merge_system(_build_messages(req.message, history))
+                async for frame, meaningful in run_stream(agent, messages):
+                    produced = produced or meaningful
+                    yield frame
+
+                if not produced and history:
+                    # Gemini sometimes returns a completely empty response when
+                    # its own long answer is replayed as an AIMessage (content-
+                    # dependent). Retry once with the conversation folded into a
+                    # plain transcript, which sidesteps the replay path.
+                    logger.warning("Agent stream produced nothing; retrying with transcript history")
+                    transcript = "\n".join(
+                        f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content']}" for m in history
+                    )
+                    folded = f"Previous conversation:\n{transcript}\n\nNew user message: {req.message}"
+                    messages = _merge_system(_build_messages(folded, []))
+                    async for frame, meaningful in run_stream(agent, messages):
+                        produced = produced or meaningful
+                        yield frame
+
+                if not produced:
+                    yield _sse(
+                        "error", {"message": "The model returned an empty response — please try again or rephrase."}
+                    )
+                yield _sse("done", {"elapsed_ms": int((time.monotonic() - t0) * 1000)})
+            except Exception as exc:
+                logger.exception("Agent stream error")
+                yield _sse("error", {"message": str(exc)})
+
+        return StreamingResponse(
+            gen(),
+            media_type="text/event-stream",
+            # no-cache + X-Accel-Buffering keep proxies from buffering the stream.
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     # --- Report tab endpoints ---
     @app.post("/api/report/description", response_model=GenerateResponse)

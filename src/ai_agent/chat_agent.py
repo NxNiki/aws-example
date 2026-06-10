@@ -668,10 +668,15 @@ def _build_llm(model_key: Optional[str] = None) -> BaseChatModel:
     return ChatOpenAI(model=model, temperature=0, api_key=SecretStr(api_key))
 
 
-def create_agent(model_key: Optional[str] = None):
-    """Create and return the LangGraph ReAct agent."""
+def create_agent(model_key: Optional[str] = None, extra_tools: Optional[List[Any]] = None):
+    """Create and return the LangGraph ReAct agent.
+
+    ``extra_tools`` lets a caller append capability-specific tools (e.g. the
+    dashboard-action tools used by the streaming /api/agent/chat endpoint)
+    without changing the default tool set for /api/chat and Slack.
+    """
     llm = _build_llm(model_key=model_key)
-    return _create_langchain_agent(llm, _TOOLS)
+    return _create_langchain_agent(llm, _TOOLS + (extra_tools or []))
 
 
 def init_metadata(
