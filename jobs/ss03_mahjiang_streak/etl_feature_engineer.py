@@ -26,11 +26,11 @@ from bituslabs_ds.features import FeaturePipelineRunner, GameFeatureConfig
 
 CONFIG = GameFeatureConfig(
     game_id="SS03",
-    output_prefix="output_ss03_feature_engineer",
+    output_prefix="output_ss03_feature_engineer_ai",
     date_start="2026-01-01",
-    date_end="2026-05-01",
+    date_end="2026-07-01",
     ai_groups=("AI", "AB_TEST_A", "AB_TEST_B", "Default"),
-    selected_groups=("Default",),
+    selected_groups=("AI",),
     partition_cols=("math_table_id",),
     bin_size=[30, 50, 70, 100],
     session_break_threshold_seconds=60 * 60 * 12,
