@@ -1,0 +1,31 @@
+{
+  "family": "rag-service-reindex",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ragReindexTaskRole",
+  "containerDefinitions": [
+    {
+      "name": "rag-service-reindex",
+      "image": "ECR_IMAGE_URI",
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/rag-service-reindex",
+          "awslogs-region": "us-west-2",
+          "awslogs-stream-prefix": "reindex"
+        }
+      },
+      "command": ["python", "jobs/build_rag_index.py", "--refresh-ecs-service"],
+      "environment": [
+        {"name": "RAG_BACKEND", "value": "faiss"},
+        {"name": "RAG_EMBEDDING_PROVIDER", "value": "gemini"},
+        {"name": "AWS_REGION", "value": "us-west-2"},
+        {"name": "ECS_CLUSTER", "value": "ai-team-dashboard-cluster"},
+        {"name": "RAG_SERVICE_NAME", "value": "rag-service"}
+      ]
+    }
+  ]
+}
