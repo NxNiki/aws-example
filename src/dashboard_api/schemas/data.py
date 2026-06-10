@@ -209,3 +209,14 @@ class DeepdiveMetrics(BaseModel):
     granularity: Granularity
     derived: list[str]  # DataMetrics group-level metrics
     user: list[str]  # raw user_* columns present in the data
+
+
+class ViewList(BaseModel):
+    # Names of saved dashboard view snapshots (the legacy "save/load config").
+    views: list[str]
+
+
+class ViewSaveResult(BaseModel):
+    name: str  # sanitized name actually stored
+    path: str  # s3:// path of the saved snapshot (shown to the user)
+    views: list[str]

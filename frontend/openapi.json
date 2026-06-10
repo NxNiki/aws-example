@@ -1076,6 +1076,48 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "ViewList": {
+        "properties": {
+          "views": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Views",
+            "type": "array"
+          }
+        },
+        "required": [
+          "views"
+        ],
+        "title": "ViewList",
+        "type": "object"
+      },
+      "ViewSaveResult": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "views": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Views",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "path",
+          "views"
+        ],
+        "title": "ViewSaveResult",
+        "type": "object"
       }
     }
   },
@@ -1473,6 +1515,126 @@
         "summary": "Health",
         "tags": [
           "health"
+        ]
+      }
+    },
+    "/api/views": {
+      "get": {
+        "description": "API endpoint: GET /api/views \u2014 list saved dashboard view snapshots.",
+        "operationId": "get_views_api_views_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViewList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Views",
+        "tags": [
+          "views"
+        ]
+      }
+    },
+    "/api/views/{name}": {
+      "get": {
+        "description": "API endpoint: GET /api/views/{name} \u2014 load one saved view snapshot (opaque JSON).",
+        "operationId": "get_view_api_views__name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get View Api Views  Name  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get View",
+        "tags": [
+          "views"
+        ]
+      },
+      "put": {
+        "description": "API endpoint: PUT /api/views/{name} \u2014 save a dashboard view snapshot.\n\nReturns the sanitized name, the s3:// path written (surfaced to the user),\nand the refreshed view list.",
+        "operationId": "put_view_api_views__name__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Snapshot",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViewSaveResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put View",
+        "tags": [
+          "views"
         ]
       }
     }
