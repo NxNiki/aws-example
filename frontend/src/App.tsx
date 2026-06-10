@@ -5,6 +5,7 @@ import { ChatPanel } from "./features/agent/ChatPanel";
 import { StatsByDate } from "./features/stats-by-date/StatsByDate";
 import { StatsByGroup } from "./features/stats-by-group/StatsByGroup";
 import { DeepDive } from "./features/deep-dive/DeepDive";
+import { ReportTab } from "./features/report/ReportTab";
 
 // Tab shell. The game-config picker is dashboard-wide and lives here, above
 // the tabs. The active tab lives in the store so the agent's navigate_tab
@@ -14,6 +15,7 @@ const TABS = [
   { id: "stats-by-group", label: "Stats by Group" },
   { id: "stats-deepdive", label: "Deep Dive" },
   { id: "weekly-report", label: "Weekly Report" },
+  { id: "report", label: "Report" },
 ] as const;
 
 export default function App() {
@@ -134,6 +136,7 @@ export default function App() {
       {tab === "stats-by-date" && <StatsByDate />}
       {tab === "stats-by-group" && <StatsByGroup />}
       {tab === "stats-deepdive" && <DeepDive />}
+      {tab === "report" && <ReportTab />}
       {tab === "weekly-report" && (
         <div className="p-10 text-center text-gray-400">“Weekly Report” — coming in a later phase.</div>
       )}

@@ -6,6 +6,7 @@ import { ClipControls } from "../../components/ClipControls";
 import { DateRanges } from "../../components/DateRanges";
 import { useDashboardStore } from "../../store/dashboardStore";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
+import { AddToReportButton } from "../report/AddToReport";
 import type { ClipOpts, Granularity, MetricGroup } from "../../api/types";
 import type { GroupPanelState } from "../../store/dashboardStore";
 
@@ -20,6 +21,8 @@ function GroupPanel(props: {
   onClip: (c: ClipOpts) => void;
 }) {
   const { group, panel } = props;
+  const configId = useDashboardStore((s) => s.configId);
+  const groupControls = useDashboardStore((s) => s.controls.group);
   const option = useMemo(
     () => buildGroupDistributionOption(panel.stats, panel.mode, panel.metric ?? ""),
     [panel.stats, panel.mode, panel.metric],
@@ -52,6 +55,24 @@ function GroupPanel(props: {
             ))}
           </div>
           <ClipControls clip={panel.clip} onChange={props.onClip} />
+          <AddToReportButton
+            getFigure={() => ({
+              title: `${group.label} — ${panel.metric ?? "?"} (${panel.mode})`,
+              source: {
+                kind: "stats-by-group",
+                config: configId ?? "",
+                granularity: groupControls.granularity,
+                ranges: groupControls.ranges
+                  .filter((r) => r.show && r.start && r.end)
+                  .map((r) => ({ start: r.start, end: r.end })),
+                cohort_selection: groupControls.cohortSelection,
+                panel_id: group.id,
+                metric: panel.metric ?? "",
+                mode: panel.mode,
+                clip: panel.clip,
+              },
+            })}
+          />
           {panel.missing && <span className="text-base text-amber-600">No data for this metric/range.</span>}
         </div>
         <div className="flex-1 min-w-0">

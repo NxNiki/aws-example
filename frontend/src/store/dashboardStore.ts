@@ -44,7 +44,7 @@ export type TabKey = keyof TabControls;
 
 // Top-level dashboard tabs. Lives in the store (not component state) so the
 // agent's navigate_tab action can drive it.
-export type DashboardTab = "stats-by-date" | "stats-by-group" | "stats-deepdive" | "weekly-report";
+export type DashboardTab = "stats-by-date" | "stats-by-group" | "stats-deepdive" | "weekly-report" | "report";
 
 const defaultRanges = (): RangeState[] => [
   { start: null, end: null, show: true },
@@ -197,6 +197,7 @@ interface DashboardState {
   deepdive: Record<DeepdivePanel, DeepdivePanelState>;
 
   views: string[]; // names of saved view snapshots
+  currentView: string | null; // last saved/loaded view name (reports link to it)
   notifications: Toast[]; // transient status messages (toasts)
   loading: boolean;
   status: string | null; // what the dashboard is currently doing (header indicator)
@@ -367,6 +368,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   deepdiveMetrics: { derived: [], user: [] },
   deepdive: { derived: emptyDeepdivePanel(), user: emptyDeepdivePanel() },
   views: [],
+  currentView: null,
   notifications: [],
   chat: emptyChat(),
   loading: false,
@@ -668,7 +670,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   saveView: async (name) => {
     try {
       const r = await api.saveView(name, get().captureView());
-      set({ views: r.views });
+      set({ views: r.views, currentView: r.name });
       get().notify("success", `Saved view “${r.name}” → ${r.path}`);
     } catch (e) {
       set({ error: String(e) });
@@ -685,7 +687,10 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       get().notify("error", `Failed to load view “${name}”: ${e}`);
       return;
     }
-    if (await get().applyView(snap)) get().notify("info", `Loaded view “${name}”`);
+    if (await get().applyView(snap)) {
+      set({ currentView: name });
+      get().notify("info", `Loaded view “${name}”`);
+    }
   },
 
   notify: (kind, message) =>

@@ -2,6 +2,8 @@ import { useMemo } from "react";
 import { EChart } from "../../charts/EChart";
 import { buildStatsByDateOption } from "../../charts/statsByDateOption";
 import { AxisMetricPicker } from "../../components/AxisMetricPicker";
+import { AddToReportButton } from "../report/AddToReport";
+import { useDashboardStore } from "../../store/dashboardStore";
 import type { Granularity, MetricGroup } from "../../api/types";
 import type { PanelState } from "../../store/dashboardStore";
 
@@ -16,6 +18,8 @@ export function Panel(props: {
   onSetLog: (log: boolean, threshold?: number) => void;
 }) {
   const { group, panel, granularity } = props;
+  const configId = useDashboardStore((s) => s.configId);
+  const dateControls = useDashboardStore((s) => s.controls.date);
 
   const option = useMemo(
     () =>
@@ -43,18 +47,38 @@ export function Panel(props: {
             maxHeightClass="max-h-96"
           />
 
-          <label className="flex items-center gap-2 text-base text-gray-600">
-            <input type="checkbox" checked={panel.log} onChange={(e) => props.onSetLog(e.target.checked)} />
-            log scale
-            <input
-              type="number"
-              className="border rounded px-2 py-1 w-16"
-              value={panel.threshold}
-              disabled={!panel.log}
-              onChange={(e) => props.onSetLog(panel.log, Number(e.target.value))}
-              title="hybrid-log threshold"
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-2 text-base text-gray-600">
+              <input type="checkbox" checked={panel.log} onChange={(e) => props.onSetLog(e.target.checked)} />
+              log scale
+              <input
+                type="number"
+                className="border rounded px-2 py-1 w-16"
+                value={panel.threshold}
+                disabled={!panel.log}
+                onChange={(e) => props.onSetLog(panel.log, Number(e.target.value))}
+                title="hybrid-log threshold"
+              />
+            </label>
+            <AddToReportButton
+              getFigure={() => ({
+                title: `${group.label} — ${[...panel.left, ...panel.right].join(", ") || "no metrics"}`,
+                source: {
+                  kind: "stats-by-date",
+                  config: configId ?? "",
+                  granularity: dateControls.granularity,
+                  date_from: dateControls.dateFrom,
+                  date_to: dateControls.dateTo,
+                  cohort_selection: dateControls.cohortSelection,
+                  panel_id: group.id,
+                  left: panel.left,
+                  right: panel.right,
+                  log: panel.log,
+                  threshold: panel.threshold,
+                },
+              })}
             />
-          </label>
+          </div>
         </div>
 
         {/* Chart fills the remaining width (min-w-0 lets ECharts shrink/resize). */}

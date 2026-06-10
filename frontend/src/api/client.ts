@@ -1,5 +1,5 @@
 import createClient from "openapi-fetch";
-import type { paths } from "./schema";
+import type { components, paths } from "./schema";
 import type {
   ConfigDetail,
   ConfigList,
@@ -7,10 +7,14 @@ import type {
   DeepdiveMetrics,
   DeepdiveRequest,
   DeepdiveResponse,
+  ExportRequest,
+  ExportResponse,
+  GenerateProxyResponse,
   GroupDistributionRequest,
   GroupDistributionResponse,
   GroupValues,
   Granularity,
+  ReportSpec,
   SeriesRequest,
   SeriesResponse,
 } from "./types";
@@ -112,5 +116,53 @@ export const api = {
     });
     if (!r.ok) fail(`PUT /api/views/${name}`, await r.text());
     return (await r.json()) as { name: string; path: string; views: string[] };
+  },
+
+  // Report Spec (Phase 4)
+  listReportSpecs: async (): Promise<string[]> => {
+    const { data, error } = await client.GET("/api/report/specs");
+    if (error || !data) fail("GET /api/report/specs", error);
+    return data.specs;
+  },
+
+  loadReportSpec: async (name: string): Promise<ReportSpec> => {
+    const { data, error } = await client.GET("/api/report/spec/{name}", { params: { path: { name } } });
+    if (error || !data) fail(`GET /api/report/spec/${name}`, error);
+    // The wire schema marks default-bearing fields optional; the server always
+    // fills them (Pydantic defaults), so the app-facing required type is safe.
+    return data as unknown as ReportSpec;
+  },
+
+  saveReportSpec: async (name: string, spec: ReportSpec): Promise<{ name: string; path: string; specs: string[] }> => {
+    const { data, error } = await client.PUT("/api/report/spec/{name}", {
+      params: { path: { name } },
+      body: spec as unknown as components["schemas"]["ReportSpec-Input"],
+    });
+    if (error || !data) fail(`PUT /api/report/spec/${name}`, error);
+    return data;
+  },
+
+  reportReferences: async (urls: string[]): Promise<Record<string, string>[]> => {
+    const { data, error } = await client.POST("/api/report/references", { body: { urls } });
+    if (error || !data) fail("POST /api/report/references", error);
+    return data.references;
+  },
+
+  generateDescription: async (payload: Record<string, unknown>): Promise<GenerateProxyResponse> => {
+    const { data, error } = await client.POST("/api/report/description", { body: payload });
+    if (error || !data) fail("POST /api/report/description", error);
+    return data;
+  },
+
+  generateSummary: async (payload: Record<string, unknown>): Promise<GenerateProxyResponse> => {
+    const { data, error } = await client.POST("/api/report/summary", { body: payload });
+    if (error || !data) fail("POST /api/report/summary", error);
+    return data;
+  },
+
+  exportReport: async (req: ExportRequest): Promise<ExportResponse> => {
+    const { data, error } = await client.POST("/api/report/export", { body: req });
+    if (error || !data) fail("POST /api/report/export", error);
+    return data;
   },
 };

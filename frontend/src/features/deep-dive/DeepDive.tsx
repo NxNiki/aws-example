@@ -8,6 +8,7 @@ import { ClipControls } from "../../components/ClipControls";
 import { DateRanges } from "../../components/DateRanges";
 import { MetricCheckList } from "../../components/MetricCheckList";
 import { useDashboardStore } from "../../store/dashboardStore";
+import { AddToReportButton } from "../report/AddToReport";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import type { DeepdivePanel as PanelId, Granularity, HistogramSeries } from "../../api/types";
 import type { DeepdivePanelState } from "../../store/dashboardStore";
@@ -21,11 +22,14 @@ const OUTLIER_STDS = [2, 2.5, 3, 3.5, 4];
 
 function DeepdivePanelView(props: {
   title: string;
+  panelId: PanelId;
   options: string[];
   panel: DeepdivePanelState;
   onPatch: (patch: Partial<DeepdivePanelState>) => void;
 }) {
   const { panel } = props;
+  const configId = useDashboardStore((s) => s.configId);
+  const vizControls = useDashboardStore((s) => s.controls.viz);
 
   const histsByMetric: Record<string, HistogramSeries[]> = {};
   for (const h of panel.histograms) (histsByMetric[h.metric] ??= []).push(h);
@@ -177,6 +181,30 @@ function DeepdivePanelView(props: {
             </div>
           )}
           <ClipControls clip={panel.clip} onChange={(clip) => props.onPatch({ clip })} />
+          <AddToReportButton
+            getFigure={() => ({
+              title: `Deep Dive ${props.panelId} — ${panel.mode}: ${panel.metrics.join(", ") || "no metrics"}`,
+              source: {
+                kind: "stats-deepdive",
+                config: configId ?? "",
+                granularity: vizControls.granularity,
+                ranges: vizControls.ranges
+                  .filter((r) => r.show && r.start && r.end)
+                  .map((r) => ({ start: r.start, end: r.end })),
+                cohort_selection: vizControls.cohortSelection,
+                panel: props.panelId,
+                mode: panel.mode,
+                metrics: panel.metrics,
+                nbins: panel.nbins,
+                normalize: panel.normalize,
+                outliers_std: panel.outliersStd,
+                scatter_log_x: panel.scatterLogX,
+                scatter_log_y: panel.scatterLogY,
+                log_y: panel.logY,
+                clip: panel.clip,
+              },
+            })}
+          />
           {panel.missing.length > 0 && (
             <span className="text-base text-amber-600">No data: {panel.missing.join(", ")}</span>
           )}
@@ -278,12 +306,14 @@ export function DeepDive() {
 
       <DeepdivePanelView
         title="Derived metrics (group-level)"
+        panelId="derived"
         options={s.deepdiveMetrics.derived}
         panel={s.deepdive.derived}
         onPatch={(patch) => s.patchDeepdive("derived", patch)}
       />
       <DeepdivePanelView
         title="User-level metrics"
+        panelId="user"
         options={s.deepdiveMetrics.user}
         panel={s.deepdive.user}
         onPatch={(patch) => s.patchDeepdive("user", patch)}

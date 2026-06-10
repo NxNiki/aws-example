@@ -14,7 +14,7 @@ export type DashboardAction =
   | { type: "set_date_range"; date_from: string; date_to: string }
   | { type: "set_granularity"; granularity: "day" | "week" | "month" };
 
-const TABS: DashboardTab[] = ["stats-by-date", "stats-by-group", "stats-deepdive", "weekly-report"];
+const TABS: DashboardTab[] = ["stats-by-date", "stats-by-group", "stats-deepdive", "weekly-report", "report"];
 const GRANULARITIES = ["day", "week", "month"] as const;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
