@@ -71,6 +71,10 @@ export function buildStatsByDateOption(series: Series[], opts: BuildOpts): EChar
   const legendNames: string[] = [];
   let bandId = 0;
 
+  // Raw (untransformed) values per series per date, for the tooltip — hover
+  // should show real mean/CI numbers even when the hybrid-log display is on.
+  const tipValues = new Map<string, Map<string, { y: number | null; lo: number | null; hi: number | null; ci: boolean }>>();
+
   series.forEach((s) => {
     // Assign left-first; drop series whose metric is no longer selected on
     // either axis. Without this, a metric just removed from one axis would, until
@@ -86,6 +90,12 @@ export function buildStatsByDateOption(series: Series[], opts: BuildOpts): EChar
     const name = `${s.cohort}: ${s.metric}`;
     legendNames.push(name);
 
+    const perDate = new Map<string, { y: number | null; lo: number | null; hi: number | null; ci: boolean }>();
+    s.x.forEach((d, i) =>
+      perDate.set(d, { y: s.y[i] ?? null, lo: s.lower[i] ?? null, hi: s.upper[i] ?? null, ci: s.kind === "user" }),
+    );
+    tipValues.set(name, perDate);
+
     // CI band (user_* metrics only): invisible lower line + stacked diff area.
     if (s.kind === "user") {
       const lo = transform(s.lower, log, threshold);
@@ -100,6 +110,7 @@ export function buildStatsByDateOption(series: Series[], opts: BuildOpts): EChar
         stack,
         data: points(s.x, lo),
         lineStyle: { opacity: 0 },
+        itemStyle: { color },
         showSymbol: false,
         silent: true,
         z: 1,
@@ -112,6 +123,7 @@ export function buildStatsByDateOption(series: Series[], opts: BuildOpts): EChar
         stack,
         data: points(s.x, diff),
         lineStyle: { opacity: 0 },
+        itemStyle: { color },
         areaStyle: { color, opacity: 0.15 },
         showSymbol: false,
         silent: true,
@@ -157,8 +169,34 @@ export function buildStatsByDateOption(series: Series[], opts: BuildOpts): EChar
     axisLabel: { formatter: axisLabelFormatter(log, threshold), fontSize: 14 },
   });
 
+  // One tooltip row per real series: line-colored marker, mean, and the actual
+  // CI bounds (not the band's stacked diff), always in RAW values even when the
+  // hybrid-log display transform is on. The "(ci-lo)"/"(ci)" helper series that
+  // draw the band are filtered out.
+  const fmtVal = (v: number | null | undefined): string => {
+    if (v == null || !Number.isFinite(v)) return "–";
+    const a = Math.abs(v);
+    return v.toLocaleString("en-US", { maximumFractionDigits: a >= 100 ? 0 : a >= 1 ? 2 : 4 });
+  };
+  const tooltipFormatter = (params: unknown): string => {
+    const list = (Array.isArray(params) ? params : [params]) as {
+      seriesName?: string;
+      marker?: string;
+      data?: [string, number | null];
+    }[];
+    const main = list.filter((p) => p.seriesName && !p.seriesName.includes("(ci"));
+    if (main.length === 0) return "";
+    const date = main[0].data?.[0] ?? "";
+    const rows = main.map((p) => {
+      const v = tipValues.get(p.seriesName as string)?.get(String(p.data?.[0]));
+      const ci = v?.ci ? ` <span style="color:#888">CI [${fmtVal(v.lo)} – ${fmtVal(v.hi)}]</span>` : "";
+      return `${p.marker ?? ""} ${p.seriesName}: <b>${fmtVal(v?.y)}</b>${ci}`;
+    });
+    return [`<b>${date}</b>`, ...rows].join("<br/>");
+  };
+
   return {
-    tooltip: { trigger: "axis" },
+    tooltip: { trigger: "axis", formatter: tooltipFormatter },
     legend: { type: "scroll", bottom: 0, data: legendNames, textStyle: { fontSize: 13 } },
     grid: { left: 80, right: 80, top: 44, bottom: 56 },
     xAxis: { type: "time", axisLabel: { fontSize: 14 } },
