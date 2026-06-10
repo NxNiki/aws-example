@@ -1,14 +1,14 @@
 import { useEffect, useState } from "react";
 import { useDashboardStore } from "./store/dashboardStore";
 import { Notifications } from "./components/Notifications";
+import { ChatPanel } from "./features/agent/ChatPanel";
 import { StatsByDate } from "./features/stats-by-date/StatsByDate";
 import { StatsByGroup } from "./features/stats-by-group/StatsByGroup";
 import { DeepDive } from "./features/deep-dive/DeepDive";
 
-// Tab shell. Phase 1 ships the Stats-by-Date tab; the rest are stubbed and
-// arrive in later phases (see docs/frontend_redesign.md §8). The game-config
-// picker is dashboard-wide and lives here, above the tabs, so it drives every
-// tab.
+// Tab shell. The game-config picker is dashboard-wide and lives here, above
+// the tabs. The active tab lives in the store so the agent's navigate_tab
+// action can drive it (Phase 3).
 const TABS = [
   { id: "stats-by-date", label: "Stats by Date" },
   { id: "stats-by-group", label: "Stats by Group" },
@@ -19,7 +19,11 @@ const TABS = [
 export default function App() {
   const { configs, configId, selectConfig, loadConfigs, views, loadViews, saveView, loadViewByName, loading, status } =
     useDashboardStore();
-  const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("stats-by-date");
+  const tab = useDashboardStore((s) => s.activeTab);
+  const setTab = useDashboardStore((s) => s.setActiveTab);
+  const chatOpen = useDashboardStore((s) => s.chat.open);
+  const chatWidth = useDashboardStore((s) => s.chat.width);
+  const toggleChat = useDashboardStore((s) => s.toggleChat);
   const [viewName, setViewName] = useState("");
 
   useEffect(() => {
@@ -28,7 +32,9 @@ export default function App() {
   }, [loadConfigs, loadViews]);
 
   return (
-    <div className="min-h-full bg-gray-50 text-gray-900">
+    // Right padding reserves room for the docked chat panel (user-resizable);
+    // ECharts re-sizes via its ResizeObserver when the panel opens/resizes.
+    <div className="min-h-full bg-gray-50 text-gray-900" style={{ paddingRight: chatOpen ? chatWidth : 0 }}>
       {/* Sticky stack: header (top-0, h-14) → tab bar (top-14, h-11) → per-tab
           controls (top-[100px] = 56 + 44). Keep the heights in sync. */}
       <header className="sticky top-0 z-40 flex h-14 items-center justify-between border-b bg-white px-4">
@@ -90,6 +96,15 @@ export default function App() {
               Save view
             </button>
           </div>
+
+          <button
+            className={`border rounded px-4 py-2 whitespace-nowrap ${
+              chatOpen ? "bg-orange-500 text-white" : "bg-orange-100 text-orange-700 hover:bg-orange-200"
+            }`}
+            onClick={toggleChat}
+          >
+            🤖 AI Assistant
+          </button>
         </div>
       </header>
 
@@ -117,6 +132,7 @@ export default function App() {
         <div className="p-10 text-center text-gray-400">“Weekly Report” — coming in a later phase.</div>
       )}
 
+      <ChatPanel />
       <Notifications />
     </div>
   );

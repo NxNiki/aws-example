@@ -9,6 +9,13 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      // Order matters: /api/agent (SSE chat on the ai_agent service) must match
+      // before the catch-all /api → dashboard_api rule. In prod the ALB does
+      // the same path split (§9 of the redesign doc).
+      "/api/agent": {
+        target: process.env.VITE_AGENT_PROXY ?? "http://127.0.0.1:8051",
+        changeOrigin: true,
+      },
       "/api": {
         target: process.env.VITE_API_PROXY ?? "http://localhost:8050",
         changeOrigin: true,

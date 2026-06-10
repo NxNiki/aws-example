@@ -1,5 +1,7 @@
 import { create } from "zustand";
 import { api } from "../api/client";
+import { streamAgentChat } from "../api/agentStream";
+import { dispatchAction } from "./actionDispatcher";
 import type { RangeState } from "../components/DateRanges";
 import type {
   ClipOpts,
@@ -39,6 +41,10 @@ export interface TabControls {
   viz: RangeTabControls;
 }
 export type TabKey = keyof TabControls;
+
+// Top-level dashboard tabs. Lives in the store (not component state) so the
+// agent's navigate_tab action can drive it.
+export type DashboardTab = "stats-by-date" | "stats-by-group" | "stats-deepdive" | "weekly-report";
 
 const defaultRanges = (): RangeState[] => [
   { start: null, end: null, show: true },
@@ -177,6 +183,9 @@ interface DashboardState {
   configId: string | null;
   config: ConfigDetail | null;
 
+  activeTab: DashboardTab;
+  setActiveTab: (tab: DashboardTab) => void;
+
   controls: TabControls;
   // Available cohort values per granularity (the data can differ by
   // granularity, and tabs can sit on different granularities).
@@ -227,6 +236,15 @@ interface DashboardState {
   // Status notifications (toasts)
   notify: (kind: Toast["kind"], message: string) => void;
   dismissNotification: (id: string) => void;
+
+  // Agent chat
+  chat: ChatState;
+  toggleChat: () => void;
+  setChatWidth: (width: number) => void;
+  setChatModel: (model: string) => void;
+  clearChat: () => void;
+  stopChat: () => void;
+  sendChat: (text: string) => Promise<void>;
 }
 
 export interface Toast {
@@ -234,6 +252,55 @@ export interface Toast {
   kind: "success" | "error" | "info";
   message: string;
 }
+
+// ── Agent chat (Phase 3) ───────────────────────────────────────────────────
+
+// One tool call or dashboard action rendered inline in an assistant message.
+export interface ChatEvent {
+  kind: "tool" | "action";
+  name: string;
+  detail: string;
+  done: boolean;
+}
+
+export interface ChatMsg {
+  role: "user" | "assistant";
+  content: string;
+  events: ChatEvent[];
+}
+
+export interface ChatState {
+  open: boolean;
+  width: number; // panel width in px (user-resizable via the drag handle)
+  model: string; // catalog key, e.g. "gemini:gemini-2.5-flash"
+  messages: ChatMsg[];
+  streaming: boolean;
+  pendingClarify: { question: string; options: string[] } | null;
+}
+
+export const CHAT_MIN_WIDTH = 360;
+export const CHAT_MAX_WIDTH = 900;
+
+// Mirrors ai_agent's MODEL_CATALOG keys (the legacy chat dropdown).
+export const CHAT_MODELS = [
+  "gemini:gemini-2.5-flash",
+  "gemini:gemini-2.5-pro",
+  "openai:gpt-4o-mini",
+  "openai:gpt-4o",
+  "openai:gpt-4.1-mini",
+  "openai:gpt-4.1",
+];
+
+const emptyChat = (): ChatState => ({
+  open: false,
+  width: 520,
+  model: CHAT_MODELS[0],
+  messages: [],
+  streaming: false,
+  pendingClarify: null,
+});
+
+let _chatAbort: AbortController | null = null;
 
 function activeRanges(ranges: RangeState[]): { start: string; end: string }[] {
   return ranges.filter((r) => r.show && r.start && r.end).map((r) => ({ start: r.start as string, end: r.end as string }));
@@ -291,6 +358,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   configs: [],
   configId: null,
   config: null,
+  activeTab: "stats-by-date",
+  setActiveTab: (tab) => set({ activeTab: tab }),
   controls: defaultControls(),
   groupValuesByGran: {},
   panels: {},
@@ -299,6 +368,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   deepdive: { derived: emptyDeepdivePanel(), user: emptyDeepdivePanel() },
   views: [],
   notifications: [],
+  chat: emptyChat(),
   loading: false,
   status: null,
   error: null,
@@ -697,5 +767,110 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         );
       }),
     );
+  },
+
+  // ── Agent chat ───────────────────────────────────────────────────────────
+
+  toggleChat: () => set((s) => ({ chat: { ...s.chat, open: !s.chat.open } })),
+  setChatWidth: (width) =>
+    set((s) => ({ chat: { ...s.chat, width: Math.min(CHAT_MAX_WIDTH, Math.max(CHAT_MIN_WIDTH, width)) } })),
+  setChatModel: (model) => set((s) => ({ chat: { ...s.chat, model } })),
+  clearChat: () => {
+    _chatAbort?.abort();
+    set((s) => ({ chat: { ...emptyChat(), open: s.chat.open, width: s.chat.width, model: s.chat.model } }));
+  },
+  stopChat: () => {
+    _chatAbort?.abort();
+    set((s) => ({ chat: { ...s.chat, streaming: false } }));
+  },
+
+  sendChat: async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || get().chat.streaming) return;
+
+    const patch = (fn: (c: ChatState) => Partial<ChatState>) => set((s) => ({ chat: { ...s.chat, ...fn(s.chat) } }));
+    const patchLast = (fn: (m: ChatMsg) => ChatMsg) =>
+      patch((c) => ({ messages: c.messages.map((m, i) => (i === c.messages.length - 1 ? fn(m) : m)) }));
+
+    // History = prior turns only (the new user message travels separately).
+    const history = get().chat.messages.map((m) => ({ role: m.role, content: m.content }));
+
+    patch((c) => ({
+      messages: [...c.messages, { role: "user", content: trimmed, events: [] }, { role: "assistant", content: "", events: [] }],
+      streaming: true,
+      pendingClarify: null,
+    }));
+
+    // Snapshot of what's on screen, so the agent can drive it (see _ACTION_GUIDE
+    // on the backend). Panel entries pair available metrics with the selection.
+    const s = get();
+    const dashboard_state = {
+      configs: s.configs.map((c) => c.id),
+      configId: s.configId,
+      activeTab: s.activeTab,
+      granularities: s.config?.granularities ?? [],
+      dateWindow: { from: s.controls.date.dateFrom, to: s.controls.date.dateTo, granularity: s.controls.date.granularity },
+      panels: (s.config?.groups ?? []).map((g) => ({
+        id: g.id,
+        label: g.label,
+        available_metrics: g.metrics,
+        left: s.panels[g.id]?.left ?? [],
+        right: s.panels[g.id]?.right ?? [],
+      })),
+    };
+
+    _chatAbort?.abort();
+    const ctl = new AbortController();
+    _chatAbort = ctl;
+    try {
+      await streamAgentChat(
+        {
+          message: trimmed,
+          history,
+          model: get().chat.model,
+          dashboard_config: s.configId ? `dashboard_config-${s.configId}.yaml` : null,
+          dashboard_state,
+        },
+        {
+          onToken: (t) => patchLast((m) => ({ ...m, content: m.content + t })),
+          onToolStart: (name, input) =>
+            patchLast((m) => ({ ...m, events: [...m.events, { kind: "tool", name, detail: input, done: false }] })),
+          onToolEnd: (name) =>
+            patchLast((m) => {
+              // Mark the most recent unfinished call of this tool as done.
+              let idx = -1;
+              m.events.forEach((e, i) => {
+                if (e.kind === "tool" && e.name === name && !e.done) idx = i;
+              });
+              if (idx < 0) return m;
+              return { ...m, events: m.events.map((e, i) => (i === idx ? { ...e, done: true } : e)) };
+            }),
+          onAction: (action) => {
+            const ok = dispatchAction(action);
+            patchLast((m) => ({
+              ...m,
+              events: [...m.events, { kind: "action", name: String(action.type ?? "?"), detail: ok ? "applied" : "failed", done: true }],
+            }));
+          },
+          onClarify: (question, options) => patch(() => ({ pendingClarify: { question, options } })),
+          onDone: () => patch(() => ({ streaming: false })),
+          onError: (msg) => {
+            patchLast((m) => ({ ...m, content: m.content + (m.content ? "\n\n" : "") + `⚠️ ${msg}` }));
+            patch(() => ({ streaming: false }));
+          },
+        },
+        ctl.signal,
+      );
+    } catch (e) {
+      if (!(e instanceof DOMException && e.name === "AbortError")) {
+        patchLast((m) => ({
+          ...m,
+          content: m.content + (m.content ? "\n\n" : "") + `⚠️ Agent unreachable: ${e}. Is the ai_agent service running on :8051?`,
+        }));
+      }
+    } finally {
+      if (_chatAbort === ctl) _chatAbort = null;
+      patch(() => ({ streaming: false }));
+    }
   },
 }));
