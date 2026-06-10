@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { EChart } from "../../charts/EChart";
 import { buildStatsByDateOption } from "../../charts/statsByDateOption";
-import { MetricCheckList } from "../../components/MetricCheckList";
+import { AxisMetricPicker } from "../../components/AxisMetricPicker";
 import type { Granularity, MetricGroup } from "../../api/types";
 import type { PanelState } from "../../store/dashboardStore";
 
@@ -33,26 +33,15 @@ export function Panel(props: {
     <div className="border rounded p-3 mb-6">
       <h3 className="text-sm font-semibold text-gray-700 mb-2">{group.label}</h3>
       <div className="flex gap-4">
-        {/* Controls sidebar: left/right axis metric pickers, then log scale. */}
-        <div className="flex flex-col gap-3 shrink-0">
-          <div className="flex gap-3">
-            <MetricCheckList
-              className="w-56"
-              maxHeightClass="max-h-96"
-              label="Left axis"
-              options={group.metrics}
-              selected={panel.left}
-              onChange={(next) => props.onSetMetrics("left", next)}
-            />
-            <MetricCheckList
-              className="w-56"
-              maxHeightClass="max-h-96"
-              label="Right axis"
-              options={group.metrics}
-              selected={panel.right}
-              onChange={(next) => props.onSetMetrics("right", next)}
-            />
-          </div>
+        {/* Controls sidebar: combined metric/axis picker, then log scale. */}
+        <div className="flex flex-col gap-3 shrink-0 w-80">
+          <AxisMetricPicker
+            options={group.metrics}
+            left={panel.left}
+            right={panel.right}
+            onChange={props.onSetMetrics}
+            maxHeightClass="max-h-96"
+          />
 
           <label className="flex items-center gap-2 text-xs text-gray-600">
             <input type="checkbox" checked={panel.log} onChange={(e) => props.onSetLog(e.target.checked)} />
