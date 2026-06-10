@@ -45,8 +45,8 @@ export const api = {
     return data;
   },
 
-  series: async (body: SeriesRequest): Promise<SeriesResponse> => {
-    const { data, error } = await client.POST("/api/data/series", { body });
+  series: async (body: SeriesRequest, signal?: AbortSignal): Promise<SeriesResponse> => {
+    const { data, error } = await client.POST("/api/data/series", { body, signal });
     if (error || !data) fail("POST /api/data/series", error);
     return data;
   },
@@ -67,14 +67,17 @@ export const api = {
     return data;
   },
 
-  groupDistribution: async (body: GroupDistributionRequest): Promise<GroupDistributionResponse> => {
-    const { data, error } = await client.POST("/api/data/group-distribution", { body });
+  groupDistribution: async (
+    body: GroupDistributionRequest,
+    signal?: AbortSignal,
+  ): Promise<GroupDistributionResponse> => {
+    const { data, error } = await client.POST("/api/data/group-distribution", { body, signal });
     if (error || !data) fail("POST /api/data/group-distribution", error);
     return data;
   },
 
-  deepdive: async (body: DeepdiveRequest): Promise<DeepdiveResponse> => {
-    const { data, error } = await client.POST("/api/data/deepdive", { body });
+  deepdive: async (body: DeepdiveRequest, signal?: AbortSignal): Promise<DeepdiveResponse> => {
+    const { data, error } = await client.POST("/api/data/deepdive", { body, signal });
     if (error || !data) fail("POST /api/data/deepdive", error);
     return data;
   },

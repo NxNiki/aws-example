@@ -17,7 +17,7 @@ const TABS = [
 ] as const;
 
 export default function App() {
-  const { configs, configId, selectConfig, loadConfigs, views, loadViews, saveView, loadViewByName, loading } =
+  const { configs, configId, selectConfig, loadConfigs, views, loadViews, saveView, loadViewByName, loading, status } =
     useDashboardStore();
   const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("stats-by-date");
   const [viewName, setViewName] = useState("");
@@ -32,7 +32,7 @@ export default function App() {
       <header className="flex items-center justify-between border-b bg-white px-4 py-3">
         <div className="flex items-center gap-3">
           <h1 className="text-lg font-semibold">Game Stats Dashboard</h1>
-          {loading && <span className="text-xs text-blue-600 animate-pulse">● loading…</span>}
+          {loading && <span className="text-xs text-blue-600 animate-pulse">● {status ?? "loading…"}</span>}
         </div>
         <div className="flex items-center gap-4 text-sm">
           <label className="flex items-center gap-2">

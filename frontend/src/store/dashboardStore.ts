@@ -136,6 +136,7 @@ interface DashboardState {
   views: string[]; // names of saved view snapshots
   notifications: Toast[]; // transient status messages (toasts)
   loading: boolean;
+  status: string | null; // what the dashboard is currently doing (header indicator)
   error: string | null;
 
   loadConfigs: () => Promise<void>;
@@ -185,6 +186,54 @@ function activeRanges(ranges: RangeState[]): { start: string; end: string }[] {
   return ranges.filter((r) => r.show && r.start && r.end).map((r) => ({ start: r.start as string, end: r.end as string }));
 }
 
+// In-flight request management. Each data loader runs through this: it aborts the
+// loader's previous request, ignores a response if a newer request has since
+// superseded it, and tracks a global in-flight count so the loading indicator
+// reflects any active fetch. Fixes the race where rapid control changes let an
+// older response overwrite newer data (or leave the spinner stuck).
+type Setter = (partial: Partial<DashboardState> | ((s: DashboardState) => Partial<DashboardState>)) => void;
+const _abort: Record<string, AbortController> = {};
+let _inflight = 0;
+const _isAbort = (e: unknown) => e instanceof DOMException && e.name === "AbortError";
+// Last-fetched input signature per panel (keyed "series:g1", "group:g2",
+// "deepdive:derived", …). A panel whose signature is unchanged is skipped, so
+// changing one panel doesn't re-fetch the others. configId is part of every
+// signature, so a config switch naturally invalidates all panels.
+const _panelSig: Record<string, string> = {};
+// Stats-by-Date does finer-grained, metric-level loading: this caches each
+// panel's CONTEXT signature (config/granularity/dates/cohorts — NOT metrics). If
+// the context is unchanged, only newly-added metrics are fetched and appended;
+// removed metrics are hidden by the option-builder (no fetch) and stay cached so
+// re-adding is instant.
+const _panelCtx: Record<string, string> = {};
+
+async function runExclusive<T>(
+  key: string,
+  label: string,
+  set: Setter,
+  run: (signal: AbortSignal) => Promise<T>,
+  apply: (result: T, set: Setter) => void,
+  onError: (e: unknown, set: Setter) => void,
+): Promise<void> {
+  _abort[key]?.abort(); // cancel the previous fetch for this loader
+  const ctl = new AbortController();
+  _abort[key] = ctl;
+  _inflight += 1;
+  set({ loading: true, status: label, error: null });
+  try {
+    const result = await run(ctl.signal);
+    if (_abort[key] === ctl) apply(result, set); // still the latest → apply
+  } catch (e) {
+    if (_abort[key] === ctl && !_isAbort(e)) onError(e, set); // ignore aborted / superseded
+  } finally {
+    if (_abort[key] === ctl) delete _abort[key];
+    _inflight = Math.max(0, _inflight - 1);
+    // Clear the status only when nothing else is in flight; otherwise leave the
+    // other in-flight loader's label showing.
+    set(_inflight > 0 ? { loading: true } : { loading: false, status: null });
+  }
+}
+
 export const useDashboardStore = create<DashboardState>((set, get) => ({
   configs: [],
   configId: null,
@@ -202,6 +251,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   views: [],
   notifications: [],
   loading: false,
+  status: null,
   error: null,
 
   loadConfigs: async () => {
@@ -270,7 +320,11 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       const { values } = await api.groupValues(configId, granularity);
       set({ groupValues: values });
     } catch (e) {
+      // Toast (not just the transient error field): a later successful
+      // loadAllSeries in selectConfig/applyView clears `error`, so the toast is
+      // what reliably surfaces this failure.
       set({ error: String(e) });
+      get().notify("error", `Failed to load cohort values: ${e}`);
     }
   },
 
@@ -289,39 +343,67 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       }
     } catch (e) {
       set({ error: String(e) });
+      get().notify("error", `Failed to load date bounds: ${e}`);
     }
   },
 
+  // Fetch each Stats-by-Date panel independently AND incrementally: when only the
+  // metric set changed (same context), fetch just the newly-added metrics and
+  // append them; removed metrics are hidden by the option-builder and kept cached
+  // (instant re-add). A context change (config/granularity/dates/cohorts) reloads
+  // the whole panel. Each panel has its own cancellation key.
   loadAllSeries: async () => {
     const { configId, granularity, dateFrom, dateTo, cohortSelection, panels } = get();
     if (!configId) return;
-    set({ loading: true, error: null });
-    try {
-      const entries = await Promise.all(
-        Object.entries(panels).map(async ([panelId, panel]) => {
-          const metrics = [...new Set([...panel.left, ...panel.right])];
-          if (metrics.length === 0) return [panelId, [] as Series[]] as const;
-          const resp = await api.series({
-            config: configId,
-            granularity,
-            metrics,
-            date_from: dateFrom,
-            date_to: dateTo,
-            group_values: cohortSelection,
-          });
-          return [panelId, resp.series] as const;
-        }),
-      );
-      set((s) => {
-        const next = { ...s.panels };
-        for (const [panelId, series] of entries) if (next[panelId]) next[panelId] = { ...next[panelId], series };
-        return { panels: next };
-      });
-    } catch (e) {
-      set({ error: String(e) });
-    } finally {
-      set({ loading: false });
-    }
+    const ctxSig = JSON.stringify({ configId, granularity, dateFrom, dateTo, cohortSelection });
+    await Promise.all(
+      Object.entries(panels).map(([panelId, panel]) => {
+        const key = `series:${panelId}`;
+        const ctxChanged = _panelCtx[key] !== ctxSig;
+        const desired = [...new Set([...panel.left, ...panel.right])];
+        const loaded = ctxChanged ? new Set<string>() : new Set(panel.series.map((s) => s.metric));
+        const toFetch = desired.filter((m) => !loaded.has(m));
+
+        if (toFetch.length === 0) {
+          // Nothing new. On a context change with no selected metrics, clear the
+          // now-stale series; otherwise the builder already hides unselected ones.
+          if (ctxChanged) {
+            _panelCtx[key] = ctxSig;
+            set((s) =>
+              s.panels[panelId] ? { panels: { ...s.panels, [panelId]: { ...s.panels[panelId], series: [] } } } : {},
+            );
+          }
+          return;
+        }
+
+        return runExclusive(
+          key,
+          "Loading metrics…",
+          set,
+          async (signal): Promise<Series[]> => {
+            const resp = await api.series(
+              { config: configId, granularity, metrics: toFetch, date_from: dateFrom, date_to: dateTo, group_values: cohortSelection },
+              signal,
+            );
+            return resp.series;
+          },
+          (fetched, set) => {
+            _panelCtx[key] = ctxSig;
+            set((s) => {
+              const cur = s.panels[panelId];
+              if (!cur) return {};
+              // Replace on context change; append the new metrics otherwise.
+              const series = ctxChanged ? fetched : [...cur.series, ...fetched];
+              return { panels: { ...s.panels, [panelId]: { ...cur, series } } };
+            });
+          },
+          (e, set) => {
+            set({ error: String(e) });
+            get().notify("error", `Failed to load series: ${e}`);
+          },
+        );
+      }),
+    );
   },
 
   setGroupMetric: (panelId, metric) =>
@@ -336,32 +418,34 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     if (!configId) return;
     const reqRanges = activeRanges(ranges);
     if (reqRanges.length === 0) return;
-    set({ loading: true, error: null });
-    try {
-      const entries = await Promise.all(
-        Object.entries(group).map(async ([panelId, p]) => {
-          if (!p.metric) return [panelId, { stats: [] as GroupStat[], missing: false }] as const;
-          const resp = await api.groupDistribution({
-            config: configId,
-            granularity,
-            metric: p.metric,
-            ranges: reqRanges,
-            group_values: cohortSelection,
-            clip: p.clip,
-          });
-          return [panelId, { stats: resp.stats, missing: resp.missing }] as const;
-        }),
-      );
-      set((s) => {
-        const next = { ...s.group };
-        for (const [panelId, r] of entries) if (next[panelId]) next[panelId] = { ...next[panelId], ...r };
-        return { group: next };
-      });
-    } catch (e) {
-      set({ error: String(e) });
-    } finally {
-      set({ loading: false });
-    }
+    await Promise.all(
+      Object.entries(group).map(([panelId, p]) => {
+        const key = `group:${panelId}`;
+        const sig = JSON.stringify({ configId, granularity, reqRanges, cohortSelection, metric: p.metric, clip: p.clip });
+        if (_panelSig[key] === sig) return;
+        return runExclusive(
+          key,
+          "Computing distributions (bootstrap CI)…",
+          set,
+          async (signal) => {
+            if (!p.metric) return { stats: [] as GroupStat[], missing: false };
+            const resp = await api.groupDistribution(
+              { config: configId, granularity, metric: p.metric, ranges: reqRanges, group_values: cohortSelection, clip: p.clip },
+              signal,
+            );
+            return { stats: resp.stats, missing: resp.missing };
+          },
+          (r, set) => {
+            _panelSig[key] = sig;
+            set((s) => (s.group[panelId] ? { group: { ...s.group, [panelId]: { ...s.group[panelId], ...r } } } : {}));
+          },
+          (e, set) => {
+            set({ error: String(e) });
+            get().notify("error", `Failed to load group stats: ${e}`);
+          },
+        );
+      }),
+    );
   },
 
   loadDeepdiveMetrics: async () => {
@@ -372,6 +456,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       set({ deepdiveMetrics: { derived, user } });
     } catch (e) {
       set({ error: String(e) });
+      get().notify("error", `Failed to load Deep Dive metrics: ${e}`);
     }
   },
 
@@ -477,46 +562,71 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     if (!configId) return;
     const reqRanges = activeRanges(ranges);
     if (reqRanges.length === 0) return;
-    set({ loading: true, error: null });
-    try {
-      const panels: DeepdivePanel[] = ["derived", "user"];
-      const entries = await Promise.all(
-        panels.map(async (panel) => {
-          const p = deepdive[panel];
-          if (p.metrics.length === 0) {
-            return [
-              panel,
-              { histograms: [] as HistogramSeries[], heatmaps: [] as CorrMatrix[], scatters: [] as ScatterSeries[], missing: [] as string[] },
-            ] as const;
-          }
-          const resp = await api.deepdive({
-            config: configId,
-            granularity,
-            panel,
-            mode: p.mode,
-            metrics: p.metrics,
-            ranges: reqRanges,
-            group_values: cohortSelection,
-            clip: p.clip,
-            nbins: p.nbins,
-            normalize: p.normalize,
-            outliers_std: p.outliersStd,
-          });
-          return [
-            panel,
-            { histograms: resp.histograms, heatmaps: resp.heatmaps, scatters: resp.scatters, missing: resp.missing },
-          ] as const;
-        }),
-      );
-      set((s) => {
-        const next = { ...s.deepdive };
-        for (const [panel, r] of entries) next[panel] = { ...next[panel], ...r };
-        return { deepdive: next };
-      });
-    } catch (e) {
-      set({ error: String(e) });
-    } finally {
-      set({ loading: false });
-    }
+    const panels: DeepdivePanel[] = ["derived", "user"];
+    await Promise.all(
+      panels.map((panel) => {
+        const p = deepdive[panel];
+        const key = `deepdive:${panel}`;
+        const sig = JSON.stringify({
+          configId,
+          granularity,
+          reqRanges,
+          cohortSelection,
+          mode: p.mode,
+          metrics: p.metrics,
+          nbins: p.nbins,
+          normalize: p.normalize,
+          clip: p.clip,
+          outliersStd: p.outliersStd,
+        });
+        if (_panelSig[key] === sig) return;
+        const label =
+          p.mode === "histogram"
+            ? "Binning histograms…"
+            : p.mode === "heatmap"
+              ? "Computing correlations…"
+              : "Sampling points…";
+        return runExclusive(
+          key,
+          label,
+          set,
+          async (signal) => {
+            if (p.metrics.length === 0) {
+              return {
+                histograms: [] as HistogramSeries[],
+                heatmaps: [] as CorrMatrix[],
+                scatters: [] as ScatterSeries[],
+                missing: [] as string[],
+              };
+            }
+            const resp = await api.deepdive(
+              {
+                config: configId,
+                granularity,
+                panel,
+                mode: p.mode,
+                metrics: p.metrics,
+                ranges: reqRanges,
+                group_values: cohortSelection,
+                clip: p.clip,
+                nbins: p.nbins,
+                normalize: p.normalize,
+                outliers_std: p.outliersStd,
+              },
+              signal,
+            );
+            return { histograms: resp.histograms, heatmaps: resp.heatmaps, scatters: resp.scatters, missing: resp.missing };
+          },
+          (r, set) => {
+            _panelSig[key] = sig;
+            set((s) => ({ deepdive: { ...s.deepdive, [panel]: { ...s.deepdive[panel], ...r } } }));
+          },
+          (e, set) => {
+            set({ error: String(e) });
+            get().notify("error", `Failed to load deep dive: ${e}`);
+          },
+        );
+      }),
+    );
   },
 }));

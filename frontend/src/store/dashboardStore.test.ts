@@ -105,13 +105,16 @@ describe("dashboardStore", () => {
       panels: { group1: { left: ["num_active_users"], right: ["rtp"], log: false, threshold: 10, series: [] } },
     });
     await useDashboardStore.getState().loadAllSeries();
-    expect(mockApi.series).toHaveBeenCalledWith({
-      config: "ss01",
-      granularity: "day",
-      metrics: ["num_active_users", "rtp"],
-      date_from: null,
-      date_to: null,
-      group_values: { user_group: ["new"] },
-    });
+    expect(mockApi.series).toHaveBeenCalledWith(
+      {
+        config: "ss01",
+        granularity: "day",
+        metrics: ["num_active_users", "rtp"],
+        date_from: null,
+        date_to: null,
+        group_values: { user_group: ["new"] },
+      },
+      expect.anything(), // AbortSignal threaded for cancellation
+    );
   });
 });
