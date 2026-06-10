@@ -103,7 +103,6 @@ export function StatsByGroup() {
       </div>
 
       {s.error && <div className="mb-4 rounded bg-red-50 text-red-700 text-sm px-3 py-2">{s.error}</div>}
-      {s.loading && <div className="mb-4 text-sm text-gray-500">Loading…</div>}
 
       {groups.map((g) => {
         const panel = s.group[g.id];

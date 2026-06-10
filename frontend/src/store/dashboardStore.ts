@@ -92,6 +92,21 @@ const emptyDeepdivePanel = (): DeepdivePanelState => ({
   missing: [],
 });
 
+// A serializable snapshot of the dashboard's UI selections (NOT fetched data /
+// figures) — the React-era "save/load config". Persisted opaquely to S3.
+export interface ViewSnapshot {
+  version: number;
+  configId: string | null;
+  granularity: Granularity;
+  dateFrom: string | null;
+  dateTo: string | null;
+  ranges: RangeState[];
+  cohortSelection: Record<string, string[]>;
+  panels: Record<string, PanelState>;
+  group: Record<string, GroupPanelState>;
+  deepdive: Record<DeepdivePanel, DeepdivePanelState>;
+}
+
 // Last-30-days window (inclusive) ending at the data's max date.
 function lastThirtyDays(maxIso: string): { from: string; to: string } {
   const d = new Date(`${maxIso}T00:00:00Z`);
@@ -118,6 +133,8 @@ interface DashboardState {
   deepdiveMetrics: { derived: string[]; user: string[] };
   deepdive: Record<DeepdivePanel, DeepdivePanelState>;
 
+  views: string[]; // names of saved view snapshots
+  notifications: Toast[]; // transient status messages (toasts)
   loading: boolean;
   error: string | null;
 
@@ -145,6 +162,23 @@ interface DashboardState {
   loadDeepdiveMetrics: () => Promise<void>;
   patchDeepdive: (panel: DeepdivePanel, patch: Partial<DeepdivePanelState>) => void;
   loadDeepdive: () => Promise<void>;
+
+  // Saved views (save/load the dashboard setting)
+  captureView: () => ViewSnapshot;
+  applyView: (snap: ViewSnapshot) => Promise<boolean>;
+  loadViews: () => Promise<void>;
+  saveView: (name: string) => Promise<void>;
+  loadViewByName: (name: string) => Promise<void>;
+
+  // Status notifications (toasts)
+  notify: (kind: Toast["kind"], message: string) => void;
+  dismissNotification: (id: string) => void;
+}
+
+export interface Toast {
+  id: string;
+  kind: "success" | "error" | "info";
+  message: string;
 }
 
 function activeRanges(ranges: RangeState[]): { start: string; end: string }[] {
@@ -165,6 +199,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   group: {},
   deepdiveMetrics: { derived: [], user: [] },
   deepdive: { derived: emptyDeepdivePanel(), user: emptyDeepdivePanel() },
+  views: [],
+  notifications: [],
   loading: false,
   error: null,
 
@@ -341,6 +377,100 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
 
   patchDeepdive: (panel, patch) =>
     set((s) => ({ deepdive: { ...s.deepdive, [panel]: { ...s.deepdive[panel], ...patch } } })),
+
+  // Capture the UI selections (drop fetched data / figures — they re-fetch).
+  captureView: () => {
+    const s = get();
+    return {
+      version: 1,
+      configId: s.configId,
+      granularity: s.granularity,
+      dateFrom: s.dateFrom,
+      dateTo: s.dateTo,
+      ranges: s.ranges,
+      cohortSelection: s.cohortSelection,
+      panels: Object.fromEntries(Object.entries(s.panels).map(([k, v]) => [k, { ...v, series: [] }])),
+      group: Object.fromEntries(Object.entries(s.group).map(([k, v]) => [k, { ...v, stats: [], missing: false }])),
+      deepdive: {
+        derived: { ...s.deepdive.derived, histograms: [], heatmaps: [], scatters: [], missing: [] },
+        user: { ...s.deepdive.user, histograms: [], heatmaps: [], scatters: [], missing: [] },
+      },
+    };
+  },
+
+  // Restore a snapshot: load the config (for group/granularity metadata), merge
+  // saved selections over fresh defaults (so renamed/added groups still work),
+  // then let the tabs refetch.
+  applyView: async (snap) => {
+    if (!snap?.configId) return false;
+    set({ loading: true, error: null });
+    try {
+      const config = await api.getConfig(snap.configId);
+      set({
+        configId: snap.configId,
+        config,
+        granularity: snap.granularity ?? "day",
+        dateFrom: snap.dateFrom ?? null,
+        dateTo: snap.dateTo ?? null,
+        ranges: snap.ranges ?? defaultRanges(),
+        cohortSelection: snap.cohortSelection ?? {},
+        panels: { ...defaultPanels(config), ...(snap.panels ?? {}) },
+        group: { ...defaultGroupPanels(config), ...(snap.group ?? {}) },
+        deepdive: {
+          derived: { ...emptyDeepdivePanel(), ...(snap.deepdive?.derived ?? {}) },
+          user: { ...emptyDeepdivePanel(), ...(snap.deepdive?.user ?? {}) },
+        },
+      });
+      await get().loadGroupValues();
+      await get().loadDeepdiveMetrics();
+      await get().loadAllSeries();
+      return true;
+    } catch (e) {
+      set({ error: String(e) });
+      get().notify("error", `Failed to apply view: ${e}`);
+      return false;
+    } finally {
+      set({ loading: false });
+    }
+  },
+
+  loadViews: async () => {
+    try {
+      set({ views: await api.listViews() });
+    } catch (e) {
+      set({ error: String(e) });
+    }
+  },
+
+  saveView: async (name) => {
+    try {
+      const r = await api.saveView(name, get().captureView());
+      set({ views: r.views });
+      get().notify("success", `Saved view “${r.name}” → ${r.path}`);
+    } catch (e) {
+      set({ error: String(e) });
+      get().notify("error", `Failed to save view: ${e}`);
+    }
+  },
+
+  loadViewByName: async (name) => {
+    let snap: ViewSnapshot;
+    try {
+      snap = (await api.loadView(name)) as ViewSnapshot;
+    } catch (e) {
+      set({ error: String(e) });
+      get().notify("error", `Failed to load view “${name}”: ${e}`);
+      return;
+    }
+    if (await get().applyView(snap)) get().notify("info", `Loaded view “${name}”`);
+  },
+
+  notify: (kind, message) =>
+    set((s) => ({
+      notifications: [...s.notifications, { id: crypto.randomUUID(), kind, message }].slice(-5),
+    })),
+
+  dismissNotification: (id) => set((s) => ({ notifications: s.notifications.filter((n) => n.id !== id) })),
 
   loadDeepdive: async () => {
     const { configId, granularity, ranges, cohortSelection, deepdive } = get();

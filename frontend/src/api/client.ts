@@ -17,7 +17,8 @@ import type {
 
 // Typed client generated from the OpenAPI schema: paths, params, request
 // bodies, and responses are all checked against dashboard_api's contract.
-const client = createClient<paths>({ baseUrl: import.meta.env.VITE_API_BASE ?? "" });
+const BASE = import.meta.env.VITE_API_BASE ?? "";
+const client = createClient<paths>({ baseUrl: BASE });
 
 function fail(path: string, error: unknown): never {
   throw new Error(`${path} failed: ${JSON.stringify(error)}`);
@@ -84,5 +85,29 @@ export const api = {
     });
     if (error || !data) fail("GET /api/data/deepdive-metrics", error);
     return data;
+  },
+
+  // Saved view snapshots (legacy "save/load config"). The snapshot is opaque
+  // frontend-owned JSON, so these use plain fetch rather than the typed client.
+  listViews: async (): Promise<string[]> => {
+    const r = await fetch(`${BASE}/api/views`);
+    if (!r.ok) fail("GET /api/views", await r.text());
+    return ((await r.json()) as { views: string[] }).views;
+  },
+
+  loadView: async (name: string): Promise<unknown> => {
+    const r = await fetch(`${BASE}/api/views/${encodeURIComponent(name)}`);
+    if (!r.ok) fail(`GET /api/views/${name}`, await r.text());
+    return r.json();
+  },
+
+  saveView: async (name: string, snapshot: unknown): Promise<{ name: string; path: string; views: string[] }> => {
+    const r = await fetch(`${BASE}/api/views/${encodeURIComponent(name)}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(snapshot),
+    });
+    if (!r.ok) fail(`PUT /api/views/${name}`, await r.text());
+    return (await r.json()) as { name: string; path: string; views: string[] };
   },
 };
