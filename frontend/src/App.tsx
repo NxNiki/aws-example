@@ -29,7 +29,9 @@ export default function App() {
 
   return (
     <div className="min-h-full bg-gray-50 text-gray-900">
-      <header className="flex items-center justify-between border-b bg-white px-4 py-3">
+      {/* Sticky stack: header (top-0, h-14) → tab bar (top-14, h-11) → per-tab
+          controls (top-[100px] = 56 + 44). Keep the heights in sync. */}
+      <header className="sticky top-0 z-40 flex h-14 items-center justify-between border-b bg-white px-4">
         <div className="flex items-center gap-3">
           <h1 className="text-lg font-semibold">Game Stats Dashboard</h1>
           {loading && <span className="text-xs text-blue-600 animate-pulse">● {status ?? "loading…"}</span>}
@@ -91,13 +93,13 @@ export default function App() {
         </div>
       </header>
 
-      <nav className="flex gap-1 border-b bg-white px-4">
+      <nav className="sticky top-14 z-30 flex h-11 gap-1 border-b bg-white px-4">
         {TABS.map((t) => (
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
             className={
-              "px-4 py-3 text-sm border-b-2 " +
+              "flex items-center px-4 text-sm border-b-2 " +
               (tab === t.id
                 ? "border-blue-600 text-blue-600 font-semibold"
                 : "border-transparent text-gray-500 hover:text-gray-700")

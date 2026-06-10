@@ -82,8 +82,9 @@ export function StatsByGroup() {
   }, [debouncedKey]);
 
   return (
-    <div className="p-6 w-full">
-      <div className="flex flex-wrap gap-6 items-start mb-6">
+    <div className="p-6 pt-0 w-full">
+      {/* Pinned below the sticky header + tab bar (see App.tsx height comment). */}
+      <div className="sticky top-[100px] z-20 -mx-6 mb-6 flex flex-wrap gap-6 items-start border-b bg-gray-50 px-6 py-3">
         <label className="flex flex-col text-sm">
           <span className="text-gray-600 mb-1">Granularity</span>
           <select

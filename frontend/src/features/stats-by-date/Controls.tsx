@@ -16,7 +16,7 @@ export function Controls(props: {
   onSetCohort: (col: string, values: string[]) => void;
 }) {
   return (
-    <div className="flex flex-wrap gap-4 items-end mb-6">
+    <div className="flex flex-wrap gap-4 items-end">
       <label className="flex flex-col text-sm">
         <span className="text-gray-600 mb-1">Granularity</span>
         <select

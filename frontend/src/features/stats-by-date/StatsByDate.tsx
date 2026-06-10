@@ -45,18 +45,21 @@ export function StatsByDate() {
   const groups = s.config?.groups ?? [];
 
   return (
-    <div className="p-6 w-full">
-      <Controls
-        granularity={s.granularity}
-        granularities={s.config?.granularities ?? ["day"]}
-        onSetGranularity={s.setGranularity}
-        dateFrom={s.dateFrom}
-        dateTo={s.dateTo}
-        onSetDateRange={s.setDateRange}
-        groupValues={s.groupValues}
-        cohortSelection={s.cohortSelection}
-        onSetCohort={s.setCohort}
-      />
+    <div className="p-6 pt-0 w-full">
+      {/* Pinned below the sticky header + tab bar while the charts scroll underneath. */}
+      <div className="sticky top-[100px] z-20 -mx-6 mb-6 border-b bg-gray-50 px-6 py-3">
+        <Controls
+          granularity={s.granularity}
+          granularities={s.config?.granularities ?? ["day"]}
+          onSetGranularity={s.setGranularity}
+          dateFrom={s.dateFrom}
+          dateTo={s.dateTo}
+          onSetDateRange={s.setDateRange}
+          groupValues={s.groupValues}
+          cohortSelection={s.cohortSelection}
+          onSetCohort={s.setCohort}
+        />
+      </div>
 
       {s.error && <div className="mb-4 rounded bg-red-50 text-red-700 text-sm px-3 py-2">{s.error}</div>}
 
