@@ -33,16 +33,16 @@ export function buildGroupDistributionOption(stats: GroupStat[], mode: "box" | "
   const tips = stats.map(tooltipText);
   const base: EChartsOption = {
     tooltip: { trigger: "axis", formatter: (p) => tips[(Array.isArray(p) ? p[0] : p).dataIndex] ?? "" },
-    grid: { left: 84, right: 24, top: 24, bottom: 80 },
-    xAxis: { type: "category", data: categories, axisLabel: { interval: 0, fontSize: 12, lineHeight: 16 } },
+    grid: { left: 96, right: 24, top: 24, bottom: 88 },
+    xAxis: { type: "category", data: categories, axisLabel: { interval: 0, fontSize: 14, lineHeight: 18 } },
     yAxis: {
       type: "value",
       scale: true,
       name: metric,
       nameLocation: "middle",
-      nameGap: 62,
-      nameTextStyle: { fontWeight: "bold", fontSize: 13 },
-      axisLabel: { fontSize: 12 },
+      nameGap: 72,
+      nameTextStyle: { fontWeight: "bold", fontSize: 15 },
+      axisLabel: { fontSize: 14 },
     },
   };
 
@@ -55,13 +55,29 @@ export function buildGroupDistributionOption(stats: GroupStat[], mode: "box" | "
     return { ...base, series: [{ type: "boxplot", data }] };
   }
 
-  // Bar (mean) + a custom error-bar overlay for the bootstrap CI.
+  // Bar (mean) + a custom error-bar overlay for the bootstrap CI. The CI
+  // whiskers are a custom series that does NOT contribute to the axis extent,
+  // so set the y-limits explicitly from the CI bounds — otherwise an upper CI
+  // above the tallest bar gets clipped.
+  const extent = stats
+    .flatMap((s) => [s.mean, s.ci_lower, s.ci_upper])
+    .filter((v): v is number => v != null && Number.isFinite(v));
+  const lo = Math.min(0, ...extent);
+  const hi = Math.max(0, ...extent);
+  const pad = (hi - lo) * 0.05 || 1;
+  const yAxis = {
+    ...(base.yAxis as object),
+    min: lo === 0 ? 0 : Math.floor((lo - pad) * 100) / 100,
+    max: Math.ceil((hi + pad) * 100) / 100,
+  };
+
   const bars = stats.map((s) => ({
     value: s.mean,
     itemStyle: { color: colors.get(s.cohort), opacity: opacityFor(s.range_index) },
   }));
   return {
     ...base,
+    yAxis,
     series: [
       { type: "bar", data: bars },
       {

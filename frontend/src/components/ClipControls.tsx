@@ -4,7 +4,7 @@ import type { ClipOpts } from "../api/types";
 export function ClipControls(props: { clip: ClipOpts; onChange: (clip: ClipOpts) => void }) {
   const { clip } = props;
   return (
-    <label className="flex items-center gap-2 text-xs text-gray-600">
+    <label className="flex items-center gap-2 text-base text-gray-600">
       <input type="checkbox" checked={clip.enable} onChange={(e) => props.onChange({ ...clip, enable: e.target.checked })} />
       clip
       <input

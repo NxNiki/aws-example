@@ -12,7 +12,7 @@ export function MetricCheckList(props: {
     props.onChange(checked ? [...new Set([...props.selected, m])] : props.selected.filter((x) => x !== m));
   };
   return (
-    <div className={`flex flex-col text-xs ${props.className ?? ""}`}>
+    <div className={`flex flex-col text-base ${props.className ?? ""}`}>
       {props.label && <span className="text-gray-500 mb-1">{props.label}</span>}
       <div className={`border rounded px-2 py-1 overflow-auto w-full ${props.maxHeightClass ?? "max-h-28"}`}>
         {props.options.map((m) => (

@@ -31,7 +31,7 @@ export function Panel(props: {
 
   return (
     <div className="border rounded p-3 mb-6">
-      <h3 className="text-sm font-semibold text-gray-700 mb-2">{group.label}</h3>
+      <h3 className="text-base font-semibold text-gray-700 mb-2">{group.label}</h3>
       <div className="flex gap-4">
         {/* Controls sidebar: combined metric/axis picker, then log scale. */}
         <div className="flex flex-col gap-3 shrink-0 w-80">
@@ -43,7 +43,7 @@ export function Panel(props: {
             maxHeightClass="max-h-96"
           />
 
-          <label className="flex items-center gap-2 text-xs text-gray-600">
+          <label className="flex items-center gap-2 text-base text-gray-600">
             <input type="checkbox" checked={panel.log} onChange={(e) => props.onSetLog(e.target.checked)} />
             log scale
             <input

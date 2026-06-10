@@ -10,9 +10,9 @@ export interface RangeState {
 export function DateRanges(props: { ranges: RangeState[]; onChange: (index: number, range: RangeState) => void }) {
   return (
     <div className="flex flex-col gap-2">
-      <span className="text-gray-600 text-sm">Date ranges (compare up to 3)</span>
+      <span className="text-gray-600 text-base">Date ranges (compare up to 3)</span>
       {props.ranges.map((r, i) => (
-        <div key={i} className="flex items-center gap-2 text-sm">
+        <div key={i} className="flex items-center gap-2 text-base">
           <label className="flex items-center gap-1">
             <input type="checkbox" checked={r.show} onChange={(e) => props.onChange(i, { ...r, show: e.target.checked })} />
             <span className="text-gray-500">R{i + 1}</span>

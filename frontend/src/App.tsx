@@ -34,9 +34,9 @@ export default function App() {
       <header className="sticky top-0 z-40 flex h-14 items-center justify-between border-b bg-white px-4">
         <div className="flex items-center gap-3">
           <h1 className="text-lg font-semibold">Game Stats Dashboard</h1>
-          {loading && <span className="text-xs text-blue-600 animate-pulse">● {status ?? "loading…"}</span>}
+          {loading && <span className="text-base text-blue-600 animate-pulse">● {status ?? "loading…"}</span>}
         </div>
-        <div className="flex items-center gap-4 text-sm">
+        <div className="flex items-center gap-4 text-base">
           <label className="flex items-center gap-2">
             <span className="text-gray-600">Game config</span>
             <select
@@ -99,7 +99,7 @@ export default function App() {
             key={t.id}
             onClick={() => setTab(t.id)}
             className={
-              "flex items-center px-4 text-sm border-b-2 " +
+              "flex items-center px-4 text-base border-b-2 " +
               (tab === t.id
                 ? "border-blue-600 text-blue-600 font-semibold"
                 : "border-transparent text-gray-500 hover:text-gray-700")

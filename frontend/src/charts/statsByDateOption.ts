@@ -146,20 +146,22 @@ export function buildStatsByDateOption(series: Series[], opts: BuildOpts): EChar
     }
   }
 
+  // Anchor the axis title toward the plot (left axis → extends right, right
+  // axis → extends left) so long metric names aren't clipped at the canvas edge.
   const mkYAxis = (metrics: string[], position: "left" | "right") => ({
     type: "value" as const,
     name: metrics.join(", "),
     position,
     scale: true,
-    nameTextStyle: { fontSize: 12 },
-    axisLabel: { formatter: axisLabelFormatter(log, threshold), fontSize: 12 },
+    nameTextStyle: { fontSize: 14, align: position },
+    axisLabel: { formatter: axisLabelFormatter(log, threshold), fontSize: 14 },
   });
 
   return {
     tooltip: { trigger: "axis" },
-    legend: { type: "scroll", bottom: 0, data: legendNames },
-    grid: { left: 64, right: 64, top: 24, bottom: 56 },
-    xAxis: { type: "time", axisLabel: { fontSize: 12 } },
+    legend: { type: "scroll", bottom: 0, data: legendNames, textStyle: { fontSize: 13 } },
+    grid: { left: 80, right: 80, top: 44, bottom: 56 },
+    xAxis: { type: "time", axisLabel: { fontSize: 14 } },
     yAxis: [mkYAxis(leftMetrics, "left"), mkYAxis(rightMetrics, "right")],
     series: echSeries,
   };

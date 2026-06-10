@@ -17,7 +17,7 @@ export function Controls(props: {
 }) {
   return (
     <div className="flex flex-wrap gap-4 items-end">
-      <label className="flex flex-col text-sm">
+      <label className="flex flex-col text-base">
         <span className="text-gray-600 mb-1">Granularity</span>
         <select
           className="border rounded px-3 py-2"
@@ -32,7 +32,7 @@ export function Controls(props: {
         </select>
       </label>
 
-      <label className="flex flex-col text-sm">
+      <label className="flex flex-col text-base">
         <span className="text-gray-600 mb-1">From</span>
         <input
           type="date"
@@ -41,7 +41,7 @@ export function Controls(props: {
           onChange={(e) => props.onSetDateRange(e.target.value || null, props.dateTo)}
         />
       </label>
-      <label className="flex flex-col text-sm">
+      <label className="flex flex-col text-base">
         <span className="text-gray-600 mb-1">To</span>
         <input
           type="date"

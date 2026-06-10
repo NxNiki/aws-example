@@ -14,20 +14,24 @@ export function buildHistogramOption(series: HistogramSeries[], opts: { logY: bo
 
   return {
     tooltip: { trigger: "item" },
-    legend: { type: "scroll", bottom: 0 },
-    grid: { left: 56, right: 24, top: 24, bottom: 48 },
+    legend: { type: "scroll", bottom: 0, textStyle: { fontSize: 13 } },
+    grid: { left: 76, right: 24, top: 24, bottom: 48 },
     xAxis: {
       type: "value",
       scale: true,
       name: series[0]?.metric ?? "",
-      nameTextStyle: { fontSize: 12 },
-      axisLabel: { fontSize: 11 },
+      nameTextStyle: { fontSize: 14 },
+      axisLabel: { fontSize: 13 },
     },
     yAxis: {
       type: opts.logY ? "log" : "value",
+      // Rotated axis label at the middle of the axis (not perched on top of the
+      // figure, where it crowded the per-metric title above the chart).
       name: opts.normalize ? "density" : "count",
-      nameTextStyle: { fontSize: 12 },
-      axisLabel: { fontSize: 11 },
+      nameLocation: "middle",
+      nameGap: 52,
+      nameTextStyle: { fontSize: 14 },
+      axisLabel: { fontSize: 13 },
     },
     series: series.map((s) => {
       const color = colorForIndex(Math.max(0, cohorts.indexOf(s.cohort)));

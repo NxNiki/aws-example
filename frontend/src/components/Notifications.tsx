@@ -25,7 +25,7 @@ export function Notifications() {
         <div
           key={n.id}
           onClick={() => dismiss(n.id)}
-          className={`cursor-pointer rounded shadow-lg px-4 py-2 text-sm text-white break-words ${KIND_BG[n.kind] ?? "bg-gray-800"}`}
+          className={`cursor-pointer rounded shadow-lg px-4 py-2 text-base text-white break-words ${KIND_BG[n.kind] ?? "bg-gray-800"}`}
           title="click to dismiss"
         >
           {n.message}

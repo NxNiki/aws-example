@@ -23,10 +23,10 @@ export function AxisMetricPicker(props: {
 
   // Fixed-width checkbox columns keep them vertically aligned; the name column
   // (minmax(0,1fr)) absorbs the rest and allows truncation.
-  const row = "grid grid-cols-[minmax(0,1fr)_2.25rem_2.25rem] items-center gap-x-1";
+  const row = "grid grid-cols-[minmax(0,1fr)_3rem_3rem] items-center gap-x-1";
 
   return (
-    <div className={`flex flex-col text-xs ${props.className ?? ""}`}>
+    <div className={`flex flex-col text-base ${props.className ?? ""}`}>
       <div className={`${row} text-gray-500 mb-1 pr-2`}>
         <span>Metric</span>
         <span className="text-center">Left</span>

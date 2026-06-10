@@ -17,7 +17,7 @@ export function CohortSelect(props: {
       {Object.entries(props.groupValues).map(([col, values]) => {
         const selected = props.selection[col] ?? [];
         return (
-          <div key={col} className="flex flex-col text-sm">
+          <div key={col} className="flex flex-col text-base">
             <span className="text-gray-600 mb-1">{col} (cohorts)</span>
             {/* Fixed 4 rows; extra values flow into new columns (scroll if wide). */}
             <div className="border rounded px-3 py-2 overflow-x-auto">

@@ -19,7 +19,7 @@ export function buildScatterOption(
 
   return {
     tooltip: { trigger: "item" },
-    legend: opts.showLegend ? { type: "scroll", top: 8, right: 8 } : undefined,
+    legend: opts.showLegend ? { type: "scroll", top: 8, right: 8, textStyle: { fontSize: 13 } } : undefined,
     // Square GRID (plot rectangle) via explicit equal width/height — not derived
     // from margins — so the data area is exactly square. Sizes assume the fixed
     // square canvas DeepDive passes (260 compact / 600 full); left/top leave room
@@ -35,8 +35,8 @@ export function buildScatterOption(
       name: opts.xLabel ?? "",
       nameLocation: "middle",
       nameGap: 26,
-      nameTextStyle: { fontSize: compact ? 10 : 12 },
-      axisLabel: { fontSize: compact ? 9 : 11 },
+      nameTextStyle: { fontSize: compact ? 11 : 14 },
+      axisLabel: { fontSize: compact ? 10 : 13 },
     },
     yAxis: {
       type: opts.logY ? "log" : "value",
@@ -44,8 +44,8 @@ export function buildScatterOption(
       name: opts.yLabel ?? "",
       nameLocation: "middle",
       nameGap: compact ? 32 : 48,
-      nameTextStyle: { fontSize: compact ? 10 : 12 },
-      axisLabel: { fontSize: compact ? 9 : 11 },
+      nameTextStyle: { fontSize: compact ? 11 : 14 },
+      axisLabel: { fontSize: compact ? 10 : 13 },
     },
     series: scatters.map((s) => ({
       type: "scatter",
