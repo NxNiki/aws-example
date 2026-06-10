@@ -209,6 +209,142 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/report/description": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Description
+         * @description API endpoint: POST /api/report/description — proxy to ai_agent.
+         *
+         *     Forwards {data_summary, existing_description, references, language, model}
+         *     to the agent service's LLM generation; in prod the ALB routes /api/report/*
+         *     here, so this hop keeps the contract while the LLM stays on ai_agent.
+         */
+        post: operations["post_description_api_report_description_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/report/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Export
+         * @description API endpoint: POST /api/report/export — write the report to Confluence.
+         *
+         *     Receives client-rendered ECharts PNGs (base64) + descriptions + summary +
+         *     references; attaches the images and idempotently replaces the
+         *     "Dashboard Report" region of the target page (content above it preserved).
+         */
+        post: operations["post_export_api_report_export_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/report/references": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post References
+         * @description API endpoint: POST /api/report/references — fetch reference pages.
+         *
+         *     Resolves Confluence URLs to {url, title, text} (cached server-side) for the
+         *     reference pills and as LLM context; non-Confluence URLs come back with empty
+         *     text but are still listed.
+         */
+        post: operations["post_references_api_report_references_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/report/spec/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Spec
+         * @description API endpoint: GET /api/report/spec/{name} — load one saved report spec.
+         */
+        get: operations["get_spec_api_report_spec__name__get"];
+        /**
+         * Put Spec
+         * @description API endpoint: PUT /api/report/spec/{name} — save a report spec to S3.
+         */
+        put: operations["put_spec_api_report_spec__name__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/report/specs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Specs
+         * @description API endpoint: GET /api/report/specs — list saved report specs.
+         */
+        get: operations["get_specs_api_report_specs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/report/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Summary
+         * @description API endpoint: POST /api/report/summary — proxy to ai_agent (see /description).
+         */
+        post: operations["post_summary_api_report_summary_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/views": {
         parameters: {
             query?: never;
@@ -330,12 +466,115 @@ export interface components {
             /** Min */
             min: string | null;
         };
+        /** DateFigureSource */
+        DateFigureSource: {
+            /** Cohort Selection */
+            cohort_selection?: {
+                [key: string]: string[];
+            };
+            /** Config */
+            config: string;
+            /** Date From */
+            date_from?: string | null;
+            /** Date To */
+            date_to?: string | null;
+            /**
+             * Granularity
+             * @default day
+             * @enum {string}
+             */
+            granularity: "day" | "week" | "month";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "stats-by-date";
+            /** Left */
+            left?: string[];
+            /**
+             * Log
+             * @default false
+             */
+            log: boolean;
+            /** Panel Id */
+            panel_id: string;
+            /** Right */
+            right?: string[];
+            /**
+             * Threshold
+             * @default 10
+             */
+            threshold: number;
+        };
         /** DateRange */
         DateRange: {
             /** End */
             end?: string | null;
             /** Start */
             start?: string | null;
+        };
+        /** DeepdiveFigureSource */
+        DeepdiveFigureSource: {
+            clip?: components["schemas"]["ClipOpts"];
+            /** Cohort Selection */
+            cohort_selection?: {
+                [key: string]: string[];
+            };
+            /** Config */
+            config: string;
+            /**
+             * Granularity
+             * @default day
+             * @enum {string}
+             */
+            granularity: "day" | "week" | "month";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "stats-deepdive";
+            /**
+             * Log Y
+             * @default false
+             */
+            log_y: boolean;
+            /** Metrics */
+            metrics?: string[];
+            /**
+             * Mode
+             * @default histogram
+             * @enum {string}
+             */
+            mode: "histogram" | "heatmap" | "scatter";
+            /**
+             * Nbins
+             * @default 50
+             */
+            nbins: number;
+            /**
+             * Normalize
+             * @default false
+             */
+            normalize: boolean;
+            /** Outliers Std */
+            outliers_std?: number | null;
+            /**
+             * Panel
+             * @enum {string}
+             */
+            panel: "derived" | "user";
+            /** Ranges */
+            ranges?: components["schemas"]["DateRange"][];
+            /**
+             * Scatter Log X
+             * @default false
+             */
+            scatter_log_x: boolean;
+            /**
+             * Scatter Log Y
+             * @default false
+             */
+            scatter_log_y: boolean;
         };
         /** DeepdiveMetrics */
         DeepdiveMetrics: {
@@ -421,6 +660,55 @@ export interface components {
             /** Scatters */
             scatters: components["schemas"]["ScatterSeries"][];
         };
+        /** ExportFigure */
+        ExportFigure: {
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Png Base64 */
+            png_base64: string;
+            /**
+             * Title
+             * @default
+             */
+            title: string;
+        };
+        /** ExportRequest */
+        ExportRequest: {
+            /** Confluence Url */
+            confluence_url: string;
+            /** Figures */
+            figures: components["schemas"]["ExportFigure"][];
+            /** References */
+            references?: components["schemas"]["ReportReference"][];
+            /**
+             * Summary
+             * @default
+             */
+            summary: string;
+        };
+        /** ExportResponse */
+        ExportResponse: {
+            /** Figures Uploaded */
+            figures_uploaded: number;
+            /** Page Id */
+            page_id: string;
+            /** Page Version */
+            page_version: number | null;
+        };
+        /** GenerateProxyResponse */
+        GenerateProxyResponse: {
+            /** Elapsed Ms */
+            elapsed_ms: number;
+            /** Message */
+            message: string;
+            /** Status */
+            status: string;
+            /** Text */
+            text: string;
+        };
         /** GroupDistributionRequest */
         GroupDistributionRequest: {
             clip?: components["schemas"]["ClipOpts"];
@@ -456,6 +744,39 @@ export interface components {
             missing: boolean;
             /** Stats */
             stats: components["schemas"]["GroupStat"][];
+        };
+        /** GroupFigureSource */
+        GroupFigureSource: {
+            clip?: components["schemas"]["ClipOpts"];
+            /** Cohort Selection */
+            cohort_selection?: {
+                [key: string]: string[];
+            };
+            /** Config */
+            config: string;
+            /**
+             * Granularity
+             * @default day
+             * @enum {string}
+             */
+            granularity: "day" | "week" | "month";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "stats-by-group";
+            /** Metric */
+            metric: string;
+            /**
+             * Mode
+             * @default bar
+             * @enum {string}
+             */
+            mode: "box" | "bar";
+            /** Panel Id */
+            panel_id: string;
+            /** Ranges */
+            ranges?: components["schemas"]["DateRange"][];
         };
         /** GroupStat */
         GroupStat: {
@@ -528,6 +849,173 @@ export interface components {
             label: string;
             /** Metrics */
             metrics: string[];
+        };
+        /** ReferencesRequest */
+        ReferencesRequest: {
+            /** Urls */
+            urls: string[];
+        };
+        /** ReferencesResponse */
+        ReferencesResponse: {
+            /** References */
+            references: {
+                [key: string]: string;
+            }[];
+        };
+        /** ReportFigure */
+        "ReportFigure-Input": {
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Id */
+            id: string;
+            /**
+             * Inherit Period
+             * @default true
+             */
+            inherit_period: boolean;
+            /** Source */
+            source: components["schemas"]["DateFigureSource"] | components["schemas"]["GroupFigureSource"] | components["schemas"]["DeepdiveFigureSource"];
+            /**
+             * Title
+             * @default
+             */
+            title: string;
+        };
+        /** ReportFigure */
+        "ReportFigure-Output": {
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Id */
+            id: string;
+            /**
+             * Inherit Period
+             * @default true
+             */
+            inherit_period: boolean;
+            /** Source */
+            source: components["schemas"]["DateFigureSource"] | components["schemas"]["GroupFigureSource"] | components["schemas"]["DeepdiveFigureSource"];
+            /**
+             * Title
+             * @default
+             */
+            title: string;
+        };
+        /** ReportReference */
+        ReportReference: {
+            /** Error */
+            error?: string | null;
+            /** Id */
+            id: string;
+            /** Status */
+            status?: string | null;
+            /** Text */
+            text?: string | null;
+            /** Title */
+            title?: string | null;
+            /** Url */
+            url: string;
+        };
+        /** ReportSpec */
+        "ReportSpec-Input": {
+            /**
+             * Confluence Url
+             * @default
+             */
+            confluence_url: string;
+            /** Figures */
+            figures?: components["schemas"]["ReportFigure-Input"][];
+            /**
+             * Id
+             * @default
+             */
+            id: string;
+            /**
+             * Language
+             * @default en
+             * @enum {string}
+             */
+            language: "en" | "zh-Hans" | "zh-Hant";
+            period?: components["schemas"]["DateRange"] | null;
+            /** References */
+            references?: components["schemas"]["ReportReference"][];
+            /**
+             * Summary
+             * @default
+             */
+            summary: string;
+            /**
+             * Title
+             * @default
+             */
+            title: string;
+            /**
+             * Version
+             * @default 1
+             */
+            version: number;
+            /** View */
+            view?: string | null;
+        };
+        /** ReportSpec */
+        "ReportSpec-Output": {
+            /**
+             * Confluence Url
+             * @default
+             */
+            confluence_url: string;
+            /** Figures */
+            figures?: components["schemas"]["ReportFigure-Output"][];
+            /**
+             * Id
+             * @default
+             */
+            id: string;
+            /**
+             * Language
+             * @default en
+             * @enum {string}
+             */
+            language: "en" | "zh-Hans" | "zh-Hant";
+            period?: components["schemas"]["DateRange"] | null;
+            /** References */
+            references?: components["schemas"]["ReportReference"][];
+            /**
+             * Summary
+             * @default
+             */
+            summary: string;
+            /**
+             * Title
+             * @default
+             */
+            title: string;
+            /**
+             * Version
+             * @default 1
+             */
+            version: number;
+            /** View */
+            view?: string | null;
+        };
+        /** ReportSpecList */
+        ReportSpecList: {
+            /** Specs */
+            specs: string[];
+        };
+        /** ReportSpecSaveResult */
+        ReportSpecSaveResult: {
+            /** Name */
+            name: string;
+            /** Path */
+            path: string;
+            /** Specs */
+            specs: string[];
         };
         /** ScatterSeries */
         ScatterSeries: {
@@ -897,6 +1385,228 @@ export interface operations {
                     "application/json": {
                         [key: string]: string;
                     };
+                };
+            };
+        };
+    };
+    post_description_api_report_description_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GenerateProxyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_export_api_report_export_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_references_api_report_references_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReferencesRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReferencesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_spec_api_report_spec__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportSpec-Output"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_spec_api_report_spec__name__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReportSpec-Input"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportSpecSaveResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_specs_api_report_specs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportSpecList"];
+                };
+            };
+        };
+    };
+    post_summary_api_report_summary_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GenerateProxyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from dashboard_api.routers import data, health, views
+from dashboard_api.routers import data, health, report, views
 from dashboard_api.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -33,6 +33,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(data.router)
     app.include_router(views.router)
+    app.include_router(report.router)
 
     dist = Path(settings.frontend_dist)
     if dist.is_dir():

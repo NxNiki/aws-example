@@ -229,6 +229,96 @@
         "title": "DateBounds",
         "type": "object"
       },
+      "DateFigureSource": {
+        "properties": {
+          "cohort_selection": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Cohort Selection",
+            "type": "object"
+          },
+          "config": {
+            "title": "Config",
+            "type": "string"
+          },
+          "date_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date From"
+          },
+          "date_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date To"
+          },
+          "granularity": {
+            "default": "day",
+            "enum": [
+              "day",
+              "week",
+              "month"
+            ],
+            "title": "Granularity",
+            "type": "string"
+          },
+          "kind": {
+            "const": "stats-by-date",
+            "default": "stats-by-date",
+            "title": "Kind",
+            "type": "string"
+          },
+          "left": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Left",
+            "type": "array"
+          },
+          "log": {
+            "default": false,
+            "title": "Log",
+            "type": "boolean"
+          },
+          "panel_id": {
+            "title": "Panel Id",
+            "type": "string"
+          },
+          "right": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Right",
+            "type": "array"
+          },
+          "threshold": {
+            "default": 10,
+            "title": "Threshold",
+            "type": "number"
+          }
+        },
+        "required": [
+          "config",
+          "panel_id"
+        ],
+        "title": "DateFigureSource",
+        "type": "object"
+      },
       "DateRange": {
         "properties": {
           "end": {
@@ -255,6 +345,117 @@
           }
         },
         "title": "DateRange",
+        "type": "object"
+      },
+      "DeepdiveFigureSource": {
+        "properties": {
+          "clip": {
+            "$ref": "#/components/schemas/ClipOpts"
+          },
+          "cohort_selection": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Cohort Selection",
+            "type": "object"
+          },
+          "config": {
+            "title": "Config",
+            "type": "string"
+          },
+          "granularity": {
+            "default": "day",
+            "enum": [
+              "day",
+              "week",
+              "month"
+            ],
+            "title": "Granularity",
+            "type": "string"
+          },
+          "kind": {
+            "const": "stats-deepdive",
+            "default": "stats-deepdive",
+            "title": "Kind",
+            "type": "string"
+          },
+          "log_y": {
+            "default": false,
+            "title": "Log Y",
+            "type": "boolean"
+          },
+          "metrics": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Metrics",
+            "type": "array"
+          },
+          "mode": {
+            "default": "histogram",
+            "enum": [
+              "histogram",
+              "heatmap",
+              "scatter"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "nbins": {
+            "default": 50,
+            "title": "Nbins",
+            "type": "integer"
+          },
+          "normalize": {
+            "default": false,
+            "title": "Normalize",
+            "type": "boolean"
+          },
+          "outliers_std": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outliers Std"
+          },
+          "panel": {
+            "enum": [
+              "derived",
+              "user"
+            ],
+            "title": "Panel",
+            "type": "string"
+          },
+          "ranges": {
+            "items": {
+              "$ref": "#/components/schemas/DateRange"
+            },
+            "title": "Ranges",
+            "type": "array"
+          },
+          "scatter_log_x": {
+            "default": false,
+            "title": "Scatter Log X",
+            "type": "boolean"
+          },
+          "scatter_log_y": {
+            "default": false,
+            "title": "Scatter Log Y",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "config",
+          "panel"
+        ],
+        "title": "DeepdiveFigureSource",
         "type": "object"
       },
       "DeepdiveMetrics": {
@@ -464,6 +665,122 @@
         "title": "DeepdiveResponse",
         "type": "object"
       },
+      "ExportFigure": {
+        "properties": {
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "png_base64": {
+            "title": "Png Base64",
+            "type": "string"
+          },
+          "title": {
+            "default": "",
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "png_base64"
+        ],
+        "title": "ExportFigure",
+        "type": "object"
+      },
+      "ExportRequest": {
+        "properties": {
+          "confluence_url": {
+            "title": "Confluence Url",
+            "type": "string"
+          },
+          "figures": {
+            "items": {
+              "$ref": "#/components/schemas/ExportFigure"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Figures",
+            "type": "array"
+          },
+          "references": {
+            "items": {
+              "$ref": "#/components/schemas/ReportReference"
+            },
+            "title": "References",
+            "type": "array"
+          },
+          "summary": {
+            "default": "",
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "confluence_url",
+          "figures"
+        ],
+        "title": "ExportRequest",
+        "type": "object"
+      },
+      "ExportResponse": {
+        "properties": {
+          "figures_uploaded": {
+            "title": "Figures Uploaded",
+            "type": "integer"
+          },
+          "page_id": {
+            "title": "Page Id",
+            "type": "string"
+          },
+          "page_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Version"
+          }
+        },
+        "required": [
+          "page_id",
+          "figures_uploaded",
+          "page_version"
+        ],
+        "title": "ExportResponse",
+        "type": "object"
+      },
+      "GenerateProxyResponse": {
+        "properties": {
+          "elapsed_ms": {
+            "title": "Elapsed Ms",
+            "type": "integer"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "status",
+          "message",
+          "elapsed_ms"
+        ],
+        "title": "GenerateProxyResponse",
+        "type": "object"
+      },
       "GroupDistributionRequest": {
         "properties": {
           "clip": {
@@ -553,6 +870,74 @@
           "missing"
         ],
         "title": "GroupDistributionResponse",
+        "type": "object"
+      },
+      "GroupFigureSource": {
+        "properties": {
+          "clip": {
+            "$ref": "#/components/schemas/ClipOpts"
+          },
+          "cohort_selection": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Cohort Selection",
+            "type": "object"
+          },
+          "config": {
+            "title": "Config",
+            "type": "string"
+          },
+          "granularity": {
+            "default": "day",
+            "enum": [
+              "day",
+              "week",
+              "month"
+            ],
+            "title": "Granularity",
+            "type": "string"
+          },
+          "kind": {
+            "const": "stats-by-group",
+            "default": "stats-by-group",
+            "title": "Kind",
+            "type": "string"
+          },
+          "metric": {
+            "title": "Metric",
+            "type": "string"
+          },
+          "mode": {
+            "default": "bar",
+            "enum": [
+              "box",
+              "bar"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "panel_id": {
+            "title": "Panel Id",
+            "type": "string"
+          },
+          "ranges": {
+            "items": {
+              "$ref": "#/components/schemas/DateRange"
+            },
+            "title": "Ranges",
+            "type": "array"
+          }
+        },
+        "required": [
+          "config",
+          "panel_id",
+          "metric"
+        ],
+        "title": "GroupFigureSource",
         "type": "object"
       },
       "GroupStat": {
@@ -806,6 +1191,399 @@
           "metrics"
         ],
         "title": "MetricGroup",
+        "type": "object"
+      },
+      "ReferencesRequest": {
+        "properties": {
+          "urls": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Urls",
+            "type": "array"
+          }
+        },
+        "required": [
+          "urls"
+        ],
+        "title": "ReferencesRequest",
+        "type": "object"
+      },
+      "ReferencesResponse": {
+        "properties": {
+          "references": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "title": "References",
+            "type": "array"
+          }
+        },
+        "required": [
+          "references"
+        ],
+        "title": "ReferencesResponse",
+        "type": "object"
+      },
+      "ReportFigure-Input": {
+        "properties": {
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "inherit_period": {
+            "default": true,
+            "title": "Inherit Period",
+            "type": "boolean"
+          },
+          "source": {
+            "discriminator": {
+              "mapping": {
+                "stats-by-date": "#/components/schemas/DateFigureSource",
+                "stats-by-group": "#/components/schemas/GroupFigureSource",
+                "stats-deepdive": "#/components/schemas/DeepdiveFigureSource"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DateFigureSource"
+              },
+              {
+                "$ref": "#/components/schemas/GroupFigureSource"
+              },
+              {
+                "$ref": "#/components/schemas/DeepdiveFigureSource"
+              }
+            ],
+            "title": "Source"
+          },
+          "title": {
+            "default": "",
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "source"
+        ],
+        "title": "ReportFigure",
+        "type": "object"
+      },
+      "ReportFigure-Output": {
+        "properties": {
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "inherit_period": {
+            "default": true,
+            "title": "Inherit Period",
+            "type": "boolean"
+          },
+          "source": {
+            "discriminator": {
+              "mapping": {
+                "stats-by-date": "#/components/schemas/DateFigureSource",
+                "stats-by-group": "#/components/schemas/GroupFigureSource",
+                "stats-deepdive": "#/components/schemas/DeepdiveFigureSource"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DateFigureSource"
+              },
+              {
+                "$ref": "#/components/schemas/GroupFigureSource"
+              },
+              {
+                "$ref": "#/components/schemas/DeepdiveFigureSource"
+              }
+            ],
+            "title": "Source"
+          },
+          "title": {
+            "default": "",
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "source"
+        ],
+        "title": "ReportFigure",
+        "type": "object"
+      },
+      "ReportReference": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "url"
+        ],
+        "title": "ReportReference",
+        "type": "object"
+      },
+      "ReportSpec-Input": {
+        "properties": {
+          "confluence_url": {
+            "default": "",
+            "title": "Confluence Url",
+            "type": "string"
+          },
+          "figures": {
+            "items": {
+              "$ref": "#/components/schemas/ReportFigure-Input"
+            },
+            "title": "Figures",
+            "type": "array"
+          },
+          "id": {
+            "default": "",
+            "title": "Id",
+            "type": "string"
+          },
+          "language": {
+            "default": "en",
+            "enum": [
+              "en",
+              "zh-Hans",
+              "zh-Hant"
+            ],
+            "title": "Language",
+            "type": "string"
+          },
+          "period": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DateRange"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "references": {
+            "items": {
+              "$ref": "#/components/schemas/ReportReference"
+            },
+            "title": "References",
+            "type": "array"
+          },
+          "summary": {
+            "default": "",
+            "title": "Summary",
+            "type": "string"
+          },
+          "title": {
+            "default": "",
+            "title": "Title",
+            "type": "string"
+          },
+          "version": {
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
+          },
+          "view": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "View"
+          }
+        },
+        "title": "ReportSpec",
+        "type": "object"
+      },
+      "ReportSpec-Output": {
+        "properties": {
+          "confluence_url": {
+            "default": "",
+            "title": "Confluence Url",
+            "type": "string"
+          },
+          "figures": {
+            "items": {
+              "$ref": "#/components/schemas/ReportFigure-Output"
+            },
+            "title": "Figures",
+            "type": "array"
+          },
+          "id": {
+            "default": "",
+            "title": "Id",
+            "type": "string"
+          },
+          "language": {
+            "default": "en",
+            "enum": [
+              "en",
+              "zh-Hans",
+              "zh-Hant"
+            ],
+            "title": "Language",
+            "type": "string"
+          },
+          "period": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DateRange"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "references": {
+            "items": {
+              "$ref": "#/components/schemas/ReportReference"
+            },
+            "title": "References",
+            "type": "array"
+          },
+          "summary": {
+            "default": "",
+            "title": "Summary",
+            "type": "string"
+          },
+          "title": {
+            "default": "",
+            "title": "Title",
+            "type": "string"
+          },
+          "version": {
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
+          },
+          "view": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "View"
+          }
+        },
+        "title": "ReportSpec",
+        "type": "object"
+      },
+      "ReportSpecList": {
+        "properties": {
+          "specs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Specs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "specs"
+        ],
+        "title": "ReportSpecList",
+        "type": "object"
+      },
+      "ReportSpecSaveResult": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "specs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Specs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "path",
+          "specs"
+        ],
+        "title": "ReportSpecSaveResult",
         "type": "object"
       },
       "ScatterSeries": {
@@ -1515,6 +2293,294 @@
         "summary": "Health",
         "tags": [
           "health"
+        ]
+      }
+    },
+    "/api/report/description": {
+      "post": {
+        "description": "API endpoint: POST /api/report/description \u2014 proxy to ai_agent.\n\nForwards {data_summary, existing_description, references, language, model}\nto the agent service's LLM generation; in prod the ALB routes /api/report/*\nhere, so this hop keeps the contract while the LLM stays on ai_agent.",
+        "operationId": "post_description_api_report_description_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerateProxyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Description",
+        "tags": [
+          "report"
+        ]
+      }
+    },
+    "/api/report/export": {
+      "post": {
+        "description": "API endpoint: POST /api/report/export \u2014 write the report to Confluence.\n\nReceives client-rendered ECharts PNGs (base64) + descriptions + summary +\nreferences; attaches the images and idempotently replaces the\n\"Dashboard Report\" region of the target page (content above it preserved).",
+        "operationId": "post_export_api_report_export_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Export",
+        "tags": [
+          "report"
+        ]
+      }
+    },
+    "/api/report/references": {
+      "post": {
+        "description": "API endpoint: POST /api/report/references \u2014 fetch reference pages.\n\nResolves Confluence URLs to {url, title, text} (cached server-side) for the\nreference pills and as LLM context; non-Confluence URLs come back with empty\ntext but are still listed.",
+        "operationId": "post_references_api_report_references_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReferencesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReferencesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post References",
+        "tags": [
+          "report"
+        ]
+      }
+    },
+    "/api/report/spec/{name}": {
+      "get": {
+        "description": "API endpoint: GET /api/report/spec/{name} \u2014 load one saved report spec.",
+        "operationId": "get_spec_api_report_spec__name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportSpec-Output"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Spec",
+        "tags": [
+          "report"
+        ]
+      },
+      "put": {
+        "description": "API endpoint: PUT /api/report/spec/{name} \u2014 save a report spec to S3.",
+        "operationId": "put_spec_api_report_spec__name__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportSpec-Input"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportSpecSaveResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Spec",
+        "tags": [
+          "report"
+        ]
+      }
+    },
+    "/api/report/specs": {
+      "get": {
+        "description": "API endpoint: GET /api/report/specs \u2014 list saved report specs.",
+        "operationId": "get_specs_api_report_specs_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportSpecList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Specs",
+        "tags": [
+          "report"
+        ]
+      }
+    },
+    "/api/report/summary": {
+      "post": {
+        "description": "API endpoint: POST /api/report/summary \u2014 proxy to ai_agent (see /description).",
+        "operationId": "post_summary_api_report_summary_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerateProxyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Summary",
+        "tags": [
+          "report"
         ]
       }
     },

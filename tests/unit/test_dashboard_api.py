@@ -31,3 +31,9 @@ def test_openapi_exposes_data_routes():
     assert "/api/data/deepdive-metrics" in paths
     assert "/api/views" in paths
     assert "/api/views/{name}" in paths
+    assert "/api/report/specs" in paths
+    assert "/api/report/spec/{name}" in paths
+    assert "/api/report/references" in paths
+    assert "/api/report/description" in paths
+    assert "/api/report/summary" in paths
+    assert "/api/report/export" in paths
