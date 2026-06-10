@@ -19,7 +19,6 @@ the doc.
 from __future__ import annotations
 
 import logging
-import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -29,15 +28,18 @@ import plotly.graph_objects as go
 
 from dashboards import confluence_client
 
-logger = logging.getLogger(__name__)
-
-
-REPORT_HEADING_TEXT = "Dashboard Report"
-
-_REPORT_HEADING_RE = re.compile(
-    rf"<h1[^>]*>\s*{re.escape(REPORT_HEADING_TEXT)}\s*</h1>",
-    re.IGNORECASE,
+# The storage-format HTML builders live in export_html (plotly-free) so the
+# React dashboard's export endpoint (dashboard_api) can share them. Aliased to
+# the original private names to keep this module's call sites unchanged.
+from dashboards.report_agent.export_html import REPORT_HEADING_TEXT  # noqa: F401  (re-exported)
+from dashboards.report_agent.export_html import (
+    build_references_block as _build_references_block,
+    build_report_section as _build_report_section,
+    figure_block_html as _figure_block_html,
+    splice_report_into_storage as _splice_report_into_storage,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -46,83 +48,6 @@ class ExportResult:
     figures_uploaded: int
     page_version: Optional[int]
     references_listed: int = 0
-
-
-def _escape_html(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
-def _wrap_paragraphs(text: str) -> str:
-    """Convert plain-text prose to a sequence of ``<p>`` blocks for Confluence storage."""
-    if not text or not text.strip():
-        return ""
-    paragraphs = re.split(r"\n\s*\n", text.strip())
-    parts: List[str] = []
-    for para in paragraphs:
-        clean = _escape_html(para.strip()).replace("\n", "<br/>")
-        if clean:
-            parts.append(f"<p>{clean}</p>")
-    return "".join(parts)
-
-
-def _figure_block_html(*, index: int, filename: str, description: str) -> str:
-    body = _wrap_paragraphs(description) or "<p><em>(no description)</em></p>"
-    return (
-        f"<h2>Figure {index}</h2>"
-        f'<ac:image ac:width="800"><ri:attachment ri:filename="{filename}"/></ac:image>'
-        f"{body}"
-    )
-
-
-def _build_references_block(references: List[Dict[str, str]]) -> str:
-    """``<h2>References</h2>`` followed by a bulleted list of titled links.
-
-    Empty list → empty string (caller skips the section). External URLs
-    that didn't fetch are still listed so the reader can follow up.
-    """
-    if not references:
-        return ""
-    items: List[str] = []
-    for ref in references:
-        url = (ref.get("url") or "").strip()
-        if not url:
-            continue
-        title = (ref.get("title") or url).strip()
-        items.append(f'<li><a href="{_escape_html(url)}">{_escape_html(title)}</a></li>')
-    if not items:
-        return ""
-    return "<h2>References</h2><ul>" + "".join(items) + "</ul>"
-
-
-def _build_report_section(
-    summary: str,
-    figure_blocks: List[str],
-    references_block: str = "",
-) -> str:
-    """Assemble the full bracketed region: heading + summary + per-figure blocks + references."""
-    parts: List[str] = [f"<h1>{REPORT_HEADING_TEXT}</h1>"]
-    if summary and summary.strip():
-        parts.append("<h2>Summary</h2>")
-        parts.append(_wrap_paragraphs(summary))
-    parts.extend(figure_blocks)
-    if references_block:
-        parts.append(references_block)
-    return "".join(parts)
-
-
-def _splice_report_into_storage(existing_storage: str, report_html: str) -> str:
-    """
-    Replace any existing ``Dashboard Report`` region with ``report_html``.
-
-    If the heading isn't present, append the region. Anything before the
-    heading (or before the appended region) stays untouched.
-    """
-    if not existing_storage:
-        return report_html
-    match = _REPORT_HEADING_RE.search(existing_storage)
-    if match:
-        return existing_storage[: match.start()] + report_html
-    return existing_storage + report_html
 
 
 def _figure_to_png(figure: go.Figure, *, width: int, height: int, scale: float = 2.0) -> bytes:
