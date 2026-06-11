@@ -89,9 +89,13 @@ interface ReportState {
   saveSpec: (name: string) => Promise<void>;
   loadSpec: (name: string) => Promise<void>;
 
-  // Apply a hand- or LLM-edited spec JSON: parse, normalize, re-render all
-  // figures from it. Returns an error message, or null on success.
+  // Apply a hand- or LLM-edited spec JSON: parse, normalize, re-render the
+  // changed figures from it. Returns an error message, or null on success.
   applySpecJson: (json: string) => Promise<string | null>;
+  // Same, from an already-parsed spec object (the agent's figure actions edit
+  // the spec and route through here so normalize + render + the staleness
+  // rule apply uniformly).
+  applySpec: (parsed: unknown) => Promise<string | null>;
 
   exportReport: () => Promise<void>;
 }
@@ -357,15 +361,33 @@ export const useReportStore = create<ReportState>((set, get) => ({
     } catch (e) {
       return `Invalid JSON: ${e instanceof Error ? e.message : e}`;
     }
+    return get().applySpec(parsed);
+  },
+
+  applySpec: async (parsed) => {
     const bad = ((parsed as Partial<ReportSpec>)?.figures ?? []).find(
       (f) => !f?.source || !["stats-by-date", "stats-by-group", "stats-deepdive"].includes(f.source.kind),
     );
     if (bad) return `Figure "${bad?.title || bad?.id || "?"}" has a missing/unknown source.kind`;
     const prev = get().spec;
+    const prevData = get().figureData;
     const spec = normalizeSpec(parsed);
-    set({ spec, figureData: {} });
+
+    // Keep fetched data for figures whose effective recipe didn't change; only
+    // changed/new/errored ones re-fetch (a one-figure patch costs one fetch).
+    const kept: Record<string, FigureData> = {};
+    const toRender: string[] = [];
+    for (const f of spec.figures) {
+      const old = prev.figures.find((o) => o.id === f.id);
+      const unchanged =
+        old && JSON.stringify(effectiveSource(f, spec.period)) === JSON.stringify(effectiveSource(old, prev.period));
+      const data = prevData[f.id];
+      if (unchanged && data && !data.error && !data.loading) kept[f.id] = data;
+      else toRender.push(f.id);
+    }
+    set({ spec, figureData: kept });
     if (spec.view && spec.view !== prev.view) await useDashboardStore.getState().loadViewByName(spec.view);
-    await get().renderAll();
+    await Promise.all(toRender.map((id) => get().renderFigure(id)));
 
     // "Data changed, prose didn't → refresh the prose": auto-regenerate the
     // description of figures whose EFFECTIVE source changed in this edit,

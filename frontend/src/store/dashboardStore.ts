@@ -2,6 +2,8 @@ import { create } from "zustand";
 import { api } from "../api/client";
 import { streamAgentChat } from "../api/agentStream";
 import { dispatchAction } from "./actionDispatcher";
+// Cycle-safe: reportStore only references this store inside function bodies.
+import { useReportStore } from "./reportStore";
 import type { RangeState } from "../components/DateRanges";
 import type {
   ClipOpts,
@@ -808,13 +810,35 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
 
     // Snapshot of what's on screen, so the agent can drive it (see _ACTION_GUIDE
     // on the backend). Panel entries pair available metrics with the selection.
+    // The report section comes BEFORE panels: the backend truncates the tail of
+    // this JSON, and panels carry the bulk. description/summary are previews —
+    // skills.md forbids the model from copying them back into patches.
     const s = get();
+    const rep = useReportStore.getState();
+    if (rep.specs.length === 0) void rep.loadSpecs(); // names ready by the next turn even if the Report tab was never opened
     const dashboard_state = {
       configs: s.configs.map((c) => c.id),
       configId: s.configId,
       activeTab: s.activeTab,
       granularities: s.config?.granularities ?? [],
       dateWindow: { from: s.controls.date.dateFrom, to: s.controls.date.dateTo, granularity: s.controls.date.granularity },
+      report: {
+        specs: rep.specs,
+        title: rep.spec.title,
+        language: rep.spec.language,
+        period: rep.spec.period,
+        view: rep.spec.view,
+        summary_preview: rep.spec.summary.slice(0, 200),
+        figures: rep.spec.figures.map((f) => ({
+          id: f.id,
+          title: f.title,
+          inherit_period: f.inherit_period,
+          description_preview: f.description.slice(0, 150),
+          render_error: rep.figureData[f.id]?.error ?? null,
+          source: f.source,
+        })),
+        reference_urls: rep.spec.references.map((r) => r.url),
+      },
       panels: (s.config?.groups ?? []).map((g) => ({
         id: g.id,
         label: g.label,
