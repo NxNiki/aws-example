@@ -23,6 +23,7 @@ import polars as pl
 from dashboard_api.services.common import (
     SeriesError,
     clean_floats,
+    collect_window,
     iter_cohorts,
     load_lazy,
     stats_by_date_cfg,
@@ -81,7 +82,9 @@ def load_series(
     aggregate_from_rows = bool(sd.get("aggregate_stats_from_user_rows", False))
     load_end = end_dt + timedelta(days=RETENTION_LOAD_EXTRA_DAYS) if aggregate_from_rows else end_dt
 
-    df_raw = lf.filter((pl.col(date_col) >= start_dt) & (pl.col(date_col) <= load_end)).collect()
+    # Shared + single-flight: the per-panel requests of one tab render all hit
+    # the same window and must not each collect their own copy (OOM).
+    df_raw = collect_window(cfg, granularity, lf, date_col, start_dt, load_end)
     if df_raw.is_empty():
         return date_col, [], list(metrics)
 

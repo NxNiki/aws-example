@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
+import time
+from collections import OrderedDict
 from datetime import date, datetime
 from typing import Any, Iterator, Optional, cast
 
@@ -18,6 +21,35 @@ import polars as pl
 from bituslabs_ds.s3_utils import read_files
 
 logger = logging.getLogger(__name__)
+
+# Collected-window cache, single-flight. The Stats-by-Date tab fires one
+# /api/data/series request PER PANEL in parallel, all for the same
+# (config, granularity, window) — without this, each request collects its own
+# multi-hundred-MB copy of the user rows simultaneously, which OOM-killed a
+# 2 GB task in production. One lock serializes collects (a concurrent miss
+# waits, then hits the cache); a small LRU with a TTL bounds steady-state
+# memory and picks up the daily ETL refresh without a restart.
+_WINDOW_CACHE_MAX = 3
+_WINDOW_CACHE_TTL_S = 900
+_window_cache: "OrderedDict[tuple[Any, ...], tuple[float, pl.DataFrame]]" = OrderedDict()
+_window_lock = threading.Lock()
+
+
+def collect_window(
+    cfg: dict[str, Any], granularity: str, lf: pl.LazyFrame, date_col: str, start_dt: Any, end_dt: Any
+) -> pl.DataFrame:
+    """Collect ``lf`` filtered to [start_dt, end_dt], shared across requests."""
+    key = (cfg.get("id"), granularity, str(start_dt), str(end_dt))
+    with _window_lock:
+        hit = _window_cache.get(key)
+        if hit and time.monotonic() - hit[0] < _WINDOW_CACHE_TTL_S:
+            _window_cache.move_to_end(key)
+            return hit[1]
+        df = lf.filter((pl.col(date_col) >= start_dt) & (pl.col(date_col) <= end_dt)).collect()
+        _window_cache[key] = (time.monotonic(), df)
+        while len(_window_cache) > _WINDOW_CACHE_MAX:
+            _window_cache.popitem(last=False)
+        return df
 
 
 class SeriesError(Exception):
