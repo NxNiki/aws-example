@@ -79,8 +79,12 @@ REGION = "us-west-2"
 SERVICE_NAME = "dashboard-api"
 IMAGE_NAME = "bituslabs-ds-dashboard-api"
 DASHBOARD_API_PORT = 8050
-TASK_CPU = 512  # 0.5 vCPU — light: data fetches + static assets, LLM-free
-TASK_MEMORY = 1024  # 1 GB
+# Match the legacy Dash task's footprint: the per-config parquet caches live
+# in-process and fishhunter alone OOM-killed a 1 GB task (both uvicorn workers
+# died on the first /api/data/series). One worker, 2 GB — each extra worker
+# duplicates the whole cache.
+TASK_CPU = 1024
+TASK_MEMORY = 2048
 DESIRED_COUNT = 1  # always-on; scale-to-zero policies wait for metric parity
 
 # The production ALB the legacy Dash app currently owns; at cutover its
@@ -235,6 +239,23 @@ def main() -> None:
             {
                 "name": SERVICE_NAME,
                 "image": ecr_uri,
+                # Override the image's --workers 2: a second worker doubles the
+                # in-process parquet cache memory (see TASK_MEMORY note). Sync
+                # endpoints run in Starlette's threadpool, so one worker still
+                # serves concurrent requests.
+                "command": [
+                    "uvicorn",
+                    "dashboard_api.app:app",
+                    "--host",
+                    "0.0.0.0",
+                    "--port",
+                    str(DASHBOARD_API_PORT),
+                    "--workers",
+                    "1",
+                    "--timeout-keep-alive",
+                    "310",
+                    "--access-log",
+                ],
                 "portMappings": [{"containerPort": DASHBOARD_API_PORT, "protocol": "tcp"}],
                 "logConfiguration": {
                     "logDriver": "awslogs",
