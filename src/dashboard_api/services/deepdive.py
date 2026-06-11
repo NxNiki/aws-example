@@ -21,7 +21,7 @@ from typing import Any, Optional
 import numpy as np
 import polars as pl
 
-from dashboard_api.services.common import SeriesError, iter_cohorts, load_lazy, stats_by_date_cfg
+from dashboard_api.services.common import SeriesError, collect_window, iter_cohorts, load_lazy, stats_by_date_cfg
 from dashboards.user_stats_aggregates import RETENTION_LOAD_EXTRA_DAYS, DataMetrics
 
 logger = logging.getLogger(__name__)
@@ -138,7 +138,9 @@ def load_deepdive(
     aggregate_from_rows = bool(sd.get("aggregate_stats_from_user_rows", False))
     load_end = overall_end + timedelta(days=RETENTION_LOAD_EXTRA_DAYS) if aggregate_from_rows else overall_end
 
-    df_raw = lf.filter((pl.col(date_col) >= overall_start) & (pl.col(date_col) <= load_end)).collect()
+    # Shared + single-flight with the other tabs' requests (see common.py —
+    # parallel per-panel collects OOM-killed the task in production).
+    df_raw = collect_window(cfg, granularity, lf, date_col, overall_start, load_end)
     if df_raw.is_empty():
         return [], [], [], list(metrics)
 
