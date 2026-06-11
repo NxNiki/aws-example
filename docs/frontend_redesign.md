@@ -1,6 +1,6 @@
 # Frontend Redesign: Agent-Native Dashboard (React + Vite + TypeScript + ECharts)
 
-**Status:** Proposed
+**Status:** In progress — Phases 0–4 (incl. 4b agent skills) implemented on `feat/frontend-redesign-react`; Phase 5 cutover pending
 **Author:** michael.niu@bituslabs.com
 **Date:** 2026-06-03
 **Scope:** Replace the monolithic Dash app (`src/dashboards/game_stats_monitor.py`, ~7,200 LOC) with a React + Vite + TypeScript SPA (charts via **Apache ECharts**), backed by a consolidated FastAPI backend that **returns data, not figures**. The goal is a dashboard where LLM/agentic capabilities are first-class — the agent can answer data questions by driving the UI, and can regenerate whole reports from a declarative spec on a one-line prompt.
@@ -157,7 +157,7 @@ Single-sourced: FastAPI Pydantic models → OpenAPI → generated TS client. Bot
 | `/api/report/description` | POST | Generate/regenerate one figure description (existing logic, ported) | optional SSE |
 | `/api/report/summary` | POST | Generate the overall summary (existing) | optional SSE |
 | `/api/report/export` | POST | Export to Confluence — client posts the ECharts-rendered PNG(s) + text; server embeds (no server-side chart rendering) | — |
-| `/api/skills` | GET | List agent skills parsed from `skills.md` (name, description, params) | — |
+| `/api/agent/skills` | GET | The `skills.md` registry, raw markdown. *(Implemented on `ai_agent`, not dashboard_api as originally drawn: the consumer is the agent at prompt-build time, in-process, and `/api/agent/*` already routes there.)* | — |
 | `/api/metadata/columns`, `/columns/{name}`, `/groups` | GET | Column/group metadata (existing) | — |
 | `/api/health` | GET | Health check | — |
 
@@ -224,12 +224,13 @@ Because the spec fully determines the report, reports are reproducible, diffable
 
 ### Agent skills (`skills.md`)
 
-A markdown registry of reusable agent procedures — names, descriptions, parameters, and the actions/endpoints each composes. The agent loads it (via `/api/skills`) and selects a skill from the user's prompt. Initial skills:
+A markdown registry of reusable agent procedures — names, descriptions, parameters, and the actions/endpoints each composes. *(As built: `src/ai_agent/skills.md`, merged into the agent's system prompt in-process and served raw at `GET /api/agent/skills`; mtime-cached, so edits apply on the next chat turn.)* Skills:
 
-- **`update_report(period)`** — load a Report Spec, shift its period, regenerate (use case #1).
-- **`show_metric(metric, configs[], breakdown?)`** — for each game config: `load_config` → choose tab (`stats-by-date` or `stats-by-group` based on `breakdown`, asking a `clarify` question if unspecified) → `set_metrics` → render (use case #2 + #3).
-- **`compare_periods(metric, periodA, periodB)`** — fetch both, render a comparison.
-- **`explain_chart(panel, mode)`** — back the per-chart contextual actions (use case #4).
+- **`update_report(period)`** — ✅ load a Report Spec, shift its period, regenerate (use case #1). Built on the report action tools: `set_report_period`, `regenerate_report`, `load/save_report_spec`, `add/patch/remove_report_figure` (targeted patches, not full-spec replacement — the state snapshot truncates prose to previews, so a round-tripped spec would lose text).
+- **`show_metric(metric, configs[], breakdown?)`** — ✅ for each game config: `load_config` → choose tab (`stats-by-date` or `stats-by-group` based on `breakdown`, asking a `clarify` question if unspecified) → `set_metrics` → render (use case #2 + #3).
+- **`edit_report_figure`** — ✅ patch one figure's title/description/inherit_period/source from chat.
+- **`compare_periods(metric, periodA, periodB)`** — fetch both, render a comparison. *(Not yet built — needs a comparison surface.)*
+- **`explain_chart(panel, mode)`** — back the per-chart contextual actions (use case #4). *(Not yet built.)*
 
 Keeping skills in markdown (rather than hard-coded) means non-engineers can read/extend the agent's repertoire, and the AI agent can `grep` them the same way it greps the codebase today.
 
@@ -286,19 +287,20 @@ The legacy Dash app keeps serving production until each tab reaches parity.
 - ✅ ECS deploy wiring: `infra/dashboard_api/deploy_ecs.py` + `build.sh` (push to ECR). The service gets its **own ALB origin** (SPA at `/`, data API at `/api/data/*`) rather than a `/v2` path on the live dashboard ALB — see §12. Shared ALB/ECS plumbing was extracted into `infra/shared/ecs_helpers.py` and all four deploy scripts (dashboard, ai_agent, rag_service, dashboard_api) now compose it.
 - Note: `/api/data/series` uses a placeholder per-date aggregation; user-row enrichment parity is Phase 1. Scale-to-zero for `dashboard_api` is deferred until the `UserRequestCount` middleware lands (the service runs one always-on task for now).
 
-**Phase 1 — First read-only tab (1–2 wks)**
-- Port **Stats by Date** end-to-end: `/api/data/series` → ECharts. Establishes the data contract and the chart `option`-builder pattern. Validate parity side by side.
+**Phase 1 — First read-only tab (1–2 wks)** — *complete*
+- ✅ **Stats by Date** end-to-end: `/api/data/series` → ECharts, full parity validated side by side, plus saved views, sticky/responsive layout, per-panel incremental loading with request cancellation.
 
-**Phase 2 — Remaining stats tabs (2–3 wks)**
-- Port Stats by Group, Stats Deepdive, Stats by Bet, Weekly Report; extract shared chart/control components.
+**Phase 2 — Remaining stats tabs (2–3 wks)** — *complete (Stats by Group + Deep Dive)*
+- ✅ Stats by Group (box/bar, 3-range comparison) and Stats Deepdive (histogram/heatmap/scatter); shared chart/control components extracted. Stats by Bet and Weekly Report deferred to post-cutover.
 
-**Phase 3 — Agent-native chat + actions (2 wks)**
-- `/api/agent/chat` SSE; chat panel with token streaming + tool-call rendering (reuse the `ai_agent` LangGraph core).
-- Introduce the **action dispatcher** and core `DashboardAction`s (`load_config`, `navigate_tab`, `set_metrics`, `set_date_range`) + **clarify** chips → delivers use cases #2 and #3.
+**Phase 3 — Agent-native chat + actions (2 wks)** — *complete*
+- ✅ `/api/agent/chat` SSE; docked resizable chat panel with token streaming + tool-call rendering (reusing the `ai_agent` LangGraph core).
+- ✅ Action dispatcher with `load_config`, `navigate_tab`, `set_metrics`, `set_date_range`, `set_granularity` + **clarify** chips → use cases #2 and #3.
 
-**Phase 4 — Report Spec + generative authoring (2–3 wks)**
-- Define `ReportSpec` (Pydantic + TS); `/api/report/spec` CRUD to S3; `/api/report/regenerate`.
-- Port the Report tab to render from a spec; port description/summary generation and Confluence export; add `skills.md` + `/api/skills` and the `update_report`/`show_metric` skills → delivers use cases #1 and #4.
+**Phase 4 — Report Spec + generative authoring (2–3 wks)** — *complete (4a manual UI + 4b agent skills)*
+- ✅ `ReportSpec` (Pydantic + TS); `/api/report/spec/{name}` CRUD to S3 with a linked-view field (one view ↔ many reports); regeneration runs client-side from figure recipes (no `/api/report/regenerate` endpoint needed — the spec is the contract).
+- ✅ Report tab renders from the spec (directly-editable JSON with Apply & render + staleness-aware prose refresh); description/summary generation proxied dashboard_api → ai_agent; Confluence export from client-rendered PNGs.
+- ✅ `skills.md` + `GET /api/agent/skills` (on ai_agent — see §5/§6) and the `update_report`/`show_metric`/`edit_report_figure` skills via report action tools → use cases #1 and #4.
 
 **Phase 5 — Cutover (1 wk)**
 - Flip the ALB default to React; keep Dash on `/legacy` for one release. Monitor `Dashboard/UserRequestCount` parity, then decommission Dash and delete `game_stats_monitor.py`.
