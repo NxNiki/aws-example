@@ -104,6 +104,7 @@ AGENT_PORT = 8051
 AGENT_DASH_TG_NAME = "ai-chat-agent-dash-tg"
 AGENT_RULE_PRIORITY = 10
 AGENT_HEALTH_CHECK_PATH = "/health"
+STAGING_RULE_PRIORITY = 9
 
 # Legacy Dash service decommission targets.
 LEGACY_SERVICE_NAME = "game-stats-dashboard"
@@ -193,6 +194,13 @@ def main() -> None:
         deregistration_delay=TG_DEREGISTRATION_DELAY,
     )
     sg_task_id = ensure_task_security_group(ec2, vpc_id, f"{SERVICE_NAME}-task-sg", DASHBOARD_API_PORT, alb_sg_id)
+    # ECS create_service rejects a TG with no load-balancer association, but the
+    # default action must stay on Dash until the new service is healthy — so
+    # associate via a staging rule on a path no real traffic matches; it's
+    # removed after the flip.
+    staging_rule_arn = ensure_listener_rule(
+        elbv2, listener_arn, STAGING_RULE_PRIORITY, ["/_dashboard-api-staging*"], tg_arn
+    )
 
     print("\n4. Task execution role + inline policy...")
     exec_role_arn = ensure_ecs_task_execution_role(iam, account_id)
@@ -283,6 +291,10 @@ def main() -> None:
         healthy_threshold=TG_HEALTHY_THRESHOLD,
         deregistration_delay=TG_DEREGISTRATION_DELAY,
     )
+    # Rule BEFORE attach: ECS rejects a TG with no load-balancer association.
+    # Inert until the flip — neither the legacy Dash UI nor anything else sends
+    # /api/agent/* to this ALB yet.
+    ensure_listener_rule(elbv2, listener_arn, AGENT_RULE_PRIORITY, ["/api/agent/*"], agent_tg_arn)
     add_service_load_balancer(
         ecs,
         cluster=ECS_CLUSTER_NAME,
@@ -294,7 +306,6 @@ def main() -> None:
     # The agent's OWN TG checks every 300s, so this rollout takes ~10 min.
     wait_for_service_stable(ecs, ECS_CLUSTER_NAME, AGENT_SERVICE_NAME, max_attempts=90)
     wait_for_targets_healthy(elbv2, agent_tg_arn, timeout_seconds=900)
-    ensure_listener_rule(elbv2, listener_arn, AGENT_RULE_PRIORITY, ["/api/agent/*"], agent_tg_arn)
 
     if args.no_flip:
         print("\n--no-flip: staged. Legacy Dash still serves the default; flip later by re-running without it.")
@@ -302,6 +313,8 @@ def main() -> None:
 
     print("\n7. CUTOVER: listener default → dashboard-api")
     set_listener_default_tg(elbv2, listener_arn, tg_arn)
+    elbv2.delete_rule(RuleArn=staging_rule_arn)
+    print("  Removed staging rule (TG now associated via the default action)")
 
     if not args.keep_legacy:
         print("\n8. Decommission legacy Dash (alarms first — the 503 alarm would resurrect it)...")
