@@ -247,11 +247,13 @@ def _chunk_text(content: Any) -> str:
     return str(content)
 
 
-# Instructions appended (as a second system message) when the agent has the
+# Instructions merged into the system prompt when the agent has the
 # dashboard-action tools. Kept separate from the main system prompt so /api/chat
 # and Slack behavior is unchanged.
 _ACTION_GUIDE = """You are embedded in the game-stats dashboard and can OPERATE it with these tools:
-load_config, navigate_tab, set_metrics, set_date_range, set_granularity, ask_user.
+load_config, navigate_tab, set_metrics, set_date_range, set_granularity, ask_user,
+and the Report tab tools: set_report_period, regenerate_report, load_report_spec,
+save_report_spec, add_report_figure, patch_report_figure, remove_report_figure.
 
 Rules:
 - When the user asks to SEE data (a metric, a comparison, a trend), drive the
@@ -260,22 +262,64 @@ Rules:
 - Use ONLY config ids, tab names, panel ids, and metric names that appear in
   the DASHBOARD STATE below. Never invent metric names — if unsure, check the
   panels' available metrics, or use the metadata tools.
+- When the user asks to update/edit the REPORT, follow the matching skill in
+  the SKILLS playbook provided in the message context. Report figure ids, saved
+  spec names, and current sources are in the DASHBOARD STATE's report section.
 - If the request is ambiguous (which game? by date or by group? which metric
   variant?), call ask_user with 2-4 concrete options, then END your turn.
 - After dispatching actions, reply with one short sentence describing what you
   changed. Keep prose minimal when actions carry the answer.
 - For pure knowledge questions (what does a column mean, how is RTP computed),
   just answer — no dashboard actions.
-
-DASHBOARD STATE (current UI):
 """
+
+_skills_cache: tuple[float, str] = (0.0, "")
+
+
+def load_skills_markdown() -> str:
+    """Load the agent skills registry (skills.md), mtime-cached.
+
+    API endpoint: GET /api/agent/skills — multi-step procedures (update_report,
+    show_metric, edit_report_figure) injected into the agent's context and
+    served raw for introspection. Editing skills.md takes effect on the next
+    chat turn without a restart.
+    """
+    global _skills_cache
+    path = Path(__file__).resolve().parent / "skills.md"
+    try:
+        mtime = path.stat().st_mtime
+        if mtime != _skills_cache[0]:
+            _skills_cache = (mtime, path.read_text(encoding="utf-8"))
+    except OSError:
+        logger.warning("skills.md not readable at %s", path)
+        return ""
+    return _skills_cache[1]
 
 
 def _agent_context_message(dashboard_state: Dict[str, Any]) -> SystemMessage:
     state_json = json.dumps(dashboard_state or {}, default=str)
-    if len(state_json) > 8000:  # keep the prompt bounded; panels carry the bulk
-        state_json = state_json[:8000] + "…(truncated)"
-    return SystemMessage(content=_ACTION_GUIDE + state_json)
+    if len(state_json) > 12000:  # keep the prompt bounded; panels carry the bulk
+        state_json = state_json[:12000] + "…(truncated)"
+    return SystemMessage(content=f"{_ACTION_GUIDE}\n\nDASHBOARD STATE (current UI):\n{state_json}")
+
+
+def _with_skills(message: str) -> str:
+    """Prepend the skills playbook to the user turn as a labeled context block.
+
+    The skills text must NOT go into the system instruction: gemini-2.5-flash
+    deterministically returns an empty response (finish_reason STOP, zero
+    output tokens, no tool calls) when instructional skill text rides in the
+    system prompt — even at ~1.5k chars — while the same text in the human
+    message works every time. Verified empirically; same bug family as the
+    two-SystemMessage and replayed-AIMessage empties handled below.
+    """
+    skills = load_skills_markdown()
+    if not skills:
+        return message
+    return (
+        "[CONTEXT — agent skills playbook, not part of the user's message]\n"
+        f"{skills}\n[END CONTEXT]\n\nUser request: {message}"
+    )
 
 
 def create_chat_app(*, prefix: str = "") -> FastAPI:
@@ -419,7 +463,7 @@ def create_chat_app(*, prefix: str = "") -> FastAPI:
                 agent = create_agent(model_key=model_key, extra_tools=ACTION_TOOLS)
 
                 produced = False
-                messages = _merge_system(_build_messages(req.message, history))
+                messages = _merge_system(_build_messages(_with_skills(req.message), history))
                 async for frame, meaningful in run_stream(agent, messages):
                     produced = produced or meaningful
                     yield frame
@@ -434,7 +478,7 @@ def create_chat_app(*, prefix: str = "") -> FastAPI:
                         f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content']}" for m in history
                     )
                     folded = f"Previous conversation:\n{transcript}\n\nNew user message: {req.message}"
-                    messages = _merge_system(_build_messages(folded, []))
+                    messages = _merge_system(_build_messages(_with_skills(folded), []))
                     async for frame, meaningful in run_stream(agent, messages):
                         produced = produced or meaningful
                         yield frame
@@ -454,6 +498,15 @@ def create_chat_app(*, prefix: str = "") -> FastAPI:
             # no-cache + X-Accel-Buffering keep proxies from buffering the stream.
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    @app.get("/api/agent/skills")
+    async def get_agent_skills() -> Dict[str, str]:
+        """API endpoint: GET /api/agent/skills — the skills.md registry, raw.
+
+        Introspection only: the agent reads the file in-process at prompt-build
+        time; this endpoint lets the UI / operators see what the agent was given.
+        """
+        return {"markdown": load_skills_markdown()}
 
     # --- Report tab endpoints ---
     @app.post("/api/report/description", response_model=GenerateResponse)

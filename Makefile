@@ -56,7 +56,7 @@ lint:
 # legacy tree has pre-existing flake8 debt (see .flake8) and is NOT gated yet;
 # add paths here as the rewrite ports each module so the gate tightens tab by
 # tab. `make lint` above still covers the whole repo for local cleanup work.
-LINT_PATHS_NEW = src/dashboard_api tests/unit/test_dashboard_api.py
+LINT_PATHS_NEW = src/dashboard_api tests/unit/test_dashboard_api.py tests/unit/test_ai_agent_actions.py
 
 lint-new:
 	poetry run flake8 $(LINT_PATHS_NEW)

@@ -13,6 +13,7 @@ quick-reply chips and the turn ends until the user answers.
 
 from __future__ import annotations
 
+import json
 from typing import List
 
 from langchain_core.tools import tool
@@ -87,6 +88,115 @@ def ask_user(question: str, options: List[str]) -> str:
     return "Question shown to the user with quick-reply options. END your turn now and wait for the reply."
 
 
-ACTION_TOOLS = [load_config, navigate_tab, set_metrics, set_date_range, set_granularity, ask_user]
+def _validate_json_arg(arg_name: str, raw: str) -> str:
+    """Return an ERROR string for the ReAct loop if ``raw`` isn't valid JSON.
+
+    The action event is emitted to the browser at on_tool_start regardless, but
+    the browser's toast is invisible to the model — this return value is the
+    only way the agent learns its JSON was malformed and can self-correct.
+    """
+    try:
+        json.loads(raw)
+    except (json.JSONDecodeError, TypeError) as exc:
+        return f"ERROR: {arg_name} is not valid JSON ({exc}). Fix the JSON and call the tool again."
+    return ""
+
+
+@tool
+def set_report_period(date_from: str, date_to: str) -> str:
+    """Set the Report tab's report period (the date window inherited figures use).
+
+    API tool: emitted as a ``set_report_period`` action. Dates are inclusive ISO
+    strings (YYYY-MM-DD). This only updates the spec — call ``regenerate_report``
+    afterwards to re-fetch figures and refresh stale prose.
+    """
+    return f"Dashboard action dispatched: report period set to {date_from} → {date_to}."
+
+
+@tool
+def regenerate_report() -> str:
+    """Re-fetch all report figures and refresh stale descriptions + summary.
+
+    API tool: emitted as a ``regenerate_report`` action. Figures with
+    ``inherit_period`` follow the report period; descriptions the user wrote by
+    hand are never overwritten. Use after ``set_report_period`` or figure edits.
+    """
+    return "Dashboard action dispatched: report regeneration started."
+
+
+@tool
+def load_report_spec(name: str) -> str:
+    """Load a saved Report Spec (and its linked dashboard view) into the Report tab.
+
+    API tool: emitted as a ``load_report_spec`` action. ``name`` must be one of
+    the saved spec names in the DASHBOARD STATE report section.
+    """
+    return f"Dashboard action dispatched: loading report spec '{name}'."
+
+
+@tool
+def save_report_spec(name: str) -> str:
+    """Save the current Report Spec to S3 under ``name``.
+
+    API tool: emitted as a ``save_report_spec`` action. Saving OVERWRITES any
+    existing spec with the same name — only call this when the user explicitly
+    asked to save, and confirm via ``ask_user`` if the name already exists.
+    """
+    return f"Dashboard action dispatched: saving report spec '{name}'."
+
+
+@tool
+def add_report_figure(title: str, source_json: str) -> str:
+    """Add a figure to the report from a recipe.
+
+    API tool: emitted as an ``add_report_figure`` action. ``source_json`` is a
+    JSON object string — a complete figure source whose ``kind`` is one of
+    ``stats-by-date``, ``stats-by-group``, ``stats-deepdive`` (full field shapes
+    and examples are in the SKILLS section). Use config/panel/metric names from
+    the DASHBOARD STATE only.
+    """
+    err = _validate_json_arg("source_json", source_json)
+    return err or f"Dashboard action dispatched: figure '{title}' added to the report."
+
+
+@tool
+def patch_report_figure(figure_id: str, patch_json: str) -> str:
+    """Edit one report figure: title, description, inherit_period, or source.
+
+    API tool: emitted as a ``patch_report_figure`` action. ``patch_json`` is a
+    JSON object string with only the fields to change; figure fields are
+    shallow-merged but ``source``, if present, REPLACES the old source wholesale
+    — always send a complete source object. Never copy truncated
+    ``description_preview`` text from the DASHBOARD STATE into a patch.
+    """
+    err = _validate_json_arg("patch_json", patch_json)
+    return err or f"Dashboard action dispatched: figure '{figure_id}' patched."
+
+
+@tool
+def remove_report_figure(figure_id: str) -> str:
+    """Remove one figure from the report.
+
+    API tool: emitted as a ``remove_report_figure`` action. ``figure_id`` must
+    be a figure id from the DASHBOARD STATE report section.
+    """
+    return f"Dashboard action dispatched: figure '{figure_id}' removed."
+
+
+ACTION_TOOLS = [
+    load_config,
+    navigate_tab,
+    set_metrics,
+    set_date_range,
+    set_granularity,
+    ask_user,
+    set_report_period,
+    regenerate_report,
+    load_report_spec,
+    save_report_spec,
+    add_report_figure,
+    patch_report_figure,
+    remove_report_figure,
+]
 ACTION_TOOL_NAMES = {t.name for t in ACTION_TOOLS}
 CLARIFY_TOOL_NAME = ask_user.name
