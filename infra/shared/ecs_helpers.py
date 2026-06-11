@@ -452,15 +452,149 @@ def create_or_update_service(
             raise
 
 
-def wait_for_service_stable(ecs_client, cluster: str, service_name: str) -> None:
-    """Block until the service reaches a steady state (or warn after ~5 min)."""
-    print("\nWaiting for service to stabilize (up to 5 min)...")
+def wait_for_service_stable(ecs_client, cluster: str, service_name: str, *, max_attempts: int = 30) -> None:
+    """Block until the service reaches a steady state (or warn after
+    ``max_attempts`` × 10s; a target group with a slow health-check interval
+    can gate a rollout for 10+ minutes)."""
+    print(f"\nWaiting for service to stabilize (up to {max_attempts * 10 // 60} min)...")
     try:
         ecs_client.get_waiter("services_stable").wait(
             cluster=cluster,
             services=[service_name],
-            WaiterConfig={"Delay": 10, "MaxAttempts": 30},
+            WaiterConfig={"Delay": 10, "MaxAttempts": max_attempts},
         )
         print("  Service is stable")
     except Exception as e:
         print(f"\n  Warning: Service did not stabilize: {e}")
+
+
+# --- Cutover helpers (Phase 5): path routing + default flip on a shared ALB ---
+
+
+def get_http_listener_arn(elbv2_client, alb_arn: str) -> str:
+    """ARN of the ALB's single :80 HTTP listener (asserts exactly one)."""
+    listeners = [ls for ls in elbv2_client.describe_listeners(LoadBalancerArn=alb_arn)["Listeners"] if ls["Port"] == 80]
+    if len(listeners) != 1:
+        raise RuntimeError(f"Expected exactly one :80 listener on {alb_arn}, found {len(listeners)}")
+    return listeners[0]["ListenerArn"]
+
+
+def ensure_sg_ingress_from_sg(ec2_client, group_id: str, port: int, source_sg_id: str, description: str) -> None:
+    """Idempotently allow TCP ``port`` into ``group_id`` from ``source_sg_id``."""
+    try:
+        ec2_client.authorize_security_group_ingress(
+            GroupId=group_id,
+            IpPermissions=[
+                {
+                    "IpProtocol": "tcp",
+                    "FromPort": port,
+                    "ToPort": port,
+                    "UserIdGroupPairs": [{"GroupId": source_sg_id, "Description": description}],
+                }
+            ],
+        )
+        print(f"  Added ingress: {port} from {source_sg_id} into {group_id}")
+    except ClientError as e:
+        if "Duplicate" not in str(e):
+            raise
+        print(f"  Ingress {port} from {source_sg_id} already present on {group_id}")
+
+
+def ensure_task_security_group(
+    ec2_client, vpc_id: str, name: str, port: int, source_sg_id: str, *, description: str | None = None
+) -> str:
+    """Ensure a task security group admitting ``port`` from an EXISTING ALB
+    security group (unlike ``ensure_service_security_groups``, which always
+    creates a fresh ALB SG pair). Returns the group id."""
+    try:
+        sg_id = ec2_client.create_security_group(
+            GroupName=name, Description=description or f"ECS tasks for {name}", VpcId=vpc_id
+        )["GroupId"]
+        print(f"  Created task security group: {sg_id}")
+    except ClientError as e:
+        if "InvalidGroup.Duplicate" not in str(e):
+            raise
+        sg_id = ec2_client.describe_security_groups(
+            Filters=[{"Name": "vpc-id", "Values": [vpc_id]}, {"Name": "group-name", "Values": [name]}]
+        )["SecurityGroups"][0]["GroupId"]
+        print(f"  Task security group exists: {sg_id}")
+
+    ensure_sg_ingress_from_sg(ec2_client, sg_id, port, source_sg_id, "From shared ALB")
+    try:
+        ec2_client.authorize_security_group_egress(
+            GroupId=sg_id,
+            IpPermissions=[{"IpProtocol": "-1", "IpRanges": [{"CidrIp": "0.0.0.0/0", "Description": "All outbound"}]}],
+        )
+    except ClientError as e:
+        if "Duplicate" not in str(e):
+            raise
+    return sg_id
+
+
+def ensure_listener_rule(elbv2_client, listener_arn: str, priority: int, path_patterns: list[str], tg_arn: str) -> str:
+    """Ensure a path-pattern forward rule on the listener. Matched by path
+    patterns: an existing rule with the same patterns gets its action/priority
+    left alone (idempotent re-runs). Returns the rule ARN."""
+    for rule in elbv2_client.describe_rules(ListenerArn=listener_arn)["Rules"]:
+        for cond in rule.get("Conditions", []):
+            if cond.get("Field") == "path-pattern" and sorted(cond.get("Values", [])) == sorted(path_patterns):
+                print(f"  Listener rule for {path_patterns} exists: {rule['RuleArn']}")
+                return rule["RuleArn"]
+    rule_arn = elbv2_client.create_rule(
+        ListenerArn=listener_arn,
+        Priority=priority,
+        Conditions=[{"Field": "path-pattern", "Values": path_patterns}],
+        Actions=[{"Type": "forward", "TargetGroupArn": tg_arn}],
+    )["Rules"][0]["RuleArn"]
+    print(f"  Created listener rule p{priority}: {path_patterns} → {tg_arn.split('/')[-2]}")
+    return rule_arn
+
+
+def set_listener_default_tg(elbv2_client, listener_arn: str, tg_arn: str) -> None:
+    """Atomically repoint the listener's default action — the cutover flip."""
+    elbv2_client.modify_listener(
+        ListenerArn=listener_arn, DefaultActions=[{"Type": "forward", "TargetGroupArn": tg_arn}]
+    )
+    print(f"  Listener default action → {tg_arn.split('/')[-2]}")
+
+
+def add_service_load_balancer(
+    ecs_client, *, cluster: str, service_name: str, container_name: str, container_port: int, tg_arn: str
+) -> None:
+    """Attach an additional target group to a running service (multi-TG).
+
+    ``update_service`` REPLACES the whole loadBalancers list, so the existing
+    attachments are re-sent alongside the new one; the call starts a rolling
+    deployment. NOTE: ``create_or_update_service``'s create path attaches only
+    its own TG — recreating the service from scratch drops extra TGs added here.
+    """
+    svc = ecs_client.describe_services(cluster=cluster, services=[service_name])["services"][0]
+    current = svc.get("loadBalancers", [])
+    if any(lb.get("targetGroupArn") == tg_arn for lb in current):
+        print(f"  Service {service_name} already attached to {tg_arn.split('/')[-2]}")
+        return
+    ecs_client.update_service(
+        cluster=cluster,
+        service=service_name,
+        loadBalancers=current
+        + [{"targetGroupArn": tg_arn, "containerName": container_name, "containerPort": container_port}],
+    )
+    print(f"  Attached {tg_arn.split('/')[-2]} to {service_name} (rolling deployment started)")
+
+
+def wait_for_targets_healthy(elbv2_client, tg_arn: str, *, timeout_seconds: int = 600) -> None:
+    """Block until the target group reports at least one healthy target."""
+    import time
+
+    print(f"  Waiting for healthy targets in {tg_arn.split('/')[-2]} (up to {timeout_seconds // 60} min)...")
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        states = [
+            t["TargetHealth"]["State"]
+            for t in elbv2_client.describe_target_health(TargetGroupArn=tg_arn)["TargetHealthDescriptions"]
+        ]
+        if "healthy" in states:
+            print(f"  Target group healthy ({states})")
+            return
+        time.sleep(15)
+    raise RuntimeError(f"No healthy targets in {tg_arn} after {timeout_seconds}s")
