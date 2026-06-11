@@ -149,10 +149,15 @@ export function ChatPanel() {
         <div className="flex gap-2">
           <textarea
             className="max-h-28 min-h-[2.5rem] flex-1 resize-y rounded border px-2 py-1"
-            placeholder="Ask the agent…"
+            placeholder="Ask the agent… (Enter to send, Shift+Enter for newline)"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
+              // Ignore Enter while an IME composition is active (Chinese/Japanese
+              // input): that Enter commits the composition, not the message.
+              // keyCode 229 covers a Safari quirk where compositionend fires
+              // before the keydown.
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 submit();
