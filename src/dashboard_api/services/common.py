@@ -22,17 +22,29 @@ from bituslabs_ds.s3_utils import read_files
 
 logger = logging.getLogger(__name__)
 
-# Collected-window cache, single-flight. The Stats-by-Date tab fires one
-# /api/data/series request PER PANEL in parallel, all for the same
-# (config, granularity, window) — without this, each request collects its own
-# multi-hundred-MB copy of the user rows simultaneously, which OOM-killed a
-# 2 GB task in production. One lock serializes collects (a concurrent miss
-# waits, then hits the cache); a small LRU with a TTL bounds steady-state
-# memory and picks up the daily ETL refresh without a restart.
-_WINDOW_CACHE_MAX = 3
+# Collected-window cache, single-flight. Each tab fires one /api/data/*
+# request PER PANEL in parallel, all for the same (config, granularity,
+# window) — without this, each request collects its own copy of the user rows
+# simultaneously, which OOM-killed 2 GB and 4 GB tasks in production. One lock
+# serializes collects (a concurrent miss waits, then hits the cache). Eviction
+# is budgeted by ESTIMATED BYTES, not entry count: a Stats-by-Group span can be
+# months of per-user rows, and pinning a few of those by count is exactly how
+# the 4 GB task died. The newest frame always stays (it's what the in-flight
+# burst shares); a TTL picks up the daily ETL refresh without a restart.
+_WINDOW_CACHE_MAX_BYTES = 2_500_000_000
 _WINDOW_CACHE_TTL_S = 900
 _window_cache: "OrderedDict[tuple[Any, ...], tuple[float, pl.DataFrame]]" = OrderedDict()
 _window_lock = threading.Lock()
+
+
+def _evict_over_budget() -> None:
+    while len(_window_cache) > 1:
+        total = sum(df.estimated_size() for _, df in _window_cache.values())
+        if total <= _WINDOW_CACHE_MAX_BYTES:
+            return
+        key, (_, df) = next(iter(_window_cache.items()))
+        _window_cache.pop(key)
+        logger.info("window cache: evicted %s (%.0f MB) over budget", key, df.estimated_size() / 1e6)
 
 
 def collect_window(
@@ -45,10 +57,11 @@ def collect_window(
         if hit and time.monotonic() - hit[0] < _WINDOW_CACHE_TTL_S:
             _window_cache.move_to_end(key)
             return hit[1]
+        _window_cache.pop(key, None)
         df = lf.filter((pl.col(date_col) >= start_dt) & (pl.col(date_col) <= end_dt)).collect()
+        logger.info("window cache: collected %s rows=%d est=%.0f MB", key, df.height, df.estimated_size() / 1e6)
         _window_cache[key] = (time.monotonic(), df)
-        while len(_window_cache) > _WINDOW_CACHE_MAX:
-            _window_cache.popitem(last=False)
+        _evict_over_budget()
         return df
 
 

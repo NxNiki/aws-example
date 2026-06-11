@@ -71,11 +71,22 @@ def _bootstrap_ci(
     n_boot: int = 500,
     alpha: float = 0.05,
 ) -> Tuple[float, float]:
-    """Return (lower, upper) bootstrap percentile CI for the mean of ``arr``."""
+    """Return (lower, upper) bootstrap percentile CI for the mean of ``arr``.
+
+    Resamples in batches: a single-shot ``(n_boot, len(arr))`` matrix is
+    ~800 MB for a 200k-element per-user array, and several land concurrently
+    when a dashboard tab bootstraps its panels in parallel — this OOM-killed
+    the dashboard-api task in production. Batching caps the transient at
+    ~80 MB with identical statistics.
+    """
     if len(arr) < 2:
         return float("nan"), float("nan")
     rng = np.random.default_rng()
-    boot_means = rng.choice(arr, size=(n_boot, len(arr)), replace=True).mean(axis=1)
+    batch = max(1, min(n_boot, 10_000_000 // len(arr)))
+    boot_means = np.empty(n_boot)
+    for i in range(0, n_boot, batch):
+        k = min(batch, n_boot - i)
+        boot_means[i : i + k] = rng.choice(arr, size=(k, len(arr)), replace=True).mean(axis=1)
     return float(np.percentile(boot_means, 100 * alpha / 2)), float(np.percentile(boot_means, 100 * (1 - alpha / 2)))
 
 

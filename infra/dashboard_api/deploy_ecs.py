@@ -79,13 +79,14 @@ REGION = "us-west-2"
 SERVICE_NAME = "dashboard-api"
 IMAGE_NAME = "bituslabs-ds-dashboard-api"
 DASHBOARD_API_PORT = 8050
-# Sized from production OOMs: 1 GB died on the first /api/data/series, 2 GB
-# died when one tab render fired its per-panel requests in parallel (each
-# collected its own copy of the user-row window before the single-flight
-# window cache landed in services/common.py). 4 GB = window cache (≤3 frames)
-# + per-request compute headroom. One worker — more workers multiply it all.
+# Sized from production OOMs: 1 GB died on the first /api/data/series; 2 GB
+# died on parallel per-panel collects (fixed by the single-flight window cache
+# in services/common.py); 4 GB still died on Stats-by-Group spans — the
+# user-row frames are simply large. 8 GB is the 1-vCPU Fargate ceiling; the
+# window cache is additionally size-budgeted (see _WINDOW_CACHE_MAX_BYTES).
+# One worker — more workers multiply it all.
 TASK_CPU = 1024
-TASK_MEMORY = 4096
+TASK_MEMORY = 8192
 DESIRED_COUNT = 1  # always-on; scale-to-zero policies wait for metric parity
 
 # The production ALB the legacy Dash app currently owns; at cutover its
