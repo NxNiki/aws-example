@@ -14,7 +14,7 @@ over OpenAI or Gemini. It exposes two surfaces:
 Both surfaces share the same `chat()`/`achat()` core in
 `ai_agent.chat_agent`, so they have identical tool access (column
 lookup, group lookup, RAG search via `rag_service.client`, Confluence
-fetch via `dashboards.confluence_client`).
+fetch via `bituslabs_ds.confluence.client`).
 
 Deploy / build steps live in [`infra/ai_agent/README.md`](../infra/ai_agent/README.md);
 this doc focuses on architecture and the Slack-side setup.

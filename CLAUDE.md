@@ -39,7 +39,7 @@ poetry run python jobs/<script>.py
 
 **Four source packages** (all under `src/`, configured in pyproject.toml):
 - `bituslabs_ds` — Core library: ETL, S3 utilities, ML, EDA, Athena, PySpark helpers
-- `dashboards` — Dash web app (game stats, Report tab UI) + a small set of shared utilities (`confluence_client.py`, `secrets.py`, `user_stats_aggregates.py`) that the ai_agent and rag_service also import
+- `dashboards` — LEGACY Dash web app (replaced in production by dashboard_api + the React SPA; deleted after the post-cutover bake). Shared utilities formerly here now live in `bituslabs_ds` (`metrics/user_stats_aggregates.py`, `confluence/{client,export_html,references}.py`, `aws_secrets.py`); one-line shims remain at the old import paths until deletion
 - `ai_agent` — FastAPI chat service: LangChain ReAct agent, Slack bot, metadata cache, Report-tab LLM endpoints
 - `rag_service` — FastAPI retrieval microservice: Confluence loader, embeddings, Faiss/OpenSearch backed retriever
 

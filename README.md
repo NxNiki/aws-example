@@ -81,7 +81,7 @@ poetry run python jobs/cluster_analysis/cluster_analysis_pipeline.py --config_fi
 
 Examples at the repo root of `jobs/` and in subfolders:
 
-- `analysis_eda_*` — e.g. wucaishen, dragon/tiger, fish hunter, deepdive slot type
+- `jobs/analyses/analysis_eda_*` — one-off EDA (wucaishen, dragon/tiger, fish hunter, deepdive slot type)
 - `jobs/ss01_wucaishen/analysis_eda_correlation.py` — correlation EDA
 - `jobs/deep_dive/eda_bet_pattern.py` — bet-pattern EDA
 
