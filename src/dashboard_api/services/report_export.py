@@ -17,8 +17,8 @@ import time
 import uuid
 from typing import Any, Optional
 
-from dashboards import confluence_client
-from dashboards.report_agent.export_html import (
+from bituslabs_ds.confluence import client as confluence_client
+from bituslabs_ds.confluence.export_html import (
     build_references_block,
     build_report_section,
     figure_block_html,

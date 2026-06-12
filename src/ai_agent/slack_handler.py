@@ -9,7 +9,7 @@ is already in a thread, the reply joins that thread.
 
 Configuration
 -------------
-Two secrets are required (read via ``dashboards.aws_secrets.get_secret``,
+Two secrets are required (read via ``bituslabs_ds.aws_secrets.get_secret``,
 which falls back to AWS Secrets Manager):
 
 * ``SLACK_BOT_TOKEN``      — xoxb-...  (Bot User OAuth Token)
@@ -37,7 +37,7 @@ import re
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional
 
-from dashboards.aws_secrets import get_secret
+from bituslabs_ds.aws_secrets import get_secret
 
 logger = logging.getLogger(__name__)
 

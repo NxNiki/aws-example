@@ -17,8 +17,8 @@ from typing import Any, Optional
 import numpy as np
 import polars as pl
 
+from bituslabs_ds.metrics.user_stats_aggregates import RETENTION_LOAD_EXTRA_DAYS, DataMetrics, _bootstrap_ci
 from dashboard_api.services.common import SeriesError, collect_window, iter_cohorts, load_lazy, stats_by_date_cfg
-from dashboards.user_stats_aggregates import RETENTION_LOAD_EXTRA_DAYS, DataMetrics, _bootstrap_ci
 
 logger = logging.getLogger(__name__)
 

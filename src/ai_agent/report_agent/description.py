@@ -242,7 +242,7 @@ def _format_column_definitions_block(data_blob: str) -> Optional[str]:
 def _format_references_block(refs: List[Dict[str, str]]) -> Optional[str]:
     """Concatenate fetched references into the ``# Reference materials`` block.
 
-    Inlined here (rather than imported from ``dashboards.report_agent.references``)
+    Inlined here (rather than imported from ``bituslabs_ds.confluence.references``)
     so this module is self-contained — the ai_agent image only needs to
     COPY this file, not the broader ``references.py`` / ``confluence_client.py``
     chain that handles fetching.

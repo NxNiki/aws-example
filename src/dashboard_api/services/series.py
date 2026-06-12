@@ -20,6 +20,7 @@ from typing import Any, Optional
 
 import polars as pl
 
+from bituslabs_ds.metrics.user_stats_aggregates import RETENTION_LOAD_EXTRA_DAYS, DataMetrics
 from dashboard_api.services.common import (
     SeriesError,
     clean_floats,
@@ -30,7 +31,6 @@ from dashboard_api.services.common import (
     to_iso_date,
     user_group_cols,
 )
-from dashboards.user_stats_aggregates import RETENTION_LOAD_EXTRA_DAYS, DataMetrics
 
 logger = logging.getLogger(__name__)
 

@@ -76,7 +76,7 @@ def post_references(req: ReferencesRequest) -> ReferencesResponse:
     text but are still listed.
     """
     try:
-        from dashboards.report_agent.references import load_references
+        from bituslabs_ds.confluence.references import load_references
 
         return ReferencesResponse(references=load_references(req.urls))
     except Exception as exc:

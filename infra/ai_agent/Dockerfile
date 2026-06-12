@@ -45,20 +45,17 @@ COPY --from=builder /app/.venv /app/.venv
 # Layout:
 #   src/ai_agent/  — chat_agent, chat_api, slack_handler, metadata_builder,
 #                    report_agent/description (this service's own modules)
-#   src/dashboards/ — only the shared/auxiliary files: confluence_client +
-#                    secrets (also used by rag_service), user_stats_aggregates
-#                    + game_stats_monitor (data-processing functions the agent
-#                    answers questions about), and dashboard_config*.yaml
-#                    (so the agent can answer data-location questions).
+#   src/dashboards/ — only game_stats_monitor (source the agent reads via
+#                    codebase_tools, never imported) and dashboard_config*.yaml
+#                    (so the agent can answer data-location questions). The
+#                    shared modules (confluence client, secrets, DataMetrics)
+#                    moved into bituslabs_ds and ride that COPY.
 #   src/rag_service/ — thin HTTP client only; no OpenSearch/Faiss/embeddings
 #                    (search_confluence_rag would fail with "RAG service
 #                    client is not installed" without these two files).
 COPY src/bituslabs_ds ./src/bituslabs_ds
 COPY src/ai_agent ./src/ai_agent
 COPY src/dashboards/__init__.py               ./src/dashboards/__init__.py
-COPY src/dashboards/confluence_client.py      ./src/dashboards/confluence_client.py
-COPY src/dashboards/aws_secrets.py            ./src/dashboards/aws_secrets.py
-COPY src/dashboards/user_stats_aggregates.py  ./src/dashboards/user_stats_aggregates.py
 COPY src/dashboards/game_stats_monitor.py     ./src/dashboards/game_stats_monitor.py
 COPY src/dashboards/dashboard_config*.yaml    ./src/dashboards/
 COPY src/rag_service/__init__.py              ./src/rag_service/__init__.py

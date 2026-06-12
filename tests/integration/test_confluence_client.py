@@ -32,7 +32,7 @@ skipif_no_confluence = pytest.mark.skipif(
 
 @skipif_no_confluence
 def test_list_spaces_returns_list() -> None:
-    from dashboards.confluence_client import list_spaces
+    from bituslabs_ds.confluence.client import list_spaces
 
     spaces = list_spaces()
     assert isinstance(spaces, list)
@@ -42,7 +42,7 @@ def test_list_spaces_returns_list() -> None:
 
 @skipif_no_confluence
 def test_search_pages_smoke() -> None:
-    from dashboards.confluence_client import search_pages
+    from bituslabs_ds.confluence.client import search_pages
 
     pages = search_pages("the", max_results=2)
     assert isinstance(pages, list)
@@ -53,7 +53,7 @@ def test_search_pages_smoke() -> None:
 @skipif_no_confluence
 def test_get_page_content_roundtrip() -> None:
     """Fetch a page by search, then load full body by id."""
-    from dashboards.confluence_client import get_page_content, search_pages
+    from bituslabs_ds.confluence.client import get_page_content, search_pages
 
     pages = search_pages("a", max_results=1)
     if not pages:
