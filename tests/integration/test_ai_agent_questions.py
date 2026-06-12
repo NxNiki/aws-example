@@ -96,12 +96,12 @@ def _tool_names_called(messages: List[Any]) -> List[str]:
 
 def _resolve_dashboard_config(entry: Dict[str, Any]) -> Any:
     """Convert the optional ``dashboard_config`` filename to an absolute
-    path under ``src/dashboards/``. Returns ``None`` when unset."""
+    path under ``configs/dashboard/``. Returns ``None`` when unset."""
     name = entry.get("dashboard_config")
     if not name:
         return None
     repo_root = Path(__file__).resolve().parents[2]
-    return repo_root / "src" / "dashboards" / name
+    return repo_root / "configs" / "dashboard" / name
 
 
 _CASES = _load_cases()

@@ -8,8 +8,8 @@ from pathlib import Path
 
 
 def _default_config_dir() -> str:
-    # src/dashboard_api/settings.py -> src/dashboards
-    return str(Path(__file__).resolve().parent.parent / "dashboards")
+    # src/dashboard_api/settings.py -> repo_root/configs/dashboard
+    return str(Path(__file__).resolve().parents[2] / "configs" / "dashboard")
 
 
 def _default_frontend_dist() -> str:

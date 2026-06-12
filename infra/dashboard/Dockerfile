@@ -49,7 +49,8 @@ COPY src/dashboards ./src/dashboards
 # Run dashboard on 0.0.0.0 so it's reachable from outside the container
 # Port 8050 is Dash's default
 # Debug off in production Docker image
-ENV DASHBOARD_CONFIG_DIR=/app/src/dashboards \
+COPY configs/dashboard ./configs/dashboard
+ENV DASHBOARD_CONFIG_DIR=/app/configs/dashboard \
     DASHBOARD_DEBUG=false
 EXPOSE 8050
 

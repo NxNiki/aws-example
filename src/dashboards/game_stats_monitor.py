@@ -7187,7 +7187,8 @@ class GameStatsDashboard:
 #   • --timeout 300 gives heavy computations 5 min before the worker is killed and replaced,
 #     preventing indefinite hangs without killing short requests unnecessarily.
 setup_logging(f"{LOCAL_ROOT}/jobs/log", log_filename=os.path.splitext(os.path.basename(__file__))[0] + ".log")
-_config_dir = os.environ.get("DASHBOARD_CONFIG_DIR", str(Path(__file__).resolve().parent))
+# YAML configs moved to repo_root/configs/dashboard; prod images set the env.
+_config_dir = os.environ.get("DASHBOARD_CONFIG_DIR", str(Path(__file__).resolve().parents[2] / "configs" / "dashboard"))
 _dashboard = GameStatsDashboard(_config_dir)
 
 # `server` is the Flask WSGI app Gunicorn binds to:

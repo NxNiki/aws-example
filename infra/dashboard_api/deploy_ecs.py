@@ -221,7 +221,7 @@ def main() -> None:
         agent_api_url = f"http://{agent_albs[0]['DNSName']}"
         print(f"  Auto-detected AI agent ALB: {agent_api_url}")
     env_vars = [
-        {"name": "DASHBOARD_CONFIG_DIR", "value": "/app/src/dashboards"},
+        {"name": "DASHBOARD_CONFIG_DIR", "value": "/app/configs/dashboard"},
         {"name": "DASHBOARD_FRONTEND_DIST", "value": "/app/frontend/dist"},
         # Enables the UserRequestCount middleware (scale-to-zero idle signal).
         {"name": "DASHBOARD_SERVICE_NAME", "value": SERVICE_NAME},

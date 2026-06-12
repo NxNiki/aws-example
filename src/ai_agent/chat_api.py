@@ -215,7 +215,13 @@ class GenerateResponse(BaseModel):
 # App factory
 # ---------------------------------------------------------------------------
 
-_DASHBOARD_DIR = Path(__file__).resolve().parent
+# Where dashboard_config-*.yaml live. Env-driven (the images set
+# DASHBOARD_CONFIG_DIR); defaults to the repo's configs/dashboard for local
+# runs. Was Path(__file__).parent before, where no YAMLs ever existed — the
+# agent silently dropped every dashboard_config request.
+_DASHBOARD_DIR = Path(
+    os.environ.get("DASHBOARD_CONFIG_DIR", str(Path(__file__).resolve().parents[2] / "configs" / "dashboard"))
+)
 
 
 def _sse(event: str, data: Dict[str, Any]) -> str:

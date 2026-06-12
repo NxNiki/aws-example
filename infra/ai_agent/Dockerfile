@@ -29,7 +29,8 @@ FROM python:3.11-slim AS runtime
 ENV VIRTUAL_ENV=/app/.venv \
     PATH="/app/.venv/bin:$PATH" \
     PYTHONPATH="/app/src" \
-    LOCAL_ROOT=/app
+    LOCAL_ROOT=/app \
+    DASHBOARD_CONFIG_DIR=/app/configs/dashboard
 
 WORKDIR /app
 
@@ -57,7 +58,7 @@ COPY src/bituslabs_ds ./src/bituslabs_ds
 COPY src/ai_agent ./src/ai_agent
 COPY src/dashboards/__init__.py               ./src/dashboards/__init__.py
 COPY src/dashboards/game_stats_monitor.py     ./src/dashboards/game_stats_monitor.py
-COPY src/dashboards/dashboard_config*.yaml    ./src/dashboards/
+COPY configs/dashboard                        ./configs/dashboard
 COPY src/rag_service/__init__.py              ./src/rag_service/__init__.py
 COPY src/rag_service/client.py                ./src/rag_service/client.py
 # ETL source files — explicit list of the scripts the agent should be able to

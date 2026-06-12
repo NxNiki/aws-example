@@ -291,7 +291,7 @@ def main() -> None:
     task_role_arn = exec_role_arn  # Same role; ensure it has S3 read for dashboard data
 
     env_vars = [
-        {"name": "DASHBOARD_CONFIG_DIR", "value": "/app/src/dashboards"},
+        {"name": "DASHBOARD_CONFIG_DIR", "value": "/app/configs/dashboard"},
         {"name": "DASHBOARD_SERVICE_NAME", "value": args.service_name},
     ]
     public_url = args.public_url or f"http://{alb_dns}"
