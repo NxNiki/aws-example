@@ -14,7 +14,6 @@ const TABS = [
   { id: "stats-by-date", label: "Stats by Date" },
   { id: "stats-by-group", label: "Stats by Group" },
   { id: "stats-deepdive", label: "Deep Dive" },
-  { id: "weekly-report", label: "Weekly Report" },
   { id: "report", label: "Report" },
 ] as const;
 
@@ -137,10 +136,6 @@ export default function App() {
       {tab === "stats-by-group" && <StatsByGroup />}
       {tab === "stats-deepdive" && <DeepDive />}
       {tab === "report" && <ReportTab />}
-      {tab === "weekly-report" && (
-        <div className="p-10 text-center text-gray-400">“Weekly Report” — coming in a later phase.</div>
-      )}
-
       <ChatPanel />
       <Notifications />
     </div>

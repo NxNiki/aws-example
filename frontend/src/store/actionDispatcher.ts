@@ -23,7 +23,7 @@ export type DashboardAction =
   | { type: "patch_report_figure"; figure_id: string; patch_json: string }
   | { type: "remove_report_figure"; figure_id: string };
 
-const TABS: DashboardTab[] = ["stats-by-date", "stats-by-group", "stats-deepdive", "weekly-report", "report"];
+const TABS: DashboardTab[] = ["stats-by-date", "stats-by-group", "stats-deepdive", "report"];
 const GRANULARITIES = ["day", "week", "month"] as const;
 const FIGURE_KINDS = ["stats-by-date", "stats-by-group", "stats-deepdive"];
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;

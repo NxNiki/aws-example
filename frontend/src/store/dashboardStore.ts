@@ -46,7 +46,7 @@ export type TabKey = keyof TabControls;
 
 // Top-level dashboard tabs. Lives in the store (not component state) so the
 // agent's navigate_tab action can drive it.
-export type DashboardTab = "stats-by-date" | "stats-by-group" | "stats-deepdive" | "weekly-report" | "report";
+export type DashboardTab = "stats-by-date" | "stats-by-group" | "stats-deepdive" | "report";
 
 const defaultRanges = (): RangeState[] => [
   { start: null, end: null, show: true },
