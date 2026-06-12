@@ -100,6 +100,12 @@ def main() -> int:
             True,
         ),
         (
+            "fish_hunter FTUE ETL",
+            JOBS_DIR / "fish_hunter" / "etl_game_stats_ftue.py",
+            [],
+            True,
+        ),
+        (
             "operation daily weekly report ETL",
             JOBS_DIR / "operation_daily_report" / "etl_weekly_report_all_games.py",
             [],
