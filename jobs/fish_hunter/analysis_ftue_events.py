@@ -19,12 +19,14 @@ these milestone events, measured from both account-created and first-bet time:
     - change device        (first bullet whose device_type differs from the first bullet)
     - change IP            (first bullet whose ip differs from the first bullet)
 
-The report is broken out per strategy group: each user is assigned the
-strategy_name of their first bullet (the strategy at session start), and the
-analysis is rendered separately for "All users" and for each strategy level.
+Each user is assigned the strategy_name of their first bullet (the strategy at
+session start). The report is a single interactive figure: pick the time
+origin, up to two strategy groups to compare (Group A solid, Group B dashed),
+and which metrics to draw; the summary table below rebuilds from the selection.
 """
 
 import argparse
+import json
 import os
 from datetime import datetime
 from typing import cast
@@ -32,7 +34,6 @@ from typing import cast
 import awswrangler as wr
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
 
 from bituslabs_ds.config import DEFAULT_ETL_OUTPUT, LOCAL_ROOT, setup_logging
 
@@ -167,21 +168,6 @@ def bin_event_counts(events: pd.DataFrame, origin_col: str, bin_seconds: int) ->
     return pd.concat(records, ignore_index=True)
 
 
-def _fmt_hms(seconds: float) -> str:
-    h, rem = divmod(int(seconds), 3600)
-    m, s = divmod(rem, 60)
-    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
-
-
-def _bin_label(idx: int, bin_seconds: int) -> str:
-    n_fine = _n_fine_bins(bin_seconds)
-    if idx < n_fine:
-        start = idx * bin_seconds
-        return f"{_fmt_hms(start)}–{_fmt_hms(start + bin_seconds)}"
-    day = idx - n_fine + 1
-    return f"day {day}–{day + 1}"
-
-
 def _axis_ticks(bin_seconds: int, max_index: int) -> tuple:
     """Tick positions/labels: time-of-day marks across the fine region, day marks after."""
     fine_marks = [0, 300, 900, 1800, 3600, 2 * 3600, 4 * 3600, 8 * 3600, 12 * 3600, 18 * 3600]
@@ -196,102 +182,6 @@ def _axis_ticks(bin_seconds: int, max_index: int) -> tuple:
             vals.append(n_fine + d - 1)
             texts.append(f"{d}d")
     return vals, texts
-
-
-def make_figure(binned: pd.DataFrame, origin_label: str, bin_seconds: int, default_visible: tuple) -> go.Figure:
-    fig = go.Figure()
-    for event, label in EVENT_LABELS.items():
-        sub = binned[binned["event"] == event]
-        fig.add_trace(
-            go.Scatter(
-                x=sub["bin_index"],
-                y=sub["count"],
-                mode="lines",
-                name=label,
-                line={"width": 1.5, "color": EVENT_COLORS[event]},
-                visible=event in default_visible,
-                customdata=[_bin_label(i, bin_seconds) for i in sub["bin_index"]],
-                hovertemplate="%{customdata}<br>%{y} users<extra>%{fullData.name}</extra>",
-            )
-        )
-    max_index = int(binned["bin_index"].max()) if not binned.empty else _n_fine_bins(bin_seconds)
-    tickvals, ticktext = _axis_ticks(bin_seconds, max_index)
-    fig.update_layout(
-        title=f"Event counts — time since {origin_label} ({bin_seconds}s bins in first 24h, daily bins after)",
-        xaxis_title=f"Time since {origin_label}",
-        yaxis_title="Number of users",
-        showlegend=False,
-        height=500,
-    )
-    # Default zoom to the first hour; the rangeslider below the x-axis drags
-    # the window across the full (compressed) range
-    fig.update_xaxes(
-        range=[0, 3600 // bin_seconds],
-        rangeslider={"visible": True, "thickness": 0.08},
-        tickvals=tickvals,
-        ticktext=ticktext,
-    )
-    return fig
-
-
-def figure_controls(div_id: str, default_visible: tuple) -> str:
-    """Checkbox per metric + a min/max time-range input wired to the plotly div via JS."""
-    boxes = []
-    for event, label in EVENT_LABELS.items():
-        checked = "checked" if event in default_visible else ""
-        boxes.append(
-            f'<label style="color:{EVENT_COLORS[event]}">'
-            f'<input type="checkbox" data-target="{div_id}" data-trace="{list(EVENT_LABELS).index(event)}"'
-            f" {checked}> {label}</label>"
-        )
-    range_inputs = (
-        f'<span class="range-ctl">Time range (s): '
-        f'<input type="number" id="{div_id}-min" value="0" step="30" style="width:90px"> &ndash; '
-        f'<input type="number" id="{div_id}-max" value="3600" step="30" style="width:90px"> '
-        f"<button onclick=\"applyRange('{div_id}')\">Apply</button></span>"
-    )
-    return f'<div class="fig-controls">{" ".join(boxes)} {range_inputs}</div>'
-
-
-def controls_js(bin_seconds: int) -> str:
-    """JS for the checkbox/range controls; secToIdx mirrors bin_event_counts' uneven binning."""
-    return f"""
-<script>
-function secToIdx(sec) {{
-    if (sec < {DAY_SECONDS}) return sec / {bin_seconds};
-    return {_n_fine_bins(bin_seconds)} + Math.floor(sec / {DAY_SECONDS}) - 1;
-}}
-document.querySelectorAll('.fig-controls input[type=checkbox]').forEach(function (cb) {{
-    cb.addEventListener('change', function () {{
-        Plotly.restyle(cb.dataset.target, {{visible: cb.checked}}, [parseInt(cb.dataset.trace)]);
-    }});
-}});
-function applyRange(divId) {{
-    var lo = parseFloat(document.getElementById(divId + '-min').value);
-    var hi = parseFloat(document.getElementById(divId + '-max').value);
-    Plotly.relayout(divId, {{'xaxis.range': [secToIdx(lo), secToIdx(hi)]}});
-}}
-</script>
-"""
-
-
-def summary_table(events: pd.DataFrame) -> pd.DataFrame:
-    n_users = len(events)
-    rows = []
-    for origin_col, origin_label, _ in ORIGINS:
-        for event, label in EVENT_LABELS.items():
-            offsets = (events[event] - events[origin_col]).dt.total_seconds().dropna()
-            rows.append(
-                {
-                    "origin": origin_label,
-                    "event": label,
-                    "users reached": len(offsets),
-                    "% of users": round(100 * len(offsets) / n_users, 1) if n_users else 0,
-                    "median (s)": round(offsets.median(), 1) if len(offsets) else None,
-                    "p90 (s)": round(offsets.quantile(0.9), 1) if len(offsets) else None,
-                }
-            )
-    return pd.DataFrame(rows)
 
 
 def _fmt_duration(seconds: float) -> str:
@@ -359,10 +249,180 @@ def _strategy_groups(events: pd.DataFrame) -> list:
     return groups
 
 
-def build_report(events: pd.DataFrame, bin_seconds: int, high_fish_value: float, output_path: str) -> None:
+DEFAULT_METRICS = ("first_bet", "stop_play")
+
+PLOTLY_CDN = "https://cdn.plot.ly/plotly-2.35.2.min.js"
+
+# Pure JS (no f-string) — reads the embedded CFG object and redraws one figure
+# from the selected origin / groups / metrics. secToIdx / binLabel mirror the
+# uneven binning in bin_event_counts so the range inputs and hover read in real
+# seconds while the axis stays on ordinal bin indices.
+APP_JS = """
+<script>
+const DASH = ['solid', 'dot'];
+function pad(n) { return n < 10 ? '0' + n : '' + n; }
+function fmtHms(sec) {
+    var h = Math.floor(sec / 3600), r = sec % 3600, m = Math.floor(r / 60), s = r % 60;
+    return h ? h + ':' + pad(m) + ':' + pad(s) : m + ':' + pad(s);
+}
+function binLabel(idx) {
+    if (idx < CFG.nFine) {
+        var st = idx * CFG.binSeconds;
+        return fmtHms(st) + '\\u2013' + fmtHms(st + CFG.binSeconds);
+    }
+    var d = idx - CFG.nFine + 1;
+    return 'day ' + d + '\\u2013' + (d + 1);
+}
+function secToIdx(sec) {
+    if (sec < 86400) return sec / CFG.binSeconds;
+    return CFG.nFine + Math.floor(sec / 86400) - 1;
+}
+function selOrigin() { return document.querySelector('input[name=origin]:checked').value; }
+function selGroups() {
+    var a = document.getElementById('grpA').value, b = document.getElementById('grpB').value, g = [];
+    if (a) g.push(a);
+    if (b && b !== '(none)' && b !== a) g.push(b);
+    return g;
+}
+function selMetrics() {
+    return CFG.order.filter(function (m) {
+        var cb = document.querySelector('.metric[value="' + m + '"]');
+        return cb && cb.checked;
+    });
+}
+function redraw() {
+    var origin = selOrigin(), groups = selGroups(), metrics = selMetrics(), traces = [];
+    groups.forEach(function (g, gi) {
+        metrics.forEach(function (m) {
+            var s = CFG.data[origin][g][m];
+            if (!s) return;
+            var nm = CFG.events[m] + (groups.length > 1 ? ' [' + g + ']' : '');
+            traces.push({
+                x: s.x, y: s.y, mode: 'lines', type: 'scatter', name: nm,
+                line: { color: CFG.colors[m], width: 1.5, dash: DASH[gi] || 'solid' },
+                customdata: s.x.map(binLabel),
+                hovertemplate: '%{customdata}<br>%{y} users<extra>' + nm + '</extra>'
+            });
+        });
+    });
+    var sub = ' (' + CFG.binSeconds + 's bins in first 24h, daily bins after)';
+    var layout = {
+        title: 'Event counts \\u2014 time since ' + origin + sub,
+        xaxis: {
+            title: 'Time since ' + origin, tickvals: CFG.ticks.vals, ticktext: CFG.ticks.text,
+            rangeslider: { visible: true, thickness: 0.08 }, range: CFG.defaultRange.slice()
+        },
+        yaxis: { title: 'Number of users' }, height: 540,
+        showlegend: true, legend: { orientation: 'h', y: -0.35 }
+    };
+    Plotly.react('figure', traces, layout);
+    rebuildTable(origin, groups, metrics);
+}
+function rebuildTable(origin, groups, metrics) {
+    var rows = '';
+    groups.forEach(function (g) {
+        metrics.forEach(function (m) {
+            var st = CFG.summary[origin][g][m];
+            rows += '<tr><td>' + g + '</td><td>' + CFG.events[m] + '</td><td>' + st.reached
+                + '</td><td>' + st.pct + '</td><td>' + (st.median == null ? '\\u2013' : st.median)
+                + '</td><td>' + (st.p90 == null ? '\\u2013' : st.p90) + '</td></tr>';
+        });
+    });
+    document.getElementById('tbl').innerHTML = rows || '<tr><td colspan="6">No metric selected.</td></tr>';
+}
+function applyRange() {
+    var lo = parseFloat(document.getElementById('rng-min').value);
+    var hi = parseFloat(document.getElementById('rng-max').value);
+    Plotly.relayout('figure', { 'xaxis.range': [secToIdx(lo), secToIdx(hi)] });
+}
+function resetRange() { Plotly.relayout('figure', { 'xaxis.range': CFG.defaultRange.slice() }); }
+document.querySelectorAll('input[name=origin], #grpA, #grpB, .metric').forEach(function (el) {
+    el.addEventListener('change', redraw);
+});
+redraw();
+</script>
+"""
+
+
+def _report_config(events: pd.DataFrame, bin_seconds: int) -> dict:
+    """Precompute every (origin, group, metric) series + summary stat for the client."""
     groups = _strategy_groups(events)
-    nav = " &middot; ".join(
-        f'<a href="#grp-{gi}">{label} ({len(sub)})</a>' for gi, (_, label, sub) in enumerate(groups)
+    data: dict = {}
+    summary: dict = {}
+    max_idx = _n_fine_bins(bin_seconds)
+    for origin_col, origin_label, _ in ORIGINS:
+        data[origin_label] = {}
+        summary[origin_label] = {}
+        for _, label, sub in groups:
+            binned = bin_event_counts(sub, origin_col, bin_seconds)
+            n_users = len(sub)
+            dser: dict = {}
+            sser: dict = {}
+            for event in EVENT_LABELS:
+                d = binned[binned["event"] == event]
+                xs = [int(v) for v in d["bin_index"].tolist()]
+                ys = [int(v) for v in d["count"].tolist()]
+                if xs:
+                    max_idx = max(max_idx, max(xs))
+                dser[event] = {"x": xs, "y": ys}
+                offsets = (sub[event] - sub[origin_col]).dt.total_seconds().dropna()
+                sser[event] = {
+                    "reached": int(len(offsets)),
+                    "pct": round(100 * len(offsets) / n_users, 1) if n_users else 0,
+                    "median": round(float(offsets.median()), 1) if len(offsets) else None,
+                    "p90": round(float(offsets.quantile(0.9)), 1) if len(offsets) else None,
+                }
+            data[origin_label][label] = dser
+            summary[origin_label][label] = sser
+
+    tickvals, ticktext = _axis_ticks(bin_seconds, max_idx)
+    return {
+        "events": dict(EVENT_LABELS),
+        "colors": dict(EVENT_COLORS),
+        "order": list(EVENT_LABELS),
+        "ticks": {"vals": [int(v) for v in tickvals], "text": ticktext},
+        "binSeconds": bin_seconds,
+        "nFine": _n_fine_bins(bin_seconds),
+        "defaultRange": [0, 3600 // bin_seconds],
+        "data": data,
+        "summary": summary,
+    }
+
+
+def _controls_html(group_labels: list, bin_seconds: int) -> str:
+    origin_radios = "".join(
+        f'<label><input type="radio" name="origin" value="{ol}" {"checked" if i == 0 else ""}> {ol}</label>'
+        for i, (_, ol, _) in enumerate(ORIGINS)
+    )
+    grp_a = "".join(f'<option value="{g}" {"selected" if g == "All users" else ""}>{g}</option>' for g in group_labels)
+    grp_b = '<option value="(none)" selected>(none)</option>' + "".join(
+        f'<option value="{g}">{g}</option>' for g in group_labels
+    )
+    metric_boxes = "".join(
+        f'<label style="color:{EVENT_COLORS[e]}">'
+        f'<input type="checkbox" class="metric" value="{e}" {"checked" if e in DEFAULT_METRICS else ""}> {lab}</label>'
+        for e, lab in EVENT_LABELS.items()
+    )
+    return (
+        f'<div class="ctl-row"><b>Origin:</b> {origin_radios}</div>'
+        f'<div class="ctl-row"><b>Group A (solid):</b> <select id="grpA">{grp_a}</select>'
+        f' &nbsp;&nbsp; <b>Group B (dashed):</b> <select id="grpB">{grp_b}</select></div>'
+        f'<div class="ctl-row metrics">{metric_boxes}</div>'
+        f'<div class="ctl-row"><b>Time range (s):</b> '
+        f'<input type="number" id="rng-min" value="0" step="{bin_seconds}" style="width:90px"> &ndash; '
+        f'<input type="number" id="rng-max" value="3600" step="{bin_seconds}" style="width:90px"> '
+        f'<button onclick="applyRange()">Apply</button> '
+        f'<button onclick="resetRange()">Reset</button></div>'
+    )
+
+
+def build_report(events: pd.DataFrame, bin_seconds: int, high_fish_value: float, output_path: str) -> None:
+    cfg = _report_config(events, bin_seconds)
+    group_labels = [label for _, label, _ in _strategy_groups(events)]
+
+    table_head = (
+        "<table><thead><tr><th>group</th><th>event</th><th>users reached</th>"
+        "<th>% of users</th><th>median (s)</th><th>p90 (s)</th></tr></thead><tbody id='tbl'></tbody></table>"
     )
 
     parts = [
@@ -370,33 +430,24 @@ def build_report(events: pd.DataFrame, bin_seconds: int, high_fish_value: float,
         "<style>body{font-family:sans-serif;margin:24px} table{border-collapse:collapse}",
         "td,th{padding:4px 12px;border-bottom:1px solid #ddd;text-align:right}",
         "th{background:#f5f5f5} td:nth-child(-n+2),th:nth-child(-n+2){text-align:left}",
-        ".fig-controls{margin:24px 0 4px 0} .fig-controls label{margin-right:16px;font-weight:bold}",
-        ".range-ctl{margin-left:24px;color:#333;font-weight:normal}",
-        "h2{margin-top:48px;border-top:2px solid #ccc;padding-top:16px}</style></head><body>",
+        ".ctl-row{margin:10px 0} .ctl-row.metrics label{margin-right:14px;font-weight:bold}",
+        "select{font-size:14px} h2{margin-top:40px}</style></head><body>",
         "<h1>FTUE Event Timing Report (FM01 first session)</h1>",
         f"<p>Generated {datetime.now():%Y-%m-%d %H:%M} &middot; {len(events)} users &middot; "
         f"bin = {bin_seconds}s &middot; high-value fish threshold = {high_fish_value}</p>",
         "<p>Users grouped by the strategy_name of their first bullet (session-start strategy).</p>",
-        f"<p><b>Jump to:</b> {nav}</p>",
+        "<h2>Interpretation (All users)</h2>",
+        interpretation_html(events, high_fish_value),
+        "<h2>Interactive event timing</h2>",
+        _controls_html(group_labels, bin_seconds),
+        '<div id="figure" style="height:560px"></div>',
+        "<h3>Selected metrics &mdash; summary</h3>",
+        table_head,
+        f'<script src="{PLOTLY_CDN}"></script>',
+        "<script>const CFG = " + json.dumps(cfg) + ";</script>",
+        APP_JS,
+        "</body></html>",
     ]
-
-    plotly_included = False
-    for gi, (_, label, sub) in enumerate(groups):
-        parts.append(f'<h2 id="grp-{gi}">Strategy group: {label} ({len(sub)} users)</h2>')
-        parts.append(summary_table(sub).to_html(index=False, border=0))
-        parts.append("<h3>Interpretation</h3>")
-        parts.append(interpretation_html(sub, high_fish_value))
-        for oi, (origin_col, origin_label, default_visible) in enumerate(ORIGINS):
-            binned = bin_event_counts(sub, origin_col, bin_seconds)
-            fig = make_figure(binned, origin_label, bin_seconds, default_visible)
-            div_id = f"ftue-{gi}-{oi}"
-            parts.append(figure_controls(div_id, default_visible))
-            include = "cdn" if not plotly_included else False
-            parts.append(fig.to_html(full_html=False, include_plotlyjs=include, div_id=div_id))
-            plotly_included = True
-
-    parts.append(controls_js(bin_seconds))
-    parts.append("</body></html>")
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, "w") as f:
