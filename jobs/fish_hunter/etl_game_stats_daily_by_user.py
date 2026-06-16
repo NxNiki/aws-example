@@ -20,7 +20,7 @@ from bituslabs_ds.config import (
 )
 from bituslabs_ds.etl import AggCol, DataLoader, ETLScheduler, RedshiftBackend, effective_start_date
 
-DEFAULT_DATE_START = "2025-10-20"
+DEFAULT_DATE_START = "2025-01-01"
 RETURN_USER_DAYS = 30
 RETENTION_DAYS = 3
 STREAK_SESSION_THRESH = 600
@@ -28,7 +28,23 @@ STREAK_KILL_THRESH = 3  # nearly 10% of all killing intervals.
 
 
 def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
-    """Generate SQL query. start_date filters both raw data and output for incremental lookback."""
+    """Generate the fish_hunter daily/weekly/monthly per-user game-stats SQL.
+
+    ETL job: produces the ``daily_group`` dimension plus the ``user_*`` metrics
+    in ``output_fish_hunter/{daily,weekly,monthly}_stats`` (dashboard fish_hunter
+    tab). ``start_date`` filters both raw data and output for incremental lookback.
+
+    ``daily_group`` assignment: each (user, day) is collapsed to exactly ONE
+    group, derived purely from the bullet ``strategy_name`` column. A single bet
+    under a higher-priority strategy claims the whole user-day for that group.
+    Priority high -> low:
+        1. RISK_CONTROLLED
+        2. BOOST_POOL
+        3. DYNAMIC_RTP family (DYNAMIC_RTP, DYNAMIC_RTP_V2, DYNAMIC_RTP_V3) --
+           the literal strategy_name is kept; if several coexist in a day, the
+           lexicographically smallest (MIN) wins as a deterministic tie-break.
+        4. DEFAULT_FALLBACK -- any other / NULL strategy_name.
+    """
     effective_start = effective_start_date(stats_agg_col, start_date)
 
     query = dedent(
@@ -40,7 +56,6 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
                 b.room_id,
                 b.bullet_id,
                 b.strategy_name, -- Keep Raw
-                b.partition_ab[0] as partition_val, -- Extract partition once here
                 b.event_timestamp AS bet_time,
                 b.payout,
                 b.bet,
@@ -82,12 +97,13 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
                 activity_date,
                 activity_week,
                 activity_month,
+                -- Assign the whole user-day to its highest-priority strategy_name.
+                -- A single bet in a higher tier claims the day. See generate_query docstring.
                 CASE
-                    -- Performance fix: Check Raw Strategy + Partition Value here
-                    WHEN SUM(CASE WHEN strategy_name = 'BOOST_POOL' AND partition_val = 'c2mta7-ls8vqx-HyJf5k-event' THEN 1 ELSE 0 END) > 0 THEN 'BOOST_POOL_2'
-                    WHEN SUM(CASE WHEN strategy_name = 'BOOST_POOL' THEN 1 ELSE 0 END) > 0 THEN 'BOOST_POOL'
-                    WHEN SUM(CASE WHEN strategy_name = 'DYNAMIC_RTP' THEN 1 ELSE 0 END) > 0 THEN 'DYNAMIC_RTP'
-                    WHEN SUM(CASE WHEN strategy_name = 'DYNAMIC_RTP_V2' THEN 1 ELSE 0 END) > 0 THEN 'DYNAMIC_RTP_2'
+                    WHEN MAX(CASE WHEN strategy_name = 'RISK_CONTROLLED' THEN 1 ELSE 0 END) > 0 THEN 'RISK_CONTROLLED'
+                    WHEN MAX(CASE WHEN strategy_name = 'BOOST_POOL' THEN 1 ELSE 0 END) > 0 THEN 'BOOST_POOL'
+                    WHEN MAX(CASE WHEN strategy_name IN ('DYNAMIC_RTP', 'DYNAMIC_RTP_V2', 'DYNAMIC_RTP_V3') THEN 1 ELSE 0 END) > 0
+                        THEN MIN(CASE WHEN strategy_name IN ('DYNAMIC_RTP', 'DYNAMIC_RTP_V2', 'DYNAMIC_RTP_V3') THEN strategy_name END)
                     ELSE 'DEFAULT_FALLBACK'
                 END AS daily_group,
                 LAG(activity_date) OVER (PARTITION BY user_id ORDER BY activity_date) AS bj_date_last_bet
@@ -504,6 +520,7 @@ if __name__ == "__main__":
         f"{DEFAULT_ETL_OUTPUT}/jobs/output_fish_hunter",
         lookback_days=3,
         overwrite=args.overwrite,
+        default_start_date=DEFAULT_DATE_START,
     )
 
     scheduler.run_incremental_job(
