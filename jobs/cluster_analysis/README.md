@@ -33,7 +33,7 @@ data = pipeline.load_cluster_data(reload=False)
 |------|---------|
 | Data | `load_cluster_data`, `load_attach_data`, `load_raw_data`, `preprocess_data` |
 | Features | `smart_feature_selection`, `feature_selection_by_variance`, `feature_selection_by_pca`, `get_transform_columns` |
-| Model | `create_cluster_model`, `create_clustering_pipeline`, `elbow_method`, `cluster_analysis`, `model_inference` |
+| Model | `create_cluster_model`, `create_clustering_pipeline`, `elbow_method`, `cluster_analysis`, `apply_model` |
 | Artifacts | `save_pipeline_model`, `load_trained_model`, `predict_clusters`, `attach_cluster_label`, `get_cluster_stats` |
 | Viz | `plot_pca`, `plot_radar_chart`, elbow helpers |
 
@@ -62,11 +62,14 @@ Enable or disable steps without editing code, for example:
 pipeline:
   elbow_method: true
   cluster_analysis: true
-  test_model: false
+  apply_model: false          # score another ai_group with the trained model (two-phase configs)
   attach_cluster_label: true
   get_cluster_stats: true
   upload_result_to_s3: false
 ```
+
+For two-phase configs (see below) the switches are keyed by group, e.g.
+`pipeline.default` (train) vs `pipeline.ai` (apply).
 
 ---
 
@@ -108,6 +111,44 @@ per-bet **attach (enriched)** data and written as one parquet per cluster:
 **0 groups dropped** in the label merge (`attach keys == label keys == 208,846`).
 
 ---
+
+## Two-phase clustering: train one ai_group, score another
+
+Some projects (e.g. ss03) train KMeans on one ai_group (`Default`) and then apply that
+frozen model to a second group (`AI`) for an apples-to-apples comparison. This is driven
+by a single config with a `groups:` mapping plus a `--group` switch — there are **no two
+files to keep in sync**, so `top_features` / `n_clusters` (which resolve the saved model
+path) can't drift between the train and apply runs.
+
+- `data_loader` holds the shared schema (`data_types`, `columns_to_read`, `bin_size`,
+  thresholds, `merge_on`). `groups.<name>` overrides only `prefix` / `row_filters` /
+  `local_cache` (and an `output_tag`), deep-merged over the shared block.
+- `merge_on` includes `ai_group`, so Default and AI labels coexist in the shared
+  `cluster_labels.parquet` without colliding.
+- `cluster_analysis` (training) persists `models/feature_order.json` (ordered feature
+  list) and `models/clip_bounds.json` (per-column clip bounds fitted on the training
+  group). `apply_model` reloads both — it does **not** re-run feature selection or
+  re-fit clipping on the new group — slices to `top_features`, clips with the **frozen
+  training bounds**, then `predict`s with the saved pipeline and writes labels. This keeps
+  every preprocessing step a pure transform, so AI is scored in the exact feature space
+  the model was trained on (a model trained before this sidecar existed falls back to
+  recomputing clip bounds on the new group, with a warning).
+- `attach_cluster_label` tags per-cluster output by group via `output_tag`:
+  `enriched_data_cluster_{k}.parquet` (empty tag) vs `enriched_data_ai_cluster_{k}.parquet`.
+
+```bash
+# Phase 1 — train on Default (elbow -> pick k & top_n -> fit -> attach Default)
+poetry run python jobs/cluster_analysis/cluster_analysis_pipeline.py \
+  --config_file jobs/cluster_analysis/cluster_config-ss03.yaml --group default
+
+# Phase 2 — apply the Default-trained model to AI (predict -> attach AI)
+poetry run python jobs/cluster_analysis/cluster_analysis_pipeline.py \
+  --config_file jobs/cluster_analysis/cluster_config-ss03.yaml --group ai
+```
+
+The AI run requires the Default run's artifacts (`feature_order.json`, `clip_bounds.json`,
+and the `kmeans_model_top{N}_features_k_{K}.pkl` pickle) under the shared `output_path`, so
+run phase 1 first and keep `top_features` / `n_clusters` unchanged between the two.
 
 ## Other scripts in this folder
 
