@@ -30,7 +30,10 @@ def generate_query(start_date: str = DEFAULT_DATE_START, end_date: Optional[str]
 
     ETL job: fish_hunter FTUE first-session stats. One row per bullet in the
     first bet session of each new FM01 (CNY) user, joined with the user's
-    first-IP info from ``stg_first_ip_per_user``. Output dataset
+    first-IP info from ``stg_first_ip_per_user`` and with CNY deposits /
+    withdrawals from ``transaction_history`` attached to the most recent
+    bullet at or before each transaction's processed_at (a bullet with
+    several transactions repeats, one row per transaction). Output dataset
     ``output_fish_hunter/ftue_first_session`` on S3, hive-partitioned by
     year/month of ``first_play_timestamp``.
 
@@ -38,16 +41,20 @@ def generate_query(start_date: str = DEFAULT_DATE_START, end_date: Optional[str]
     (internal/test op codes excluded via dim_user_latest). Bullets within
     SCAN_WINDOW_HOURS of first play are sessionized with a
     SESSION_GAP_SECONDS gap rule; only session 0 (the first session) is kept.
-    A first session running past the scan window is truncated.
+    A first session running past the scan window is truncated. Transactions
+    before a user's first bullet (e.g. the initial deposit) have no bet to
+    attach to and are dropped.
 
     Inputs: ``end_date`` caps the cohort (first play <= end_date) so a slow
     backfill can run in short chunks that finish before the SSH tunnel's idle
-    timeout drops the connection. The bullet scan extends 1 day past it so
-    boundary users' sessions are not cut off; the next chunk's 3-day watermark
-    lookback re-fetches boundary users and dedup keeps the complete session.
+    timeout drops the connection. The bullet/transaction scans extend 1 day
+    past it so boundary users' sessions are not cut off; the next chunk's
+    3-day watermark lookback re-fetches boundary users and dedup keeps the
+    complete session.
     """
     cohort_end_filter = f"AND t.first_play_timestamp <= '{end_date}'" if end_date else ""
     bullet_end_filter = f"AND created_at < DATEADD(DAY, 1, CAST('{end_date}' AS TIMESTAMP))" if end_date else ""
+    txn_end_filter = f"AND th.processed_at < DATEADD(DAY, 1, CAST('{end_date}' AS TIMESTAMP))" if end_date else ""
 
     query = dedent(
         f"""
@@ -95,6 +102,22 @@ def generate_query(start_date: str = DEFAULT_DATE_START, end_date: Optional[str]
                 AND ul.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
         ),
 
+        transactions AS (
+            -- {CURRENCY_TYPE} deposits/withdrawals of cohort users; each will be attached to the
+            -- most recent bullet at or before its processed_at time
+            SELECT
+                th.user_id,
+                th.type, -- 0: deposit, 1: withdraw
+                th.amount,
+                th.processed_at
+            FROM agfish_game.transaction_history AS th
+            INNER JOIN cohort AS c ON th.user_id = c.user_id
+            WHERE
+                th.currency_type = '{CURRENCY_TYPE}'
+                AND th.processed_at >= '{start_date}' -- literal for block pruning
+                {txn_end_filter}
+        ),
+
         first_ip AS (
             -- one row per user (confirmed); pre-filter to the cohort so the final
             -- join doesn't touch the full table
@@ -111,7 +134,7 @@ def generate_query(start_date: str = DEFAULT_DATE_START, end_date: Optional[str]
         session_bullets AS (
             -- bullets within the scan window after first play (hard cap so the bullet
             -- scan stays bounded; a first session running past the cap is truncated),
-            -- with the gap to each user's previous bullet
+            -- with each user's previous and next bullet timestamps
             SELECT
                 t.user_id,
                 t.game_id,
@@ -129,14 +152,14 @@ def generate_query(start_date: str = DEFAULT_DATE_START, end_date: Optional[str]
                 t3.device_type,
                 t3.ip,
                 t3.strategy_name,
-                DATEDIFF(
-                    SECOND,
-                    LAG(t3.event_timestamp) OVER (
-                        PARTITION BY t3.user_id
-                        ORDER BY t3.event_timestamp, t3.bullet_id
-                    ),
-                    t3.event_timestamp
-                ) AS gap_seconds_prev
+                LAG(t3.event_timestamp) OVER (
+                    PARTITION BY t3.user_id
+                    ORDER BY t3.event_timestamp, t3.bullet_id
+                ) AS prev_event_timestamp,
+                LEAD(t3.event_timestamp) OVER (
+                    PARTITION BY t3.user_id
+                    ORDER BY t3.event_timestamp, t3.bullet_id
+                ) AS next_event_timestamp
             FROM cohort AS t
             INNER JOIN bullets_in_range AS t3
                 ON
@@ -165,13 +188,67 @@ def generate_query(start_date: str = DEFAULT_DATE_START, end_date: Optional[str]
                 device_type,
                 ip,
                 strategy_name,
-                gap_seconds_prev,
-                SUM(CASE WHEN gap_seconds_prev >= {SESSION_GAP_SECONDS} THEN 1 ELSE 0 END) OVER (
+                next_event_timestamp,
+                SUM(
+                    CASE
+                        WHEN DATEDIFF(SECOND, prev_event_timestamp, event_timestamp) >= {SESSION_GAP_SECONDS} THEN 1
+                        ELSE 0
+                    END
+                ) OVER (
                     PARTITION BY user_id
                     ORDER BY event_timestamp, bullet_id
                     ROWS UNBOUNDED PRECEDING
                 ) AS session_number
             FROM session_bullets
+        ),
+
+        first_session AS (
+            -- session 0 only. next_event_timestamp (from the full scan window, so the
+            -- last session bullet still sees the next session's first bullet) bounds
+            -- each bullet's transaction-attachment interval
+            SELECT
+                user_id,
+                game_id,
+                first_play_timestamp,
+                bullet_id,
+                event_timestamp,
+                bet,
+                bullet_level,
+                payout,
+                fish_value,
+                multiplier,
+                room_id,
+                scene_id,
+                prev_balance,
+                device_type,
+                ip,
+                strategy_name,
+                next_event_timestamp
+            FROM sessionized
+            WHERE session_number = 0
+        ),
+
+        txn_attached AS (
+            -- attach each transaction backward to the most recent bullet at or before
+            -- processed_at: bullet ts <= processed_at < next bullet ts (or the {SCAN_WINDOW_HOURS}h
+            -- scan-window end for the last bullet in the window). transactions before
+            -- a user's first bullet (e.g. the initial deposit) have no bet to attach
+            -- to and are dropped
+            SELECT
+                sb.user_id,
+                sb.bullet_id,
+                tx.type,
+                tx.amount,
+                tx.processed_at
+            FROM first_session AS sb
+            INNER JOIN transactions AS tx
+                ON
+                    sb.user_id = tx.user_id
+                    AND sb.event_timestamp <= tx.processed_at
+                    AND COALESCE(
+                        sb.next_event_timestamp,
+                        DATEADD(HOUR, {SCAN_WINDOW_HOURS}, sb.first_play_timestamp)
+                    ) > tx.processed_at
         )
 
         SELECT
@@ -194,11 +271,20 @@ def generate_query(start_date: str = DEFAULT_DATE_START, end_date: Optional[str]
             sb.prev_balance,
             sb.device_type,
             sb.ip,
-            sb.strategy_name
-        FROM sessionized AS sb
+            sb.strategy_name,
+            CASE tx.type
+                WHEN 0 THEN 'deposit'
+                WHEN 1 THEN 'withdrawal'
+            END AS transaction_type,
+            tx.amount AS transaction_amount,
+            tx.processed_at AS transaction_processed_at
+        FROM first_session AS sb
         INNER JOIN first_ip AS t2
             ON sb.user_id = t2.user_id
-        WHERE sb.session_number = 0
+        LEFT JOIN txn_attached AS tx
+            ON
+                sb.user_id = tx.user_id
+                AND sb.bullet_id = tx.bullet_id
         ;
 
         """
@@ -256,7 +342,9 @@ if __name__ == "__main__":
     scheduler.run_incremental_job(
         job_name="ftue_first_session",
         query_func=lambda start_date: generate_query(start_date, end_date=args.end_date),
-        key_cols=["user_id", "bullet_id"],
+        # transaction_processed_at is part of the key because a bullet with
+        # several attached transactions is several rows
+        key_cols=["user_id", "bullet_id", "transaction_processed_at"],
         date_col="first_play_timestamp",
         partition_level="month",
         lookback=3,
