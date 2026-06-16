@@ -2,6 +2,7 @@
 Machine Learning utilities and clustering analysis classes.
 """
 
+import copy
 import gc
 import json
 import logging
@@ -99,30 +100,88 @@ class ClusterAnalysisPipeline:
     Supports multiple projects with separate configuration files.
     """
 
-    def __init__(self, config_file: str):
+    def __init__(self, config_file: str, active_group: Optional[str] = None):
         """
         Initialize clustering analysis for a specific project.
 
         Args:
-            project_name: Name of the project (e.g., 'wucaishen', 'deepdive')
-            config_path: Optional path to config file. If None, uses default location.
+            config_file: Path to the project YAML config.
+            active_group: When the config declares a ``groups:`` mapping (one data
+                source per ai_group, e.g. train on ``default`` then score ``ai``),
+                this selects which group's data_loader / pipeline / output_tag is
+                active for this run. Ignored by legacy flat configs. Falls back to
+                the config's ``active_group`` field when not passed on the CLI.
         """
 
         self._config_file = config_file
         self._config = load_config(config_file)
         self.project_name = self._config["project_name"]
         self.valid_sample_file = ""
+
+        self._active_group = active_group or self._config.get("active_group")
+        self._data_loader = self._resolve_data_loader()
+        self._pipeline_flags = self._resolve_pipeline_flags()
+        self._output_tag = self._resolve_output_tag()
+
         self._setup_directories()
 
-        cluster_data_config = self._config["data_loader"]["cluster_data"]
+        cluster_data_config = self._data_loader["cluster_data"]
         self._cluster_data_files = list_s3_files(
             cluster_data_config["bucket"], cluster_data_config["prefix"], cluster_data_config["pattern"]
         )
 
-        attach_data_config = self._config["data_loader"]["attach_data"]
+        attach_data_config = self._data_loader["attach_data"]
         self._attach_data_files = list_s3_files(
             attach_data_config["bucket"], attach_data_config["prefix"], attach_data_config["pattern"]
         )
+
+    def _resolve_data_loader(self) -> Dict[str, Any]:
+        """Resolve the active data_loader, supporting per-group overrides.
+
+        Layout A (legacy, flat): ``data_loader`` is used as-is; ``groups`` absent.
+        Layout B (single-config two-phase): ``data_loader`` holds the shared schema
+        (bucket, pattern, data_types, columns_to_read, bin_size, merge_on, outlier
+        thresholds, ...) and ``groups.<name>`` overrides only the per-group keys
+        (prefix, row_filters, local_cache) inside ``cluster_data`` / ``attach_data``.
+        The selected group is deep-merged over the shared block so the rest of the
+        pipeline reads one flat data_loader regardless of layout.
+        """
+        base = self._config["data_loader"]
+        groups = self._config.get("groups")
+        if not groups:
+            return base
+        if self._active_group is None:
+            raise ValueError(
+                f"config declares groups {sorted(groups)} but no active_group was "
+                "selected (pass --group on the CLI or set active_group in the config)."
+            )
+        if self._active_group not in groups:
+            raise ValueError(f"active_group {self._active_group!r} not in groups {sorted(groups)}.")
+        merged = copy.deepcopy(base)
+        override = groups[self._active_group]
+        for section in ("cluster_data", "attach_data"):
+            if section in override:
+                merged.setdefault(section, {}).update(override[section])
+        return merged
+
+    def _resolve_pipeline_flags(self) -> Dict[str, Any]:
+        """Pipeline switches, optionally keyed by group (``pipeline.<group>``)."""
+        pipeline = self._config["pipeline"]
+        if self._active_group is not None and self._active_group in pipeline:
+            return pipeline[self._active_group]
+        return pipeline
+
+    def _resolve_output_tag(self) -> str:
+        """Filename tag that keeps per-group attach output from colliding.
+
+        Sourced from ``groups.<name>.output_tag``; empty for legacy flat configs so
+        existing single-group filenames (``enriched_data_cluster_{k}.parquet``) are
+        preserved.
+        """
+        groups = self._config.get("groups")
+        if groups and self._active_group in groups:
+            return str(groups[self._active_group].get("output_tag", ""))
+        return ""
 
     def _setup_directories(self) -> None:
         """Create necessary directories for the project."""
@@ -158,7 +217,7 @@ class ClusterAnalysisPipeline:
 
     @property
     def merge_features(self):
-        return self._config["data_loader"]["merge_on"]
+        return self._data_loader["merge_on"]
 
     @property
     def normal_features(self):
@@ -174,7 +233,7 @@ class ClusterAnalysisPipeline:
 
     @property
     def bin_size(self):
-        return self._config["data_loader"]["attach_data"]["bin_size"]
+        return self._data_loader["attach_data"]["bin_size"]
 
     @property
     def n_clusters(self):
@@ -182,33 +241,37 @@ class ClusterAnalysisPipeline:
 
     @property
     def outlier_threshold(self):
-        val = self._config["data_loader"]["cluster_data"].get("outlier_threshold", np.nan)
+        val = self._data_loader["cluster_data"].get("outlier_threshold", np.nan)
         return val
 
     @property
     def clip_threshold(self):
-        val = self._config["data_loader"]["cluster_data"].get("clip_threshold", np.nan)
+        val = self._data_loader["cluster_data"].get("clip_threshold", np.nan)
         return val
 
     @property
     def remove_short_sessions(self) -> bool:
-        return bool(self._config["data_loader"]["cluster_data"].get("remove_short_sessions", False))
+        return bool(self._data_loader["cluster_data"].get("remove_short_sessions", False))
 
     @property
     def session_count_column(self) -> str:
-        return self._config["data_loader"]["cluster_data"].get("session_count_column", "bet_rounds")
+        return self._data_loader["cluster_data"].get("session_count_column", "bet_rounds")
 
     @property
     def cluster_stats_columns(self):
-        return self._config["data_loader"]["attach_data"]["cluster_stats_columns"]
+        return self._data_loader["attach_data"]["cluster_stats_columns"]
+
+    @property
+    def output_tag(self) -> str:
+        return self._output_tag
 
     @property
     def run_elbow_method(self):
-        return self._config["pipeline"]["elbow_method"]
+        return self._pipeline_flags.get("elbow_method", False)
 
     @property
     def run_cluster_analysis(self):
-        return self._config["pipeline"]["cluster_analysis"]
+        return self._pipeline_flags.get("cluster_analysis", False)
 
     @property
     def pickle_model_name(self):
@@ -221,20 +284,20 @@ class ClusterAnalysisPipeline:
         )
 
     @property
-    def run_test_model(self):
-        return self._config["pipeline"]["test_model"]
+    def run_apply_model(self):
+        return self._pipeline_flags.get("apply_model", False)
 
     @property
     def run_attach_cluster_label(self):
-        return self._config["pipeline"]["attach_cluster_label"]
+        return self._pipeline_flags.get("attach_cluster_label", False)
 
     @property
     def run_get_cluster_stats(self):
-        return self._config["pipeline"]["get_cluster_stats"]
+        return self._pipeline_flags.get("get_cluster_stats", False)
 
     @property
     def run_upload_result_to_s3(self):
-        return self._config["pipeline"]["upload_result_to_s3"]
+        return self._pipeline_flags.get("upload_result_to_s3", False)
 
     @property
     def onnx_opset_version(self):
@@ -260,7 +323,7 @@ class ClusterAnalysisPipeline:
         return StandardScaler()
 
     def get_data_types(self, data_source: str) -> Dict[str, str]:
-        return self._config["data_loader"][data_source].get("data_types", {})
+        return self._data_loader[data_source].get("data_types", {})
 
     def load_raw_data(self, data_label, reload: bool = False) -> pd.DataFrame:
         """
@@ -269,19 +332,19 @@ class ClusterAnalysisPipeline:
 
         if data_label == "attach_data":
             files = self._attach_data_files
-            output_file = self._config["data_loader"]["attach_data"]["local_cache"]
-            columns = self._config["data_loader"]["attach_data"]["columns_to_read"]
-            row_filters = self._config["data_loader"]["attach_data"]["row_filters"]
+            output_file = self._data_loader["attach_data"]["local_cache"]
+            columns = self._data_loader["attach_data"]["columns_to_read"]
+            row_filters = self._data_loader["attach_data"]["row_filters"]
             data_types = self.get_data_types("attach_data")
         elif data_label == "cluster_data":
             files = self._cluster_data_files
-            output_file = self._config["data_loader"]["cluster_data"]["local_cache"]
+            output_file = self._data_loader["cluster_data"]["local_cache"]
             columns = self.key_features + self.normal_features + self.skewed_features
             # The session-count column (e.g. bet_rounds) is not a feature; read it so
             # load_cluster_data can drop incomplete bins.
             if self.remove_short_sessions and self.session_count_column not in columns:
                 columns = columns + [self.session_count_column]
-            row_filters = self._config["data_loader"]["cluster_data"]["row_filters"]
+            row_filters = self._data_loader["cluster_data"]["row_filters"]
             data_types = self.get_data_types("cluster_data")
         else:
             raise ValueError(f"unsupported data_label: {data_label!r}")
@@ -311,9 +374,9 @@ class ClusterAnalysisPipeline:
         Save the result and valid samples (used to select cluster data) to a parquet file.
         """
 
-        output_file = self._config["data_loader"]["attach_data"]["local_cache"]
+        output_file = self._data_loader["attach_data"]["local_cache"]
         local_cache_path = f"{self.work_dir}/{output_file}"
-        row_filters = self._config["data_loader"]["attach_data"].get("row_filters")
+        row_filters = self._data_loader["attach_data"].get("row_filters")
 
         if not reload and os.path.exists(local_cache_path):
             logger.info(f"read local attach data: {local_cache_path}")
@@ -361,9 +424,9 @@ class ClusterAnalysisPipeline:
             Loaded and filtered DataFrame
         """
 
-        output_file = self._config["data_loader"]["cluster_data"]["local_cache"]
+        output_file = self._data_loader["cluster_data"]["local_cache"]
         local_cache_path = f"{self.work_dir}/{output_file}"
-        row_filters = self._config["data_loader"]["cluster_data"].get("row_filters")
+        row_filters = self._data_loader["cluster_data"].get("row_filters")
 
         if not reload and os.path.exists(local_cache_path):
             logger.info(f"read local attach data: {local_cache_path}")
@@ -755,13 +818,21 @@ class ClusterAnalysisPipeline:
         """Run K-means clustering analysis using pipeline approach."""
 
         feature_columns = features_ordered_by_importance[: self.n_top_features]
+        # Persist the full importance-ordered feature list so a later apply_model run
+        # (e.g. scoring the AI group with this Default-trained model) reuses the exact
+        # same columns/order instead of re-running feature selection on different data.
+        self._save_feature_order(features_ordered_by_importance)
         # Clip outliers to match elbow_method's preprocessing, so the cluster sizes
         # reported here match the elbow table for the same (n_features, k).
-        clipped, _, _ = clip_outliers(
-            cast(pd.DataFrame, data[feature_columns]),
+        clip_input = cast(pd.DataFrame, data[feature_columns])
+        clipped, upper_bounds, lower_bounds = clip_outliers(
+            clip_input,
             self.clip_threshold[0],
             self.clip_threshold[1],
         )
+        # Persist the fitted clip bounds so apply_model scores another group with the
+        # SAME bounds (a transform, not a re-fit on the new group's distribution).
+        self._save_clip_bounds(clip_input, lower_bounds, upper_bounds)
         clustering_data = cast(pd.DataFrame, clipped)
         transform_columns, transform_columns_index = self.get_transform_columns(clustering_data)
         pipeline = self.create_clustering_pipeline(
@@ -789,23 +860,9 @@ class ClusterAnalysisPipeline:
             )
 
         # Save cluster labels into the shared parquet; one column per <model>-n_features_<N>-k_<K>.
-        # Re-running the same (model, n_features, k) overwrites only its own column.
         new_labels = data[self.merge_features].copy()
         new_labels[self.cluster_label_column] = cluster_label
-
-        merge_cols: List[str] = (
-            [self.merge_features] if isinstance(self.merge_features, str) else list(self.merge_features)
-        )
-        labels_path = self.cluster_labels_file_path
-        if labels_path.exists():
-            existing = pd.read_parquet(labels_path)
-            if self.cluster_label_column in existing.columns:
-                existing = existing.drop(columns=[self.cluster_label_column])
-            combined = existing.merge(new_labels, on=merge_cols, how="outer")
-        else:
-            combined = new_labels
-        labels_path.parent.mkdir(parents=True, exist_ok=True)
-        combined.to_parquet(labels_path, index=False)
+        self._write_cluster_labels(new_labels)
 
         # Save pipeline model
         self.save_pipeline_model(pipeline)
@@ -828,25 +885,138 @@ class ClusterAnalysisPipeline:
 
         return cluster_label, pipeline
 
-    def model_inference(
-        self, data: pd.DataFrame, features_ordered_by_importance: List[str], model_path: Optional[str] = None
-    ) -> np.ndarray:
-        """Run model inference on new data."""
+    @property
+    def feature_order_path(self):
+        """JSON sidecar holding the importance-ordered feature list from training."""
+        return self.output_path / "models" / "feature_order.json"
+
+    def _save_feature_order(self, features_ordered_by_importance: List[str]) -> None:
+        self.feature_order_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.feature_order_path, "w") as f:
+            json.dump(list(features_ordered_by_importance), f, indent=2)
+        logger.info(
+            f"Saved feature order ({len(features_ordered_by_importance)} features) to {self.feature_order_path}"
+        )
+
+    def _load_feature_order(self) -> List[str]:
+        if not self.feature_order_path.exists():
+            raise FileNotFoundError(
+                f"feature order not found at {self.feature_order_path}; run cluster_analysis (training) first."
+            )
+        with open(self.feature_order_path) as f:
+            return list(json.load(f))
+
+    @property
+    def clip_bounds_path(self):
+        """JSON sidecar of the per-column clip bounds fitted during training."""
+        return self.output_path / "models" / "clip_bounds.json"
+
+    def _save_clip_bounds(self, clip_input: pd.DataFrame, lower_bounds: List[float], upper_bounds: List[float]) -> None:
+        """Persist the clip bounds clip_outliers fitted on the training data.
+
+        ``lower_bounds`` / ``upper_bounds`` are aligned to the input frame's numeric
+        columns (clip_outliers' iteration order). Stored keyed by column name (robust
+        to column reordering) with NaN -> None for "no clip on this tail".
+        """
+        numeric_cols = clip_input.select_dtypes(include="number").columns.tolist()
+        bounds = {
+            col: {
+                "lower": None if pd.isna(lower_bounds[i]) else float(lower_bounds[i]),
+                "upper": None if pd.isna(upper_bounds[i]) else float(upper_bounds[i]),
+            }
+            for i, col in enumerate(numeric_cols)
+        }
+        self.clip_bounds_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.clip_bounds_path, "w") as f:
+            json.dump(bounds, f, indent=2)
+        logger.info(f"Saved clip bounds ({len(bounds)} columns) to {self.clip_bounds_path}")
+
+    def _apply_clip_bounds(self, data: pd.DataFrame) -> pd.DataFrame:
+        """Clip ``data`` with the training bounds, or fall back to refitting on ``data``.
+
+        Reusing the fitted bounds keeps clipping a pure transform so a new group (AI) is
+        scored in the same feature space the model was trained on. If the sidecar is
+        missing (model trained before clip-bound persistence) we recompute on ``data``
+        and warn, matching the legacy behaviour.
+        """
+        if not self.clip_bounds_path.exists():
+            logger.warning(
+                f"clip bounds not found at {self.clip_bounds_path}; recomputing on this group's data "
+                "(re-fits clipping on the inference set — retrain to persist bounds)."
+            )
+            clipped, _, _ = clip_outliers(data, self.clip_threshold[0], self.clip_threshold[1])
+            return cast(pd.DataFrame, clipped)
+
+        with open(self.clip_bounds_path) as f:
+            bounds = json.load(f)
+        clipped = data.copy()
+        for col in clipped.columns:
+            col_bounds = bounds.get(col)
+            if not col_bounds:
+                continue
+            clipped[col] = clipped[col].clip(lower=col_bounds["lower"], upper=col_bounds["upper"])
+        return clipped
+
+    def _write_cluster_labels(self, new_labels: pd.DataFrame) -> None:
+        """Upsert one run's labels into the shared cluster_labels.parquet.
+
+        One column per ``<model>-n_features_<N>-k_<K>`` run. Labels are upserted by
+        ``merge_features`` key (which includes ``ai_group``): the incoming rows
+        overwrite their own keys in the column, while rows for other keys are
+        preserved. This matters because the train (Default) and apply (AI) runs share
+        the SAME column name, so a naive drop-and-remerge would wipe the other group's
+        labels out of that column — here Default and AI labels coexist side by side.
+        """
+        merge_cols: List[str] = (
+            [self.merge_features] if isinstance(self.merge_features, str) else list(self.merge_features)
+        )
+        col = self.cluster_label_column
+        labels_path = self.cluster_labels_file_path
+        if labels_path.exists():
+            existing = pd.read_parquet(labels_path)
+            if col in existing.columns:
+                # Outer-merge brings col (existing) and col_incoming (this run); prefer
+                # incoming where present, else keep the existing value for that key.
+                merged = existing.merge(
+                    new_labels[merge_cols + [col]], on=merge_cols, how="outer", suffixes=("", "_incoming")
+                )
+                merged[col] = merged[f"{col}_incoming"].combine_first(merged[col])
+                combined = merged.drop(columns=[f"{col}_incoming"])
+            else:
+                combined = existing.merge(new_labels, on=merge_cols, how="outer")
+        else:
+            combined = new_labels
+        labels_path.parent.mkdir(parents=True, exist_ok=True)
+        combined.to_parquet(labels_path, index=False)
+
+    def apply_model(self, data: pd.DataFrame, model_path: Optional[str] = None) -> np.ndarray:
+        """Score a new ai_group with the trained pipeline and persist its cluster labels.
+
+        Cross-group inference stage: applies the model fit by ``cluster_analysis`` on
+        the training group (e.g. Default) to another group's grouped data (e.g. AI),
+        then writes the predicted labels into the shared ``cluster_labels.parquet`` so
+        ``attach_cluster_label`` can join them onto that group's enriched data.
+
+        Preprocessing mirrors training exactly so this is a pure transform, not a re-fit
+        on the new group: the importance-ordered feature list is reloaded from
+        ``feature_order.json`` (NOT re-selected here), sliced to ``top_features``, and
+        clipped with the bounds fitted during training (``clip_bounds.json``). Requires
+        that ``top_features`` / ``n_clusters`` match the trained model so the pickle path
+        and column count line up.
+        """
+        feature_columns = self._load_feature_order()[: self.n_top_features]
+        clipped = self._apply_clip_bounds(cast(pd.DataFrame, data[feature_columns]))
         pipeline = self.load_trained_model(model_path)
-        cluster_labels = pipeline.predict(data[features_ordered_by_importance])
+        cluster_labels = np.asarray(pipeline.predict(cast(pd.DataFrame, clipped)))
 
         unique_labels, counts = np.unique(cluster_labels, return_counts=True)
-        for label, count in zip(unique_labels, counts):
-            logger.info(f"Cluster {label}: {count} samples")
+        logger.info(f"apply_model cluster sizes: {dict(zip(unique_labels, counts))}")
 
-        data["cluster"] = cluster_labels
-        for cluster in np.unique(cluster_labels):
-            print(f"save cluster: {cluster}")
-            data.loc[data["cluster"] == cluster, :].drop(columns="cluster").to_csv(
-                f"{self.output_path}/output/grouped_data_2025_cluster_{cluster}.csv", index=False
-            )
+        new_labels = data[self.merge_features].copy()
+        new_labels[self.cluster_label_column] = cluster_labels
+        self._write_cluster_labels(new_labels)
 
-        return np.asarray(cluster_labels)
+        return cluster_labels
 
     def plot_pca(
         self,
@@ -1092,7 +1262,7 @@ class ClusterAnalysisPipeline:
         num_samples = 0
         for cluster in unique_clusters:
             logger.info(f"save attach data for cluster: {cluster}")
-            file_name = f"enriched_data_cluster_{cluster}.parquet"
+            file_name = self._enriched_cluster_file_name(cluster)
             cluster_data = attach_data.merge(
                 data_with_cluster_label[data_with_cluster_label[cluster_column] == cluster],
                 on=merge_cols,
@@ -1117,12 +1287,22 @@ class ClusterAnalysisPipeline:
                 f"sum of sample size for all clusters: {num_samples} larger than attach data: {len(attach_data)}!"
             )
 
+    def _enriched_cluster_file_name(self, cluster: Any) -> str:
+        """Per-cluster attach filename, group-tagged so groups don't overwrite each other.
+
+        Empty ``output_tag`` (legacy / single-group configs) keeps the historical
+        ``enriched_data_cluster_{k}.parquet`` name; a tag (e.g. ``ai``) yields
+        ``enriched_data_ai_cluster_{k}.parquet``.
+        """
+        tag = f"_{self.output_tag}" if self.output_tag else ""
+        return f"enriched_data{tag}_cluster_{cluster}.parquet"
+
     def get_cluster_stats(self):
 
         cluster_stats = {}
         for cluster_index in range(self.n_clusters):
             data = read_local_cache(
-                local_cache_path=self.output_path / f"output/enriched_data_cluster_{cluster_index}.parquet",
+                local_cache_path=self.output_path / "output" / self._enriched_cluster_file_name(cluster_index),
                 columns=self.cluster_stats_columns,
                 lazy_load=False,
             )
