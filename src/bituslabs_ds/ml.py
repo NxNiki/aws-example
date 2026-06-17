@@ -9,6 +9,7 @@ import logging
 import os
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import joblib
@@ -114,24 +115,28 @@ class ClusterAnalysisPipeline:
                 the config's ``active_group`` field when not passed on the CLI.
             run_id: Name of the per-run output folder under ``work_dir`` (holds
                 ``<cluster_model>/{figures,models,output}`` and the shared
-                ``cluster_labels.parquet``). Callers pass a timestamped id
-                (e.g. ``result_2026-06-17_10-18``) so successive runs don't
-                overwrite each other. The two-phase ``inference`` run MUST reuse
-                the ``train`` run's run_id to find its model / feature_order /
-                clip_bounds. Falls back to ``project_name`` (legacy layout) when
-                not provided.
+                ``cluster_labels.parquet``). Defaults to a timestamped, bin-size
+                tagged id (e.g. ``result_2026-06-17_10-18_binsize50``) so successive
+                runs don't overwrite each other and the bin size is visible. The
+                two-phase ``inference`` run MUST reuse the ``train`` run's run_id
+                (pass ``--run-id``) to find its model / feature_order / clip_bounds.
         """
 
         self._config_file = config_file
         self._config = load_config(config_file)
         self.project_name = self._config["project_name"]
-        self.run_id = run_id or self._config.get("run_id") or self.project_name
         self.valid_sample_file = ""
 
         self._active_group = active_group or self._config.get("active_group")
         self._data_loader = self._resolve_data_loader()
         self._pipeline_flags = self._resolve_pipeline_flags()
         self._output_tag = self._resolve_output_tag()
+
+        # Default run_id is timestamped and bin-size-tagged (so runs don't overwrite and
+        # the bin size is visible in the folder); needs bin_size, hence after data_loader.
+        self.run_id = (
+            run_id or self._config.get("run_id") or f"result_{datetime.now():%Y-%m-%d_%H-%M}_binsize{self.bin_size}"
+        )
 
         self._setup_directories()
 
@@ -336,6 +341,18 @@ class ClusterAnalysisPipeline:
     def get_data_types(self, data_source: str) -> Dict[str, str]:
         return self._data_loader[data_source].get("data_types", {})
 
+    def _processed_cache_path(self, base_name: str) -> str:
+        """work_dir path for a processed cache, tagged with the active bin size.
+
+        Processed caches (grouped/enriched after complete-bin filtering) have contents
+        that depend on bin_size, so the name carries ``_binsize{N}``. The raw cache
+        (unfiltered S3 pull, bin-independent) keeps the plain base name.
+        """
+        for ext in (".parquet", ".csv"):
+            if base_name.endswith(ext):
+                return f"{self.work_dir}/{base_name[: -len(ext)]}_binsize{self.bin_size}{ext}"
+        raise ValueError(f"unsupported cache file format: {base_name}")
+
     def load_raw_data(self, data_label, reload: bool = False) -> pd.DataFrame:
         """
         load preprocessed data from s3.
@@ -386,7 +403,7 @@ class ClusterAnalysisPipeline:
         """
 
         output_file = self._data_loader["attach_data"]["local_cache"]
-        local_cache_path = f"{self.work_dir}/{output_file}"
+        local_cache_path = self._processed_cache_path(output_file)
         row_filters = self._data_loader["attach_data"].get("row_filters")
 
         if not reload and os.path.exists(local_cache_path):
@@ -436,7 +453,7 @@ class ClusterAnalysisPipeline:
         """
 
         output_file = self._data_loader["cluster_data"]["local_cache"]
-        local_cache_path = f"{self.work_dir}/{output_file}"
+        local_cache_path = self._processed_cache_path(output_file)
         row_filters = self._data_loader["cluster_data"].get("row_filters")
 
         if not reload and os.path.exists(local_cache_path):
@@ -1299,14 +1316,15 @@ class ClusterAnalysisPipeline:
             )
 
     def _enriched_cluster_file_name(self, cluster: Any) -> str:
-        """Per-cluster attach filename, group-tagged so groups don't overwrite each other.
+        """Per-cluster attach filename: group-tagged and bin-size suffixed.
 
         Empty ``output_tag`` (legacy / single-group configs) keeps the historical
-        ``enriched_data_cluster_{k}.parquet`` name; a tag (e.g. ``ai``) yields
-        ``enriched_data_ai_cluster_{k}.parquet``.
+        ``enriched_data_cluster_{k}`` stem; a tag (e.g. ``ai``) yields
+        ``enriched_data_ai_cluster_{k}``. The ``_binsize{N}`` suffix records the bin
+        size the clustering used, e.g. ``enriched_data_ai_cluster_0_binsize50.parquet``.
         """
         tag = f"_{self.output_tag}" if self.output_tag else ""
-        return f"enriched_data{tag}_cluster_{cluster}.parquet"
+        return f"enriched_data{tag}_cluster_{cluster}_binsize{self.bin_size}.parquet"
 
     def get_cluster_stats(self):
 

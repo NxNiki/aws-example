@@ -61,13 +61,12 @@ def main(config_path: str, group: str | None = None, run_id: str | None = None):
     log_suffix = f"_{group}" if group else ""
     setup_logging(LOCAL_ROOT / "jobs/log", f"cluster_analysis_{project_name}{log_suffix}_{time_tag}.log")
 
-    # Each run lands in its own timestamped folder so results aren't overwritten.
-    # The two-phase inference run must reuse the train run's id via --run-id.
-    if run_id is None:
-        run_id = f"result_{datetime.now().strftime('%Y-%m-%d_%H-%M')}"
-    logger.info(f"run_id for this run: {run_id}")
-
+    # Each run lands in its own folder so results aren't overwritten. When run_id is
+    # not passed, the pipeline derives a timestamped, bin-size-tagged default
+    # (result_<date>_binsize<N>). The two-phase inference run must reuse the train
+    # run's id via --run-id.
     cluster_pipeline = ClusterAnalysisPipeline(config_path, active_group=group, run_id=run_id)
+    logger.info(f"run_id for this run: {cluster_pipeline.run_id}")
     data = cluster_pipeline.load_cluster_data(reload=RELOAD_CLUSTER_DATA)
 
     # Data profiling and cleaning
