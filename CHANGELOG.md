@@ -197,6 +197,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **dashboard_api served the wrong game's data after a config switch.** The
+  in-process window cache (`services/common.py`, added with the OOM fixes
+  below) keyed each cached user-row frame on `cfg.get("id")` — but the raw
+  config YAML has no `id` (it's derived from the filename), so the key was
+  `(None, granularity, start, end)` for *every* config. Switching games with
+  the same granularity and date window (e.g. ss02 → ss03) hit the previous
+  game's cached frame and rendered its numbers under the new config. Affected
+  all three data tabs (series, deep dive, group distribution).
+  - Surfaced two ways: (1) the freshly loaded config showed the previous
+    game's values; (2) **retention appeared to "change" when the date range
+    changed** — not a retention-calculation problem, but because the range is
+    part of the cache key, so changing it forced a cache *miss* that finally
+    fetched the correct config's data. With the cache keyed correctly, both
+    go away.
+  - Fix: `load_raw_config` now stamps `cfg["id"] = config_id` (the single load
+    chokepoint every data route uses), and `collect_window` raises rather than
+    caching under a `None` id, so a future caller that forgets fails loudly
+    instead of silently serving another game's rows. Regression tests cover
+    the no-collision keying and the missing-id guard. Verified in production:
+    ss02 vs ss03 `user_total_bet` now return distinct means (1041.80 vs
+    1082.78), stable across a round-trip.
+- **dashboard_api task OOM-killed under real dashboard load (502s).** Three
+  compounding causes, fixed in sequence: (1) the per-config parquet cache is
+  held in-process, so two uvicorn workers doubled it — pinned to a single
+  worker; (2) a tab render fires one `/api/data/*` request per panel in
+  parallel, and each collected its own copy of the same user-row window —
+  added the single-flight, byte-budgeted `collect_window` cache so one render
+  collects once; (3) `_bootstrap_ci` allocated the full `(n_boot × len(arr))`
+  resample matrix at once (~800 MB for a 200k-row per-user metric, several
+  landing concurrently) — now resampled in batches (~80 MB transient,
+  statistically identical CIs). Task sized to 8 GB / 1 vCPU.
+
 - **Chat agent silently fell back to live Confluence instead of RAG.**
   `search_confluence_rag` raised `ImportError` inside the slim
   ai-agent Docker image because `rag_service/client.py` wasn't copied
