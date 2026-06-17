@@ -126,6 +126,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Production cutover: the React dashboard replaced the legacy Dash app**
+  (frontend redesign Phase 5). `dashboard_api` (FastAPI: SPA + `/api/data/*` +
+  `/api/report/*`) now serves the same production URL the Dash app did,
+  behind the existing `game-stats-dashboard-alb` — no new ALB. The listener
+  default was flipped from the Dash target group to `dashboard-api-tg`
+  (atomic `modify_listener`), and a priority-10 `/api/agent/*` rule routes
+  browser chat traffic to the `ai-chat-agent` service via a second target
+  group on that ALB (a TG belongs to one ALB, so the agent service carries two
+  — note: recreating that service from scratch silently drops the extra TG).
+  ALB idle timeout raised 60 → 300 s for SSE chat streams. The fleet stays at
+  three ECS services (dashboard-api, ai-chat-agent, rag-service); the legacy
+  `game-stats-dashboard` service is parked at desired-count 0 for a rollback
+  bake, with its scale-to-zero alarms/policies removed (the scale-out alarm
+  watched the shared ALB's 503 count and would otherwise resurrect Dash).
+  `infra/dashboard_api/deploy_ecs.py` performs the whole sequence idempotently
+  and prints a rollback runbook. The Weekly Report placeholder tab was removed
+  from the SPA (its nightly ETL job is kept). `dashboard_api` also emits the
+  `Dashboard/UserRequestCount` metric (scale-to-zero idle signal), gated on
+  `DASHBOARD_SERVICE_NAME`.
+- **Repository reorganization (moves-only, behavior-preserving).** Shared
+  infrastructure that lived inside the legacy `dashboards` package moved into
+  the `bituslabs_ds` library so the Dash package can be deleted after the bake:
+  `metrics/user_stats_aggregates.py` (DataMetrics + `_bootstrap_ci`),
+  `confluence/{client,export_html,references}.py`, and `aws_secrets.py`.
+  One-line re-export shims remain at the old `dashboards.*` paths so the frozen
+  legacy image stays rebuildable until deletion; `dashboard_api`, `ai_agent`,
+  `rag_service`, and tests import from the new paths, and the three service
+  Dockerfiles drop their per-file `src/dashboards` COPY lines (the modules ride
+  the existing `COPY src/bituslabs_ds`). The six `dashboard_config-*.yaml`
+  moved out of `src/dashboards/` to a top-level `configs/dashboard/`, resolved
+  via `DASHBOARD_CONFIG_DIR` everywhere — which also fixed a latent bug where
+  `ai_agent`'s `chat_api` resolved configs from a directory that never held
+  any YAMLs, silently dropping every `dashboard_config` request. Eleven
+  root-level one-off scripts moved to `jobs/analyses/` (scheduled job paths are
+  frozen — EventBridge bakes them into rule targets — and stayed put); see the
+  new `jobs/README.md`.
 - Renamed `src/dashboards/secrets.py` → `src/dashboards/aws_secrets.py`
   to avoid shadowing the Python stdlib ``secrets`` module. Running any
   module under ``src/dashboards/`` as a path (e.g. ``python
