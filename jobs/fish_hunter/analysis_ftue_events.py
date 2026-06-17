@@ -66,17 +66,14 @@ EVENT_LABELS = {
     "change_ip": "Change IP",
 }
 
-EVENT_COLORS = {
-    "first_bet": "#636efa",
-    "first_kill": "#EF553B",
-    "first_high_kill": "#00cc96",
-    "stop_play": "#ab63fa",
-    "first_deposit": "#FFA15A",
-    "second_deposit": "#19d3f3",
-    "first_withdrawal": "#FF6692",
-    "change_device": "#B6E880",
-    "change_ip": "#FF97FF",
-}
+# Lines are colored by strategy group (stable per group index); metric is
+# encoded by dash style. Palette is the Plotly qualitative set.
+GROUP_PALETTE = ["#636efa", "#EF553B", "#00cc96", "#ab63fa", "#FFA15A", "#19d3f3", "#FF6692", "#B6E880"]
+
+
+def _group_color(i: int) -> str:
+    return GROUP_PALETTE[i % len(GROUP_PALETTE)]
+
 
 # (origin column, axis label, events visible by default in that figure)
 ORIGINS = [
@@ -249,7 +246,7 @@ def _strategy_groups(events: pd.DataFrame) -> list:
     return groups
 
 
-DEFAULT_METRICS = ("first_bet", "stop_play")
+DEFAULT_METRICS = ("first_kill",)
 
 PLOTLY_CDN = "https://cdn.plot.ly/plotly-2.35.2.min.js"
 
@@ -259,7 +256,7 @@ PLOTLY_CDN = "https://cdn.plot.ly/plotly-2.35.2.min.js"
 # seconds while the axis stays on ordinal bin indices.
 APP_JS = """
 <script>
-const DASH = ['solid', 'dot'];
+const DASH = ['solid', 'dot', 'dash', 'longdash', 'dashdot', 'longdashdot'];
 function pad(n) { return n < 10 ? '0' + n : '' + n; }
 function fmtHms(sec) {
     var h = Math.floor(sec / 3600), r = sec % 3600, m = Math.floor(r / 60), s = r % 60;
@@ -279,10 +276,11 @@ function secToIdx(sec) {
 }
 function selOrigin() { return document.querySelector('input[name=origin]:checked').value; }
 function selGroups() {
-    var a = document.getElementById('grpA').value, b = document.getElementById('grpB').value, g = [];
-    if (a) g.push(a);
-    if (b && b !== '(none)' && b !== a) g.push(b);
-    return g;
+    // preserve CFG.groups order so each group's dash style is stable
+    return CFG.groups.filter(function (g) {
+        var cb = document.querySelector('.group[value="' + g + '"]');
+        return cb && cb.checked;
+    });
 }
 function selMetrics() {
     return CFG.order.filter(function (m) {
@@ -290,30 +288,44 @@ function selMetrics() {
         return cb && cb.checked;
     });
 }
+function isChecked(id) { var cb = document.getElementById(id); return cb && cb.checked; }
 function redraw() {
-    var origin = selOrigin(), groups = selGroups(), metrics = selMetrics(), traces = [];
-    groups.forEach(function (g, gi) {
+    var origin = selOrigin(), groups = selGroups(), metrics = selMetrics();
+    var abs = isChecked('absToggle'), useLog = isChecked('logToggle'), traces = [];
+    groups.forEach(function (g) {
+        var gColor = CFG.groupColors[CFG.groups.indexOf(g)];
         metrics.forEach(function (m) {
             var s = CFG.data[origin][g][m];
             if (!s) return;
             var nm = CFG.events[m] + (groups.length > 1 ? ' [' + g + ']' : '');
+            var dash = DASH[CFG.order.indexOf(m) % DASH.length];
+            var hov = abs
+                ? '%{customdata[0]}<br>%{y} users<extra>' + nm + '</extra>'
+                : '%{customdata[0]}<br>%{y:.2%} of group (%{customdata[1]} users)<extra>' + nm + '</extra>';
             traces.push({
-                x: s.x, y: s.y, mode: 'lines', type: 'scatter', name: nm,
-                line: { color: CFG.colors[m], width: 1.5, dash: DASH[gi] || 'solid' },
-                customdata: s.x.map(binLabel),
-                hovertemplate: '%{customdata}<br>%{y} users<extra>' + nm + '</extra>'
+                x: s.x, y: abs ? s.c : s.y, mode: 'lines+markers', type: 'scatter', name: nm,
+                line: { color: gColor, width: 1.5, dash: dash },
+                marker: { color: gColor, size: 4 },
+                customdata: s.x.map(function (idx, i) { return [binLabel(idx), s.c[i]]; }),
+                hovertemplate: hov
             });
         });
     });
     var sub = ' (' + CFG.binSeconds + 's bins in first 24h, daily bins after)';
+    // Log y on a percentage axis: Plotly keeps the fractional values and applies
+    // the percent tickformat to the 10^k tick positions (0.1% / 1% / 10% / 100%).
+    // Non-positive (zero) bins simply drop out, which is correct on a log scale.
+    var yaxis = abs
+        ? { title: 'Number of users', tickformat: '' }
+        : { title: 'Share of group users', tickformat: '.1%' };
+    if (useLog) { yaxis.type = 'log'; }
     var layout = {
-        title: 'Event counts \\u2014 time since ' + origin + sub,
+        title: (abs ? 'Number of users by event' : 'Share of users by event') + ' \\u2014 time since ' + origin + sub,
         xaxis: {
             title: 'Time since ' + origin, tickvals: CFG.ticks.vals, ticktext: CFG.ticks.text,
             rangeslider: { visible: true, thickness: 0.08 }, range: CFG.defaultRange.slice()
         },
-        yaxis: { title: 'Number of users' }, height: 540,
-        showlegend: true, legend: { orientation: 'h', y: -0.35 }
+        yaxis: yaxis, height: 700, showlegend: true, legend: { orientation: 'h', y: -0.35 }
     };
     Plotly.react('figure', traces, layout);
     rebuildTable(origin, groups, metrics);
@@ -336,7 +348,7 @@ function applyRange() {
     Plotly.relayout('figure', { 'xaxis.range': [secToIdx(lo), secToIdx(hi)] });
 }
 function resetRange() { Plotly.relayout('figure', { 'xaxis.range': CFG.defaultRange.slice() }); }
-document.querySelectorAll('input[name=origin], #grpA, #grpB, .metric').forEach(function (el) {
+document.querySelectorAll('input[name=origin], .group, .metric, #absToggle, #logToggle').forEach(function (el) {
     el.addEventListener('change', redraw);
 });
 redraw();
@@ -361,10 +373,13 @@ def _report_config(events: pd.DataFrame, bin_seconds: int) -> dict:
             for event in EVENT_LABELS:
                 d = binned[binned["event"] == event]
                 xs = [int(v) for v in d["bin_index"].tolist()]
-                ys = [int(v) for v in d["count"].tolist()]
+                cs = [int(v) for v in d["count"].tolist()]
+                # y is the share of the group's users per bin so groups of
+                # different sizes are comparable; raw counts kept in c for hover.
+                ys = [round(c / n_users, 6) if n_users else 0 for c in cs]
                 if xs:
                     max_idx = max(max_idx, max(xs))
-                dser[event] = {"x": xs, "y": ys}
+                dser[event] = {"x": xs, "y": ys, "c": cs}
                 offsets = (sub[event] - sub[origin_col]).dt.total_seconds().dropna()
                 sser[event] = {
                     "reached": int(len(offsets)),
@@ -376,14 +391,16 @@ def _report_config(events: pd.DataFrame, bin_seconds: int) -> dict:
             summary[origin_label][label] = sser
 
     tickvals, ticktext = _axis_ticks(bin_seconds, max_idx)
+    group_labels = [label for _, label, _ in groups]
     return {
         "events": dict(EVENT_LABELS),
-        "colors": dict(EVENT_COLORS),
         "order": list(EVENT_LABELS),
+        "groups": group_labels,
+        "groupColors": [_group_color(i) for i in range(len(group_labels))],
         "ticks": {"vals": [int(v) for v in tickvals], "text": ticktext},
         "binSeconds": bin_seconds,
         "nFine": _n_fine_bins(bin_seconds),
-        "defaultRange": [0, 3600 // bin_seconds],
+        "defaultRange": [0, 900 // bin_seconds],
         "data": data,
         "summary": summary,
     }
@@ -394,23 +411,26 @@ def _controls_html(group_labels: list, bin_seconds: int) -> str:
         f'<label><input type="radio" name="origin" value="{ol}" {"checked" if i == 0 else ""}> {ol}</label>'
         for i, (_, ol, _) in enumerate(ORIGINS)
     )
-    grp_a = "".join(f'<option value="{g}" {"selected" if g == "All users" else ""}>{g}</option>' for g in group_labels)
-    grp_b = '<option value="(none)" selected>(none)</option>' + "".join(
-        f'<option value="{g}">{g}</option>' for g in group_labels
+    group_boxes = "".join(
+        f'<label style="color:{_group_color(i)}">'
+        f'<input type="checkbox" class="group" value="{g}" {"checked" if g == "All users" else ""}> {g}</label>'
+        for i, g in enumerate(group_labels)
     )
     metric_boxes = "".join(
-        f'<label style="color:{EVENT_COLORS[e]}">'
-        f'<input type="checkbox" class="metric" value="{e}" {"checked" if e in DEFAULT_METRICS else ""}> {lab}</label>'
+        f'<label><input type="checkbox" class="metric" value="{e}" {"checked" if e in DEFAULT_METRICS else ""}>'
+        f" {lab}</label>"
         for e, lab in EVENT_LABELS.items()
     )
     return (
-        f'<div class="ctl-row"><b>Origin:</b> {origin_radios}</div>'
-        f'<div class="ctl-row"><b>Group A (solid):</b> <select id="grpA">{grp_a}</select>'
-        f' &nbsp;&nbsp; <b>Group B (dashed):</b> <select id="grpB">{grp_b}</select></div>'
+        f'<div class="ctl-row"><b>Origin:</b> {origin_radios}'
+        f' &nbsp;&nbsp; <b>Y-axis:</b> <label><input type="checkbox" id="absToggle">'
+        f" show absolute user count (default: ratio)</label>"
+        f' &nbsp; <label><input type="checkbox" id="logToggle"> log scale</label></div>'
+        f'<div class="ctl-row groups"><b>Groups (one color each):</b> {group_boxes}</div>'
         f'<div class="ctl-row metrics">{metric_boxes}</div>'
         f'<div class="ctl-row"><b>Time range (s):</b> '
         f'<input type="number" id="rng-min" value="0" step="{bin_seconds}" style="width:90px"> &ndash; '
-        f'<input type="number" id="rng-max" value="3600" step="{bin_seconds}" style="width:90px"> '
+        f'<input type="number" id="rng-max" value="900" step="{bin_seconds}" style="width:90px"> '
         f'<button onclick="applyRange()">Apply</button> '
         f'<button onclick="resetRange()">Reset</button></div>'
     )
@@ -440,7 +460,7 @@ def build_report(events: pd.DataFrame, bin_seconds: int, high_fish_value: float,
         interpretation_html(events, high_fish_value),
         "<h2>Interactive event timing</h2>",
         _controls_html(group_labels, bin_seconds),
-        '<div id="figure" style="height:560px"></div>',
+        '<div id="figure" style="height:720px"></div>',
         "<h3>Selected metrics &mdash; summary</h3>",
         table_head,
         f'<script src="{PLOTLY_CDN}"></script>',
