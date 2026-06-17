@@ -51,7 +51,12 @@ def collect_window(
     cfg: dict[str, Any], granularity: str, lf: pl.LazyFrame, date_col: str, start_dt: Any, end_dt: Any
 ) -> pl.DataFrame:
     """Collect ``lf`` filtered to [start_dt, end_dt], shared across requests."""
-    key = (cfg.get("id"), granularity, str(start_dt), str(end_dt))
+    config_id = cfg.get("id")
+    if not config_id:
+        # A None id would collide across every config and serve the wrong
+        # game's rows from cache (load_raw_config stamps it — see configs.py).
+        raise SeriesError("config dict is missing 'id'; cannot safely cache its window")
+    key = (config_id, granularity, str(start_dt), str(end_dt))
     with _window_lock:
         hit = _window_cache.get(key)
         if hit and time.monotonic() - hit[0] < _WINDOW_CACHE_TTL_S:

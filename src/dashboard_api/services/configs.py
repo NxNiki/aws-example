@@ -52,7 +52,12 @@ def load_raw_config(config_dir: str, config_id: str) -> Optional[dict[str, Any]]
     path = find_config_path(config_dir, config_id)
     if path is None:
         return None
-    return load_config(str(path))
+    cfg = load_config(str(path))
+    # Stamp the id (the YAML has no id of its own — it comes from the filename).
+    # The window cache in services/common.py keys on it; without this every
+    # config collides on the same cache key and serves another game's rows.
+    cfg["id"] = config_id
+    return cfg
 
 
 def build_config_detail(config_id: str, cfg: dict[str, Any]) -> ConfigDetail:
