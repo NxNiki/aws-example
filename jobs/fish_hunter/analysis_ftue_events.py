@@ -67,8 +67,9 @@ EVENT_LABELS = {
 }
 
 # Lines are colored by strategy group (stable per group index); metric is
-# encoded by dash style. Palette is the Plotly qualitative set.
-GROUP_PALETTE = ["#636efa", "#EF553B", "#00cc96", "#ab63fa", "#FFA15A", "#19d3f3", "#FF6692", "#B6E880"]
+# encoded by dash style (or solid when a single metric is selected). High-
+# contrast ColorBrewer Set1 palette so groups stay distinct.
+GROUP_PALETTE = ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00", "#a65628", "#f781bf", "#999999"]
 
 
 def _group_color(i: int) -> str:
@@ -298,7 +299,8 @@ function redraw() {
             var s = CFG.data[origin][g][m];
             if (!s) return;
             var nm = CFG.events[m] + (groups.length > 1 ? ' [' + g + ']' : '');
-            var dash = DASH[CFG.order.indexOf(m) % DASH.length];
+            // dash distinguishes metrics; with a single metric it adds no info, so keep solid
+            var dash = metrics.length > 1 ? DASH[CFG.order.indexOf(m) % DASH.length] : 'solid';
             var hov = abs
                 ? '%{customdata[0]}<br>%{y} users<extra>' + nm + '</extra>'
                 : '%{customdata[0]}<br>%{y:.2%} of group (%{customdata[1]} users)<extra>' + nm + '</extra>';

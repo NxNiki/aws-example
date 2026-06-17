@@ -35,8 +35,9 @@ from analysis_ftue_events import (
 from bituslabs_ds.config import LOCAL_ROOT, setup_logging
 
 # One color per strategy group (figures encode group by color since each
-# figure is a single metric).
-GROUP_COLORS = ["#636efa", "#EF553B", "#00cc96", "#ab63fa", "#FFA15A", "#19d3f3"]
+# figure is a single metric). High-contrast ColorBrewer Set1, matching the
+# interactive HTML report's GROUP_PALETTE.
+GROUP_COLORS = ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00", "#a65628", "#f781bf", "#999999"]
 
 SECTION_START = "<!-- ftue-strategy-report:start -->"
 SECTION_END = "<!-- ftue-strategy-report:end -->"
