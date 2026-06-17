@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-17
+
+### Added
+
+- **Two-phase clustering for SS03 (train one ai_group, score another).**
+  `ClusterAnalysisPipeline` trains KMeans on the `train` group (Default) and
+  applies the frozen model to the `inference` group (AI) from one config via a
+  `groups:` mapping and `--group {train,inference}`. Training persists the model,
+  ordered feature list (`feature_order.json`) and fitted clip bounds
+  (`clip_bounds.json`); inference reuses them so preprocessing is a pure transform.
+  Cross-group labels coexist in a shared `cluster_labels.parquet`.
+- **Timestamped, bin-size-tagged clustering outputs.** Runs write to
+  `result_<date>_binsize<N>/` (local + S3) so they don't overwrite; per-cluster
+  attach files and processed caches carry the `_binsize<N>` tag.
+- **SS03 feature-engineering `--group` switch** with separate Default/AI S3
+  prefixes and per-group `bin_size`.
+- **fish_hunter FTUE analytics:** first-session ETL, event-timing HTML report, and
+  an interactive strategy-comparison report (multi-group select, ratio/abs + log-y,
+  per-group palette) with a Confluence publisher; deposits/withdrawals, device/IP
+  and per-strategy breakdowns; CNY transactions attached to the FTUE ETL.
+- **rag_service:** daily scheduled reindex via Fargate task + EventBridge;
+  `life_cycle_prediction` Confluence source.
+- **SS03 daily-by-user-group** SQL query snapshots + ai_group double-counting docs.
+
+### Changed
+
+- `ETLScheduler` default start date is now configurable.
+- rag_service: removed the unused `/reindex` endpoint.
+
+### Fixed
+
+- `clip_outliers` no longer emits a pandas FutureWarning on integer columns.
+- `check_pid_difference`: rolling-window comparison with per-game isolation.
+
 ## [0.3.0] - 2026-06-05
 
 ### Added
