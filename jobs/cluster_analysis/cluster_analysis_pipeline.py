@@ -128,7 +128,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--group",
         default=None,
-        help="Active group for configs with a `groups:` mapping (e.g. 'default' to train, 'ai' to score).",
+        help="Active group for configs with a `groups:` mapping (e.g. 'train' to fit, 'inference' to score).",
     )
     args = parser.parse_args()
 

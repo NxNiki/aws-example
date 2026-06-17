@@ -69,7 +69,7 @@ pipeline:
 ```
 
 For two-phase configs (see below) the switches are keyed by group, e.g.
-`pipeline.default` (train) vs `pipeline.ai` (apply).
+`pipeline.train` (fit) vs `pipeline.inference` (apply).
 
 ---
 
@@ -137,16 +137,16 @@ path) can't drift between the train and apply runs.
   `enriched_data_cluster_{k}.parquet` (empty tag) vs `enriched_data_ai_cluster_{k}.parquet`.
 
 ```bash
-# Phase 1 — train on Default (elbow -> pick k & top_n -> fit -> attach Default)
+# Phase 1 — train group (elbow -> pick k & top_n -> fit -> attach)
 poetry run python jobs/cluster_analysis/cluster_analysis_pipeline.py \
-  --config_file jobs/cluster_analysis/cluster_config-ss03.yaml --group default
+  --config_file jobs/cluster_analysis/cluster_config-ss03.yaml --group train
 
-# Phase 2 — apply the Default-trained model to AI (predict -> attach AI)
+# Phase 2 — inference group: apply the train-group model (predict -> attach)
 poetry run python jobs/cluster_analysis/cluster_analysis_pipeline.py \
-  --config_file jobs/cluster_analysis/cluster_config-ss03.yaml --group ai
+  --config_file jobs/cluster_analysis/cluster_config-ss03.yaml --group inference
 ```
 
-The AI run requires the Default run's artifacts (`feature_order.json`, `clip_bounds.json`,
+The inference run requires the train run's artifacts (`feature_order.json`, `clip_bounds.json`,
 and the `kmeans_model_top{N}_features_k_{K}.pkl` pickle) under the shared `output_path`, so
 run phase 1 first and keep `top_features` / `n_clusters` unchanged between the two.
 

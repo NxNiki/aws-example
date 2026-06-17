@@ -107,7 +107,8 @@ class ClusterAnalysisPipeline:
         Args:
             config_file: Path to the project YAML config.
             active_group: When the config declares a ``groups:`` mapping (one data
-                source per ai_group, e.g. train on ``default`` then score ``ai``),
+                source per ai_group, e.g. a ``train`` group to fit and an
+                ``inference`` group to score),
                 this selects which group's data_loader / pipeline / output_tag is
                 active for this run. Ignored by legacy flat configs. Falls back to
                 the config's ``active_group`` field when not passed on the CLI.

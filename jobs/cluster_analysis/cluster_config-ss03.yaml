@@ -15,7 +15,7 @@ s3_prefix: ""
 # with that model. project_name / work_dir / cluster_analysis.model are shared so both
 # runs resolve the same output_path, model dir, and cluster_labels.parquet. `active_group`
 # selects which group's data sources + pipeline switches are active; override with --group.
-active_group: "default"
+active_group: "train"
 
 data_loader:
   cluster_data:  # data to train cluster model. Per-group prefix/row_filters/local_cache live under `groups:`.
@@ -184,7 +184,7 @@ data_loader:
 # (data_types, columns_to_read, bin_size, thresholds) is shared above. merge_on includes
 # ai_group, so Default and AI labels coexist in cluster_labels.parquet without colliding.
 groups:
-  default:  # training group: fit kmeans here, attach to Default enriched data.
+  train:  # training group: fit kmeans here, attach to its enriched data. (ai_group=Default)
     cluster_data:
       prefix: "etl-results/jobs/output_ss03_feature_engineer/features_grouped_binsize_50/"
       row_filters: {currency: "", math_table_id: "normal_zero", ai_group: "Default"}
@@ -194,7 +194,7 @@ groups:
       row_filters: {currency: "", math_table_id: "normal_zero", ai_group: "Default"}
       local_cache: "ss03_features_enriched_default.parquet"
     output_tag: ""  # keep historical enriched_data_cluster_{k}.parquet names
-  ai:  # inference group: score with the Default-trained model, attach to AI enriched data.
+  inference:  # inference group: score with the train-group model, attach to its enriched data. (ai_group=AI)
     cluster_data:
       prefix: "etl-results/jobs/output_ss03_feature_engineer_ai/features_grouped_binsize_50/"
       row_filters: {currency: "", math_table_id: "normal_zero", ai_group: "AI"}
@@ -367,17 +367,16 @@ cluster_analysis:
 # top_features / n_clusters above are shared, so the `ai` apply run always loads the
 # model the `default` run trained (no hand-syncing of hyperparameters between runs).
 pipeline:
-  default:  # train: sweep elbow, fit final kmeans, attach to Default enriched data.
+  train:  # sweep elbow, fit final kmeans, attach to the train group's enriched data.
     elbow_method: true  # Run elbow method analysis
-    cluster_analysis: true  # Fit kmeans on selected features; persists model + feature_order.json
+    cluster_analysis: true  # Fit kmeans on selected features; persists model + feature_order.json + clip_bounds.json
     apply_model: false  # No cross-group scoring while training
-    attach_cluster_label: true  # Attach Default cluster indices to Default enriched data
+    attach_cluster_label: true  # Attach cluster indices to the train group's enriched data
     get_cluster_stats: false
     upload_result_to_s3: false
-  ai:  # apply: score AI grouped data with the Default-trained model, attach to AI enriched data.
-    elbow_method: false
-    cluster_analysis: false  # Do NOT refit; reuse the Default-trained model
-    apply_model: true  # Predict AI labels with the saved model + saved feature order
-    attach_cluster_label: true  # Attach AI cluster indices -> enriched_data_ai_cluster_{k}.parquet
+  inference:  # score the inference group with the train-group model, attach to its enriched data.
+    # elbow_method / cluster_analysis omitted: inference never sweeps or refits (default False).
+    apply_model: true  # Predict labels with the saved model + saved feature order
+    attach_cluster_label: true  # Attach cluster indices -> enriched_data_ai_cluster_{k}.parquet
     get_cluster_stats: false
     upload_result_to_s3: false
