@@ -30,16 +30,18 @@ import argparse
 
 from bituslabs_ds.features import FeaturePipelineRunner, GameFeatureConfig
 
-# ai_group slice -> (output_prefix, selected_groups). Separate prefixes keep the
+# ai_group slice -> (output_prefix, selected_groups, bin_size). Separate prefixes keep the
 # Default and AI datasets isolated; the cluster pipeline reads each via its own group.
+# bin_size is per-group so each matches the set already materialised on S3 (keeping
+# incremental runs drift-free); the clustering itself only consumes binsize_50.
 GROUPS = {
-    "default": ("output_ss03_feature_engineer", ("Default",)),
-    "ai": ("output_ss03_feature_engineer_ai", ("AI",)),
+    "default": ("output_ss03_feature_engineer", ("Default",), [50, 70]),
+    "ai": ("output_ss03_feature_engineer_ai", ("AI",), [30, 50, 70, 100]),
 }
 
 
 def build_config(group: str) -> GameFeatureConfig:
-    output_prefix, selected_groups = GROUPS[group]
+    output_prefix, selected_groups, bin_size = GROUPS[group]
     return GameFeatureConfig(
         game_id="SS03",
         output_prefix=output_prefix,
@@ -48,7 +50,7 @@ def build_config(group: str) -> GameFeatureConfig:
         ai_groups=("AI", "AB_TEST_A", "AB_TEST_B", "Default"),
         selected_groups=selected_groups,
         partition_cols=("math_table_id",),
-        bin_size=[30, 50, 70],
+        bin_size=bin_size,
         session_break_threshold_seconds=60 * 60 * 12,
     )
 

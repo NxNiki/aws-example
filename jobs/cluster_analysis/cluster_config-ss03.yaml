@@ -361,7 +361,7 @@ cluster_analysis:
   dbscan_eps: 3  # DBSCAN: neighborhood radius in scaled feature space; tune per dataset.
   dbscan_min_samples: 50  # DBSCAN: min samples in eps-neighborhood for a core point.
   n_clusters: 3  # Number of clusters for K-means. The `ai` apply run reuses this to resolve the trained model.
-  top_features: 35  # Number of top features to use. The `ai` apply run reuses this to resolve the trained model.
+  top_features: 40  # Number of top features to use. The inference run reuses this to resolve the trained model.
 
 # Pipeline switches keyed by group; the active_group's block is used for the run.
 # top_features / n_clusters above are shared, so the `ai` apply run always loads the
@@ -373,10 +373,10 @@ pipeline:
     apply_model: false  # No cross-group scoring while training
     attach_cluster_label: true  # Attach cluster indices to the train group's enriched data
     get_cluster_stats: false
-    upload_result_to_s3: false
+    upload_result_to_s3: true  # Upload this run's output folder to S3
   inference:  # score the inference group with the train-group model, attach to its enriched data.
     # elbow_method / cluster_analysis omitted: inference never sweeps or refits (default False).
     apply_model: true  # Predict labels with the saved model + saved feature order
     attach_cluster_label: true  # Attach cluster indices -> enriched_data_ai_cluster_{k}.parquet
     get_cluster_stats: false
-    upload_result_to_s3: false
+    upload_result_to_s3: true  # Upload this run's output folder to S3
