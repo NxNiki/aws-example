@@ -888,7 +888,7 @@ class ClusterAnalysisPipeline:
             )
 
         # Save cluster labels into the shared parquet; one column per <model>-n_features_<N>-k_<K>.
-        new_labels = data[self.merge_features].copy()
+        new_labels = pd.DataFrame(data[self.merge_features].copy())
         new_labels[self.cluster_label_column] = cluster_label
         self._write_cluster_labels(new_labels)
 
@@ -1008,7 +1008,7 @@ class ClusterAnalysisPipeline:
                 merged = existing.merge(
                     new_labels[merge_cols + [col]], on=merge_cols, how="outer", suffixes=("", "_incoming")
                 )
-                merged[col] = merged[f"{col}_incoming"].combine_first(merged[col])
+                merged[col] = cast(pd.Series, merged[f"{col}_incoming"]).combine_first(cast(pd.Series, merged[col]))
                 combined = merged.drop(columns=[f"{col}_incoming"])
             else:
                 combined = existing.merge(new_labels, on=merge_cols, how="outer")
@@ -1040,7 +1040,7 @@ class ClusterAnalysisPipeline:
         unique_labels, counts = np.unique(cluster_labels, return_counts=True)
         logger.info(f"apply_model cluster sizes: {dict(zip(unique_labels, counts))}")
 
-        new_labels = data[self.merge_features].copy()
+        new_labels = pd.DataFrame(data[self.merge_features].copy())
         new_labels[self.cluster_label_column] = cluster_labels
         self._write_cluster_labels(new_labels)
 
