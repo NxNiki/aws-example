@@ -100,7 +100,7 @@ class ClusterAnalysisPipeline:
     Supports multiple projects with separate configuration files.
     """
 
-    def __init__(self, config_file: str, active_group: Optional[str] = None):
+    def __init__(self, config_file: str, active_group: Optional[str] = None, run_id: Optional[str] = None):
         """
         Initialize clustering analysis for a specific project.
 
@@ -112,11 +112,20 @@ class ClusterAnalysisPipeline:
                 this selects which group's data_loader / pipeline / output_tag is
                 active for this run. Ignored by legacy flat configs. Falls back to
                 the config's ``active_group`` field when not passed on the CLI.
+            run_id: Name of the per-run output folder under ``work_dir`` (holds
+                ``<cluster_model>/{figures,models,output}`` and the shared
+                ``cluster_labels.parquet``). Callers pass a timestamped id
+                (e.g. ``result_2026-06-17_10-18``) so successive runs don't
+                overwrite each other. The two-phase ``inference`` run MUST reuse
+                the ``train`` run's run_id to find its model / feature_order /
+                clip_bounds. Falls back to ``project_name`` (legacy layout) when
+                not provided.
         """
 
         self._config_file = config_file
         self._config = load_config(config_file)
         self.project_name = self._config["project_name"]
+        self.run_id = run_id or self._config.get("run_id") or self.project_name
         self.valid_sample_file = ""
 
         self._active_group = active_group or self._config.get("active_group")
@@ -185,9 +194,10 @@ class ClusterAnalysisPipeline:
         return ""
 
     def _setup_directories(self) -> None:
-        """Create necessary directories for the project."""
+        """Create necessary directories for the run (under work_dir/<run_id>/<model>)."""
         self.work_dir = LOCAL_ROOT / "jobs" / self._config["work_dir"]
-        self.output_path = self.work_dir / self._config["project_name"] / self.cluster_model
+        self.output_path = self.work_dir / self.run_id / self.cluster_model
+        logger.info(f"run_id={self.run_id!r}; output_path={self.output_path}")
 
         # Create directories
         for dir_name in ["output", "features", "figures", "models"]:
@@ -209,8 +219,8 @@ class ClusterAnalysisPipeline:
 
     @property
     def cluster_labels_file_path(self):
-        """Shared parquet across all (model, n_features, k) runs; one column per run."""
-        return self.work_dir / self._config["project_name"] / "cluster_labels.parquet"
+        """Shared parquet across all (model, n_features, k) runs in this run_id; one column per run."""
+        return self.work_dir / self.run_id / "cluster_labels.parquet"
 
     @property
     def key_features(self):

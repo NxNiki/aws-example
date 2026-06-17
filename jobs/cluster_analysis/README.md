@@ -136,19 +136,28 @@ path) can't drift between the train and apply runs.
 - `attach_cluster_label` tags per-cluster output by group via `output_tag`:
   `enriched_data_cluster_{k}.parquet` (empty tag) vs `enriched_data_ai_cluster_{k}.parquet`.
 
+Each run writes to its own folder `work_dir/<run_id>/` (default
+`run_id = result_<YYYY-MM-DD_HH-MM>`) so successive runs don't overwrite each other.
+Because the inference run reads the train run's model, **pass the train run's `run_id`
+to the inference run via `--run-id`** (the train run logs its id as `run_id for this run: ...`):
+
 ```bash
-# Phase 1 — train group (elbow -> pick k & top_n -> fit -> attach)
+# Phase 1 — train group (elbow -> pick k & top_n -> fit -> attach). Note the logged run_id.
 poetry run python jobs/cluster_analysis/cluster_analysis_pipeline.py \
   --config_file jobs/cluster_analysis/cluster_config-ss03.yaml --group train
 
-# Phase 2 — inference group: apply the train-group model (predict -> attach)
+# Phase 2 — inference group: apply the train-group model (predict -> attach).
+# Reuse the train run's run_id so it finds the trained model.
 poetry run python jobs/cluster_analysis/cluster_analysis_pipeline.py \
-  --config_file jobs/cluster_analysis/cluster_config-ss03.yaml --group inference
+  --config_file jobs/cluster_analysis/cluster_config-ss03.yaml --group inference \
+  --run-id result_2026-06-17_10-18
 ```
 
 The inference run requires the train run's artifacts (`feature_order.json`, `clip_bounds.json`,
-and the `kmeans_model_top{N}_features_k_{K}.pkl` pickle) under the shared `output_path`, so
-run phase 1 first and keep `top_features` / `n_clusters` unchanged between the two.
+and the `kmeans_model_top{N}_features_k_{K}.pkl` pickle) under the shared
+`work_dir/<run_id>/<model>/models/`, so run phase 1 first, reuse its `run_id`, and keep
+`top_features` / `n_clusters` unchanged between the two. (Data caches live directly under
+`work_dir`, shared across run_ids, so a new run_id does not re-download from S3.)
 
 ## Other scripts in this folder
 
