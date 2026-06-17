@@ -53,14 +53,20 @@ def feature_selection(data, cluster_pipeline):
     return important_features
 
 
-def main(config_path: str):
+def main(config_path: str, group: str | None = None, run_id: str | None = None):
     start_time = time.time()
 
     project_name = os.path.basename(config_path).replace(".yaml", "")
     time_tag = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    setup_logging(LOCAL_ROOT / "jobs/log", f"cluster_analysis_{project_name}_{time_tag}.log")
+    log_suffix = f"_{group}" if group else ""
+    setup_logging(LOCAL_ROOT / "jobs/log", f"cluster_analysis_{project_name}{log_suffix}_{time_tag}.log")
 
-    cluster_pipeline = ClusterAnalysisPipeline(config_path)
+    # Each run lands in its own folder so results aren't overwritten. When run_id is
+    # not passed, the pipeline derives a timestamped, bin-size-tagged default
+    # (result_<date>_binsize<N>). The two-phase inference run must reuse the train
+    # run's id via --run-id.
+    cluster_pipeline = ClusterAnalysisPipeline(config_path, active_group=group, run_id=run_id)
+    logger.info(f"run_id for this run: {cluster_pipeline.run_id}")
     data = cluster_pipeline.load_cluster_data(reload=RELOAD_CLUSTER_DATA)
 
     # Data profiling and cleaning
@@ -68,27 +74,28 @@ def main(config_path: str):
     numeric_cols = data.select_dtypes(include=["number"]).columns
     data[numeric_cols] = data[numeric_cols].fillna(0)
 
-    important_features = feature_selection(data, cluster_pipeline)
+    # Feature selection is only needed by stages that fit a model on this data.
+    # The apply stage reuses the persisted feature order instead of re-selecting.
+    if cluster_pipeline.run_elbow_method or cluster_pipeline.run_cluster_analysis:
+        important_features = feature_selection(data, cluster_pipeline)
 
-    # feed original data (without power transform which is packed in the clustering pipeline)
-    if cluster_pipeline.run_elbow_method:
-        cluster_pipeline.elbow_method(
-            data=data,
-            features_ordered_by_importance=important_features,
-        )
+        # feed original data (without power transform which is packed in the clustering pipeline)
+        if cluster_pipeline.run_elbow_method:
+            cluster_pipeline.elbow_method(
+                data=data,
+                features_ordered_by_importance=important_features,
+            )
 
-    if cluster_pipeline.run_cluster_analysis:
-        cluster_pipeline.cluster_analysis(
-            data=data,
-            features_ordered_by_importance=important_features,
-        )
+        if cluster_pipeline.run_cluster_analysis:
+            cluster_pipeline.cluster_analysis(
+                data=data,
+                features_ordered_by_importance=important_features,
+            )
 
-    if cluster_pipeline.run_test_model:
-        cluster_pipeline.model_inference(
-            data=data,
-            features_ordered_by_importance=important_features,
-            # model_path="/Users/niuxin/Documents/aws-example/jobs/output_ss01_wucaishen/ss01_analysis_kmeans_2026-01-21_15-22-05/models/kmeans_model_top40_features_k_3.pkl",
-        )
+    # Score a second ai_group with the model trained above (or in a prior run),
+    # reusing the persisted feature order; writes labels to cluster_labels.parquet.
+    if cluster_pipeline.run_apply_model:
+        cluster_pipeline.apply_model(data=data)
 
     del data
     gc.collect()
@@ -123,6 +130,18 @@ if __name__ == "__main__":
     parser.add_argument(
         "--config_file", default=f"{current_path}/cluster_config-{project}.yaml", help="Project to analyze"
     )
+    parser.add_argument(
+        "--group",
+        default=None,
+        help="Active group for configs with a `groups:` mapping (e.g. 'train' to fit, 'inference' to score).",
+    )
+    parser.add_argument(
+        "--run-id",
+        dest="run_id",
+        default=None,
+        help="Output folder under work_dir (default: result_<YYYY-MM-DD_HH-MM>). "
+        "Pass the train run's id here on the inference run so it finds the trained model.",
+    )
     args = parser.parse_args()
 
-    main(args.config_file)
+    main(args.config_file, group=args.group, run_id=args.run_id)

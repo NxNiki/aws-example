@@ -243,7 +243,9 @@ def clip_outliers(
         if not positives.empty:
             upper_bound = positives.quantile(upper_quantile)
             upper_bounds.append(upper_bound)
-            df.loc[df[col_name] > upper_bound, col_name] = upper_bound
+            # upper_bound > 0, so clip(upper=) leaves negatives/zeros untouched (same as
+            # the old positives-only mask) while promoting int columns to float safely.
+            df[col_name] = df[col_name].clip(upper=upper_bound)
             logger.info(f"apply clip to positive values in {col_name}, upper bound: {upper_bound}")
         else:
             upper_bounds.append(np.nan)
@@ -251,7 +253,8 @@ def clip_outliers(
         if not negatives.empty:
             lower_bound = negatives.quantile(lower_quantile)
             lower_bounds.append(lower_bound)
-            df.loc[df[col_name] < lower_bound, col_name] = lower_bound
+            # lower_bound < 0, so clip(lower=) leaves positives/zeros untouched.
+            df[col_name] = df[col_name].clip(lower=lower_bound)
             logger.info(f"apply clip to negative values in {col_name}, lower bound: {lower_bound}")
         else:
             lower_bounds.append(np.nan)

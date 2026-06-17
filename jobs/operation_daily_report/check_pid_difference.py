@@ -5,7 +5,9 @@ SS01 and SS03 share the same Athena query (ag_share_data.slotorders SB28).
 """
 
 import argparse
+import logging
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from textwrap import dedent
 from typing import Any
@@ -23,6 +25,20 @@ from bituslabs_ds.config import (
     setup_logging,
 )
 from bituslabs_ds.etl import AthenaBackend, DataLoader, RedshiftBackend
+
+logger = logging.getLogger(__name__)
+
+# Stored in the results dict (in place of a PID list) when a single game's check
+# raises. Per-game isolation: one game failing -- e.g. corrupt Athena data -- must
+# not abort the others, and the failure has to stay visible in the final report.
+# run_daily_report captures stdout while calling main(), so a printed traceback
+# would be swallowed; a marker carried in the returned report reaches Slack.
+_CHECK_FAILED_PREFIX = "CHECK FAILED:"
+
+
+def _failed_marker(exc: Exception) -> list[str]:
+    return [f"{_CHECK_FAILED_PREFIX} {exc!r}"]
+
 
 pids_to_ignore = {
     "B26",
@@ -108,6 +124,18 @@ pids_to_ignore = {
     "LN7",
 }
 
+# agfish.hunterorders has oversized/corrupt rows in older months (observed in
+# 2024-10 and 2024-12) that trip Athena's hard 32MB per-row limit on ANY scan
+# touching those files -- even projecting only productid -- aborting the whole
+# daily report. Scan a rolling recent window instead of full history: 12 months
+# stays clear of the known bad months, and since the window only moves forward it
+# can never reach back into 2024 again. This also matches the "currently unopened
+# PID" intent of the report (a productid active only years ago is stale anyway).
+FISHHUNTER_ATHENA_LOOKBACK_DAYS = 365
+_FISHHUNTER_ATHENA_CUTOFF = (datetime.now(timezone.utc) - timedelta(days=FISHHUNTER_ATHENA_LOOKBACK_DAYS)).strftime(
+    "%Y-%m-%d %H:%M:%S"
+)
+
 # Shared Athena query for ss01 and ss03 (same slotorders table)
 SLOT_ATHENA_QUERY = dedent(
     f"""
@@ -130,7 +158,7 @@ QUERIES: dict[str, dict[str, Any]] = {
             SELECT distinct t.productid AS product_id FROM agfish.hunterorders AS t
             WHERE t.currency IN {ETL_CURRENCY_CODES} AND t.gametype = 'HM3D' AND t.account != 0 AND t.fishcost != 0
             AND t.ordertype = 1 AND t.remark = t.gametype AND t.weaponid IS NULL
-            AND t.billtime > TIMESTAMP '2024-01-01 00:00:00'
+            AND t.billtime > TIMESTAMP '{_FISHHUNTER_ATHENA_CUTOFF}'
         """
         ),
         "athena_database": "agfish",
@@ -249,60 +277,80 @@ def main(
 
     results: dict[str, list[str]] = {}
 
-    # Fish hunter: Athena result cached at output/fishhunter_product_id_pa.parquet
+    # Fish hunter (independent Athena + Redshift). Isolated so a failure here --
+    # e.g. corrupt rows in agfish.hunterorders -- doesn't abort the ss01/ss03 checks.
     fishhunter_pa = output_dir / "fishhunter_product_id_pa.parquet"
-    results["fishhunter"] = run_pid_diff_check(
-        athena_database=QUERIES["fish_hunter"]["athena_database"],
-        athena_output_location=QUERIES["fish_hunter"]["athena_output"],
-        athena_query=QUERIES["fish_hunter"]["athena_query"],
-        redshift_database=QUERIES["fish_hunter"]["redshift_database"],
-        redshift_query=QUERIES["fish_hunter"]["redshift_query"],
-        output_path_redshift=str(output_dir / "fishhunter_product_id.parquet"),
-        output_path_athena=str(fishhunter_pa),
-        pids_to_ignore=pids_to_ignore,
-        bastion_ip=bastion_ip,
-        ctas_approach=QUERIES["fish_hunter"]["ctas_approach"],
-        reload=reload_athena,
-    )
-
-    # Slot (ss01/ss03): run Athena once, reuse for both. Cached at output/slot_product_id_pa.parquet
-    slot_pa_path = output_dir / "slot_product_id_pa.parquet"
-    data_loader = DataLoader(
-        backend=AthenaBackend(
-            database="ag_share_data",
-            output_location=f"s3://{S3_BUCKET}/ds-data-slot/product_id_pa",
-            ctas_approach=False,
-        )
-    )
     try:
-        df_slot_pa = data_loader.query_to_df(
-            query=SLOT_ATHENA_QUERY, local_cache=str(slot_pa_path), reload=reload_athena
+        results["fishhunter"] = run_pid_diff_check(
+            athena_database=QUERIES["fish_hunter"]["athena_database"],
+            athena_output_location=QUERIES["fish_hunter"]["athena_output"],
+            athena_query=QUERIES["fish_hunter"]["athena_query"],
+            redshift_database=QUERIES["fish_hunter"]["redshift_database"],
+            redshift_query=QUERIES["fish_hunter"]["redshift_query"],
+            output_path_redshift=str(output_dir / "fishhunter_product_id.parquet"),
+            output_path_athena=str(fishhunter_pa),
+            pids_to_ignore=pids_to_ignore,
+            bastion_ip=bastion_ip,
+            ctas_approach=QUERIES["fish_hunter"]["ctas_approach"],
+            reload=reload_athena,
         )
-        print(df_slot_pa)
-    finally:
-        data_loader.close()
+    except Exception as e:
+        logger.exception("fishhunter PID check failed")
+        results["fishhunter"] = _failed_marker(e)
 
-    results["ss01"] = run_slot_pid_diff(
-        redshift_query=QUERIES["ss01"]["redshift_query"],
-        redshift_database=QUERIES["ss01"]["redshift_database"],
-        prefix="ss01",
-        output_path_redshift=str(output_dir / "ss01_product_id.parquet"),
-        output_path_athena=str(slot_pa_path),
-        pids_to_ignore=pids_to_ignore,
-        bastion_ip=bastion_ip,
-    )
+    # Slot (ss01/ss03): run Athena once, reuse for both. Cached at output/slot_product_id_pa.parquet.
+    # The shared Athena scan is a single point of failure for both games; isolate it
+    # once, then isolate each game's Redshift diff so ss01 and ss03 stay independent.
+    slot_pa_path = output_dir / "slot_product_id_pa.parquet"
+    slot_athena_error: list[str] | None = None
+    try:
+        data_loader = DataLoader(
+            backend=AthenaBackend(
+                database="ag_share_data",
+                output_location=f"s3://{S3_BUCKET}/ds-data-slot/product_id_pa",
+                ctas_approach=False,
+            )
+        )
+        try:
+            df_slot_pa = data_loader.query_to_df(
+                query=SLOT_ATHENA_QUERY, local_cache=str(slot_pa_path), reload=reload_athena
+            )
+            print(df_slot_pa)
+        finally:
+            data_loader.close()
+    except Exception as e:
+        logger.exception("slot (ss01/ss03) shared Athena query failed")
+        slot_athena_error = _failed_marker(e)
 
-    results["ss03"] = run_slot_pid_diff(
-        redshift_query=QUERIES["ss03"]["redshift_query"],
-        redshift_database=QUERIES["ss03"]["redshift_database"],
-        prefix="ss03",
-        output_path_redshift=str(output_dir / "ss03_product_id.parquet"),
-        output_path_athena=str(slot_pa_path),
-        pids_to_ignore=pids_to_ignore,
-        bastion_ip=bastion_ip,
-    )
+    for game in ("ss01", "ss03"):
+        if slot_athena_error is not None:
+            results[game] = slot_athena_error
+            continue
+        try:
+            results[game] = run_slot_pid_diff(
+                redshift_query=QUERIES[game]["redshift_query"],
+                redshift_database=QUERIES[game]["redshift_database"],
+                prefix=game,
+                output_path_redshift=str(output_dir / f"{game}_product_id.parquet"),
+                output_path_athena=str(slot_pa_path),
+                pids_to_ignore=pids_to_ignore,
+                bastion_ip=bastion_ip,
+            )
+        except Exception as e:
+            logger.exception("%s PID check failed", game)
+            results[game] = _failed_marker(e)
 
     return results
+
+
+def _render_section(results: dict[str, list[str]], key: str) -> str:
+    """Render one game's PID list, or its inline failure marker if the check raised."""
+    val = results.get(key)
+    if val is None:
+        return f"{_CHECK_FAILED_PREFIX} not run"
+    if len(val) == 1 and val[0].startswith(_CHECK_FAILED_PREFIX):
+        return val[0]
+    return str(val)
 
 
 def format_pid_report(results: dict[str, list[str]]) -> str:
@@ -310,15 +358,15 @@ def format_pid_report(results: dict[str, list[str]]) -> str:
     lines = [
         "\nss01_wucaishen 未开通PID：",
         "--------------------------------",
-        str(results["ss01"]),
+        _render_section(results, "ss01"),
         "--------------------------------",
         "ss03_majiang_streak 未开通PID：",
         "--------------------------------",
-        str(results["ss03"]),
+        _render_section(results, "ss03"),
         "--------------------------------",
         "捕鱼未开通PID：",
         "--------------------------------",
-        str(results["fishhunter"]),
+        _render_section(results, "fishhunter"),
         "--------------------------------",
     ]
     return "\n".join(lines)

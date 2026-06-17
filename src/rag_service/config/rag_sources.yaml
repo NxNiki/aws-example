@@ -59,13 +59,18 @@ sources:
       - https://bituslabs.atlassian.net/wiki/spaces/hub/folder/91619342
     include_children: true
 
-  - name: model_fish_hunter
-    page_urls:
-      - []
-    include_children: true
-
   - name: ai_summary_pages
     page_urls:
       - https://bituslabs.atlassian.net/wiki/spaces/hub/pages/627179541/AI
       - https://bituslabs.atlassian.net/wiki/spaces/hub/pages/718012441/AI
     include_children: false
+
+  - name: life_cycle_prediction
+    page_urls:
+      - https://bituslabs.atlassian.net/wiki/spaces/hub/folder/1114537998
+    include_children: true
+
+  - name: model_fish_hunter
+    page_urls:
+      - []
+    include_children: true

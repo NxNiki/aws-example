@@ -51,6 +51,27 @@ _USER_BETS_GROUP_COLS = """
 
 
 def generate_query(stats_agg_col: AggCol, start_date: str):
+    """Build the SS03 per-user game-stats SQL (one row per period x ai_group x user).
+
+    ETL job: writes output_ss03_mahjiang_streak/{daily,weekly,monthly}_stats
+    (the ``user_*`` metrics consumed by the SS03 dashboard / DataMetrics).
+    ``stats_agg_col`` selects the period grain: activity_date / _week / _month.
+
+    IMPORTANT — rows are intentionally duplicated, so NEVER aggregate across
+    all ``ai_group`` values. ``user_bets_group`` UNION ALLs each bet into:
+      * one COMBINED group: AI / AB_TEST_A / AB_TEST_B / Default, and
+      * one or more PER-MATHTABLE groups: ``<mathtable>`` for AI users,
+        ``Default_<mathtable>`` for the rest (AB_TEST_A/B excluded here).
+    The per-mathtable rows are just a re-partition of the same bets, so every
+    bet is counted twice. The four COMBINED groups partition each bet exactly
+    once and have one row per user per period.
+
+    Correct user-level rollups (e.g. avg bet per user, distinct user counts):
+    filter to the COMBINED groups only, then divide by COUNT(DISTINCT user_id).
+    Summing a metric over every ai_group double-counts. Note also that all dates
+    are Shanghai-day buckets (CONVERT_TIMEZONE to Asia/Shanghai); comparing
+    against a raw-UTC ``created_at`` window will disagree at the day boundaries.
+    """
     effective_start = effective_start_date(stats_agg_col, start_date)
     query = dedent(
         f"""

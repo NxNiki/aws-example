@@ -475,11 +475,12 @@ class ETLScheduler:
         storage_root: OutputDir,
         lookback_days: int = 3,
         overwrite: bool = False,
+        default_start_date: str = "2025-01-01",
     ):
         self.loader = data_loader
         self._is_s3, self._storage_root = normalize_storage_root(storage_root)
         self.lookback_days = lookback_days
-        self.default_start_date = "2025-01-01"
+        self.default_start_date = default_start_date
         self.overwrite = overwrite
 
     @property
