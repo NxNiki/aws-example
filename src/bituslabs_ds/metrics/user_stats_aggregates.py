@@ -226,8 +226,17 @@ class DataMetrics:
         end_dt: datetime,
         key_cols: List[str],
         granularity: str = "day",
+        presence_df: Optional[pl.DataFrame] = None,
     ) -> None:
         self._df = df
+        # Population used for the ANY-GROUP retention return test (see
+        # _presence_by_date). When ``df`` is already a single-cohort slice
+        # (the dashboard filters per group BEFORE constructing DataMetrics),
+        # pass the FULL unfiltered window here so "did the user return in any
+        # group" isn't silently narrowed to "return in THIS group" — otherwise
+        # a group renamed across days (e.g. DYNAMIC_RTP_V2 → _V3) shows 0
+        # retention. Defaults to ``df`` for callers that already hold all groups.
+        self._presence_df = presence_df if presence_df is not None else df
         self.start_dt = start_dt
         self.end_dt = end_dt
         self.key_cols = key_cols
@@ -498,17 +507,21 @@ class DataMetrics:
     @cached_property
     def _presence_by_date(self) -> Dict[date, Set]:
         """
-        ``date → set of all user_ids active on that date`` across the FULL df, IGNORING group.
+        ``date → set of all user_ids active on that date``, IGNORING group, over the
+        full population (``self._presence_df`` — the unfiltered window when the caller
+        pre-filtered ``self._df`` to one cohort; otherwise ``self._df`` itself).
 
         Retention is ANY-GROUP: a day-0 cohort user counts as retained if they are active on
         the follow-up date in ANY group, not just their day-0 group. So a user who moves
-        between groups across days (e.g. ``dynamic_rtp_v3`` on day D → ``default`` on D+1, or
-        between A/B arms) still counts as retained for their day-0 group — "did they come back
-        to the game", not "did they stay in this group". The date key is normalised to ``date``.
+        between groups across days (e.g. ``DYNAMIC_RTP_V2`` on day D → ``DYNAMIC_RTP_V3`` on
+        D+1, or between A/B arms) still counts as retained for their day-0 group — "did they
+        come back to the game", not "did they stay in this group". This MUST read the full
+        population, not the per-cohort slice, or a renamed/replaced group reads as 0
+        retention. The date key is normalised to ``date``.
         """
         date_col = self._key_cols[0]
         presence: Dict[date, Set] = {}
-        for row in self._df.select(["user_id", date_col]).unique().iter_rows(named=True):
+        for row in self._presence_df.select(["user_id", date_col]).unique().iter_rows(named=True):
             presence.setdefault(_norm_date(row[date_col]), set()).add(row["user_id"])
         return presence
 

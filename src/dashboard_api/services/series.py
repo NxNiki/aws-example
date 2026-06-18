@@ -95,7 +95,11 @@ def load_series(
         df_c_date = df_c.filter((pl.col(date_col) >= start_dt) & (pl.col(date_col) <= end_dt))
         if df_c_date.is_empty():
             continue
-        dm = DataMetrics(df_c, start_dt=start_dt, end_dt=end_dt, key_cols=[date_col], granularity=granularity)
+        # presence_df=df_raw (full window, all groups) so any-group retention
+        # counts returns even when a user's group changed across days.
+        dm = DataMetrics(
+            df_c, start_dt=start_dt, end_dt=end_dt, key_cols=[date_col], granularity=granularity, presence_df=df_raw
+        )
         for metric in metrics:
             x_dates, y, lo, hi = dm.plot_values(metric, df_c_date)
             if len(x_dates) == 0:

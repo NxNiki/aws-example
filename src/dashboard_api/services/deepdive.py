@@ -151,7 +151,14 @@ def load_deepdive(
 
     for label, df_c in iter_cohorts(cfg, df_raw, group_values):
         dm = (
-            DataMetrics(df_c, start_dt=overall_start, end_dt=overall_end, key_cols=[date_col], granularity=granularity)
+            DataMetrics(
+                df_c,
+                start_dt=overall_start,
+                end_dt=overall_end,
+                key_cols=[date_col],
+                granularity=granularity,
+                presence_df=df_raw,  # full population for any-group retention
+            )
             if panel == "derived"
             else None
         )

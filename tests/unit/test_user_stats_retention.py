@@ -51,6 +51,32 @@ def test_day1_retention_zero_when_no_return():
     assert rate == pytest.approx(0.0)
 
 
+def test_renamed_group_across_days_via_presence_df():
+    """Dashboard flow: df is pre-filtered to one group, key_cols=[date] only.
+
+    Reproduces the production bug — a group present on D0 but renamed/replaced on
+    D1 (DYNAMIC_RTP_V2 → _V3). Without the full population the return test reads
+    only the filtered slice (no D1 rows) → 0 retention; presence_df=full fixes it.
+    """
+    d0, d1 = datetime(2026, 6, 1), datetime(2026, 6, 2)
+    full = pl.DataFrame(
+        {
+            "user_id": ["u1", "u2", "u1", "u2"],
+            "activity_date": [d0, d0, d1, d1],
+            "daily_group": ["DYNAMIC_RTP_V2", "DYNAMIC_RTP_V2", "DYNAMIC_RTP_V3", "DYNAMIC_RTP_V3"],
+        }
+    )
+    df_v2 = full.filter(pl.col("daily_group") == "DYNAMIC_RTP_V2")  # what iter_cohorts hands DataMetrics
+
+    buggy = DataMetrics(df_v2, start_dt=d0, end_dt=d0, key_cols=["activity_date"])["retention_rate_day1"]
+    assert buggy["retention_rate_day1"][0] == pytest.approx(0.0)  # the symptom
+
+    fixed = DataMetrics(df_v2, start_dt=d0, end_dt=d0, key_cols=["activity_date"], presence_df=full)[
+        "retention_rate_day1"
+    ]
+    assert fixed["retention_rate_day1"][0] == pytest.approx(1.0)  # both users returned under V3
+
+
 def test_day0_cohort_is_per_group():
     """The denominator (cohort) is still per-group, even though the return test is any-group."""
     d0 = datetime(2026, 6, 1)

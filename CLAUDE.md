@@ -147,6 +147,8 @@ features and should be split.
 
 Never commit secrets. Copy `.env.example` → `.env` and set `REDSHIFT_USER`, `REDSHIFT_PASSWORD`, `BASTION_KEY_PATH`. On ECS, secrets come from environment variables / Secrets Manager.
 
+A populated `.env` is already present locally with the Redshift + bastion credentials — use it (via `bituslabs_ds.etl.DataLoader`) to run ground-truth Redshift queries when validating dashboard/ETL numbers. The bastion IP changes; pass the current one (`DataLoader(bastion_ip=...)` / job `--bastion-ip`).
+
 ## Branch & Merge Workflow
 
 Full workflow rules live in `CONTRIBUTING.md`. Highlights:

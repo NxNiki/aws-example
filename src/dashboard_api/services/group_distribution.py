@@ -92,7 +92,14 @@ def load_group_distribution(
     stats: list[dict[str, Any]] = []
     produced = False
     for label, df_c in iter_cohorts(cfg, df_raw, group_values):
-        dm = DataMetrics(df_c, start_dt=overall_start, end_dt=overall_end, key_cols=[date_col], granularity=granularity)
+        dm = DataMetrics(
+            df_c,
+            start_dt=overall_start,
+            end_dt=overall_end,
+            key_cols=[date_col],
+            granularity=granularity,
+            presence_df=df_raw,  # full population for any-group retention
+        )
         metric_df = dm[metric]
         if metric_df is None:
             continue
