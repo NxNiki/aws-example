@@ -27,6 +27,23 @@ Usage::
 ``df`` must cover ``[start_dt, end_dt + RETENTION_LOAD_EXTRA_DAYS]`` so that retention
 follow-up dates are available when a retention metric is requested.
 
+Retention definition (ANY-GROUP)
+--------------------------------
+Day-N retention for a group ``G`` on day ``D`` is::
+
+    retention_rate_dayN(G, D) = |{users in G on D who are active on D+N in ANY group}|
+                                / |{users in G on D}|
+
+The follow-up test is **any-group**, not same-group: a day-0 cohort user counts as
+retained if they return to the game on the follow-up date in *any* group — not only ``G``.
+This matters because a user's group can change day to day (e.g. fish_hunter ``daily_group``
+is reassigned by strategy priority each day, or a user moves between A/B arms): a user in
+``dynamic_rtp_v3`` on day D who bets under ``default`` on D+1 is still retained for
+``dynamic_rtp_v3``. The denominator (cohort) is still per-group; only the return test
+ignores the group. Implemented via ``_presence_by_date`` (date → all active users) used by
+``_count_at_horizon``. (Same-group "stickiness" would require keying the follow-up presence
+by group; we intentionally do not.)
+
 Public API (imported by game_stats_monitor):
     DataMetrics, ENRICH_PRODUCED_COLUMNS, ENRICH_USER_ROW_INPUT_COLUMNS,
     RETENTION_LOAD_EXTRA_DAYS, column_is_enrich_produced
@@ -235,7 +252,7 @@ class DataMetrics:
         ``attr_name`` may be either a ``cached_property`` (e.g. ``rtp``) or a
         plain method (e.g. ``_count_at_horizon``). Internal helpers count
         too because retention metrics route through ``_cohorts`` /
-        ``_presence_map`` rather than touching ``pl.col("user_*")`` directly.
+        ``_presence_by_date`` rather than touching ``pl.col("user_*")`` directly.
         """
         if _seen is None:
             _seen = set()
@@ -479,16 +496,20 @@ class DataMetrics:
         )
 
     @cached_property
-    def _presence_map(self) -> Dict[Tuple, Set]:
+    def _presence_by_date(self) -> Dict[date, Set]:
         """
-        ``(*key_cols_values,) → set of user_ids`` across the FULL df (including follow-up dates).
-        The date position in the key is normalised to ``date`` (not ``datetime``).
+        ``date → set of all user_ids active on that date`` across the FULL df, IGNORING group.
+
+        Retention is ANY-GROUP: a day-0 cohort user counts as retained if they are active on
+        the follow-up date in ANY group, not just their day-0 group. So a user who moves
+        between groups across days (e.g. ``dynamic_rtp_v3`` on day D → ``default`` on D+1, or
+        between A/B arms) still counts as retained for their day-0 group — "did they come back
+        to the game", not "did they stay in this group". The date key is normalised to ``date``.
         """
         date_col = self._key_cols[0]
-        presence: Dict[Tuple, Set] = {}
-        for row in self._df.select(["user_id"] + self._key_cols).unique().iter_rows(named=True):
-            key = tuple(_norm_date(row[c]) if c == date_col else row[c] for c in self._key_cols)
-            presence.setdefault(key, set()).add(row["user_id"])
+        presence: Dict[date, Set] = {}
+        for row in self._df.select(["user_id", date_col]).unique().iter_rows(named=True):
+            presence.setdefault(_norm_date(row[date_col]), set()).add(row["user_id"])
         return presence
 
     @cached_property
@@ -517,20 +538,19 @@ class DataMetrics:
 
     def _count_at_horizon(self, horizon_idx: int) -> Optional[pl.DataFrame]:
         """
-        For each cohort, count how many users appear at the ``horizon_idx``-th follow-up date.
+        For each cohort, count how many of its users are active at the ``horizon_idx``-th
+        follow-up date in ANY group (any-group retention — see ``_presence_by_date``).
         Returns a DataFrame with ``_key_cols + ["_n"]`` or ``None`` when no cohorts exist.
-        Not cached itself — but uses cached ``_cohorts`` and ``_presence_map``.
+        Not cached itself — but uses cached ``_cohorts`` and ``_presence_by_date``.
         """
         cohorts = self._cohorts
         if not cohorts:
             return None
-        date_col = self._key_cols[0]
-        presence = self._presence_map
+        presence = self._presence_by_date
         rows = []
         for combo, d0, _n0, cohort in cohorts:
             h = _horizon_dates(d0, self.granularity)[horizon_idx]
-            h_key = tuple(_norm_date(h) if c == date_col else combo[c] for c in self._key_cols)
-            n = len(cohort & presence.get(h_key, set()))
+            n = len(cohort & presence.get(_norm_date(h), set()))
             rows.append({**combo, "_n": n})
         return pl.DataFrame(rows)
 
