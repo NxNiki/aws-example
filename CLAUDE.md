@@ -147,7 +147,14 @@ features and should be split.
 
 Never commit secrets. Copy `.env.example` → `.env` and set `REDSHIFT_USER`, `REDSHIFT_PASSWORD`, `BASTION_KEY_PATH`. On ECS, secrets come from environment variables / Secrets Manager.
 
-A populated `.env` is already present locally with the Redshift + bastion credentials — use it (via `bituslabs_ds.etl.DataLoader`) to run ground-truth Redshift queries when validating dashboard/ETL numbers. The bastion IP changes; pass the current one (`DataLoader(bastion_ip=...)` / job `--bastion-ip`).
+A populated `.env` is present locally with the full set of credentials the services and jobs use — not just Redshift. It carries:
+- **Redshift + bastion:** `REDSHIFT_USER`, `REDSHIFT_PASSWORD`, `BASTION_KEY_PATH` — run ground-truth Redshift queries via `bituslabs_ds.etl.DataLoader` (e.g. to validate dashboard/ETL numbers against the source).
+- **Confluence:** `CONFLUENCE_URL`, `CONFLUENCE_EMAIL`, `CONFLUENCE_TOKEN`.
+- **LLM:** `GOOGLE_API_KEY` (Gemini).
+- **Slack:** `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_USER_TOKEN`, `SLACK_CHANNEL_ID`.
+- **Services:** `RAG_SERVICE_URL`.
+
+The bastion **IP is not stored** (it changes) — pass the current one to `DataLoader(bastion_ip=...)` or a job's `--bastion-ip`. Never print `.env` values or commit them (`.env` is gitignored).
 
 ## Branch & Merge Workflow
 
