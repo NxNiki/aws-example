@@ -79,11 +79,13 @@ export function buildGroupDistributionOption(stats: GroupStat[], mode: "box" | "
     .filter((v): v is number => v != null && Number.isFinite(v));
   const lo = Math.min(0, ...extent);
   const hi = Math.max(0, ...extent);
-  const pad = (hi - lo) * 0.05 || 1;
+  const range = hi - lo || 1;
+  // Headroom for the per-bar stat block, which sits just above each bar's top
+  // and grows upward; without it the upper lines clip.
   const yAxis = {
     ...(base.yAxis as object),
-    min: lo === 0 ? 0 : Math.floor((lo - pad) * 100) / 100,
-    max: Math.ceil((hi + pad) * 100) / 100,
+    min: lo === 0 ? 0 : Math.floor((lo - range * 0.05) * 100) / 100,
+    max: Math.ceil((hi + range * 0.9) * 100) / 100,
   };
 
   const bars = stats.map((s) => ({
@@ -93,9 +95,6 @@ export function buildGroupDistributionOption(stats: GroupStat[], mode: "box" | "
   return {
     ...base,
     yAxis,
-    // Wider left margin: the per-bar stat text sits in the gap left of each bar
-    // and the leftmost one would otherwise spill onto the y-axis labels.
-    grid: { ...(base.grid as object), left: 150 },
     series: [
       { type: "bar", data: bars },
       {
@@ -124,22 +123,25 @@ export function buildGroupDistributionOption(stats: GroupStat[], mode: "box" | "
             );
           }
 
-          // Text block in the gap left of the bar, right-edge just clear of the
-          // bar's left side, baseline sitting on the bar's mean (parity with the
-          // legacy plotly annotation: x=i-0.25, xanchor=right, yanchor=bottom).
+          // Left-aligned stat block to the LEFT of the CI whisker, sitting just
+          // above the bar's top (mean) and growing upward. Right edge clears the
+          // whisker's cap; left edge is offset by the full block width
+          // (estimated from the longest line so wide values still clear it).
+          const text = statText(s);
+          const fontSize = 18;
+          const longest = Math.max(...text.split("\n").map((l) => l.length));
+          const blockWidth = longest * fontSize * 0.5;
           const at = api.coord([idx, s.mean ?? 0]);
-          const catW = api.size?.([1, 0]) as number[] | undefined;
-          const halfCat = catW ? catW[0] / 2 : 24;
           children.push({
             type: "text",
             style: {
-              text: statText(s),
-              x: at[0] - halfCat * 0.62,
-              y: at[1],
-              textAlign: "right",
+              text,
+              x: at[0] - cap - 6 - blockWidth,
+              y: at[1] - 8,
+              textAlign: "left",
               textVerticalAlign: "bottom",
-              fontSize: 11,
-              lineHeight: 14,
+              fontSize,
+              lineHeight: 22,
               fill: "#333",
             },
           });
