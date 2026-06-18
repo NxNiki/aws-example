@@ -27,18 +27,30 @@ function tooltipText(s: GroupStat): string {
   ].join("<br/>");
 }
 
+// Abbreviate large magnitudes to save width: ≥1e9 → "B", ≥1e6 → "M", ≥1e3 →
+// "k", each with three decimals (1,234 → "1.234k", 10,234 → "10.234k"). Below
+// 1,000 stays as-is — 2 decimals for floats, the bare integer for counts.
+// Full precision stays in the tooltip.
+function compact(v: number | null, integer = false): string {
+  if (v == null) return "–";
+  const a = Math.abs(v);
+  if (a >= 1e9) return `${(v / 1e9).toFixed(3)}B`;
+  if (a >= 1e6) return `${(v / 1e6).toFixed(3)}M`;
+  if (a >= 1e3) return `${(v / 1e3).toFixed(3)}k`;
+  return integer ? String(v) : v.toFixed(2);
+}
+
 // Per-bar summary drawn beside each bar (parity with the legacy plotly tab's
-// annotation). Kept compact so it fits the inter-bar gap: the "95%" qualifier
-// and full precision live in the tooltip; the CI line uses an en-dash range.
+// annotation). The "95%" qualifier and full precision live in the tooltip.
 function statText(s: GroupStat): string {
-  const f = (v: number | null) => (v == null ? "–" : v.toFixed(2));
   return [
-    `n=${s.n}`,
-    `μ=${f(s.mean)}`,
-    `med=${f(s.median)}`,
-    `max=${f(s.max)}`,
-    `min=${f(s.min)}`,
-    `CI ${f(s.ci_lower)}–${f(s.ci_upper)}`,
+    `n=${compact(s.n, true)}`,
+    `μ=${compact(s.mean)}`,
+    `med=${compact(s.median)}`,
+    `max=${compact(s.max)}`,
+    `min=${compact(s.min)}`,
+    `CI lo=${compact(s.ci_lower)}`,
+    `CI hi=${compact(s.ci_upper)}`,
   ].join("\n");
 }
 
@@ -92,6 +104,13 @@ export function buildGroupDistributionOption(stats: GroupStat[], mode: "box" | "
     value: s.mean,
     itemStyle: { color: colors.get(s.cohort), opacity: opacityFor(s.range_index) },
   }));
+
+  // Per-bar stat text shrinks as bars get more crowded: 22px at ≤3 bars down to
+  // 14px at ≥9 bars, linear in between (hardcoded range, clamped at both ends).
+  const n = stats.length;
+  const t = Math.max(0, Math.min(1, (n - 3) / (9 - 3)));
+  const statFontSize = Math.round(22 - t * (22 - 14));
+  const statLineHeight = Math.round(statFontSize * 1.25);
   return {
     ...base,
     yAxis,
@@ -128,9 +147,8 @@ export function buildGroupDistributionOption(stats: GroupStat[], mode: "box" | "
           // whisker's cap; left edge is offset by the full block width
           // (estimated from the longest line so wide values still clear it).
           const text = statText(s);
-          const fontSize = 18;
           const longest = Math.max(...text.split("\n").map((l) => l.length));
-          const blockWidth = longest * fontSize * 0.5;
+          const blockWidth = longest * statFontSize * 0.5;
           const at = api.coord([idx, s.mean ?? 0]);
           children.push({
             type: "text",
@@ -140,8 +158,8 @@ export function buildGroupDistributionOption(stats: GroupStat[], mode: "box" | "
               y: at[1] - 8,
               textAlign: "left",
               textVerticalAlign: "bottom",
-              fontSize,
-              lineHeight: 22,
+              fontSize: statFontSize,
+              lineHeight: statLineHeight,
               fill: "#333",
             },
           });
