@@ -27,6 +27,21 @@ function tooltipText(s: GroupStat): string {
   ].join("<br/>");
 }
 
+// Per-bar summary drawn beside each bar (parity with the legacy plotly tab's
+// annotation). Kept compact so it fits the inter-bar gap: the "95%" qualifier
+// and full precision live in the tooltip; the CI line uses an en-dash range.
+function statText(s: GroupStat): string {
+  const f = (v: number | null) => (v == null ? "–" : v.toFixed(2));
+  return [
+    `n=${s.n}`,
+    `μ=${f(s.mean)}`,
+    `med=${f(s.median)}`,
+    `max=${f(s.max)}`,
+    `min=${f(s.min)}`,
+    `CI ${f(s.ci_lower)}–${f(s.ci_upper)}`,
+  ].join("\n");
+}
+
 export function buildGroupDistributionOption(stats: GroupStat[], mode: "box" | "bar", metric: string): EChartsOption {
   const colors = cohortColors(stats);
   const categories = stats.map(label);
@@ -78,27 +93,58 @@ export function buildGroupDistributionOption(stats: GroupStat[], mode: "box" | "
   return {
     ...base,
     yAxis,
+    // Wider left margin: the per-bar stat text sits in the gap left of each bar
+    // and the leftmost one would otherwise spill onto the y-axis labels.
+    grid: { ...(base.grid as object), left: 150 },
     series: [
       { type: "bar", data: bars },
       {
         type: "custom",
-        // Draw a vertical whisker from ci_lower to ci_upper at each category.
+        // Per category: the CI whisker (ci_lower→ci_upper) plus the summary
+        // stat text beside the bar. clip:false so the multi-line text isn't
+        // cut off at the grid edge.
+        clip: false,
         renderItem: (_params, api) => {
           const idx = api.value(0) as number;
           const s = stats[idx];
-          if (s.ci_lower == null || s.ci_upper == null) return { type: "group", children: [] };
-          const lo = api.coord([idx, s.ci_lower]);
-          const hi = api.coord([idx, s.ci_upper]);
           const stroke = { stroke: "#333", lineWidth: 1.5 };
           const cap = 5;
-          return {
-            type: "group",
-            children: [
+          // ECharts custom-element children are awkward to type precisely; the
+          // renderItem return is the documented escape hatch.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const children: any[] = [];
+
+          if (s.ci_lower != null && s.ci_upper != null) {
+            const lo = api.coord([idx, s.ci_lower]);
+            const hi = api.coord([idx, s.ci_upper]);
+            children.push(
               { type: "line", shape: { x1: lo[0], y1: lo[1], x2: hi[0], y2: hi[1] }, style: stroke },
               { type: "line", shape: { x1: lo[0] - cap, y1: lo[1], x2: lo[0] + cap, y2: lo[1] }, style: stroke },
               { type: "line", shape: { x1: hi[0] - cap, y1: hi[1], x2: hi[0] + cap, y2: hi[1] }, style: stroke },
-            ],
-          };
+            );
+          }
+
+          // Text block in the gap left of the bar, right-edge just clear of the
+          // bar's left side, baseline sitting on the bar's mean (parity with the
+          // legacy plotly annotation: x=i-0.25, xanchor=right, yanchor=bottom).
+          const at = api.coord([idx, s.mean ?? 0]);
+          const catW = api.size?.([1, 0]) as number[] | undefined;
+          const halfCat = catW ? catW[0] / 2 : 24;
+          children.push({
+            type: "text",
+            style: {
+              text: statText(s),
+              x: at[0] - halfCat * 0.62,
+              y: at[1],
+              textAlign: "right",
+              textVerticalAlign: "bottom",
+              fontSize: 11,
+              lineHeight: 14,
+              fill: "#333",
+            },
+          });
+
+          return { type: "group", children };
         },
         data: stats.map((_, i) => [i]),
         z: 3,
