@@ -334,16 +334,7 @@ export function ReportTab() {
 
       <SpecEditor />
 
-      {r.spec.figures.length === 0 && (
-        <div className="p-10 text-center text-gray-400">
-          No figures yet — use <b>＋ Add to report</b> on any chart in the data tabs.
-        </div>
-      )}
-      {r.spec.figures.map((f) => (
-        <FigureCard key={f.id} fig={f} />
-      ))}
-
-      {/* Summary */}
+      {/* Summary (kept above the figures) */}
       <div className="mb-6 rounded border bg-white p-4">
         <div className="mb-1 flex items-center gap-3">
           <h3 className="font-semibold text-gray-700">Summary</h3>
@@ -360,6 +351,15 @@ export function ReportTab() {
           onChange={(e) => r.patchSpec({ summary: e.target.value })}
         />
       </div>
+
+      {r.spec.figures.length === 0 && (
+        <div className="p-10 text-center text-gray-400">
+          No figures yet — use <b>＋ Add to report</b> on any chart in the data tabs.
+        </div>
+      )}
+      {r.spec.figures.map((f) => (
+        <FigureCard key={f.id} fig={f} />
+      ))}
 
       {/* References */}
       <div className="mb-6 rounded border bg-white p-4">
