@@ -18,7 +18,7 @@ const opacityFor = (rangeIndex: number) => (rangeIndex === 0 ? 1 : 0.45);
 const label = (s: GroupStat) => `${s.cohort}\n${s.range_label}`;
 
 function tooltipText(s: GroupStat): string {
-  const f = (v: number | null) => (v == null ? "–" : v.toFixed(2));
+  const f = (v: number | null) => (v == null ? "–" : v.toFixed(3));
   return [
     `<b>${s.cohort}</b> · ${s.range_label}`,
     `n=${s.n} μ=${f(s.mean)} med=${f(s.median)}`,
@@ -37,7 +37,7 @@ function compact(v: number | null, integer = false): string {
   if (a >= 1e9) return `${(v / 1e9).toFixed(3)}B`;
   if (a >= 1e6) return `${(v / 1e6).toFixed(3)}M`;
   if (a >= 1e3) return `${(v / 1e3).toFixed(3)}k`;
-  return integer ? String(v) : v.toFixed(2);
+  return integer ? String(v) : v.toFixed(3);
 }
 
 // Per-bar summary drawn beside each bar (parity with the legacy plotly tab's

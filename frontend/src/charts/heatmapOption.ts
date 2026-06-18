@@ -52,7 +52,7 @@ export function buildHeatmapOption(matrix: CorrMatrix): EChartsOption {
           show: metrics.length <= 12,
           formatter: (p) => {
             const v = (p as unknown as { data: [number, number, number | null] }).data[2];
-            return v == null ? "" : v.toFixed(2);
+            return v == null ? "" : v.toFixed(3);
           },
           fontSize: 13,
         },
