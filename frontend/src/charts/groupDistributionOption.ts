@@ -97,7 +97,7 @@ export function buildGroupDistributionOption(stats: GroupStat[], mode: "box" | "
   const yAxis = {
     ...(base.yAxis as object),
     min: lo === 0 ? 0 : Math.floor((lo - range * 0.05) * 100) / 100,
-    max: Math.ceil((hi + range * 0.9) * 100) / 100,
+    max: Math.ceil((hi + range * 0.95) * 100) / 100,
   };
 
   const bars = stats.map((s) => ({
@@ -105,11 +105,11 @@ export function buildGroupDistributionOption(stats: GroupStat[], mode: "box" | "
     itemStyle: { color: colors.get(s.cohort), opacity: opacityFor(s.range_index) },
   }));
 
-  // Per-bar stat text shrinks as bars get more crowded: 22px at ≤3 bars down to
+  // Per-bar stat text shrinks as bars get more crowded: 19px at ≤3 bars down to
   // 14px at ≥9 bars, linear in between (hardcoded range, clamped at both ends).
   const n = stats.length;
   const t = Math.max(0, Math.min(1, (n - 3) / (9 - 3)));
-  const statFontSize = Math.round(22 - t * (22 - 14));
+  const statFontSize = Math.round(19 - t * (19 - 14));
   const statLineHeight = Math.round(statFontSize * 1.25);
   return {
     ...base,
