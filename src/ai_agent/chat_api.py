@@ -173,7 +173,7 @@ class ReferenceItem(BaseModel):
 class GenerateDescriptionRequest(BaseModel):
     data_summary: Dict[str, Any] = Field(
         ...,
-        description="JSON output of dashboards.report_agent.data_summary.extract_data_summary(figure)",
+        description="JSON summary of the figure's series/axes (built client-side and POSTed here)",
     )
     existing_description: Optional[str] = Field(
         None,

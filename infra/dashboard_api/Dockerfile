@@ -40,11 +40,6 @@ COPY src/dashboard_api ./src/dashboard_api
 # The shared modules (DataMetrics engine, Confluence client + secrets, report
 # HTML builders) live in bituslabs_ds and ride the COPY above.
 COPY configs/dashboard ./configs/dashboard
-# TRANSITIONAL: also stage the YAMLs at the old path so this image works under
-# a task definition that still sets DASHBOARD_CONFIG_DIR=/app/src/dashboards
-# (:latest image / task-def env can skew during deploys). Drop once the new
-# task def is live everywhere.
-COPY configs/dashboard/ ./src/dashboards/
 COPY --from=spa /frontend/dist ./frontend/dist
 
 ENV DASHBOARD_CONFIG_DIR=/app/configs/dashboard \

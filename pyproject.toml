@@ -6,7 +6,6 @@ authors = ["Xin Niu <michaelniki1988@.gmail.com>"]
 readme = "README.md"
 packages = [
     { include = "bituslabs_ds", from = "src" },
-    { include = "dashboards", from = "src" },
     { include = "dashboard_api", from = "src" },
     { include = "ai_agent", from = "src" },
     { include = "rag_service", from = "src" },
@@ -56,16 +55,6 @@ torch = "^2.10.0"
 torchvision = "^0.25.0"
 torchaudio = "^2.10.0" 
 lightning = "^2.4.0" # Modern standard for organizing PyTorch code
-
-[tool.poetry.group.dashboard]
-optional = true
-[tool.poetry.group.dashboard.dependencies]
-matplotlib = "^3.9.0"
-plotly = "^6.3.1"
-kaleido = "0.2.1"  # 1.x needs system Chrome; 0.2.x bundles Chromium and works in slim Docker images
-dash = "^3.2.0"
-polars = "^1.38.1"  # avoid 1.38.0 (yanked on PyPI)
-gunicorn = "^22.0"  # production WSGI server; replaces Flask dev server in Docker
 
 # dashboard_api — the new lightweight FastAPI service backing the React SPA
 # (data + report API; serves the built SPA static assets). LLM-free and
@@ -214,7 +203,7 @@ ignore_missing_imports = true
 [tool.isort]
 profile = "black"
 line_length = 120
-known_first_party = ["bituslabs_ds", "dashboards", "ai_agent", "rag_service"]
+known_first_party = ["bituslabs_ds", "dashboard_api", "ai_agent", "rag_service"]
 known_third_party = ["numpy", "pandas"]
 combine_as_imports = true
 include_trailing_comma = true

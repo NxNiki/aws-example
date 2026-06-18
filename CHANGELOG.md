@@ -304,6 +304,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `self.lf_bet` and tightening the early-return guard inside
   `_load_bet_data`.
 
+### Removed
+
+- **Legacy Dash dashboard decommissioned (frontend redesign Phase 5
+  complete).** After a clean one-week production bake of the React dashboard
+  (steady traffic, zero errors, legacy service idle at desired 0), the old Dash
+  app and its infra were deleted: `src/dashboards/` (the ~7,200-LOC
+  `game_stats_monitor.py`, `weekly_report.py`, the legacy `report_agent`
+  exporter/data_summary, and the back-compat shims left by the reorg) and
+  `infra/dashboard/`. The `dashboards` package entry and the `dashboard` poetry
+  group (dash, plotly, kaleido, gunicorn, matplotlib) were dropped from
+  `pyproject.toml` — every shared dep in that group remains available via the
+  `ds`/`dev`/`dashboard_api` groups. AWS teardown removed the
+  `game-stats-dashboard` ECS service, its task-definition family,
+  `game-stats-dashboard-tg`, the legacy task security group, the
+  `/ecs/game-stats-dashboard` log group, and the `bituslabs-ds-dashboard` ECR
+  repository. **Kept:** the production ALB (`game-stats-dashboard-alb`, now
+  fronting `dashboard-api`) and its security group; the weekly-report ETL job
+  and its scheduled-jobs registry entry. Rollback to Dash is no longer a
+  one-line ALB flip — it requires rebuilding from a pre-deletion git SHA.
+
 ## [0.2.0] - 2026-05-06
 
 This release establishes the documented release process (see `CONTRIBUTING.md`) and bundles all work since `0.1.5`. Future releases will track changes incrementally in `[Unreleased]`.

@@ -214,9 +214,7 @@ def build_metadata(
             src = result.get("file", "unknown")
             etl_aliases[alias][src] = expr
 
-    # Scan Python aggregation logic. Must point at the REAL module in
-    # bituslabs_ds/metrics — the old dashboards/ path is a one-line re-export
-    # shim now, and scanning it would silently yield zero aggregation docs.
+    # Scan the DataMetrics source for aggregation docstrings.
     agg_file = _SRC_DIR / "bituslabs_ds" / "metrics" / "user_stats_aggregates.py"
     python_agg: Dict[str, str] = {}
     if agg_file.exists():

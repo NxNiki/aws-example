@@ -1,6 +1,6 @@
 # Frontend Redesign: Agent-Native Dashboard (React + Vite + TypeScript + ECharts)
 
-**Status:** In progress — Phases 0–4 (incl. 4b agent skills) implemented on `feat/frontend-redesign-react`; Phase 5 cutover pending
+**Status:** Complete — Phases 0–5 shipped on `feat/frontend-redesign-react`; the legacy Dash app is decommissioned (see CHANGELOG → Removed).
 **Author:** michael.niu@bituslabs.com
 **Date:** 2026-06-03
 **Scope:** Replace the monolithic Dash app (`src/dashboards/game_stats_monitor.py`, ~7,200 LOC) with a React + Vite + TypeScript SPA (charts via **Apache ECharts**), backed by a consolidated FastAPI backend that **returns data, not figures**. The goal is a dashboard where LLM/agentic capabilities are first-class — the agent can answer data questions by driving the UI, and can regenerate whole reports from a declarative spec on a one-line prompt.
@@ -302,8 +302,9 @@ The legacy Dash app keeps serving production until each tab reaches parity.
 - ✅ Report tab renders from the spec (directly-editable JSON with Apply & render + staleness-aware prose refresh); description/summary generation proxied dashboard_api → ai_agent; Confluence export from client-rendered PNGs.
 - ✅ `skills.md` + `GET /api/agent/skills` (on ai_agent — see §5/§6) and the `update_report`/`show_metric`/`edit_report_figure` skills via report action tools → use cases #1 and #4.
 
-**Phase 5 — Cutover (1 wk)**
-- Flip the ALB default to React; keep Dash on `/legacy` for one release. Monitor `Dashboard/UserRequestCount` parity, then decommission Dash and delete `game_stats_monitor.py`.
+**Phase 5 — Cutover (1 wk)** — *complete*
+- ✅ Flipped the ALB default to the React `dashboard_api` (atomic listener swap on the existing `game-stats-dashboard-alb`; `/api/agent/*` routed to ai_agent). No `/legacy` route — Dash assets aren't prefix-aware, so rollback was the listener flip during the bake instead.
+- ✅ After a clean one-week `Dashboard/UserRequestCount` parity bake (steady traffic, zero errors), decommissioned Dash: deleted `src/dashboards/` (incl. `game_stats_monitor.py`) + `infra/dashboard/`, the `dashboards` package + `dashboard` poetry group, and the AWS resources (ECS service, task-def, target group, task SG, log group, ECR repo). See CHANGELOG → Removed.
 
 Rough estimate: ~10–14 weeks; each phase independently shippable.
 
