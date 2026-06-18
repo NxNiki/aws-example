@@ -147,7 +147,7 @@ features and should be split.
 
 Never commit secrets. Copy `.env.example` → `.env` and set `REDSHIFT_USER`, `REDSHIFT_PASSWORD`, `BASTION_KEY_PATH`. On ECS, secrets come from environment variables / Secrets Manager.
 
-A populated `.env` is present locally with the full set of credentials the services and jobs use — not just Redshift. It carries:
+A populated `.env` is present locally with the full set of credentials the services and jobs use:
 - **Redshift + bastion:** `REDSHIFT_USER`, `REDSHIFT_PASSWORD`, `BASTION_KEY_PATH` — run ground-truth Redshift queries via `bituslabs_ds.etl.DataLoader` (e.g. to validate dashboard/ETL numbers against the source).
 - **Confluence:** `CONFLUENCE_URL`, `CONFLUENCE_EMAIL`, `CONFLUENCE_TOKEN`.
 - **LLM:** `GOOGLE_API_KEY` (Gemini).
