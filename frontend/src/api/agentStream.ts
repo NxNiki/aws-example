@@ -2,6 +2,9 @@
 // EventSource can't POST, so this fetches and parses the text/event-stream from
 // the response body. Caller cancels via the AbortSignal (stop button / unmount).
 
+// The JSON request body POSTed to /api/agent/chat (mirrors the backend's
+// AgentChatRequest): the new user message, prior turns, and a snapshot of the
+// dashboard the agent can read/drive.
 export interface AgentChatPayload {
   message: string;
   history: { role: string; content: string }[];
@@ -10,6 +13,8 @@ export interface AgentChatPayload {
   dashboard_state: Record<string, unknown>;
 }
 
+// Callbacks the caller supplies — one per SSE event type the agent emits.
+// streamAgentChat invokes the matching one as each frame arrives.
 export interface AgentStreamHandlers {
   onToken: (text: string) => void;
   onToolStart: (name: string, input: string) => void;
