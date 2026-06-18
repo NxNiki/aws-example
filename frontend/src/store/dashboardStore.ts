@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { uid } from "../lib/uid";
 import { api } from "../api/client";
 import { streamAgentChat } from "../api/agentStream";
 import { dispatchAction } from "./actionDispatcher";
@@ -697,7 +698,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
 
   notify: (kind, message) =>
     set((s) => ({
-      notifications: [...s.notifications, { id: crypto.randomUUID(), kind, message }].slice(-5),
+      notifications: [...s.notifications, { id: uid(), kind, message }].slice(-5),
     })),
 
   dismissNotification: (id) => set((s) => ({ notifications: s.notifications.filter((n) => n.id !== id) })),

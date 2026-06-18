@@ -1,3 +1,4 @@
+import { uid } from "../lib/uid";
 import { useDashboardStore } from "./dashboardStore";
 import { useReportStore } from "./reportStore";
 import type { DashboardTab } from "./dashboardStore";
@@ -162,7 +163,7 @@ export function dispatchAction(raw: Record<string, unknown>): boolean {
         if (!FIGURE_KINDS.includes(source.kind)) throw new Error(`unknown figure kind "${source.kind}"`);
         enqueueReport(() => {
           const fig: ReportFigure = {
-            id: crypto.randomUUID().slice(0, 8),
+            id: uid(),
             title,
             description: "",
             inherit_period: true,

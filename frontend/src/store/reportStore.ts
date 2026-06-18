@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { uid } from "../lib/uid";
 import type * as echarts from "echarts";
 import { api } from "../api/client";
 import { buildDataSummary } from "../charts/reportSummary";
@@ -114,7 +115,7 @@ function normalizeSpec(raw: unknown): ReportSpec {
     period: r.period ?? null,
     view: r.view ?? null,
     figures: (Array.isArray(r.figures) ? r.figures : []).map((f) => ({
-      id: f?.id || crypto.randomUUID().slice(0, 8),
+      id: f?.id || uid(),
       title: f?.title ?? "",
       description: f?.description ?? "",
       inherit_period: f?.inherit_period ?? true,
@@ -122,7 +123,7 @@ function normalizeSpec(raw: unknown): ReportSpec {
     })),
     references: (Array.isArray(r.references) ? r.references : []).map((ref) => ({
       ...ref,
-      id: ref?.id || crypto.randomUUID().slice(0, 8),
+      id: ref?.id || uid(),
       url: ref?.url ?? "",
     })),
     summary: r.summary ?? "",
@@ -140,7 +141,7 @@ export const useReportStore = create<ReportState>((set, get) => ({
 
   addFigure: (source, title) => {
     const fig: ReportFigure = {
-      id: crypto.randomUUID().slice(0, 8),
+      id: uid(),
       title,
       description: "",
       inherit_period: true,
@@ -294,7 +295,7 @@ export const useReportStore = create<ReportState>((set, get) => ({
 
   addReference: () =>
     set((s) => ({
-      spec: { ...s.spec, references: [...s.spec.references, { id: crypto.randomUUID().slice(0, 8), url: "" }] },
+      spec: { ...s.spec, references: [...s.spec.references, { id: uid(), url: "" }] },
     })),
 
   updateReference: async (id, url) => {
