@@ -52,7 +52,12 @@ function FigureChart({ fig, data }: { fig: ReportFigure; data: FigureData }) {
 
   if (data.loading) return <div className="p-6 text-gray-400">Loading…</div>;
   if (data.error) return <div className="p-4 text-red-600">Failed to render: {data.error}</div>;
-  if (option) return <EChart option={option} height={360} onReady={onReady} />;
+  if (option) {
+    // Stats-by-Group bars carry the per-bar stat block above each bar; match the
+    // source tab's 400px so it isn't clipped (Stats-by-Date has no such block).
+    const height = src.kind === "stats-by-group" ? 400 : 360;
+    return <EChart option={option} height={height} onReady={onReady} />;
+  }
 
   if (src.kind === "stats-deepdive") {
     if (src.mode === "histogram" && data.histograms?.length) {
