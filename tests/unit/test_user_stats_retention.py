@@ -90,3 +90,29 @@ def test_day0_cohort_is_per_group():
     res = _dm(df, d0)["day0_num_users"].sort("ai_group")
     assert res.filter(pl.col("ai_group") == "A")["day0_num_users"][0] == 2
     assert res.filter(pl.col("ai_group") == "B")["day0_num_users"][0] == 1
+
+
+def test_day5_and_day7_retention_day_granularity():
+    """day5 / day7 retention compute at day granularity (offsets 5 and 7)."""
+    d0 = datetime(2026, 6, 1)
+    df = pl.DataFrame(
+        {
+            "user_id": ["u1", "u2", "u1", "u2"],
+            "activity_date": [d0, d0, datetime(2026, 6, 6), datetime(2026, 6, 8)],  # +5 and +7
+            "ai_group": ["A", "A", "A", "A"],
+        }
+    )
+    dm = DataMetrics(df, start_dt=d0, end_dt=d0, key_cols=KEY_COLS)
+    r5 = dm["retention_rate_day5"].filter(pl.col("ai_group") == "A")["retention_rate_day5"][0]
+    r7 = dm["retention_rate_day7"].filter(pl.col("ai_group") == "A")["retention_rate_day7"][0]
+    assert r5 == pytest.approx(0.5)  # u1 back on D+5 -> 1/2
+    assert r7 == pytest.approx(0.5)  # u2 back on D+7 -> 1/2
+
+
+def test_day5_day7_unavailable_for_week_granularity():
+    """day5/day7 are day-granularity concepts — week granularity has no such horizon."""
+    d0 = datetime(2026, 6, 1)
+    df = pl.DataFrame({"user_id": ["u1"], "activity_date": [d0], "ai_group": ["A"]})
+    dm = DataMetrics(df, start_dt=d0, end_dt=d0, key_cols=KEY_COLS, granularity="week")
+    assert dm["retention_rate_day5"] is None  # guarded, no IndexError
+    assert dm["retention_rate_day7"] is None

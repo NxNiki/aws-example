@@ -29,8 +29,12 @@ stats_by_date:
     "day0_num_users",
     "day1_num_users",
     "day3_num_users",
+    "day5_num_users",
+    "day7_num_users",
     "retention_rate_day1",
     "retention_rate_day3",
+    "retention_rate_day5",
+    "retention_rate_day7",
     # Parquet column (per-user flag, averaged to get fraction who killed fish):
     "user_killed_fish",
   ]

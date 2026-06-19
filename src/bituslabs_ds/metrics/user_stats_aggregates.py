@@ -67,7 +67,7 @@ logger = logging.getLogger(__name__)
 # Retention window constants
 # ---------------------------------------------------------------------------
 
-RETENTION_DAY_OFFSETS: Tuple[int, ...] = (1, 2, 3)
+RETENTION_DAY_OFFSETS: Tuple[int, ...] = (1, 2, 3, 5, 7)
 RETENTION_LOAD_EXTRA_DAYS: int = max(RETENTION_DAY_OFFSETS)
 
 # ---------------------------------------------------------------------------
@@ -107,16 +107,20 @@ def _bootstrap_ci(
     return float(np.percentile(boot_means, 100 * alpha / 2)), float(np.percentile(boot_means, 100 * (1 - alpha / 2)))
 
 
-def _horizon_dates(d0: Union[date, datetime], granularity: str) -> Tuple[datetime, datetime, datetime]:
-    """Three follow-up datetimes for a cohort starting at ``d0``."""
+def _horizon_dates(d0: Union[date, datetime], granularity: str) -> Tuple[datetime, ...]:
+    """Follow-up datetimes for a cohort starting at ``d0``.
+
+    Day granularity has one horizon per ``RETENTION_DAY_OFFSETS`` entry (day 1/2/3/5/7).
+    Week/month keep three period-based horizons; the day-5/day-7 metrics are
+    day-granularity concepts and resolve to no data there (the caller guards the index).
+    """
     t0 = _to_datetime(d0)
     g = (granularity or "day").lower()
     if g == "week":
         return t0 + timedelta(days=7), t0 + timedelta(days=14), t0 + timedelta(days=21)
     if g == "month":
         return t0 + timedelta(days=31), t0 + timedelta(days=62), t0 + timedelta(days=93)
-    hs = tuple(t0 + timedelta(days=k) for k in RETENTION_DAY_OFFSETS)
-    return hs  # type: ignore[return-value]
+    return tuple(t0 + timedelta(days=k) for k in RETENTION_DAY_OFFSETS)
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +155,8 @@ class DataMetrics:
             "day1_num_users",
             "day2_num_users",
             "day3_num_users",
+            "day5_num_users",
+            "day7_num_users",
             # bet / payout / profit totals
             "total_num_bets",
             "total_num_bets_bg",
@@ -213,8 +219,12 @@ class DataMetrics:
             "day1_num_users",
             "day2_num_users",
             "day3_num_users",
+            "day5_num_users",
+            "day7_num_users",
             "retention_rate_day1",
             "retention_rate_day3",
+            "retention_rate_day5",
+            "retention_rate_day7",
         }
     )
 
@@ -558,6 +568,9 @@ class DataMetrics:
         """
         cohorts = self._cohorts
         if not cohorts:
+            return None
+        # day-5/day-7 horizons don't exist for week/month granularity.
+        if horizon_idx >= len(_horizon_dates(cohorts[0][1], self.granularity)):
             return None
         presence = self._presence_by_date
         rows = []
@@ -1062,6 +1075,20 @@ class DataMetrics:
         return frame.rename({"_n": "day3_num_users"})
 
     @cached_property
+    def _day5_num_users(self) -> Optional[pl.DataFrame]:
+        frame = self._count_at_horizon(3)  # RETENTION_DAY_OFFSETS index of 5
+        if frame is None:
+            return None
+        return frame.rename({"_n": "day5_num_users"})
+
+    @cached_property
+    def _day7_num_users(self) -> Optional[pl.DataFrame]:
+        frame = self._count_at_horizon(4)  # RETENTION_DAY_OFFSETS index of 7
+        if frame is None:
+            return None
+        return frame.rename({"_n": "day7_num_users"})
+
+    @cached_property
     def _retention_rate_day1(self) -> Optional[pl.DataFrame]:
         day0 = self._day0_num_users
         day1 = self._day1_num_users
@@ -1087,6 +1114,34 @@ class DataMetrics:
                 (pl.col("day3_num_users") / pl.col("day0_num_users").replace(0, None)).alias("retention_rate_day3")
             )
             .select(self._key_cols + ["retention_rate_day3"])
+        )
+
+    @cached_property
+    def _retention_rate_day5(self) -> Optional[pl.DataFrame]:
+        day0 = self._day0_num_users
+        day5 = self._day5_num_users
+        if day0 is None or day5 is None:
+            return None
+        return (
+            day0.join(day5, on=self._key_cols, how="left")
+            .with_columns(
+                (pl.col("day5_num_users") / pl.col("day0_num_users").replace(0, None)).alias("retention_rate_day5")
+            )
+            .select(self._key_cols + ["retention_rate_day5"])
+        )
+
+    @cached_property
+    def _retention_rate_day7(self) -> Optional[pl.DataFrame]:
+        day0 = self._day0_num_users
+        day7 = self._day7_num_users
+        if day0 is None or day7 is None:
+            return None
+        return (
+            day0.join(day7, on=self._key_cols, how="left")
+            .with_columns(
+                (pl.col("day7_num_users") / pl.col("day0_num_users").replace(0, None)).alias("retention_rate_day7")
+            )
+            .select(self._key_cols + ["retention_rate_day7"])
         )
 
 
