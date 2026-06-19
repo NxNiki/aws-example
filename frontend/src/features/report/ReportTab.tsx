@@ -244,7 +244,7 @@ export function ReportTab() {
       <div className="sticky top-[6.25rem] z-20 -mx-6 mb-6 flex flex-wrap items-end gap-4 border-b bg-gray-50 px-6 py-3">
         <div className="flex items-center gap-2">
           <select
-            className="w-40 rounded border px-2 py-2"
+            className="w-64 rounded border px-2 py-2"
             value=""
             onChange={(e) => {
               if (e.target.value) {
@@ -261,7 +261,7 @@ export function ReportTab() {
             ))}
           </select>
           <input
-            className="w-36 rounded border px-2 py-2"
+            className="w-56 rounded border px-2 py-2"
             placeholder="spec name"
             value={specName}
             onChange={(e) => setSpecName(e.target.value)}
