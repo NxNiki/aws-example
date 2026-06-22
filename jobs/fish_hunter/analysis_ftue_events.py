@@ -221,6 +221,9 @@ def compute_user_bet_window(df: pd.DataFrame, window_seconds: int) -> dict:
         per_user["has_bet"] = per_user["n_bets"] >= 1
         per_user["ratio_up"] = up / n_delta
         per_user["ratio_down"] = dn / n_delta
+        # whether the user ever raised / lowered their bet in the window (>=1 delta)
+        per_user["any_up"] = up.reindex(per_user.index).fillna(0) > 0
+        per_user["any_down"] = dn.reindex(per_user.index).fillna(0) > 0
         out[origin_label] = per_user
     return out
 
@@ -229,8 +232,12 @@ BET_METRICS = {
     "n_bets": "Avg bets per user",
     "total_bet": "Avg total bet per user",
     "with_bet": "Users with a bet",
-    "ratio_up": "Bet-increase ratio",
-    "ratio_down": "Bet-decrease ratio",
+    "ratio_up": "Bet-increase ratio (per-user deltas)",
+    "ratio_down": "Bet-decrease ratio (per-user deltas)",
+    "n_up_users": "# users increasing bet",
+    "r_up_users": "% users increasing bet",
+    "n_down_users": "# users decreasing bet",
+    "r_down_users": "% users decreasing bet",
 }
 
 
@@ -253,6 +260,8 @@ def bet_window_config(df: pd.DataFrame, window_seconds: int) -> dict:
                 "with_bet": _prop_ci(int(sub["has_bet"].sum()), n_users),
                 "ratio_up": _mean_ci(sub["ratio_up"]),
                 "ratio_down": _mean_ci(sub["ratio_down"]),
+                "users_up": _prop_ci(int(sub["any_up"].sum()), n_users),
+                "users_down": _prop_ci(int(sub["any_down"].sum()), n_users),
             }
         out[origin_label] = gdict
     return out
@@ -302,9 +311,22 @@ def _prop_series(present, n_users: int, x: list) -> dict:
     }
 
 
+def _count_series(counts: pd.Series, x: list) -> dict:
+    """Per-bin exact count (no CI: it's a population count, not a sample estimate)."""
+    c = _round_list(np.asarray(counts.fillna(0.0), dtype=float), 1)
+    return {"x": x, "mean": c, "lo": c, "hi": c}
+
+
 def _bin_series(ub: pd.DataFrame, n_users: int, n_bins: int) -> dict:
     """Per-bin mean+CI for every bet metric, from the per-(user, bin) aggregate ``ub``."""
-    ub = ub.assign(cnt2=ub["cnt"] ** 2, sbet2=ub["sbet"] ** 2, rup2=ub["rup"] ** 2, rdn2=ub["rdn"] ** 2)
+    ub = ub.assign(
+        cnt2=ub["cnt"] ** 2,
+        sbet2=ub["sbet"] ** 2,
+        rup2=ub["rup"] ** 2,
+        rdn2=ub["rdn"] ** 2,
+        is_up=(ub["n_up"] > 0).astype(float),  # user raised their bet at least once in the bin
+        is_dn=(ub["n_dn"] > 0).astype(float),
+    )
     agg = (
         ub.groupby("bin")
         .agg(
@@ -318,6 +340,8 @@ def _bin_series(ub: pd.DataFrame, n_users: int, n_bins: int) -> dict:
             sum_rdn=("rdn", "sum"),
             sum_rdn2=("rdn2", "sum"),
             rcnt=("rup", "count"),  # users with a within-window delta by this bin
+            users_up=("is_up", "sum"),
+            users_down=("is_dn", "sum"),
         )
         .reindex(range(n_bins))
     )
@@ -328,6 +352,10 @@ def _bin_series(ub: pd.DataFrame, n_users: int, n_bins: int) -> dict:
         "with_bet": _prop_series(agg["present"], n_users, x),
         "ratio_up": _moment_series(agg["sum_rup"], agg["sum_rup2"], agg["rcnt"], x, nd=4, clip01=True),
         "ratio_down": _moment_series(agg["sum_rdn"], agg["sum_rdn2"], agg["rcnt"], x, nd=4, clip01=True),
+        "n_up_users": _count_series(agg["users_up"], x),
+        "r_up_users": _prop_series(agg["users_up"], n_users, x),
+        "n_down_users": _count_series(agg["users_down"], x),
+        "r_down_users": _prop_series(agg["users_down"], n_users, x),
     }
 
 
@@ -679,6 +707,10 @@ function fmtCi(st, pct) {
     var f = pct ? function (x) { return (100 * x).toFixed(1) + '%'; } : function (x) { return (+x).toFixed(2); };
     return f(st.mean) + ' [' + f(st.lo) + ', ' + f(st.hi) + ']';
 }
+function usersCell(st) {
+    if (!st || st.mean == null) return '\\u2013';
+    return st.reached + ' (' + (100 * st.mean).toFixed(1) + '%)';
+}
 function betTable() {
     var origin = selOrigin(), groups = selGroups(), bets = CFG.bets[origin], rows = '';
     groups.forEach(function (g) {
@@ -687,9 +719,9 @@ function betTable() {
         rows += '<tr><td>' + g + '</td><td>' + fmtCi(b.n_bets, false) + '</td><td>' + fmtCi(b.total_bet, false)
             + '</td><td>' + fmtCi(b.with_bet, true) + '</td><td>' + fmtCi(b.ratio_up, true)
             + '</td><td>' + fmtCi(b.ratio_down, true) + '</td><td>' + b.with_bet.reached + ' / ' + b.n_users
-            + '</td></tr>';
+            + '</td><td>' + usersCell(b.users_up) + '</td><td>' + usersCell(b.users_down) + '</td></tr>';
     });
-    document.getElementById('betTbl').innerHTML = rows || '<tr><td colspan="7">No group selected.</td></tr>';
+    document.getElementById('betTbl').innerHTML = rows || '<tr><td colspan="9">No group selected.</td></tr>';
 }
 function applyRangeBet() {
     var lo = parseFloat(document.getElementById('rng-min-bet').value);
@@ -844,7 +876,8 @@ def build_report(
     bet_table_head = (
         "<table><thead><tr><th>group</th><th>avg bets/user</th><th>avg total bet/user</th>"
         "<th>% with a bet</th><th>bet-increase ratio</th><th>bet-decrease ratio</th>"
-        "<th>users w/ bet / N</th></tr></thead><tbody id='betTbl'></tbody></table>"
+        "<th>users w/ bet / N</th><th>users increasing (count, %)</th>"
+        "<th>users decreasing (count, %)</th></tr></thead><tbody id='betTbl'></tbody></table>"
     )
     bet_section = [
         f"<h2>First-{window_min_str}-minute bet behavior</h2>",
@@ -853,8 +886,10 @@ def build_report(
         "interval. Bullets are de-duplicated before counting, so transaction fan-out does not inflate bet counts. "
         "<b>Bet-increase / -decrease ratio</b> is, per user, the share of that bin's consecutive bet-to-bet "
         "changes that go up / down (a change compares a bullet to the previous one; bins with no change to "
-        "evaluate are skipped). Uses the same origin / group selectors above; metrics differ in scale, so the "
-        "log toggle helps when overlaying them.</p>",
+        "evaluate are skipped). <b># / % users increasing / decreasing bet</b> count the users with at least "
+        "one bet increase / decrease (any delta &gt; 0 / &lt; 0) in the bin, and that count over all group "
+        "users. Uses the same origin / group selectors above; metrics differ in scale, so the log toggle "
+        "helps when overlaying them.</p>",
         _bet_controls_html(bin_seconds, window_seconds),
         '<div id="betFig" style="height:580px"></div>',
         f"<h3>{window_min_str}-minute window summary</h3>",
