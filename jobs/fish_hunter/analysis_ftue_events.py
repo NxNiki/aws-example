@@ -193,18 +193,21 @@ def compute_user_bet_window(df: pd.DataFrame, window_seconds: int) -> dict:
     attached transaction; counting raw rows would over-count bets.
     """
     bullets = df.dropna(subset=["bullet_id"]).drop_duplicates(["user_id", "bullet_id"])
-    base = bullets.groupby("user_id").agg(
-        account_created=("account_created", "first"),
-        first_bet=("event_timestamp", "min"),
-        strategy_group=("strategy_name", "first"),
+    base = cast(
+        pd.DataFrame,
+        bullets.groupby("user_id").agg(
+            account_created=("account_created", "first"),
+            first_bet=("event_timestamp", "min"),
+            strategy_group=("strategy_name", "first"),
+        ),
     )
     window = pd.Timedelta(seconds=window_seconds)
     cols = ["user_id", "event_timestamp", "bullet_id", "bet"]
     out: dict = {}
     for origin_col, origin_label, _ in ORIGINS:
-        origin_time = base[origin_col].rename("origin_time")
+        origin_time = cast(pd.Series, base[origin_col]).rename("origin_time")
         m = bullets[cols].merge(origin_time, left_on="user_id", right_index=True)
-        win = m[(m["event_timestamp"] >= m["origin_time"]) & (m["event_timestamp"] <= m["origin_time"] + window)]
+        win = m.loc[(m["event_timestamp"] >= m["origin_time"]) & (m["event_timestamp"] <= m["origin_time"] + window)]
         win = win.sort_values(["user_id", "event_timestamp", "bullet_id"])
 
         agg = win.groupby("user_id").agg(n_bets=("bet", "size"), total_bet=("bet", "sum"))
@@ -228,16 +231,28 @@ def compute_user_bet_window(df: pd.DataFrame, window_seconds: int) -> dict:
     return out
 
 
+# Per-bin bet metrics. "Avg ... / active user" divides by the users who actually
+# bet in that bin (not the whole 40-min cohort); the "Total ..." metrics are the
+# raw per-bin sums. Grouped for the checkbox layout; flat dict drives everything else.
+BET_METRIC_GROUPS = [
+    ("Bet volume", ["sum_n_bets", "n_bets", "sum_total_bet", "total_bet"]),
+    ("Active users", ["n_with_bet", "with_bet"]),
+    ("Per-user bet change", ["ratio_up", "ratio_down"]),
+    ("Users changing bet", ["n_up_users", "r_up_users", "n_down_users", "r_down_users"]),
+]
 BET_METRICS = {
-    "n_bets": "Avg bets per user",
-    "total_bet": "Avg total bet per user",
-    "with_bet": "Users with a bet",
+    "sum_n_bets": "Total bets",
+    "n_bets": "Avg bets / active user",
+    "sum_total_bet": "Total bet amount",
+    "total_bet": "Avg bet amount / active user",
+    "n_with_bet": "Users with a bet (n)",
+    "with_bet": "Users with a bet (%)",
     "ratio_up": "Bet-increase ratio (per-user deltas)",
     "ratio_down": "Bet-decrease ratio (per-user deltas)",
-    "n_up_users": "# users increasing bet",
-    "r_up_users": "% users increasing bet",
-    "n_down_users": "# users decreasing bet",
-    "r_down_users": "% users decreasing bet",
+    "n_up_users": "Users increasing bet (n)",
+    "r_up_users": "Users increasing bet (%)",
+    "n_down_users": "Users decreasing bet (n)",
+    "r_down_users": "Users decreasing bet (%)",
 }
 
 
@@ -253,10 +268,11 @@ def bet_window_config(df: pd.DataFrame, window_seconds: int) -> dict:
         gdict: dict = {}
         for label, sub in groups:
             n_users = int(len(sub))
+            active = sub.loc[sub["has_bet"]]  # per-active-user means exclude users with no bet in the window
             gdict[label] = {
                 "n_users": n_users,
-                "n_bets": _mean_ci(sub["n_bets"]),
-                "total_bet": _mean_ci(sub["total_bet"]),
+                "n_bets": _mean_ci(active["n_bets"]),
+                "total_bet": _mean_ci(active["total_bet"]),
                 "with_bet": _prop_ci(int(sub["has_bet"].sum()), n_users),
                 "ratio_up": _mean_ci(sub["ratio_up"]),
                 "ratio_down": _mean_ci(sub["ratio_down"]),
@@ -327,7 +343,8 @@ def _bin_series(ub: pd.DataFrame, n_users: int, n_bins: int) -> dict:
         is_up=(ub["n_up"] > 0).astype(float),  # user raised their bet at least once in the bin
         is_dn=(ub["n_dn"] > 0).astype(float),
     )
-    agg = (
+    agg = cast(
+        pd.DataFrame,
         ub.groupby("bin")
         .agg(
             sum_cnt=("cnt", "sum"),
@@ -343,19 +360,28 @@ def _bin_series(ub: pd.DataFrame, n_users: int, n_bins: int) -> dict:
             users_up=("is_up", "sum"),
             users_down=("is_dn", "sum"),
         )
-        .reindex(range(n_bins))
+        .reindex(range(n_bins)),
     )
     x = list(range(n_bins))
+
+    def c(name: str) -> pd.Series:
+        return cast(pd.Series, agg[name])
+
     return {
-        "n_bets": _moment_series(agg["sum_cnt"], agg["sum_cnt2"], n_users, x),
-        "total_bet": _moment_series(agg["sum_sbet"], agg["sum_sbet2"], n_users, x),
-        "with_bet": _prop_series(agg["present"], n_users, x),
-        "ratio_up": _moment_series(agg["sum_rup"], agg["sum_rup2"], agg["rcnt"], x, nd=4, clip01=True),
-        "ratio_down": _moment_series(agg["sum_rdn"], agg["sum_rdn2"], agg["rcnt"], x, nd=4, clip01=True),
-        "n_up_users": _count_series(agg["users_up"], x),
-        "r_up_users": _prop_series(agg["users_up"], n_users, x),
-        "n_down_users": _count_series(agg["users_down"], x),
-        "r_down_users": _prop_series(agg["users_down"], n_users, x),
+        # raw per-bin totals (not divided by users)
+        "sum_n_bets": _count_series(c("sum_cnt"), x),
+        "sum_total_bet": _count_series(c("sum_sbet"), x),
+        "n_with_bet": _count_series(c("present"), x),
+        # per-active-user means: divide by users who bet in the bin (present), not the cohort
+        "n_bets": _moment_series(c("sum_cnt"), c("sum_cnt2"), c("present"), x),
+        "total_bet": _moment_series(c("sum_sbet"), c("sum_sbet2"), c("present"), x),
+        "with_bet": _prop_series(c("present"), n_users, x),
+        "ratio_up": _moment_series(c("sum_rup"), c("sum_rup2"), c("rcnt"), x, nd=4, clip01=True),
+        "ratio_down": _moment_series(c("sum_rdn"), c("sum_rdn2"), c("rcnt"), x, nd=4, clip01=True),
+        "n_up_users": _count_series(c("users_up"), x),
+        "r_up_users": _prop_series(c("users_up"), n_users, x),
+        "n_down_users": _count_series(c("users_down"), x),
+        "r_down_users": _prop_series(c("users_down"), n_users, x),
     }
 
 
@@ -371,16 +397,19 @@ def bet_series_config(df: pd.DataFrame, window_seconds: int, bin_seconds: int) -
     window contribute no delta.
     """
     bullets = df.dropna(subset=["bullet_id"]).drop_duplicates(["user_id", "bullet_id"])
-    base = bullets.groupby("user_id").agg(
-        account_created=("account_created", "first"),
-        first_bet=("event_timestamp", "min"),
-        strategy_group=("strategy_name", "first"),
+    base = cast(
+        pd.DataFrame,
+        bullets.groupby("user_id").agg(
+            account_created=("account_created", "first"),
+            first_bet=("event_timestamp", "min"),
+            strategy_group=("strategy_name", "first"),
+        ),
     )
     strat = base["strategy_group"]
     n_bins = int(window_seconds // bin_seconds)
     out: dict = {}
     for origin_col, origin_label, _ in ORIGINS:
-        origin_time = base[origin_col].rename("origin_time")
+        origin_time = cast(pd.Series, base[origin_col]).rename("origin_time")
         m = bullets[["user_id", "event_timestamp", "bullet_id", "bet"]].merge(
             origin_time, left_on="user_id", right_index=True
         )
@@ -664,8 +693,10 @@ var BET_RATIO_METRICS = { with_bet: 1, ratio_up: 1, ratio_down: 1, r_up_users: 1
 function redrawBetSeries() {
     var origin = selOrigin(), groups = selGroups(), metrics = selBetMetrics();
     var showCI = isChecked('betCiToggle'), useLog = isChecked('betLogToggle'), traces = [];
-    var hasRatio = metrics.some(function (m) { return BET_RATIO_METRICS[m]; });
-    var hasCount = metrics.some(function (m) { return !BET_RATIO_METRICS[m]; });
+    var ratioMetrics = metrics.filter(function (m) { return BET_RATIO_METRICS[m]; });
+    var countMetrics = metrics.filter(function (m) { return !BET_RATIO_METRICS[m]; });
+    var hasRatio = ratioMetrics.length > 0, hasCount = countMetrics.length > 0;
+    function axisTitle(keys) { return keys.map(function (k) { return CFG.betMetrics[k]; }).join(' / '); }
     groups.forEach(function (g) {
         var gColor = betColor(g);
         metrics.forEach(function (m) {
@@ -698,8 +729,8 @@ function redrawBetSeries() {
             });
         });
     });
-    var ratioAxis = { title: 'Share of users', tickformat: '.0%', rangemode: 'tozero' };
-    var countAxis = { title: 'Count / per-user mean', rangemode: 'tozero' };
+    var ratioAxis = { title: axisTitle(ratioMetrics), tickformat: '.0%', rangemode: 'tozero' };
+    var countAxis = { title: axisTitle(countMetrics), rangemode: 'tozero' };
     var layout = {
         title: 'Bet behavior over time \\u2014 time since ' + origin
             + ' (' + CFG.binSeconds + 's bins, first ' + CFG.windowMinutes + ' min)',
@@ -858,13 +889,21 @@ def _controls_html(group_labels: list, bin_seconds: int, window_seconds: int) ->
 
 
 def _bet_controls_html(bin_seconds: int, window_seconds: int) -> str:
-    metric_boxes = "".join(
-        f'<label><input type="checkbox" class="betmetric" value="{k}" {"checked" if k in DEFAULT_BET_METRICS else ""}>'
-        f" {lab}</label>"
-        for k, lab in BET_METRICS.items()
+    # one labelled row per metric group so the now-dozen metrics stay readable
+    group_rows = "".join(
+        '<div class="ctl-row metrics"><span class="grp-label">'
+        + header
+        + ":</span> "
+        + "".join(
+            f'<label><input type="checkbox" class="betmetric" value="{k}"'
+            f' {"checked" if k in DEFAULT_BET_METRICS else ""}> {BET_METRICS[k]}</label>'
+            for k in keys
+        )
+        + "</div>"
+        for header, keys in BET_METRIC_GROUPS
     )
     return (
-        f'<div class="ctl-row metrics">{metric_boxes}</div>'
+        f"{group_rows}"
         f'<div class="ctl-row"><label><input type="checkbox" id="betCiToggle" checked> show 95% CI band</label>'
         f' &nbsp; <label><input type="checkbox" id="betLogToggle"> log scale</label></div>'
         f'<div class="ctl-row"><b>Time range (s):</b> '
@@ -894,23 +933,24 @@ def build_report(
     )
 
     bet_table_head = (
-        "<table><thead><tr><th>group</th><th>avg bets/user</th><th>avg total bet/user</th>"
+        "<table><thead><tr><th>group</th><th>avg bets / active user</th><th>avg bet amt / active user</th>"
         "<th>% with a bet</th><th>bet-increase ratio</th><th>bet-decrease ratio</th>"
         "<th>users w/ bet / N</th><th>users increasing (count, %)</th>"
         "<th>users decreasing (count, %)</th></tr></thead><tbody id='betTbl'></tbody></table>"
     )
     bet_section = [
         f"<h2>First-{window_min_str}-minute bet behavior</h2>",
-        f"<p>Each metric is one value per user per {bin_seconds}s bin over the first {window_min_str} minutes "
-        "(measured from the selected origin); the line is the cross-user mean and the band is its 95% confidence "
-        "interval. Bullets are de-duplicated before counting, so transaction fan-out does not inflate bet counts. "
-        "<b>Bet-increase / -decrease ratio</b> is, per user, the share of that bin's consecutive bet-to-bet "
-        "changes that go up / down (a change compares a bullet to the previous one; bins with no change to "
-        "evaluate are skipped). <b># / % users increasing / decreasing bet</b> count the users with at least "
-        "one bet increase / decrease (any delta &gt; 0 / &lt; 0) in the bin, and that count over all group "
-        "users. Uses the same origin / group selectors above. Ratio metrics are drawn on a percentage left "
-        "axis and count / per-user-mean metrics on a raw right axis (the right axis appears only when both "
-        "kinds are shown); the log toggle further helps when overlaying metrics of different magnitude.</p>",
+        f"<p>Per-bin metrics over the first {window_min_str} minutes (measured from the selected origin), "
+        f"binned at {bin_seconds}s. <b>Total bets / Total bet amount</b> are the raw per-bin sums. "
+        "<b>Avg ... / active user</b> divide that sum by the users who actually bet in the bin (not the whole "
+        "cohort), shown as the cross-user mean with a 95% CI band. <b>Users with a bet</b> is the count and "
+        "share of the cohort active in the bin. <b>Bet-increase / -decrease ratio</b> is, per user, the share "
+        "of that bin's consecutive bet-to-bet changes that go up / down (bins with no change are skipped). "
+        "<b>Users increasing / decreasing bet</b> are the count and share of users with at least one increase "
+        "/ decrease (any delta &gt; 0 / &lt; 0) in the bin. Bullets are de-duplicated before counting. Uses "
+        "the same origin / group selectors above; ratio metrics use a percentage left axis and count / "
+        "per-user-mean metrics a raw right axis (shown only when both kinds are selected), and the log toggle "
+        "helps when overlaying metrics of different magnitude.</p>",
         _bet_controls_html(bin_seconds, window_seconds),
         '<div id="betFig" style="height:580px"></div>',
         f"<h3>{window_min_str}-minute window summary</h3>",
@@ -922,7 +962,8 @@ def build_report(
         "<style>body{font-family:sans-serif;margin:24px} table{border-collapse:collapse}",
         "td,th{padding:4px 12px;border-bottom:1px solid #ddd;text-align:right}",
         "th{background:#f5f5f5} td:nth-child(-n+2),th:nth-child(-n+2){text-align:left}",
-        ".ctl-row{margin:10px 0} .ctl-row.metrics label{margin-right:14px;font-weight:bold}",
+        ".ctl-row{margin:10px 0} .ctl-row.metrics label{margin-right:14px}",
+        ".grp-label{font-weight:bold;display:inline-block;min-width:150px}",
         "select{font-size:14px} h2{margin-top:40px}</style></head><body>",
         "<h1>FTUE Event Timing Report (FM01 first session)</h1>",
         f"<p>Generated {datetime.now():%Y-%m-%d %H:%M} &middot; {len(events)} users &middot; "
