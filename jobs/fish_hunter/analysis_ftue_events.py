@@ -658,39 +658,48 @@ function betBinLabel(idx) {
     var st = idx * CFG.binSeconds;
     return fmtHms(st) + '\\u2013' + fmtHms(st + CFG.binSeconds);
 }
+// Ratio metrics live on a percentage left axis; count / per-user-mean metrics on
+// a raw right axis. A second axis appears only when both kinds are on screen.
+var BET_RATIO_METRICS = { with_bet: 1, ratio_up: 1, ratio_down: 1, r_up_users: 1, r_down_users: 1 };
 function redrawBetSeries() {
     var origin = selOrigin(), groups = selGroups(), metrics = selBetMetrics();
     var showCI = isChecked('betCiToggle'), useLog = isChecked('betLogToggle'), traces = [];
+    var hasRatio = metrics.some(function (m) { return BET_RATIO_METRICS[m]; });
+    var hasCount = metrics.some(function (m) { return !BET_RATIO_METRICS[m]; });
     groups.forEach(function (g) {
         var gColor = betColor(g);
         metrics.forEach(function (m) {
             var s = CFG.betSeries[origin][g] && CFG.betSeries[origin][g][m];
             if (!s) return;
+            var isRatio = !!BET_RATIO_METRICS[m];
+            // counts sit on y2 only when ratios share the figure; otherwise everything is on y
+            var yref = isRatio ? 'y' : (hasRatio ? 'y2' : 'y');
             var nm = CFG.betMetrics[m] + (groups.length > 1 ? ' [' + g + ']' : '');
             var dash = metrics.length > 1 ? DASH[CFG.betOrder.indexOf(m) % DASH.length] : 'solid';
             if (showCI) {
                 // band drawn as lower bound then upper bound with fill back to it
                 traces.push({
-                    x: s.x, y: s.lo, mode: 'lines', line: { width: 0 },
+                    x: s.x, y: s.lo, mode: 'lines', line: { width: 0 }, yaxis: yref,
                     showlegend: false, hoverinfo: 'skip', connectgaps: false
                 });
                 traces.push({
-                    x: s.x, y: s.hi, mode: 'lines', line: { width: 0 }, fill: 'tonexty',
+                    x: s.x, y: s.hi, mode: 'lines', line: { width: 0 }, fill: 'tonexty', yaxis: yref,
                     fillcolor: hexToRgba(gColor, 0.15), showlegend: false, hoverinfo: 'skip', connectgaps: false
                 });
             }
+            var vf = isRatio ? ':.2%' : '';
             traces.push({
-                x: s.x, y: s.mean, mode: 'lines+markers', type: 'scatter', name: nm,
+                x: s.x, y: s.mean, mode: 'lines+markers', type: 'scatter', name: nm, yaxis: yref,
                 line: { color: gColor, width: 1.5, dash: dash }, marker: { color: gColor, size: 3 },
                 connectgaps: false,
                 customdata: s.x.map(function (idx, i) { return [betBinLabel(idx), s.lo[i], s.hi[i]]; }),
-                hovertemplate: '%{customdata[0]}<br>%{y} (95% CI %{customdata[1]}\\u2013%{customdata[2]})'
-                    + '<extra>' + nm + '</extra>'
+                hovertemplate: '%{customdata[0]}<br>%{y' + vf + '} (95% CI %{customdata[1]' + vf + '}'
+                    + '\\u2013%{customdata[2]' + vf + '})<extra>' + nm + '</extra>'
             });
         });
     });
-    var yaxis = { title: 'Per-user mean', rangemode: 'tozero' };
-    if (useLog) { yaxis = { title: 'Per-user mean', type: 'log' }; }
+    var ratioAxis = { title: 'Share of users', tickformat: '.0%', rangemode: 'tozero' };
+    var countAxis = { title: 'Count / per-user mean', rangemode: 'tozero' };
     var layout = {
         title: 'Bet behavior over time \\u2014 time since ' + origin
             + ' (' + CFG.binSeconds + 's bins, first ' + CFG.windowMinutes + ' min)',
@@ -698,8 +707,19 @@ function redrawBetSeries() {
             title: 'Time since ' + origin, tickvals: CFG.betTicks.vals, ticktext: CFG.betTicks.text,
             rangeslider: { visible: true, thickness: 0.08 }, range: [0, CFG.nBetBins]
         },
-        yaxis: yaxis, height: 560, showlegend: true, legend: { orientation: 'h', y: -0.3 }
+        height: 560, showlegend: true, legend: { orientation: 'h', y: -0.3 }
     };
+    if (hasRatio && hasCount) {
+        layout.yaxis = ratioAxis;
+        countAxis.overlaying = 'y'; countAxis.side = 'right';
+        layout.yaxis2 = countAxis;
+    } else if (hasRatio) {
+        layout.yaxis = ratioAxis;
+    } else {
+        layout.yaxis = countAxis;
+    }
+    // log y keeps the percent tickformat; Plotly applies it to the 10^k positions
+    if (useLog) { layout.yaxis.type = 'log'; if (layout.yaxis2) { layout.yaxis2.type = 'log'; } }
     Plotly.react('betFig', traces, layout);
 }
 function fmtCi(st, pct) {
@@ -888,8 +908,9 @@ def build_report(
         "changes that go up / down (a change compares a bullet to the previous one; bins with no change to "
         "evaluate are skipped). <b># / % users increasing / decreasing bet</b> count the users with at least "
         "one bet increase / decrease (any delta &gt; 0 / &lt; 0) in the bin, and that count over all group "
-        "users. Uses the same origin / group selectors above; metrics differ in scale, so the log toggle "
-        "helps when overlaying them.</p>",
+        "users. Uses the same origin / group selectors above. Ratio metrics are drawn on a percentage left "
+        "axis and count / per-user-mean metrics on a raw right axis (the right axis appears only when both "
+        "kinds are shown); the log toggle further helps when overlaying metrics of different magnitude.</p>",
         _bet_controls_html(bin_seconds, window_seconds),
         '<div id="betFig" style="height:580px"></div>',
         f"<h3>{window_min_str}-minute window summary</h3>",
