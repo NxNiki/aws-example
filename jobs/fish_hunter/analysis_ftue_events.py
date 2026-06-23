@@ -47,6 +47,7 @@ from bituslabs_ds.config import DEFAULT_ETL_OUTPUT, LOCAL_ROOT, setup_logging
 
 DEFAULT_INPUT = f"{DEFAULT_ETL_OUTPUT}/jobs/output_fish_hunter/ftue_first_session/"
 DEFAULT_OUTPUT = f"{LOCAL_ROOT}/jobs/output_fish_hunter/ftue_analysis_report.html"
+DEFAULT_MD_OUTPUT = f"{LOCAL_ROOT}/jobs/output_fish_hunter/ftue_bet_behavior_zh.md"
 
 COLUMNS = [
     "user_id",
@@ -914,15 +915,200 @@ def _bet_controls_html(bin_seconds: int, window_seconds: int) -> str:
     )
 
 
+def _bet_behavior_figure(cfg: dict, origin_label: str = "first bet"):
+    """Render and return the 2x2 bet-behavior matplotlib Figure (All users)."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    bs = cfg["betSeries"][origin_label]["All users"]
+    bin_s = cfg["binSeconds"]
+    win_min = cfg["windowMinutes"]
+    nb = cfg["nBetBins"]
+    n_users = cfg["bets"][origin_label]["All users"]["n_users"]
+    x = np.array([i * bin_s / 60.0 for i in range(nb)])  # minutes since origin
+
+    def arr(metric: str, key: str) -> np.ndarray:
+        return np.array([np.nan if v is None else v for v in bs[metric][key]], dtype=float)
+
+    def panel(ax, metrics: list, title: str, ylabel: str, pct: bool = False) -> None:
+        for metric, color in zip(metrics, ["#377eb8", "#e41a1c"]):
+            mean, lo, hi = arr(metric, "mean"), arr(metric, "lo"), arr(metric, "hi")
+            if pct:
+                mean, lo, hi = mean * 100, lo * 100, hi * 100
+            ax.plot(x, mean, color=color, lw=1.6, label=cfg["betMetrics"][metric])
+            ax.fill_between(x, lo, hi, color=color, alpha=0.15, linewidth=0)
+        ax.set_title(title, fontsize=11)
+        ax.set_xlabel(f"minutes since {origin_label}")
+        ax.set_ylabel(ylabel)
+        ax.set_xlim(0, win_min)
+        ax.grid(True, alpha=0.3)
+        if len(metrics) > 1:
+            ax.legend(fontsize=8)
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+    panel(axes[0, 0], ["with_bet"], "Active users (share of cohort with a bet)", "share (%)", pct=True)
+    panel(axes[0, 1], ["n_bets"], "Avg bets per active user", "bets / active user")
+    panel(axes[1, 0], ["total_bet"], "Avg bet amount per active user", "amount / active user")
+    panel(axes[1, 1], ["r_up_users", "r_down_users"], "Users adjusting their bet", "share (%)", pct=True)
+    fig.suptitle(
+        f"FM01 FTUE \u2014 first-{win_min:g}-min bet behavior (all users, {bin_s}s bins, N={n_users:,})", fontsize=13
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    return fig
+
+
+ORIGIN_ZH = {"account created": "账号注册", "first bet": "首次下注"}
+
+
+def _bet_md_interpretation(cfg: dict, origin_label: str = "first bet") -> list:
+    """Auto-generated reading of one origin's bet-behavior headline numbers (recomputed each run)."""
+    bs = cfg["betSeries"][origin_label]["All users"]
+    bets = cfg["bets"][origin_label]["All users"]
+    bin_s = cfg["binSeconds"]
+    win_str = f"{cfg['windowMinutes']:g}"
+    means = bs["with_bet"]["mean"]
+
+    def t_of(i: int) -> float:
+        return i * bin_s / 60.0
+
+    peak_i = max(range(len(means)), key=lambda i: means[i] if means[i] is not None else -1.0)
+    peak_v = means[peak_i] or 0.0
+    bin0 = means[0] or 0.0
+
+    def below_after(thr: float) -> str:
+        for i in range(peak_i, len(means)):
+            v = means[i]
+            if v is not None and v < thr:
+                return f"{t_of(i):.0f} 分钟"
+        return "—"
+
+    def last_val(key: str) -> float:
+        for v in reversed(bs[key]["mean"]):
+            if v is not None:
+                return v
+        return 0.0
+
+    nb0 = bs["n_bets"]["mean"][0] or 0.0
+    nb_last = last_val("n_bets")
+    zh = ORIGIN_ZH.get(origin_label, origin_label)
+    return [
+        f"**活跃节奏**：以「{zh}」为起点，首个 {bin_s} 秒箱有 {100 * bin0:.0f}% 的用户在下注；"
+        f"活跃占比在第 {t_of(peak_i):.1f} 分钟达到峰值 {100 * peak_v:.0f}%，约 {below_after(0.5)}后降到 50% 以下，"
+        f"{below_after(0.1)}后降到 10% 以下（见左上）。",
+        f"**人均强度不降反升**：按活跃用户计的人均下注次数从约 {nb0:.0f} 升到后段约 {nb_last:.0f}（右上），"
+        "人均下注金额同样走高（左下）；留下来的是重度玩家——休闲玩家流失后，仍在场的用户下注更密集。",
+        f"**极少人调整注额**：{win_str} 分钟内曾提高 / 降低注额的用户仅约 "
+        f"{100 * bets['users_up']['mean']:.0f}% / {100 * bets['users_down']['mean']:.0f}%，"
+        "逐弹注额几乎不变；多数玩家固定注额自动连发（右下）。",
+    ]
+
+
+def _bet_origin_section_md(cfg: dict, origin_label: str, num: str, img_src: str) -> str:
+    """One per-origin markdown section: figure + interpretation + 40-min summary table."""
+    win_str = f"{cfg['windowMinutes']:g}"
+    bets = cfg["bets"][origin_label]["All users"]
+    n_users = bets["n_users"]
+    zh = ORIGIN_ZH.get(origin_label, origin_label)
+    interp = "\n".join(f"- {b}" for b in _bet_md_interpretation(cfg, origin_label))
+    return f"""## {num}、以「{zh}」为起点（origin = {origin_label}）
+
+![{zh}起点 · 首 {win_str} 分钟下注行为]({img_src})
+
+{interp}
+
+**{win_str} 分钟窗口汇总（全体用户）**
+| 指标 | 值（95% CI） |
+|---|---|
+| 人均下注次数（活跃用户）Avg bets / active user | {bets['n_bets']['mean']:.0f} [{bets['n_bets']['lo']:.0f}, {bets['n_bets']['hi']:.0f}] |
+| 人均下注金额（活跃用户）Avg bet amount / active user | {bets['total_bet']['mean']:.0f} [{bets['total_bet']['lo']:.0f}, {bets['total_bet']['hi']:.0f}] |
+| 窗口内有下注的用户 Users with a bet | {bets['with_bet']['reached']:,} / {n_users:,}（{100 * bets['with_bet']['mean']:.1f}%） |
+| 曾提高注额的用户 Users increasing bet | {bets['users_up']['reached']:,}（{100 * bets['users_up']['mean']:.1f}%） |
+| 曾降低注额的用户 Users decreasing bet | {bets['users_down']['reached']:,}（{100 * bets['users_down']['mean']:.1f}%） |
+"""
+
+
+def build_bet_behavior_markdown(
+    cfg: dict, output_path: str, origins: tuple = ("account created", "first bet"), embed: bool = True
+) -> None:
+    """Write a markdown summary of the first-window bet behavior, one section per origin.
+
+    Sections are emitted in ``origins`` order (account-register first, then first-bet).
+    ``embed=True`` inlines each 2x2 figure as a base64 data URI (single portable file;
+    renders in VS Code / most viewers but NOT on GitHub). ``embed=False`` writes one
+    sidecar PNG per origin next to the markdown and links it relatively (GitHub-renderable).
+    Interpretation and tables are recomputed from ``cfg``.
+    """
+    import base64
+    import io
+
+    import matplotlib.pyplot as plt
+
+    win_str = f"{cfg['windowMinutes']:g}"
+    bin_s = cfg["binSeconds"]
+    n_users = cfg["bets"][origins[0]]["All users"]["n_users"]
+
+    def figure_src(origin_label: str) -> str:
+        fig = _bet_behavior_figure(cfg, origin_label)
+        if embed:
+            buf = io.BytesIO()
+            fig.savefig(buf, format="png", dpi=130)
+            src = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+        else:
+            slug = origin_label.replace(" ", "_")
+            png_path = os.path.splitext(output_path)[0] + f"_{slug}.png"
+            os.makedirs(os.path.dirname(png_path) or ".", exist_ok=True)
+            fig.savefig(png_path, dpi=130)
+            src = os.path.basename(png_path)
+        plt.close(fig)
+        return src
+
+    nums = ["三", "四", "五", "六"]
+    sections = "\n".join(
+        _bet_origin_section_md(cfg, origin_label, nums[i], figure_src(origin_label))
+        for i, origin_label in enumerate(origins)
+    )
+
+    header = f"""# 捕鱼（FM01）新用户首 {win_str} 分钟下注行为分析（First-{win_str}-minute bet behavior）
+
+> 配套报告：交互式 HTML（`ftue_analysis_report.html`）「First-{win_str}-minute bet behavior」一节。
+> 本文为该节的静态摘要，数据口径与 FTUE 报告一致（FM01 / CNY 新用户，首次会话），由 analysis_ftue_events.py --markdown 自动生成。
+
+## 一、口径与时间窗
+- **时间起点**：分别以 **账号注册**（account created）与 **首次下注**（first bet）为 0 点，各看其后 0–{win_str} 分钟，按 **{bin_s} 秒** 分箱。
+- **去重**：按 `(user_id, bullet_id)` 去重后再统计，避免交易记录扇出导致下注次数虚高。
+- **样本**：全体用户 N = {n_users:,}。
+
+## 二、「活跃用户」如何定义
+对每个 {bin_s} 秒时间箱：
+1. 取该用户落在该时间箱内的（去重后）子弹；
+2. 按 `(user_id, bin)` 聚合，**每个用户在每个时间箱至多一行**；
+3. 该时间箱的「活跃用户数」= 时间箱内有 ≥1 颗子弹的用户数（即聚合后的行数）。
+
+因此 **活跃用户占比** = 活跃用户数 / 全体用户数 N；**人均指标（/ active user）** 的分母是**该时间箱的活跃用户数**，
+而非 {win_str} 分钟内的全体用户——衡量「当下仍在玩的人」的强度，不被已离开的用户稀释。
+
+> 说明：以**账号注册**为起点时，0 点是账号创建时刻；由于不少账号在首次玩捕鱼前已存在较久，注册后头几个箱并非 100% 活跃，
+> 该视角衡量「注册→开始玩」的速度与节奏。以**首次下注**为起点时，0 点是每位用户的首颗子弹，故首个箱必为 100% 活跃，
+> 衡量开玩后的下注强度与留存。
+"""
+
+    md = header + "\n" + sections + "\n> 注：图与表均可在交互报告中切换时间起点与策略分组；本文取「全体用户」。\n"
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    with open(output_path, "w") as f:
+        f.write(md)
+    print(f"Bet-behavior markdown written to {output_path}")
+
+
 def build_report(
     events: pd.DataFrame,
-    df: pd.DataFrame,
+    cfg: dict,
     bin_seconds: int,
     window_seconds: int,
     high_fish_value: float,
     output_path: str,
 ) -> None:
-    cfg = _report_config(events, df, bin_seconds, window_seconds)
     group_labels = [label for _, label, _ in _strategy_groups(events)]
     window_min = cfg["windowMinutes"]
     window_min_str = f"{window_min:g}"
@@ -1002,12 +1188,28 @@ def main():
         help="Window (minutes from origin) for the bet-behavior metrics and the default curve zoom",
     )
     parser.add_argument("--high-fish-value", type=float, default=500, help="fish_value threshold for high-value kill")
+    parser.add_argument(
+        "--markdown",
+        nargs="?",
+        const=DEFAULT_MD_OUTPUT,
+        default=None,
+        help=f"Also write a markdown bet-behavior summary (default path: {DEFAULT_MD_OUTPUT})",
+    )
+    parser.add_argument(
+        "--markdown-mode",
+        choices=["embed", "sidecar"],
+        default="embed",
+        help="embed: inline figure as base64 (one file, not GitHub-renderable); sidecar: write a PNG next to the md (GitHub-renderable)",
+    )
     args = parser.parse_args()
 
     window_seconds = int(round(args.window_minutes * 60))
     df = load_data(args.input)
     events = compute_user_events(df, args.high_fish_value)
-    build_report(events, df, args.bin_seconds, window_seconds, args.high_fish_value, args.output)
+    cfg = _report_config(events, df, args.bin_seconds, window_seconds)
+    build_report(events, cfg, args.bin_seconds, window_seconds, args.high_fish_value, args.output)
+    if args.markdown:
+        build_bet_behavior_markdown(cfg, args.markdown, embed=args.markdown_mode == "embed")
 
 
 if __name__ == "__main__":
