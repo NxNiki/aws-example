@@ -57,7 +57,7 @@ Attach policies that match what you run. Common needs:
 | EMR: submit steps, manage cluster | e.g. `AmazonEMRFullAccessPolicy_v2` |
 | SageMaker: training, tuning | Execution role (see `SAGEMAKER_ROLE` in `src/bituslabs_ds/config.py`) plus `sagemaker:*` / PassRole as required |
 | ECR push/pull (Docker deploys) | ECR login + push policies for your repos |
-| ECS / EventBridge (scheduled ETL, dashboard) | See [infra/etl/README.md](infra/etl/README.md) and [infra/dashboard/README.md](infra/dashboard/README.md) |
+| ECS / EventBridge (scheduled ETL, dashboard) | See [infra/etl/README.md](infra/etl/README.md) and [infra/dashboard_api/README.md](infra/dashboard_api/README.md) |
 
 Narrow permissions in production; the table above matches the older README’s intent.
 
@@ -175,14 +175,14 @@ For SQL against Athena instead of Redshift, add **`AmazonAthenaFullAccess`** (or
 
 The Game Stats Dashboard runs as a container on **ECS Fargate** with an ALB.
 
-- **Full instructions:** **[infra/dashboard/README.md](infra/dashboard/README.md)**
-- **`infra/dashboard/deploy_ecs.py`** — deploy or update the service.
-- **`infra/dashboard/Dockerfile`** + **`infra/dashboard/build.sh`** — build and push the image to ECR.
+- **Full instructions:** **[infra/dashboard_api/README.md](infra/dashboard_api/README.md)**
+- **`infra/dashboard_api/deploy_ecs.py`** — deploy or update the service.
+- **`infra/dashboard_api/Dockerfile`** + **`infra/dashboard_api/build.sh`** — build and push the image to ECR.
 
 After code or dependency changes, **rebuild the image** before deploy:
 
 ```bash
-python infra/dashboard/deploy_ecs.py --build-first
+python infra/dashboard_api/deploy_ecs.py --build-first
 ```
 
 ---
@@ -191,7 +191,7 @@ python infra/dashboard/deploy_ecs.py --build-first
 
 | Topic | Location |
 |------------|----------|
-| Dashboard (ECS, Docker, `--build-first`) | [infra/dashboard/README.md](infra/dashboard/README.md) |
+| Dashboard (ECS, Docker, `--build-first`) | [infra/dashboard_api/README.md](infra/dashboard_api/README.md) |
 | Scheduled ETL on Fargate | [infra/etl/README.md](infra/etl/README.md) |
 | Clustering / K-means | [jobs/cluster_analysis/README.md](jobs/cluster_analysis/README.md) |
 | Operation daily report | [jobs/operation_daily_report/README.md](jobs/operation_daily_report/README.md) |
