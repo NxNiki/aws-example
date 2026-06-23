@@ -7,6 +7,17 @@ import { colorForIndex } from "./styles";
 // (parity with the legacy opacity/hatch). Backend returns the summary stats;
 // this just lays them out.
 
+// Width sized to the number of bars so a few groups don't stretch across the
+// full container (which looked bad at 3–6 groups) yet stay readable as bars are
+// added. Each bar needs room for the bar itself, its left-side multi-line stat
+// block (~120px), AND its two-line x-axis label (the full date range runs ~190px
+// wide), so budget ~250px/bar on top of the y-axis gutter (grid.left 96 +
+// grid.right 24). The caller wraps the chart in an overflow-x-auto container so
+// many bars scroll instead of squashing.
+export function groupChartWidth(nBars: number): number {
+  return Math.max(620, 120 + nBars * 250);
+}
+
 function cohortColors(stats: GroupStat[]): Map<string, string> {
   const map = new Map<string, string>();
   for (const s of stats) if (!map.has(s.cohort)) map.set(s.cohort, colorForIndex(map.size));
@@ -61,15 +72,15 @@ export function buildGroupDistributionOption(stats: GroupStat[], mode: "box" | "
   const base: EChartsOption = {
     tooltip: { trigger: "axis", formatter: (p) => tips[(Array.isArray(p) ? p[0] : p).dataIndex] ?? "" },
     grid: { left: 96, right: 24, top: 24, bottom: 88 },
-    xAxis: { type: "category", data: categories, axisLabel: { interval: 0, fontSize: 14, lineHeight: 18 } },
+    xAxis: { type: "category", data: categories, axisLabel: { interval: 0, fontSize: 16, lineHeight: 20 } },
     yAxis: {
       type: "value",
       scale: true,
       name: metric,
       nameLocation: "middle",
       nameGap: 72,
-      nameTextStyle: { fontWeight: "bold", fontSize: 15 },
-      axisLabel: { fontSize: 14 },
+      nameTextStyle: { fontWeight: "bold", fontSize: 17 },
+      axisLabel: { fontSize: 16 },
     },
   };
 

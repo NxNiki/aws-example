@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from "react";
 import { EChart } from "../../charts/EChart";
-import { buildGroupDistributionOption } from "../../charts/groupDistributionOption";
+import { buildGroupDistributionOption, groupChartWidth } from "../../charts/groupDistributionOption";
 import { CohortSelect } from "../../components/CohortSelect";
 import { ClipControls } from "../../components/ClipControls";
 import { DateRanges } from "../../components/DateRanges";
@@ -75,8 +75,8 @@ function GroupPanel(props: {
           />
           {panel.missing && <span className="text-base text-amber-600">No data for this metric/range.</span>}
         </div>
-        <div className="flex-1 min-w-0">
-          <EChart option={option} height={400} />
+        <div className="flex-1 min-w-0 overflow-x-auto">
+          <EChart option={option} height={400} width={groupChartWidth(panel.stats.length)} />
         </div>
       </div>
     </div>
