@@ -1,10 +1,11 @@
 """Snapshot tests for dashboard-feeding ETL SQL.
 
-``generate_query`` in ``jobs/fish_hunter/etl_game_stats_daily_by_user.py`` builds
-the daily/weekly/monthly per-user stats that back the dashboard fish_hunter tab.
-Each granularity is compared character-for-character to a checked-in golden file
-under ``tests/unit/etl_snapshots/`` so an accidental change to the SQL fails CI
-and the snapshot diff is exactly what a reviewer inspects.
+The per-user-group ``generate_query`` in the fish_hunter and ss03 dashboard ETL
+jobs builds the daily/weekly/monthly stats that back their dashboard tabs. Each
+granularity is compared character-for-character to a checked-in golden file
+under ``tests/unit/etl_snapshots/`` so an accidental change to the SQL (e.g. a
+stale AB-test id mapping) fails CI and the snapshot diff is exactly what a
+reviewer inspects.
 
 If you intentionally change the SQL, regenerate the snapshots:
 
@@ -23,6 +24,12 @@ import pytest
 SNAPSHOTS_DIR = Path(__file__).parent / "etl_snapshots"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# Full-history start date the schedulers use for an --overwrite reload
+# (ETLScheduler.default_start_date); the snapshots are rendered from it.
+_FULL_HISTORY_START = "2025-01-01"
+
+_GRANULARITIES = [("daily", "activity_date"), ("weekly", "activity_week"), ("monthly", "activity_month")]
+
 
 def _load_job_module(relative_path: str) -> ModuleType:
     """Side-load a job script as a module (``jobs/<game>/`` is not a package)."""
@@ -35,13 +42,14 @@ def _load_job_module(relative_path: str) -> ModuleType:
 
 
 _FISH_HUNTER = _load_job_module("jobs/fish_hunter/etl_game_stats_daily_by_user.py")
+_SS03 = _load_job_module("jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py")
 
-# (snapshot label, stats_agg_col) for the three granularities the scheduler runs.
-_FISH_HUNTER_CASES = [
-    ("daily", "activity_date"),
-    ("weekly", "activity_week"),
-    ("monthly", "activity_month"),
+# (job module, snapshot stem) — one snapshot file per (stem, granularity).
+_JOBS = [
+    (_FISH_HUNTER, "fish_hunter"),
+    (_SS03, "ss03_mahjiang_streak"),
 ]
+_CASES = [(module, stem, label, agg_col) for module, stem in _JOBS for label, agg_col in _GRANULARITIES]
 
 
 def _check_snapshot(actual: str, snapshot_path: Path, label: str) -> None:
@@ -62,7 +70,7 @@ def _check_snapshot(actual: str, snapshot_path: Path, label: str) -> None:
     )
 
 
-@pytest.mark.parametrize("label,agg_col", _FISH_HUNTER_CASES, ids=[c[0] for c in _FISH_HUNTER_CASES])
-def test_fish_hunter_stats_snapshot(label: str, agg_col: str) -> None:
-    actual = _FISH_HUNTER.generate_query(agg_col, _FISH_HUNTER.DEFAULT_DATE_START).strip() + "\n"
-    _check_snapshot(actual, SNAPSHOTS_DIR / f"fish_hunter_{label}.sql", f"fish_hunter {label}")
+@pytest.mark.parametrize("module,stem,label,agg_col", _CASES, ids=[f"{c[1]}-{c[2]}" for c in _CASES])
+def test_etl_stats_snapshot(module: ModuleType, stem: str, label: str, agg_col: str) -> None:
+    actual = module.generate_query(agg_col, _FULL_HISTORY_START).strip() + "\n"
+    _check_snapshot(actual, SNAPSHOTS_DIR / f"{stem}_{label}.sql", f"{stem} {label}")

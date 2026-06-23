@@ -53,8 +53,8 @@ user_bets_group AS (
 
         CASE
             WHEN t.ab_group_id = 'jojpin-9mokha-rexQug' THEN 'AI'
-            WHEN t.ab_group_id = '4a04df21-c749-4808-8e55-3a0b74c084d2' THEN 'AB_TEST_A'
-            WHEN t.ab_group_id = '4f1a46ca-7baa-4452-9a40-ef21d9b33b57' THEN 'AB_TEST_B'
+            WHEN t.ab_group_id = '4f1a46ca-7baa-4452-9a40-ef21d9b33b57' THEN 'AB_TEST_A'
+            WHEN t.ab_group_id = '4a04df21-c749-4808-8e55-3a0b74c084d2' THEN 'AB_TEST_B'
             ELSE 'Default'
         END AS ai_group
     FROM
@@ -89,7 +89,7 @@ user_bets_group AS (
     FROM
         user_bets AS t
     WHERE t.ab_group_id IS NULL
-       OR t.ab_group_id NOT IN ('4a04df21-c749-4808-8e55-3a0b74c084d2', '4f1a46ca-7baa-4452-9a40-ef21d9b33b57')
+       OR t.ab_group_id NOT IN ('4f1a46ca-7baa-4452-9a40-ef21d9b33b57', '4a04df21-c749-4808-8e55-3a0b74c084d2')
 ),
 
 user_stats AS (
