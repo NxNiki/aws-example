@@ -50,6 +50,7 @@ const freshControls = () => ({
   date: { granularity: "day" as const, dateFrom: null, dateTo: null, cohortSelection: {} },
   group: { granularity: "day" as const, ranges: freshRanges(), cohortSelection: {} },
   viz: { granularity: "day" as const, ranges: freshRanges(), cohortSelection: {} },
+  summaryTable: { granularity: "day" as const, ranges: freshRanges(), cohortSelection: {} },
 });
 
 const initialState = () => ({

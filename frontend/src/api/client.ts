@@ -17,6 +17,8 @@ import type {
   ReportSpec,
   SeriesRequest,
   SeriesResponse,
+  SummaryTableRequest,
+  SummaryTableResponse,
 } from "./types";
 
 // Typed client generated from the OpenAPI schema: paths, params, request
@@ -78,6 +80,19 @@ export const api = {
     const { data, error } = await client.POST("/api/data/group-distribution", { body, signal });
     if (error || !data) fail("POST /api/data/group-distribution", error);
     return data;
+  },
+
+  // Summary-table tab. Plain fetch (not in the generated typed client yet — see
+  // the hand-written types in ./types.ts).
+  summaryTable: async (body: SummaryTableRequest, signal?: AbortSignal): Promise<SummaryTableResponse> => {
+    const r = await fetch(`${BASE}/api/data/summary-table`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (!r.ok) fail("POST /api/data/summary-table", await r.text());
+    return (await r.json()) as SummaryTableResponse;
   },
 
   deepdive: async (body: DeepdiveRequest, signal?: AbortSignal): Promise<DeepdiveResponse> => {

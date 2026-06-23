@@ -84,7 +84,20 @@ export interface DeepdiveFigureSource {
   clip: ClipOpts;
 }
 
-export type FigureSource = DateFigureSource | GroupFigureSource | DeepdiveFigureSource;
+export interface SummaryTableFigureSource {
+  kind: "summary-table";
+  config: string;
+  granularity: Granularity;
+  ranges: DateRange[];
+  cohort_selection: Record<string, string[]>;
+  metrics: Record<string, string[]>; // per metric-group (group id → selected metrics)
+  stats: SummaryStat[];
+  reference_key: string | null;
+  metric_options: Record<string, SummaryMetricOption>;
+  pvalues: boolean;
+}
+
+export type FigureSource = DateFigureSource | GroupFigureSource | DeepdiveFigureSource | SummaryTableFigureSource;
 
 export interface ReportFigure {
   id: string;
@@ -117,6 +130,63 @@ export interface ReportSpec {
   summary: string;
   confluence_url: string;
 }
+
+// Summary-table tab. Hand-written (not yet in the generated schema) so the new
+// endpoint works without regenerating schema.d.ts — run `make openapi` later to
+// fold these into the typed client. Mirror schemas/data.py:Summary*.
+// Per-metric display reshaping applied before stats: clip to [min,max] then a
+// signed log1p. Independent per metric.
+export interface SummaryMetricOption {
+  log: boolean;
+  clip: ClipOpts;
+}
+
+export interface SummaryTableRequest {
+  config: string;
+  granularity: Granularity;
+  ranges: DateRange[];
+  group_values: Record<string, string[]>;
+  metric_options: Record<string, SummaryMetricOption>; // keyed by metric name
+  pvalues: boolean;
+}
+
+export interface SummaryColumn {
+  key: string; // stable id for the reference-column selection
+  cohort: string;
+  range_index: number;
+  range_label: string;
+}
+
+export interface SummaryCell {
+  n: number;
+  mean: number | null;
+  median: number | null;
+  q1: number | null;
+  q3: number | null;
+  std: number | null;
+  min: number | null;
+  max: number | null;
+}
+
+export interface SummaryRow {
+  metric: string;
+  group_id: string;
+  group_label: string;
+  cells: (SummaryCell | null)[]; // aligned to SummaryTableResponse.columns; null = no data
+  pvalue: number | null;
+  test: string | null; // "t-test" | "anova" | null
+  missing: boolean;
+}
+
+export interface SummaryTableResponse {
+  config: string;
+  granularity: Granularity;
+  columns: SummaryColumn[];
+  rows: SummaryRow[];
+}
+
+// The cell stats the user can toggle on; each shows its own ±% vs the reference.
+export type SummaryStat = "n" | "mean" | "median" | "q1" | "q3" | "min" | "max";
 
 export type GenerateProxyResponse = Schemas["GenerateProxyResponse"];
 export type ExportRequest = Schemas["ExportRequest"];

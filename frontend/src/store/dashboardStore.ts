@@ -18,6 +18,10 @@ import type {
   HistogramSeries,
   ScatterSeries,
   Series,
+  SummaryColumn,
+  SummaryMetricOption,
+  SummaryRow,
+  SummaryStat,
 } from "../api/types";
 
 // ── Per-tab shared controls ────────────────────────────────────────────────
@@ -42,12 +46,13 @@ export interface TabControls {
   date: DateTabControls;
   group: RangeTabControls;
   viz: RangeTabControls;
+  summaryTable: RangeTabControls;
 }
 export type TabKey = keyof TabControls;
 
 // Top-level dashboard tabs. Lives in the store (not component state) so the
 // agent's navigate_tab action can drive it.
-export type DashboardTab = "stats-by-date" | "stats-by-group" | "stats-deepdive" | "report";
+export type DashboardTab = "stats-by-date" | "stats-by-group" | "summary-table" | "stats-deepdive" | "report";
 
 const defaultRanges = (): RangeState[] => [
   { start: null, end: null, show: true },
@@ -59,6 +64,7 @@ const defaultControls = (): TabControls => ({
   date: { granularity: "day", dateFrom: null, dateTo: null, cohortSelection: {} },
   group: { granularity: "day", ranges: defaultRanges(), cohortSelection: {} },
   viz: { granularity: "day", ranges: defaultRanges(), cohortSelection: {} },
+  summaryTable: { granularity: "day", ranges: defaultRanges(), cohortSelection: {} },
 });
 
 // ── Per-panel state ────────────────────────────────────────────────────────
@@ -79,6 +85,21 @@ export interface GroupPanelState {
   clip: ClipOpts;
   stats: GroupStat[];
   missing: boolean;
+}
+
+// Summary table: all metrics × all (cohort×range) columns in one grid. The
+// fetched data is `columns`/`rows`; the rest are display options. `stats` and
+// `referenceKey` are pure display (no refetch); `showPValues` triggers a refetch
+// because the significance column is computed server-side.
+export interface SummaryTableState {
+  metrics: Record<string, string[]>; // per metric-group (group id → selected metrics); display filter
+  metricOptions: Record<string, SummaryMetricOption>; // per-metric clip + log (refetch)
+  stats: SummaryStat[]; // which cell stats to show (count / mean / median / quartiles / min / max)
+  showPValues: boolean;
+  referenceKey: string | null; // column the ±% values are measured against
+  columns: SummaryColumn[];
+  rows: SummaryRow[];
+  missing: boolean; // every metric came back empty for the current selection
 }
 
 // Deep Dive: a panel (derived/user) with a mode + metric multi-select.
@@ -117,6 +138,25 @@ function defaultGroupPanels(config: ConfigDetail): Record<string, GroupPanelStat
   return panels;
 }
 
+const emptySummaryTable = (): SummaryTableState => ({
+  metrics: {},
+  metricOptions: {},
+  stats: ["mean"],
+  showPValues: false,
+  referenceKey: null,
+  columns: [],
+  rows: [],
+  missing: false,
+});
+
+// First metric of each group — the summary table's default (keep it small; the
+// per-group selectors let the user add more).
+function defaultSummaryMetrics(config: ConfigDetail): Record<string, string[]> {
+  const metrics: Record<string, string[]> = {};
+  for (const g of config.groups) metrics[g.id] = g.metrics.slice(0, 1);
+  return metrics;
+}
+
 const emptyDeepdivePanel = (): DeepdivePanelState => ({
   mode: "histogram",
   metrics: [],
@@ -150,6 +190,9 @@ export interface ViewSnapshot {
   panels: Record<string, PanelState>;
   group: Record<string, GroupPanelState>;
   deepdive: Record<DeepdivePanel, DeepdivePanelState>;
+  summaryTable?: SummaryTableState; // optional: pre-summary-table snapshots omit it
+  // Active report-spec name when the view was saved; loading the view reloads it.
+  reportSpec?: string | null;
 }
 
 function snapshotControls(snap: ViewSnapshot): TabControls {
@@ -159,6 +202,7 @@ function snapshotControls(snap: ViewSnapshot): TabControls {
       date: { ...dc.date, ...(snap.controls.date ?? {}) },
       group: { ...dc.group, ...(snap.controls.group ?? {}) },
       viz: { ...dc.viz, ...(snap.controls.viz ?? {}) },
+      summaryTable: { ...dc.summaryTable, ...(snap.controls.summaryTable ?? {}) },
     };
   }
   // v1: one global set of controls — apply it to every tab.
@@ -169,6 +213,7 @@ function snapshotControls(snap: ViewSnapshot): TabControls {
     date: { granularity, dateFrom: snap.dateFrom ?? null, dateTo: snap.dateTo ?? null, cohortSelection },
     group: { granularity, ranges, cohortSelection },
     viz: { granularity, ranges, cohortSelection },
+    summaryTable: { granularity, ranges, cohortSelection },
   };
 }
 
@@ -196,6 +241,7 @@ interface DashboardState {
 
   panels: Record<string, PanelState>; // Stats-by-Date
   group: Record<string, GroupPanelState>; // Stats-by-Group
+  summaryTable: SummaryTableState; // Summary table
   deepdiveMetrics: { derived: string[]; user: string[] };
   deepdive: Record<DeepdivePanel, DeepdivePanelState>;
 
@@ -210,7 +256,7 @@ interface DashboardState {
   selectConfig: (id: string) => Promise<void>;
   patchControls: <K extends TabKey>(tab: K, patch: Partial<TabControls[K]>) => void;
   setTabCohort: (tab: TabKey, col: string, values: string[]) => void;
-  setTabRange: (tab: "group" | "viz", index: number, range: RangeState) => void;
+  setTabRange: (tab: "group" | "viz" | "summaryTable", index: number, range: RangeState) => void;
   ensureGroupValues: (gran: Granularity) => Promise<void>;
 
   // Stats-by-Date
@@ -225,6 +271,14 @@ interface DashboardState {
   setGroupClip: (panelId: string, clip: ClipOpts) => void;
   loadGroupDistribution: () => Promise<void>;
 
+  // Summary table
+  setSummaryMetrics: (groupId: string, metrics: string[]) => void;
+  setSummaryMetricOption: (metric: string, option: SummaryMetricOption) => void;
+  setSummaryStats: (stats: SummaryStat[]) => void;
+  setSummaryPValues: (show: boolean) => void;
+  setSummaryReference: (key: string | null) => void;
+  loadSummaryTable: () => Promise<void>;
+
   // Deep Dive
   loadDeepdiveMetrics: () => Promise<void>;
   patchDeepdive: (panel: DeepdivePanel, patch: Partial<DeepdivePanelState>) => void;
@@ -232,10 +286,10 @@ interface DashboardState {
 
   // Saved views (save/load the dashboard setting)
   captureView: () => ViewSnapshot;
-  applyView: (snap: ViewSnapshot) => Promise<boolean>;
+  applyView: (snap: ViewSnapshot, opts?: { loadReport?: boolean }) => Promise<boolean>;
   loadViews: () => Promise<void>;
   saveView: (name: string) => Promise<void>;
-  loadViewByName: (name: string) => Promise<void>;
+  loadViewByName: (name: string, loadReport?: boolean) => Promise<void>;
 
   // Status notifications (toasts)
   notify: (kind: Toast["kind"], message: string) => void;
@@ -368,6 +422,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   groupValuesByGran: {},
   panels: {},
   group: {},
+  summaryTable: emptySummaryTable(),
   deepdiveMetrics: { derived: [], user: [] },
   deepdive: { derived: emptyDeepdivePanel(), user: emptyDeepdivePanel() },
   views: [],
@@ -399,6 +454,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       error: null,
       configId: id,
       groupValuesByGran: {},
+      summaryTable: emptySummaryTable(),
       deepdiveMetrics: { derived: [], user: [] },
       deepdive: { derived: emptyDeepdivePanel(), user: emptyDeepdivePanel() },
       // Keep each tab's granularity/windows; cohort values are config-specific.
@@ -406,13 +462,19 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         date: { ...s.controls.date, cohortSelection: {} },
         group: { ...s.controls.group, cohortSelection: {} },
         viz: { ...s.controls.viz, cohortSelection: {} },
+        summaryTable: { ...s.controls.summaryTable, cohortSelection: {} },
       },
     }));
     try {
       const config = await api.getConfig(id);
-      set({ config, panels: defaultPanels(config), group: defaultGroupPanels(config) });
+      set({
+        config,
+        panels: defaultPanels(config),
+        group: defaultGroupPanels(config),
+        summaryTable: { ...emptySummaryTable(), metrics: defaultSummaryMetrics(config) },
+      });
       const c = get().controls;
-      const grans = [...new Set([c.date.granularity, c.group.granularity, c.viz.granularity])];
+      const grans = [...new Set([c.date.granularity, c.group.granularity, c.viz.granularity, c.summaryTable.granularity])];
       await Promise.all(grans.map((g) => get().ensureGroupValues(g)));
       await get().loadDeepdiveMetrics();
       await get().loadDateBounds();
@@ -484,6 +546,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
             date: { ...s.controls.date, dateFrom: from, dateTo: to },
             group: { ...s.controls.group, ranges: seed(s.controls.group.ranges) },
             viz: { ...s.controls.viz, ranges: seed(s.controls.viz.ranges) },
+            summaryTable: { ...s.controls.summaryTable, ranges: seed(s.controls.summaryTable.ranges) },
           },
         }));
       }
@@ -596,6 +659,71 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     );
   },
 
+  setSummaryMetrics: (groupId, metrics) =>
+    set((s) => ({ summaryTable: { ...s.summaryTable, metrics: { ...s.summaryTable.metrics, [groupId]: metrics } } })),
+  setSummaryMetricOption: (metric, option) =>
+    set((s) => ({
+      summaryTable: { ...s.summaryTable, metricOptions: { ...s.summaryTable.metricOptions, [metric]: option } },
+    })),
+  setSummaryStats: (stats) => set((s) => ({ summaryTable: { ...s.summaryTable, stats } })),
+  setSummaryPValues: (show) => set((s) => ({ summaryTable: { ...s.summaryTable, showPValues: show } })),
+  setSummaryReference: (key) => set((s) => ({ summaryTable: { ...s.summaryTable, referenceKey: key } })),
+
+  // Fetch the whole summary grid in one request (all metrics × all columns).
+  // Only config / granularity / ranges / cohorts / p-values toggle force a
+  // refetch; stat-selection and the reference column are display-only.
+  loadSummaryTable: async () => {
+    const { configId, controls, summaryTable } = get();
+    if (!configId) return;
+    const { granularity, ranges, cohortSelection } = controls.summaryTable;
+    const reqRanges = activeRanges(ranges);
+    if (reqRanges.length === 0) return;
+    const key = "summary-table";
+    const sig = JSON.stringify({
+      configId,
+      granularity,
+      reqRanges,
+      cohortSelection,
+      metricOptions: summaryTable.metricOptions,
+      pvalues: summaryTable.showPValues,
+    });
+    if (_panelSig[key] === sig) return;
+    return runExclusive(
+      key,
+      summaryTable.showPValues ? "computing summary + p-values…" : "computing summary…",
+      set,
+      async (signal) =>
+        api.summaryTable(
+          {
+            config: configId,
+            granularity,
+            ranges: reqRanges,
+            group_values: cohortSelection,
+            metric_options: summaryTable.metricOptions,
+            pvalues: summaryTable.showPValues,
+          },
+          signal,
+        ),
+      (resp, set) => {
+        _panelSig[key] = sig;
+        set((s) => {
+          // Keep the chosen reference if it's still a column; else pin to the first.
+          const keys = resp.columns.map((c) => c.key);
+          const referenceKey =
+            s.summaryTable.referenceKey && keys.includes(s.summaryTable.referenceKey)
+              ? s.summaryTable.referenceKey
+              : (keys[0] ?? null);
+          const missing = resp.rows.length > 0 && resp.rows.every((r) => r.missing);
+          return { summaryTable: { ...s.summaryTable, columns: resp.columns, rows: resp.rows, referenceKey, missing } };
+        });
+      },
+      (e, set) => {
+        set({ error: String(e) });
+        get().notify("error", `Failed to load summary table: ${e}`);
+      },
+    );
+  },
+
   loadDeepdiveMetrics: async () => {
     const { configId, controls } = get();
     if (!configId) return;
@@ -620,17 +748,21 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       controls: s.controls,
       panels: Object.fromEntries(Object.entries(s.panels).map(([k, v]) => [k, { ...v, series: [] }])),
       group: Object.fromEntries(Object.entries(s.group).map(([k, v]) => [k, { ...v, stats: [], missing: false }])),
+      // Keep the display options (stats / p-values / reference); drop fetched data.
+      summaryTable: { ...s.summaryTable, columns: [], rows: [], missing: false },
       deepdive: {
         derived: { ...s.deepdive.derived, histograms: [], heatmaps: [], scatters: [], missing: [] },
         user: { ...s.deepdive.user, histograms: [], heatmaps: [], scatters: [], missing: [] },
       },
+      // Remember the active (saved) report spec so loading this view reloads it.
+      reportSpec: useReportStore.getState().spec.id || null,
     };
   },
 
   // Restore a snapshot: load the config (for group/granularity metadata), merge
   // saved selections over fresh defaults (so renamed/added groups still work),
   // then let the tabs refetch. v1 snapshots are migrated by snapshotControls.
-  applyView: async (snap) => {
+  applyView: async (snap, opts) => {
     if (!snap?.configId) return false;
     set({ loading: true, error: null });
     try {
@@ -643,15 +775,36 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         groupValuesByGran: {},
         panels: { ...defaultPanels(config), ...(snap.panels ?? {}) },
         group: { ...defaultGroupPanels(config), ...(snap.group ?? {}) },
+        summaryTable: {
+          ...emptySummaryTable(),
+          ...(snap.summaryTable ?? {}),
+          metrics: snap.summaryTable?.metrics ?? defaultSummaryMetrics(config),
+          columns: [],
+          rows: [],
+          missing: false,
+        },
         deepdive: {
           derived: { ...emptyDeepdivePanel(), ...(snap.deepdive?.derived ?? {}) },
           user: { ...emptyDeepdivePanel(), ...(snap.deepdive?.user ?? {}) },
         },
       });
-      const grans = [...new Set([controls.date.granularity, controls.group.granularity, controls.viz.granularity])];
+      const grans = [
+        ...new Set([
+          controls.date.granularity,
+          controls.group.granularity,
+          controls.viz.granularity,
+          controls.summaryTable.granularity,
+        ]),
+      ];
       await Promise.all(grans.map((g) => get().ensureGroupValues(g)));
       await get().loadDeepdiveMetrics();
       await get().loadAllSeries();
+      // Reload the report spec this view was saved with (unless a spec load is
+      // what triggered this view load — restoreView=false path avoids a cycle).
+      const rep = useReportStore.getState();
+      if (opts?.loadReport !== false && snap.reportSpec && snap.reportSpec !== rep.spec.id) {
+        await rep.loadSpec(snap.reportSpec, false);
+      }
       return true;
     } catch (e) {
       set({ error: String(e) });
@@ -681,7 +834,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     }
   },
 
-  loadViewByName: async (name) => {
+  loadViewByName: async (name, loadReport = true) => {
     let snap: ViewSnapshot;
     try {
       snap = (await api.loadView(name)) as ViewSnapshot;
@@ -690,7 +843,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       get().notify("error", `Failed to load view “${name}”: ${e}`);
       return;
     }
-    if (await get().applyView(snap)) {
+    if (await get().applyView(snap, { loadReport })) {
       set({ currentView: name });
       get().notify("info", `Loaded view “${name}”`);
     }

@@ -4,6 +4,7 @@ import { Notifications } from "./components/Notifications";
 import { ChatPanel } from "./features/agent/ChatPanel";
 import { StatsByDate } from "./features/stats-by-date/StatsByDate";
 import { StatsByGroup } from "./features/stats-by-group/StatsByGroup";
+import { SummaryTable } from "./features/summary-table/SummaryTable";
 import { DeepDive } from "./features/deep-dive/DeepDive";
 import { ReportTab } from "./features/report/ReportTab";
 
@@ -13,6 +14,7 @@ import { ReportTab } from "./features/report/ReportTab";
 const TABS = [
   { id: "stats-by-date", label: "Stats by Date" },
   { id: "stats-by-group", label: "Stats by Group" },
+  { id: "summary-table", label: "Summary Table" },
   { id: "stats-deepdive", label: "Deep Dive" },
   { id: "report", label: "Report" },
 ] as const;
@@ -134,6 +136,7 @@ export default function App() {
 
       {tab === "stats-by-date" && <StatsByDate />}
       {tab === "stats-by-group" && <StatsByGroup />}
+      {tab === "summary-table" && <SummaryTable />}
       {tab === "stats-deepdive" && <DeepDive />}
       {tab === "report" && <ReportTab />}
       <ChatPanel />
