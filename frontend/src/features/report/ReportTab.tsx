@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { useDashboardStore } from "../../store/dashboardStore";
 import { EChart } from "../../charts/EChart";
 import { buildStatsByDateOption } from "../../charts/statsByDateOption";
-import { buildGroupDistributionOption } from "../../charts/groupDistributionOption";
+import { buildGroupDistributionOption, groupChartWidth } from "../../charts/groupDistributionOption";
 import { buildHistogramOption } from "../../charts/histogramOption";
 import { buildHeatmapOption, heatmapSize } from "../../charts/heatmapOption";
 import { buildScatterOption } from "../../charts/scatterOption";
+import { SummaryGrid } from "../summary-table/SummaryGrid";
 import { useReportStore } from "../../store/reportStore";
 import type { FigureData } from "../../store/reportStore";
 import type { ReportFigure, ReportLanguage } from "../../api/types";
@@ -53,10 +53,31 @@ function FigureChart({ fig, data }: { fig: ReportFigure; data: FigureData }) {
   if (data.loading) return <div className="p-6 text-gray-400">Loading…</div>;
   if (data.error) return <div className="p-4 text-red-600">Failed to render: {data.error}</div>;
   if (option) {
-    // Stats-by-Group bars carry the per-bar stat block above each bar; match the
-    // source tab's 400px so it isn't clipped (Stats-by-Date has no such block).
-    const height = src.kind === "stats-by-group" ? 400 : 360;
-    return <EChart option={option} height={height} onReady={onReady} />;
+    // Stats-by-Group bars carry the per-bar stat block (needs the source tab's
+    // 400px) and a width sized to the bar count (wrapped to scroll).
+    if (src.kind === "stats-by-group" && data.stats) {
+      return (
+        <div className="overflow-x-auto">
+          <EChart option={option} height={400} width={groupChartWidth(data.stats.length)} onReady={onReady} />
+        </div>
+      );
+    }
+    return <EChart option={option} height={360} onReady={onReady} />;
+  }
+
+  if (src.kind === "summary-table" && data.columns && data.rows) {
+    // Read-only grid (no reference radio); table figures aren't PNG-exported.
+    const rows = data.rows.filter((r) => (src.metrics[r.group_id] ?? []).includes(r.metric));
+    return (
+      <SummaryGrid
+        columns={data.columns}
+        rows={rows}
+        stats={src.stats}
+        referenceKey={src.reference_key}
+        showPValues={src.pvalues}
+        metricOptions={src.metric_options}
+      />
+    );
   }
 
   if (src.kind === "stats-deepdive") {
@@ -227,14 +248,11 @@ function SpecEditor() {
 
 export function ReportTab() {
   const r = useReportStore();
-  const views = useDashboardStore((s) => s.views);
-  const currentView = useDashboardStore((s) => s.currentView);
-  const [specName, setSpecName] = useState("");
+  const specName = r.specName;
+  const setSpecName = r.setSpecName;
 
   useEffect(() => {
     void r.loadSpecs();
-    // Default the report's linked view to the dashboard's current one.
-    if (!r.spec.view && currentView) r.patchSpec({ view: currentView });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -293,22 +311,6 @@ export function ReportTab() {
             </option>
           ))}
         </select>
-
-        <label className="flex items-center gap-2" title="Saved dashboard view this report is linked to (restored when the report loads)">
-          <span className="text-gray-600">View</span>
-          <select
-            className="w-36 rounded border px-2 py-2"
-            value={r.spec.view ?? ""}
-            onChange={(e) => r.patchSpec({ view: e.target.value || null })}
-          >
-            <option value="">(none)</option>
-            {views.map((v) => (
-              <option key={v} value={v}>
-                {v}
-              </option>
-            ))}
-          </select>
-        </label>
 
         <div className="flex items-center gap-2" title="Figures with “inherit period” re-fetch this window on Regenerate">
           <span className="text-gray-600">Period</span>

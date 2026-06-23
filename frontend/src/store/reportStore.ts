@@ -15,6 +15,8 @@ import type {
   ReportSpec,
   ScatterSeries,
   Series,
+  SummaryColumn,
+  SummaryRow,
 } from "../api/types";
 
 // Report tab state (Phase 4). The working ReportSpec is the source of truth —
@@ -30,6 +32,8 @@ export interface FigureData {
   histograms?: HistogramSeries[];
   heatmaps?: CorrMatrix[];
   scatters?: ScatterSeries[];
+  columns?: SummaryColumn[]; // summary-table figure
+  rows?: SummaryRow[]; // summary-table figure
 }
 
 const emptySpec = (): ReportSpec => ({
@@ -68,7 +72,11 @@ interface ReportState {
   figureData: Record<string, FigureData>;
   specs: string[];
   busy: string | null; // human label of the in-flight LLM/export call
+  // The save-as / active spec name. Lives in the store (not component state) so
+  // it survives a Report-tab unmount when switching tabs.
+  specName: string;
 
+  setSpecName: (name: string) => void;
   patchSpec: (patch: Partial<ReportSpec>) => void;
   addFigure: (source: FigureSource, title: string) => void;
   removeFigure: (id: string) => void;
@@ -88,7 +96,9 @@ interface ReportState {
 
   loadSpecs: () => Promise<void>;
   saveSpec: (name: string) => Promise<void>;
-  loadSpec: (name: string) => Promise<void>;
+  // restoreView=false skips re-loading the linked dashboard view — used when a
+  // view load is what triggered this spec load (avoids a view↔spec cycle).
+  loadSpec: (name: string, restoreView?: boolean) => Promise<void>;
 
   // Apply a hand- or LLM-edited spec JSON: parse, normalize, re-render the
   // changed figures from it. Returns an error message, or null on success.
@@ -136,7 +146,9 @@ export const useReportStore = create<ReportState>((set, get) => ({
   figureData: {},
   specs: [],
   busy: null,
+  specName: "",
 
+  setSpecName: (name) => set({ specName: name }),
   patchSpec: (patch) => set((s) => ({ spec: { ...s.spec, ...patch } })),
 
   addFigure: (source, title) => {
@@ -199,6 +211,16 @@ export const useReportStore = create<ReportState>((set, get) => ({
           clip: src.clip,
         });
         setData({ stats: resp.stats });
+      } else if (src.kind === "summary-table") {
+        const resp = await api.summaryTable({
+          config: src.config,
+          granularity: src.granularity,
+          ranges: src.ranges,
+          group_values: src.cohort_selection,
+          metric_options: src.metric_options,
+          pvalues: src.pvalues,
+        });
+        setData({ columns: resp.columns, rows: resp.rows });
       } else {
         const resp = await api.deepdive({
           config: src.config,
@@ -331,23 +353,26 @@ export const useReportStore = create<ReportState>((set, get) => ({
 
   saveSpec: async (name) => {
     try {
-      const r = await api.saveReportSpec(name, { ...get().spec, id: name });
-      set({ specs: r.specs });
-      get().patchSpec({ id: r.name });
+      // Link the spec to whatever dashboard view is currently loaded (the
+      // in-tab View selector was removed — the link is automatic now).
+      const view = useDashboardStore.getState().currentView ?? null;
+      const r = await api.saveReportSpec(name, { ...get().spec, id: name, view });
+      set({ specs: r.specs, specName: r.name });
+      get().patchSpec({ id: r.name, view });
       notify("success", `Saved report spec “${r.name}” → ${r.path}`);
     } catch (e) {
       notify("error", `Failed to save report spec: ${e}`);
     }
   },
 
-  loadSpec: async (name) => {
+  loadSpec: async (name, restoreView = true) => {
     try {
       const spec = normalizeSpec(await api.loadReportSpec(name));
-      set({ spec, figureData: {} });
-      // Restore the linked dashboard view (one view ↔ many reports) so the
-      // whole authoring context comes back; figures render from their own
-      // recipes regardless.
-      if (spec.view) await useDashboardStore.getState().loadViewByName(spec.view);
+      set({ spec, figureData: {}, specName: name });
+      // Restore the linked dashboard view so the authoring context comes back;
+      // figures render from their own recipes regardless. Skipped when a view
+      // load triggered this (restoreView=false) to avoid a view↔spec cycle.
+      if (restoreView && spec.view) await useDashboardStore.getState().loadViewByName(spec.view, false);
       await get().renderAll();
       notify("info", `Loaded report spec “${name}”`);
     } catch (e) {
@@ -367,7 +392,7 @@ export const useReportStore = create<ReportState>((set, get) => ({
 
   applySpec: async (parsed) => {
     const bad = ((parsed as Partial<ReportSpec>)?.figures ?? []).find(
-      (f) => !f?.source || !["stats-by-date", "stats-by-group", "stats-deepdive"].includes(f.source.kind),
+      (f) => !f?.source || !["stats-by-date", "stats-by-group", "stats-deepdive", "summary-table"].includes(f.source.kind),
     );
     if (bad) return `Figure "${bad?.title || bad?.id || "?"}" has a missing/unknown source.kind`;
     const prev = get().spec;

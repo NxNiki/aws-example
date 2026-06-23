@@ -1,4 +1,14 @@
-import type { CorrMatrix, GroupStat, HistogramSeries, ReportFigure, ScatterSeries, Series } from "../api/types";
+import type {
+  CorrMatrix,
+  GroupStat,
+  HistogramSeries,
+  ReportFigure,
+  ScatterSeries,
+  Series,
+  SummaryColumn,
+  SummaryMetricOption,
+  SummaryRow,
+} from "../api/types";
 import type { FigureData } from "../store/reportStore";
 
 // Build the compact JSON "data_summary" the LLM description/summary endpoints
@@ -72,6 +82,42 @@ function scatterTraces(scatters: ScatterSeries[]) {
   }));
 }
 
+// The summary table for the LLM: column headers (with which is the reference),
+// then per metric its value in each column + the significance test. Reuses
+// `mean` as the representative value (what the ±% in the UI is built from).
+function summaryTableData(
+  columns: SummaryColumn[],
+  rows: SummaryRow[],
+  selected: Record<string, string[]>,
+  referenceKey: string | null,
+  metricOptions: Record<string, SummaryMetricOption>,
+) {
+  const colLabels = columns.map((c) => `${c.cohort} · ${c.range_label}`);
+  const refIndex = columns.findIndex((c) => c.key === referenceKey);
+  const reshape = (m: string): string | undefined => {
+    const o = metricOptions[m];
+    if (!o) return undefined;
+    const parts: string[] = [];
+    if (o.clip.enable && (o.clip.min != null || o.clip.max != null)) parts.push(`clip ${o.clip.min ?? "-inf"}:${o.clip.max ?? "inf"}`);
+    if (o.log) parts.push("log");
+    return parts.length ? parts.join(", ") : undefined;
+  };
+  const metricRows = rows
+    .filter((r) => (selected[r.group_id] ?? []).includes(r.metric))
+    .map((r) => ({
+      metric: r.metric,
+      group: r.group_label,
+      ...(reshape(r.metric) ? { reshape: reshape(r.metric) } : {}),
+      mean_by_column: r.cells.map((c) => (c ? round(c.mean) : null)),
+      ...(r.test ? { pvalue: round(r.pvalue), test: r.test } : {}),
+    }));
+  return {
+    columns: colLabels,
+    reference: refIndex >= 0 ? colLabels[refIndex] : null,
+    metrics: metricRows,
+  };
+}
+
 export function buildDataSummary(fig: ReportFigure, data: FigureData): Record<string, unknown> {
   const src = fig.source;
   const base = {
@@ -85,6 +131,9 @@ export function buildDataSummary(fig: ReportFigure, data: FigureData): Record<st
   }
   if (src.kind === "stats-by-group" && data.stats) {
     return { ...base, metric: src.metric, display: src.mode, groups: groupTraces(data.stats) };
+  }
+  if (src.kind === "summary-table" && data.columns && data.rows) {
+    return { ...base, ...summaryTableData(data.columns, data.rows, src.metrics, src.reference_key, src.metric_options) };
   }
   if (src.kind === "stats-deepdive") {
     if (src.mode === "histogram" && data.histograms) return { ...base, traces: histogramTraces(data.histograms) };
