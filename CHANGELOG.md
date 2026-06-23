@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **fish_hunter daily/weekly/monthly SQL query snapshots** in
+  `tests/unit/etl_snapshots/fish_hunter_{daily,weekly,monthly}.sql` (rendered
+  `etl_game_stats_daily_by_user.generate_query`, the dashboard fish_hunter feed),
+  with a self-verifying `tests/unit/test_etl_sql_snapshots.py` that fails on SQL
+  drift (regenerate via `REGENERATE_SNAPSHOTS=1`).
+
 ### Fixed
 
 - **fish_hunter daily/weekly/monthly user stats only counted fish-killers.** The
