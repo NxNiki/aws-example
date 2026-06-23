@@ -14,7 +14,7 @@ from typing import Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
-from dashboard_api.schemas.data import ClipOpts, DateRange, Granularity
+from dashboard_api.schemas.data import ClipOpts, DateRange, Granularity, SummaryMetricOption
 
 ReportLanguage = Literal["en", "zh-Hans", "zh-Hant"]
 
@@ -66,7 +66,21 @@ class DeepdiveFigureSource(BaseModel):
     clip: ClipOpts = Field(default_factory=ClipOpts)
 
 
-FigureSource = Union[DateFigureSource, GroupFigureSource, DeepdiveFigureSource]
+class SummaryTableFigureSource(BaseModel):
+    kind: Literal["summary-table"] = "summary-table"
+    config: str
+    granularity: Granularity = "day"
+    ranges: list[DateRange] = Field(default_factory=list)
+    cohort_selection: dict[str, list[str]] = Field(default_factory=dict)
+    # Per metric-group (group id → selected metrics); display filter on the grid.
+    metrics: dict[str, list[str]] = Field(default_factory=dict)
+    stats: list[str] = Field(default_factory=lambda: ["mean"])
+    reference_key: Optional[str] = None
+    metric_options: dict[str, SummaryMetricOption] = Field(default_factory=dict)
+    pvalues: bool = False
+
+
+FigureSource = Union[DateFigureSource, GroupFigureSource, DeepdiveFigureSource, SummaryTableFigureSource]
 
 
 class ReportFigure(BaseModel):
@@ -162,6 +176,7 @@ __all__ = [
     "DateFigureSource",
     "GroupFigureSource",
     "DeepdiveFigureSource",
+    "SummaryTableFigureSource",
     "ReportReference",
     "ReportSpecList",
     "ReportSpecSaveResult",

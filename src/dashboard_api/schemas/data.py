@@ -145,6 +145,71 @@ class GroupDistributionResponse(BaseModel):
     missing: bool  # the metric produced no data in any cohort/range
 
 
+# --- Summary table (all metrics × all cohort/range columns in one grid) ------
+
+
+# Per-metric display reshaping applied before stats/p-values: clip pins values
+# to [min, max]; log applies a signed log1p. Independent per metric so a skewed
+# metric can be tamed without touching the others.
+class SummaryMetricOption(BaseModel):
+    log: bool = False
+    clip: ClipOpts = Field(default_factory=ClipOpts)
+
+
+class SummaryTableRequest(BaseModel):
+    config: str
+    granularity: Granularity = "day"
+    # The columns are the cross-product of selected cohorts × these ranges.
+    ranges: list[DateRange] = Field(min_length=1)
+    group_values: dict[str, list[str]] = Field(default_factory=dict)
+    # Per-metric (keyed by metric name) clip + log; a metric absent here is left
+    # as-is. Sent for every metric the client may show.
+    metric_options: dict[str, SummaryMetricOption] = Field(default_factory=dict)
+    # Compute the per-metric significance column (t-test for 2 columns, one-way
+    # ANOVA for 3+). Off by default — it re-reads the per-row value arrays.
+    pvalues: bool = False
+
+
+# One column of the summary table: a single (cohort × date-range) combination.
+class SummaryColumn(BaseModel):
+    key: str  # stable id the frontend uses to track the reference column
+    cohort: str
+    range_index: int  # which of the request's ranges (0-based)
+    range_label: str
+
+
+# One metric's value summary in a single column. The frontend renders whichever
+# of these stats the user has toggled on, each with its ±% vs the reference column.
+class SummaryCell(BaseModel):
+    n: int
+    mean: Optional[float]
+    median: Optional[float]
+    q1: Optional[float]
+    q3: Optional[float]
+    std: Optional[float]
+    min: Optional[float]
+    max: Optional[float]
+
+
+# One table row: a metric across every column (cells aligned to response.columns;
+# None = no data for that cohort/range), plus the optional significance test.
+class SummaryRow(BaseModel):
+    metric: str
+    group_id: str  # which metric group (group1/2/3) this row belongs to
+    group_label: str
+    cells: list[Optional[SummaryCell]]
+    pvalue: Optional[float] = None
+    test: Optional[str] = None  # "t-test" | "anova" | None
+    missing: bool = False  # metric absent / produced no data in any column
+
+
+class SummaryTableResponse(BaseModel):
+    config: str
+    granularity: Granularity
+    columns: list[SummaryColumn]
+    rows: list[SummaryRow]
+
+
 DeepdivePanel = Literal["derived", "user"]  # group-level metrics vs raw user_* columns
 DeepdiveMode = Literal["histogram", "heatmap", "scatter"]
 

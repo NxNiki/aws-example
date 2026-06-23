@@ -24,12 +24,18 @@ from dashboard_api.schemas.data import (
     Series,
     SeriesRequest,
     SeriesResponse,
+    SummaryCell,
+    SummaryColumn,
+    SummaryRow,
+    SummaryTableRequest,
+    SummaryTableResponse,
 )
 from dashboard_api.services.common import SeriesError
 from dashboard_api.services.configs import build_config_detail, list_config_summaries, load_raw_config
 from dashboard_api.services.deepdive import load_deepdive, load_deepdive_metrics
 from dashboard_api.services.group_distribution import load_group_distribution
 from dashboard_api.services.series import load_date_bounds, load_group_values, load_series
+from dashboard_api.services.summary_table import load_summary_table
 from dashboard_api.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -167,6 +173,57 @@ def post_group_distribution(req: GroupDistributionRequest) -> GroupDistributionR
         metric=req.metric,
         stats=[GroupStat(**s) for s in stats],
         missing=missing,
+    )
+
+
+@router.post("/summary-table", response_model=SummaryTableResponse)
+def post_summary_table(req: SummaryTableRequest) -> SummaryTableResponse:
+    """API endpoint: POST /api/data/summary-table — Summary-table tab.
+
+    One grid for all metrics at once: rows are metrics (grouped by the config's
+    metric groups), columns are the selected cohort × date-range combinations.
+    Each cell is a metric's mean/median/quartiles for that column; the frontend
+    flags one column as the reference and renders the rest as ``value (±%)``.
+    With ``pvalues=true`` each row also carries a Welch t-test (2 columns) or
+    one-way ANOVA (3+) p-value.
+    """
+    cfg = load_raw_config(settings.config_dir, req.config)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail=f"Unknown config '{req.config}'")
+    try:
+        columns, rows = load_summary_table(
+            cfg,
+            req.granularity,
+            [(r.start, r.end) for r in req.ranges],
+            req.group_values,
+            {
+                m: {"log": o.log, "clip_enable": o.clip.enable, "clip_min": o.clip.min, "clip_max": o.clip.max}
+                for m, o in req.metric_options.items()
+            },
+            req.pvalues,
+        )
+    except SeriesError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("summary-table read failed for config=%s", req.config)
+        raise HTTPException(status_code=503, detail=f"Failed to read summary table: {exc}") from exc
+
+    return SummaryTableResponse(
+        config=req.config,
+        granularity=req.granularity,
+        columns=[SummaryColumn(**c) for c in columns],
+        rows=[
+            SummaryRow(
+                metric=r["metric"],
+                group_id=r["group_id"],
+                group_label=r["group_label"],
+                cells=[SummaryCell(**c) if c is not None else None for c in r["cells"]],
+                pvalue=r.get("pvalue"),
+                test=r.get("test"),
+                missing=r["missing"],
+            )
+            for r in rows
+        ],
     )
 
 
