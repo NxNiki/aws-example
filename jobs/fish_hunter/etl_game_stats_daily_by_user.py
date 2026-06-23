@@ -34,6 +34,12 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
     in ``output_fish_hunter/{daily,weekly,monthly}_stats`` (dashboard fish_hunter
     tab). ``start_date`` filters both raw data and output for incremental lookback.
 
+    One row per (user, period, daily_group) for EVERY betting user -- not only
+    fish-killers. Kill-specific metrics (kill ratios, killed-fish values, kill
+    streaks, seconds/bets-to-kill) are NULL/0 for users who never killed; the
+    ``user_killed_fish`` 0/1 flag segments killers. This is required for correct
+    downstream user counts and retention (day0_num_users, num_active_users, ...).
+
     ``daily_group`` assignment: each (user, day) is collapsed to exactly ONE
     group, derived purely from the bullet ``strategy_name`` column. A single bet
     under a higher-priority strategy claims the whole user-day for that group.
@@ -358,7 +364,11 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
             FROM base_data b
             JOIN user_daily_group u ON b.user_id = u.user_id AND b.activity_date = u.activity_date
             GROUP BY b.user_id, u.daily_group, b.{stats_agg_col}
-            HAVING MAX(b.killed) > 0
+            -- Include ALL betting users, not only fish-killers. Kill-specific metrics
+            -- already degrade to NULL/0 for non-killers (CASE WHEN killed / NULLIF), while
+            -- downstream user counts & retention (day0_num_users, num_active_users, …) need
+            -- the full active-user set; a `HAVING MAX(b.killed) > 0` here undercounted them.
+            -- Segment to killers downstream via the user_killed_fish flag when needed.
         ),
 
         user_first_bet AS (

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **fish_hunter daily/weekly/monthly user stats only counted fish-killers.** The
+  `stats_by_user_date` CTE in `etl_game_stats_daily_by_user.py` had a
+  `HAVING MAX(b.killed) > 0`, dropping every user-day where the user bet but
+  never killed a fish. Downstream dashboard metrics that count distinct users
+  (`day0_num_users`, retention, `num_active_users`, kill ratios, RTP) were
+  therefore computed over killers only and undercounted/skewed. Removed the
+  filter so all betting users are emitted; kill-specific metrics still degrade
+  to NULL/0 for non-killers, and `user_killed_fish` can segment killers when
+  needed. Re-run with `--overwrite` to backfill corrected history.
+
 ## [0.4.0] - 2026-06-17
 
 ### Added
