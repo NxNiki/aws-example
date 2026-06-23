@@ -1029,6 +1029,95 @@ def _bet_origin_section_md(cfg: dict, origin_label: str, num: str, img_src: str)
 """
 
 
+def _bet_compare_figure(cfg: dict, origin_label: str, groups: list):
+    """2x2 strategy-comparison figure (one line per group); panel 4 shows only the bet-increase share."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    bin_s = cfg["binSeconds"]
+    win_min = cfg["windowMinutes"]
+    nb = cfg["nBetBins"]
+    x = np.array([i * bin_s / 60.0 for i in range(nb)])
+
+    def arr(group: str, metric: str, key: str) -> np.ndarray:
+        s = cfg["betSeries"][origin_label][group][metric]
+        return np.array([np.nan if v is None else v for v in s[key]], dtype=float)
+
+    def gcolor(group: str) -> str:
+        return _group_color(cfg["groups"].index(group))
+
+    panels = [
+        ("with_bet", "Active users (share with a bet)", "share (%)", True),
+        ("n_bets", "Avg bets per active user", "bets / active user", False),
+        ("total_bet", "Avg bet amount per active user", "amount / active user", False),
+        ("r_up_users", "Users increasing bet", "share (%)", True),
+    ]
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+    for ax, (metric, title, ylabel, pct) in zip(axes.ravel(), panels):
+        for group in groups:
+            mean, lo, hi = arr(group, metric, "mean"), arr(group, metric, "lo"), arr(group, metric, "hi")
+            if pct:
+                mean, lo, hi = mean * 100, lo * 100, hi * 100
+            color = gcolor(group)
+            ax.plot(x, mean, color=color, lw=1.6, label=group)
+            ax.fill_between(x, lo, hi, color=color, alpha=0.12, linewidth=0)
+        ax.set_title(title, fontsize=11)
+        ax.set_xlabel(f"minutes since {origin_label}")
+        ax.set_ylabel(ylabel)
+        ax.set_xlim(0, win_min)
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=8)
+    fig.suptitle(
+        f"FM01 FTUE — strategy comparison (first-{win_min:g}-min, {bin_s}s bins, origin={origin_label})",
+        fontsize=13,
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    return fig
+
+
+def _bet_compare_section_md(cfg: dict, origin_label: str, groups: list, num: str, img_src: str) -> str:
+    """Strategy-comparison markdown section: figure + headline bullets + comparison table."""
+    win_str = f"{cfg['windowMinutes']:g}"
+
+    def b(group: str) -> dict:
+        return cfg["bets"][origin_label][group]
+
+    def leader(metric: str) -> str:
+        return max(groups, key=lambda g: b(g)[metric]["mean"])
+
+    bets_list = "、".join(f"{g} {b(g)['n_bets']['mean']:.0f}" for g in groups)
+    up_list = "、".join(f"{g} {100 * b(g)['users_up']['mean']:.0f}%" for g in groups)
+    bullets = [
+        f"**人均下注强度**：人均下注次数（活跃用户口径）{bets_list}，最高为 **{leader('n_bets')}**；"
+        f"人均下注金额最高为 **{leader('total_bet')}**。",
+        f"**提高注额倾向**：{win_str} 分钟内曾提高注额的用户占比 {up_list}，最高为 **{leader('users_up')}**"
+        "（第 4 面板仅画「提高注额」曲线，见右下）。",
+        "**留存与样本**：左上为各策略活跃占比衰减；**BOOST_POOL** 样本最小（见下表），置信区间最宽，解读需谨慎。",
+    ]
+    interp = "\n".join(f"- {x}" for x in bullets)
+    rows = "".join(
+        f"| {g} | {b(g)['n_users']:,} | {b(g)['n_bets']['mean']:.0f} | {b(g)['total_bet']['mean']:.0f} | "
+        f"{100 * b(g)['users_up']['mean']:.1f}% | {100 * b(g)['users_down']['mean']:.1f}% |\n"
+        for g in groups
+    )
+    return f"""## {num}、策略对比（origin = {origin_label}）
+
+对比 **DEFAULT_FALLBACK / DYNAMIC_RTP_V3 / BOOST_POOL** 三个会话起始策略（按用户首颗子弹的策略划分）；
+第 4 个面板仅展示「提高注额用户占比」曲线。
+
+![策略对比 · 首 {win_str} 分钟下注行为]({img_src})
+
+{interp}
+
+**{win_str} 分钟窗口对比（活跃用户口径）**
+| 策略 | 用户数 N | 人均下注次数 | 人均下注金额 | 提高注额用户占比 | 降低注额用户占比 |
+|---|---|---|---|---|---|
+{rows}
+"""
+
+
 def build_bet_behavior_markdown(
     cfg: dict, output_path: str, origins: tuple = ("account created", "first bet"), embed: bool = True
 ) -> None:
@@ -1049,14 +1138,12 @@ def build_bet_behavior_markdown(
     bin_s = cfg["binSeconds"]
     n_users = cfg["bets"][origins[0]]["All users"]["n_users"]
 
-    def figure_src(origin_label: str) -> str:
-        fig = _bet_behavior_figure(cfg, origin_label)
+    def render(fig, slug: str) -> str:
         if embed:
             buf = io.BytesIO()
             fig.savefig(buf, format="png", dpi=130)
             src = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
         else:
-            slug = origin_label.replace(" ", "_")
             png_path = os.path.splitext(output_path)[0] + f"_{slug}.png"
             os.makedirs(os.path.dirname(png_path) or ".", exist_ok=True)
             fig.savefig(png_path, dpi=130)
@@ -1066,9 +1153,23 @@ def build_bet_behavior_markdown(
 
     nums = ["三", "四", "五", "六"]
     sections = "\n".join(
-        _bet_origin_section_md(cfg, origin_label, nums[i], figure_src(origin_label))
+        _bet_origin_section_md(
+            cfg,
+            origin_label,
+            nums[i],
+            render(_bet_behavior_figure(cfg, origin_label), origin_label.replace(" ", "_")),
+        )
         for i, origin_label in enumerate(origins)
     )
+
+    # strategy comparison (first-bet origin): DEFAULT_FALLBACK / DYNAMIC_RTP_V3 / BOOST_POOL
+    compare_origin = "first bet"
+    compare_groups = [
+        g for g in ("DEFAULT_FALLBACK", "DYNAMIC_RTP_V3", "BOOST_POOL") if g in cfg["betSeries"].get(compare_origin, {})
+    ]
+    if len(compare_groups) >= 2:
+        src = render(_bet_compare_figure(cfg, compare_origin, compare_groups), "strategy_compare")
+        sections += "\n" + _bet_compare_section_md(cfg, compare_origin, compare_groups, nums[len(origins)], src)
 
     header = f"""# 捕鱼（FM01）新用户首 {win_str} 分钟下注行为分析（First-{win_str}-minute bet behavior）
 
