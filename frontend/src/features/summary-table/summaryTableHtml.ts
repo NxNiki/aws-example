@@ -38,13 +38,13 @@ function cellHtml(
   isRef: boolean,
   scale: number,
 ): string {
-  if (!cell) return "—";
   const shown = stats.length ? stats : (["mean"] as SummaryStat[]);
   return shown
     .map((st) => {
+      if (!cell) return "—";
       const val = cell[st];
       const refVal = refCell ? refCell[st] : null;
-      let s = esc(`${shown.length > 1 ? `${STAT_LABEL[st]} ` : ""}${fmtNum(val)}`);
+      let s = esc(fmtNum(val));
       if (isRef) {
         s += ` ${colored("(ref)", REF_GRAY)}`;
       } else {
@@ -67,10 +67,15 @@ export function buildSummaryTableHtml(
 
   const refIndex = columns.findIndex((c) => c.key === refKey);
   const showP = source.pvalues && filtered.some((r) => r.test);
-  const nCols = 1 + columns.length + (showP ? 1 : 0);
+  // With >1 stat, a "Stat" column carries the labels so they aren't repeated in
+  // every cell (mirrors SummaryGrid).
+  const shownStats = stats.length ? stats : (["mean"] as SummaryStat[]);
+  const showStatCol = shownStats.length > 1;
+  const nCols = 1 + (showStatCol ? 1 : 0) + columns.length + (showP ? 1 : 0);
 
   const head =
     "<th>Metric</th>" +
+    (showStatCol ? "<th>Stat</th>" : "") +
     columns
       .map(
         (c, i) =>
@@ -86,9 +91,10 @@ export function buildSummaryTableHtml(
     }
     const refCell = refIndex >= 0 ? r.cells[refIndex] : null;
     const scale = rowPctScale(r.cells, refCell, refIndex, stats);
+    const statCell = showStatCol ? `<td>${shownStats.map((st) => esc(STAT_LABEL[st])).join("<br/>")}</td>` : "";
     const cells = columns.map((_, ci) => `<td>${cellHtml(r.cells[ci], refCell, stats, ci === refIndex, scale)}</td>`).join("");
     const pCell = showP ? `<td>${esc(fmtPValue(r.pvalue))}</td>` : "";
-    body.push(`<tr><td>${esc(r.metric + metricNote(opts[r.metric]))}</td>${cells}${pCell}</tr>`);
+    body.push(`<tr><td>${esc(r.metric + metricNote(opts[r.metric]))}</td>${statCell}${cells}${pCell}</tr>`);
   });
 
   return `<table><tbody><tr>${head}</tr>${body.join("")}</tbody></table>`;

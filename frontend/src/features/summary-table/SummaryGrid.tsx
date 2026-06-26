@@ -44,17 +44,24 @@ function CellView(props: {
   scale: number; // per-row max |Δ%| for the colormap
 }) {
   const { cell, refCell, stats, isRef, scale } = props;
-  if (!cell) return <span className="text-gray-300">—</span>;
+  // Stat labels live in the dedicated "Stat" column; cells show only values,
+  // one line per stat (in the same order) so they align with that column.
   const shown = stats.length ? stats : (["mean"] as SummaryStat[]);
   return (
     <div className="flex flex-col gap-0.5">
       {shown.map((st) => {
+        if (!cell) {
+          return (
+            <div key={st} className="text-gray-300">
+              —
+            </div>
+          );
+        }
         const val = cell[st];
         const refVal = refCell ? refCell[st] : null;
         const p = isRef ? null : pctValue(val, refVal);
         return (
           <div key={st} className="whitespace-nowrap tabular-nums">
-            {shown.length > 1 && <span className="text-gray-400 mr-1">{STAT_LABEL[st]}</span>}
             <span className="text-gray-800">{fmtNum(val)}</span>
             {p != null && (
               <span className="ml-1" style={{ color: pctColor(p, scale) ?? undefined }}>
@@ -106,7 +113,11 @@ export function SummaryGrid(props: {
   if (columns.length === 0 || rows.length === 0) return null;
   const refIndex = columns.findIndex((col) => col.key === referenceKey);
   const showPCol = props.showPValues && rows.some((r) => r.test);
-  const totalCols = 1 + columns.length + (showPCol ? 1 : 0);
+  // With >1 stat, a dedicated "Stat" column carries the labels (count/mean/…)
+  // so they aren't repeated inside every cell; with one stat it's omitted.
+  const shownStats = stats.length ? stats : (["mean"] as SummaryStat[]);
+  const showStatCol = shownStats.length > 1;
+  const totalCols = 1 + (showStatCol ? 1 : 0) + columns.length + (showPCol ? 1 : 0);
 
   return (
     <div className="overflow-x-auto border rounded">
@@ -116,6 +127,9 @@ export function SummaryGrid(props: {
             <th className="sticky left-0 z-10 bg-gray-100 border-b border-r px-3 py-2 text-left font-semibold text-gray-700">
               Metric
             </th>
+            {showStatCol && (
+              <th className="border-b border-r px-3 py-2 text-left font-semibold text-gray-700">Stat</th>
+            )}
             {columns.map((col) => {
               const isRef = col.key === referenceKey;
               return (
@@ -168,6 +182,15 @@ export function SummaryGrid(props: {
                     {row.metric}
                     {note && <span className="text-sm font-normal text-gray-400">{note}</span>}
                   </td>
+                  {showStatCol && (
+                    <td className="border-b border-r px-3 py-2 text-sm text-gray-500 align-top">
+                      <div className="flex flex-col gap-0.5">
+                        {shownStats.map((st) => (
+                          <div key={st}>{STAT_LABEL[st]}</div>
+                        ))}
+                      </div>
+                    </td>
+                  )}
                   {columns.map((col, ci) => (
                     <td key={col.key} className={"border-b border-r px-3 py-2 " + (ci === refIndex ? "bg-blue-50/50" : "")}>
                       <CellView cell={row.cells[ci]} refCell={refCell} stats={stats} isRef={ci === refIndex} scale={scale} />
