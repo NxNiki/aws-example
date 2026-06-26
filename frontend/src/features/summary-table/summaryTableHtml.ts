@@ -15,15 +15,27 @@ const compactRange = (label: string): string =>
     .map((d) => d.slice(2))
     .join(":");
 
+// Confluence accepts inline text color as `<span style="color: rgb(...)">`
+// (matches SummaryGrid's red/green ±% and gray "(ref)").
+const PCT_DOWN = "rgb(220,38,38)"; // text-red-600
+const PCT_UP = "rgb(21,128,61)"; // text-green-700
+const REF_GRAY = "rgb(150,150,150)";
+const colored = (text: string, color: string): string => `<span style="color: ${color};">${esc(text)}</span>`;
+
 function cellHtml(cell: SummaryCell | null, refCell: SummaryCell | null, stats: SummaryStat[], isRef: boolean): string {
   if (!cell) return "—";
   const shown = stats.length ? stats : (["mean"] as SummaryStat[]);
   return shown
     .map((st) => {
       const val = cell[st];
-      const pct = isRef ? null : fmtPct(val, refCell ? refCell[st] : null);
-      const label = shown.length > 1 ? `${STAT_LABEL[st]} ` : "";
-      return esc(`${label}${fmtNum(val)}${pct ? ` (${pct})` : ""}${isRef ? " (ref)" : ""}`);
+      let s = esc(`${shown.length > 1 ? `${STAT_LABEL[st]} ` : ""}${fmtNum(val)}`);
+      if (isRef) {
+        s += ` ${colored("(ref)", REF_GRAY)}`;
+      } else {
+        const pct = fmtPct(val, refCell ? refCell[st] : null);
+        if (pct) s += ` ${colored(`(${pct})`, pct.startsWith("-") ? PCT_DOWN : PCT_UP)}`;
+      }
+      return s;
     })
     .join("<br/>");
 }
