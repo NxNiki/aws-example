@@ -1,5 +1,5 @@
 import { Fragment } from "react";
-import { fmtNum, fmtPct, fmtPValue } from "../../lib/format";
+import { fmtNum, fmtPct, fmtPValue, pctColor, pctScale, pctValue } from "../../lib/format";
 import type { SummaryCell, SummaryColumn, SummaryMetricOption, SummaryRow, SummaryStat } from "../../api/types";
 
 // Stat → short header label. Used by the controls (full label) and cells (short).
@@ -36,26 +36,57 @@ export function metricNote(opt: SummaryMetricOption | undefined): string {
 
 // One metric's value in one column: each selected stat as `value (±% vs reference)`.
 // The reference column shows raw values only. Multiple stats stack as rows.
-function CellView(props: { cell: SummaryCell | null; refCell: SummaryCell | null; stats: SummaryStat[]; isRef: boolean }) {
-  const { cell, refCell, stats, isRef } = props;
+function CellView(props: {
+  cell: SummaryCell | null;
+  refCell: SummaryCell | null;
+  stats: SummaryStat[];
+  isRef: boolean;
+  scale: number; // per-row max |Δ%| for the colormap
+}) {
+  const { cell, refCell, stats, isRef, scale } = props;
   if (!cell) return <span className="text-gray-300">—</span>;
   const shown = stats.length ? stats : (["mean"] as SummaryStat[]);
   return (
     <div className="flex flex-col gap-0.5">
       {shown.map((st) => {
         const val = cell[st];
-        const pct = isRef ? null : fmtPct(val, refCell ? refCell[st] : null);
+        const refVal = refCell ? refCell[st] : null;
+        const p = isRef ? null : pctValue(val, refVal);
         return (
           <div key={st} className="whitespace-nowrap tabular-nums">
             {shown.length > 1 && <span className="text-gray-400 mr-1">{STAT_LABEL[st]}</span>}
             <span className="text-gray-800">{fmtNum(val)}</span>
-            {pct && <span className={pct.startsWith("-") ? "text-red-600 ml-1" : "text-green-700 ml-1"}>({pct})</span>}
+            {p != null && (
+              <span className="ml-1" style={{ color: pctColor(p, scale) ?? undefined }}>
+                ({fmtPct(val, refVal)})
+              </span>
+            )}
             {isRef && <span className="text-gray-400 ml-1">(ref)</span>}
           </div>
         );
       })}
     </div>
   );
+}
+
+// Per-row colormap normalization: the largest |Δ%| among a metric's non-reference
+// cells (across every shown stat), so each metric is colored on its own scale.
+function rowPctScale(
+  row: SummaryRow,
+  columns: SummaryColumn[],
+  refIndex: number,
+  stats: SummaryStat[],
+): number {
+  const shown = stats.length ? stats : (["mean"] as SummaryStat[]);
+  const refCell = refIndex >= 0 ? row.cells[refIndex] : null;
+  const pcts: Array<number | null> = [];
+  columns.forEach((_, ci) => {
+    if (ci === refIndex) return;
+    const cell = row.cells[ci];
+    if (!cell) return;
+    for (const st of shown) pcts.push(pctValue(cell[st], refCell ? refCell[st] : null));
+  });
+  return pctScale(pcts);
 }
 
 // The summary grid: rows are metrics (sectioned by metric group), columns are
@@ -119,6 +150,7 @@ export function SummaryGrid(props: {
             const newGroup = i === 0 || rows[i - 1].group_id !== row.group_id;
             const refCell = refIndex >= 0 ? row.cells[refIndex] : null;
             const note = metricNote(metricOptions[row.metric]);
+            const scale = rowPctScale(row, columns, refIndex, stats);
             return (
               <Fragment key={`${row.group_id}:${row.metric}`}>
                 {newGroup && (
@@ -138,7 +170,7 @@ export function SummaryGrid(props: {
                   </td>
                   {columns.map((col, ci) => (
                     <td key={col.key} className={"border-b border-r px-3 py-2 " + (ci === refIndex ? "bg-blue-50/50" : "")}>
-                      <CellView cell={row.cells[ci]} refCell={refCell} stats={stats} isRef={ci === refIndex} />
+                      <CellView cell={row.cells[ci]} refCell={refCell} stats={stats} isRef={ci === refIndex} scale={scale} />
                     </td>
                   ))}
                   {showPCol && (
