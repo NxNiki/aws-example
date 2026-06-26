@@ -7,7 +7,7 @@ import type {
   DeepdiveMetrics,
   DeepdiveRequest,
   DeepdiveResponse,
-  ExportRequest,
+  ExportRequestInput,
   ExportResponse,
   GenerateProxyResponse,
   GroupDistributionRequest,
@@ -175,9 +175,15 @@ export const api = {
     return data;
   },
 
-  exportReport: async (req: ExportRequest): Promise<ExportResponse> => {
-    const { data, error } = await client.POST("/api/report/export", { body: req });
-    if (error || !data) fail("POST /api/report/export", error);
-    return data;
+  // Plain fetch (not the generated typed client): figures may carry `html`
+  // instead of `png_base64`, which the generated ExportRequest doesn't model yet.
+  exportReport: async (req: ExportRequestInput): Promise<ExportResponse> => {
+    const r = await fetch(`${BASE}/api/report/export`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(req),
+    });
+    if (!r.ok) fail("POST /api/report/export", await r.text());
+    return (await r.json()) as ExportResponse;
   },
 };

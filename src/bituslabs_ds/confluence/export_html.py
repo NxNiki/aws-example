@@ -49,6 +49,17 @@ def figure_block_html(*, index: int, filename: str, description: str) -> str:
     )
 
 
+def table_figure_block_html(*, index: int, table_html: str, description: str) -> str:
+    """Figure block for a pre-rendered HTML table (e.g. the Summary-table grid).
+
+    Mirrors ``figure_block_html`` but embeds the table markup inline instead of
+    an attached image — tabular figures have no chart to rasterize, and a real
+    Confluence table reads/searches better than a screenshot.
+    """
+    body = wrap_paragraphs(description) or "<p><em>(no description)</em></p>"
+    return f"<h2>Figure {index}</h2>{table_html}{body}"
+
+
 def build_references_block(references: List[Dict[str, str]]) -> str:
     """``<h2>References</h2>`` followed by a bulleted list of titled links.
 

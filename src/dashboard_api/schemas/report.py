@@ -152,7 +152,11 @@ class GenerateProxyResponse(BaseModel):
 class ExportFigure(BaseModel):
     title: str = ""
     description: str = ""
-    png_base64: str  # client-rendered ECharts PNG (data-URL body, no prefix)
+    # One per figure: a client-rendered ECharts PNG (data-URL body, no prefix)
+    # for charts, OR pre-rendered HTML for tabular figures (the Summary-table
+    # grid) that have no chart to rasterize.
+    png_base64: Optional[str] = None
+    html: Optional[str] = None
 
 
 class ExportRequest(BaseModel):

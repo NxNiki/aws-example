@@ -191,3 +191,20 @@ export type SummaryStat = "n" | "mean" | "median" | "q1" | "q3" | "min" | "max";
 export type GenerateProxyResponse = Schemas["GenerateProxyResponse"];
 export type ExportRequest = Schemas["ExportRequest"];
 export type ExportResponse = Schemas["ExportResponse"];
+
+// Hand-written export input: a figure ships EITHER a chart PNG or pre-rendered
+// HTML (Summary-table grid). Kept separate from the generated ExportRequest so
+// the optional png/html don't need a schema regen.
+export interface ExportFigureInput {
+  title: string;
+  description: string;
+  png_base64?: string;
+  html?: string;
+}
+
+export interface ExportRequestInput {
+  confluence_url: string;
+  summary: string;
+  references: ReportReference[];
+  figures: ExportFigureInput[];
+}

@@ -3,10 +3,12 @@ import { uid } from "../lib/uid";
 import type * as echarts from "echarts";
 import { api } from "../api/client";
 import { buildDataSummary } from "../charts/reportSummary";
+import { buildSummaryTableHtml } from "../features/summary-table/summaryTableHtml";
 import { useDashboardStore } from "./dashboardStore";
 import type {
   CorrMatrix,
   DateRange,
+  ExportFigureInput,
   FigureSource,
   GroupStat,
   HistogramSeries,
@@ -442,19 +444,27 @@ export const useReportStore = create<ReportState>((set, get) => ({
   },
 
   exportReport: async () => {
-    const { spec } = get();
+    const { spec, figureData } = get();
     if (!spec.confluence_url.trim()) {
       notify("error", "Set the Confluence page URL first");
       return;
     }
+    // Charts export as PNGs (from their live ECharts instance); the Summary-table
+    // figure has no chart, so it exports as an inline HTML table instead.
     const figures = spec.figures
-      .map((f) => {
+      .map((f): ExportFigureInput | null => {
+        if (f.source.kind === "summary-table") {
+          const data = figureData[f.id];
+          if (!data?.columns || !data?.rows) return null;
+          const html = buildSummaryTableHtml(f.source, data.columns, data.rows);
+          return html ? { title: f.title, description: f.description, html } : null;
+        }
         const chart = _charts[f.id];
         if (!chart) return null;
-        const dataUrl = chart.getDataURL({ type: "png", pixelRatio: 2, backgroundColor: "#fff" });
-        return { title: f.title, description: f.description, png_base64: dataUrl.split(",")[1] ?? "" };
+        const png = chart.getDataURL({ type: "png", pixelRatio: 2, backgroundColor: "#fff" }).split(",")[1] ?? "";
+        return png ? { title: f.title, description: f.description, png_base64: png } : null;
       })
-      .filter((f): f is NonNullable<typeof f> => f !== null && f.png_base64.length > 0);
+      .filter((f): f is ExportFigureInput => f !== null);
     if (figures.length === 0) {
       notify("error", "No rendered figures to export");
       return;

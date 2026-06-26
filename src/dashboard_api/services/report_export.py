@@ -23,6 +23,7 @@ from bituslabs_ds.confluence.export_html import (
     build_report_section,
     figure_block_html,
     splice_report_into_storage,
+    table_figure_block_html,
 )
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ def export_report_pngs(
     *,
     confluence_url: str,
     summary: str,
-    figures: list[dict[str, Any]],  # {title, description, png_base64}
+    figures: list[dict[str, Any]],  # {title, description, png_base64 | html}
     references: list[dict[str, Any]],
 ) -> tuple[str, int, Optional[int]]:
     """Attach the PNGs and write the report region. Returns
@@ -49,6 +50,18 @@ def export_report_pngs(
 
     figure_blocks: list[str] = []
     for idx, fig in enumerate(figures, start=1):
+        description = fig.get("description") or ""
+        title = (fig.get("title") or "").strip()
+        if title:
+            description = f"{title}\n\n{description}" if description else title
+
+        # Tabular figures (Summary-table grid) ship pre-rendered HTML — embed it
+        # inline as a real Confluence table rather than attaching an image.
+        table_html = fig.get("html")
+        if table_html:
+            figure_blocks.append(table_figure_block_html(index=idx, table_html=table_html, description=description))
+            continue
+
         b64 = (fig.get("png_base64") or "").split(",")[-1]  # tolerate a data-URL prefix
         try:
             png_bytes = base64.b64decode(b64, validate=True)
@@ -59,10 +72,6 @@ def export_report_pngs(
             continue
         filename = f"report_{int(time.time())}_{uuid.uuid4().hex[:8]}.png"
         confluence_client.attach_file(page_id, png_bytes, filename, content_type="image/png")
-        description = fig.get("description") or ""
-        title = (fig.get("title") or "").strip()
-        if title:
-            description = f"{title}\n\n{description}" if description else title
         figure_blocks.append(figure_block_html(index=idx, filename=filename, description=description))
 
     references_block = build_references_block(
