@@ -83,6 +83,8 @@ interface ReportState {
   addFigure: (source: FigureSource, title: string) => void;
   removeFigure: (id: string) => void;
   patchFigure: (id: string, patch: Partial<ReportFigure>) => void;
+  // Reorder a figure (and its description, which lives on the figure) up/down.
+  moveFigure: (id: string, dir: -1 | 1) => void;
   registerChart: (id: string, chart: echarts.ECharts | null) => void;
 
   renderFigure: (id: string) => Promise<void>;
@@ -177,6 +179,17 @@ export const useReportStore = create<ReportState>((set, get) => ({
     set((s) => ({
       spec: { ...s.spec, figures: s.spec.figures.map((f) => (f.id === id ? { ...f, ...patch } : f)) },
     })),
+
+  moveFigure: (id, dir) =>
+    set((s) => {
+      const figs = s.spec.figures;
+      const i = figs.findIndex((f) => f.id === id);
+      const j = i + dir;
+      if (i < 0 || j < 0 || j >= figs.length) return {};
+      const next = figs.slice();
+      [next[i], next[j]] = [next[j], next[i]];
+      return { spec: { ...s.spec, figures: next } };
+    }),
 
   registerChart: (id, chart) => {
     _charts[id] = chart;

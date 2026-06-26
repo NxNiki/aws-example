@@ -139,9 +139,9 @@ function FigureChart({ fig, data }: { fig: ReportFigure; data: FigureData }) {
   return <div className="p-4 text-gray-400">No data — check the recipe (config/metrics may have changed).</div>;
 }
 
-function FigureCard({ fig }: { fig: ReportFigure }) {
+function FigureCard({ fig, index, total }: { fig: ReportFigure; index: number; total: number }) {
   const data = useReportStore((s) => s.figureData[fig.id] ?? {});
-  const { patchFigure, removeFigure, generateDescription, renderFigure } = useReportStore();
+  const { patchFigure, removeFigure, generateDescription, renderFigure, moveFigure } = useReportStore();
   return (
     <div className="mb-6 rounded border bg-white p-4">
       <div className="mb-2 flex flex-wrap items-center gap-3">
@@ -158,6 +158,22 @@ function FigureCard({ fig }: { fig: ReportFigure }) {
           />
           inherit period
         </label>
+        <button
+          className="rounded border px-2 py-1 text-sm text-gray-600 disabled:opacity-30"
+          title="Move figure up"
+          disabled={index === 0}
+          onClick={() => moveFigure(fig.id, -1)}
+        >
+          ↑
+        </button>
+        <button
+          className="rounded border px-2 py-1 text-sm text-gray-600 disabled:opacity-30"
+          title="Move figure down"
+          disabled={index === total - 1}
+          onClick={() => moveFigure(fig.id, 1)}
+        >
+          ↓
+        </button>
         <button className="rounded border px-2 py-1 text-sm text-gray-600" onClick={() => void renderFigure(fig.id)}>
           ↻ re-render
         </button>
@@ -364,8 +380,8 @@ export function ReportTab() {
           No figures yet — use <b>＋ Add to report</b> on any chart in the data tabs.
         </div>
       )}
-      {r.spec.figures.map((f) => (
-        <FigureCard key={f.id} fig={f} />
+      {r.spec.figures.map((f, i) => (
+        <FigureCard key={f.id} fig={f} index={i} total={r.spec.figures.length} />
       ))}
 
       {/* References */}
