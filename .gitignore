@@ -10,6 +10,8 @@ log
 **/*.onnx
 **/features/
 !src/bituslabs_ds/features/
+!frontend/src/features/
+!frontend/src/features/**
 **/figures/
 **/model_output/
 **/output/

@@ -221,6 +221,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Production cutover: the React dashboard replaced the legacy Dash app**
+  (frontend redesign Phase 5). `dashboard_api` (FastAPI: SPA + `/api/data/*` +
+  `/api/report/*`) now serves the same production URL the Dash app did,
+  behind the existing `game-stats-dashboard-alb` — no new ALB. The listener
+  default was flipped from the Dash target group to `dashboard-api-tg`
+  (atomic `modify_listener`), and a priority-10 `/api/agent/*` rule routes
+  browser chat traffic to the `ai-chat-agent` service via a second target
+  group on that ALB (a TG belongs to one ALB, so the agent service carries two
+  — note: recreating that service from scratch silently drops the extra TG).
+  ALB idle timeout raised 60 → 300 s for SSE chat streams. The fleet stays at
+  three ECS services (dashboard-api, ai-chat-agent, rag-service); the legacy
+  `game-stats-dashboard` service is parked at desired-count 0 for a rollback
+  bake, with its scale-to-zero alarms/policies removed (the scale-out alarm
+  watched the shared ALB's 503 count and would otherwise resurrect Dash).
+  `infra/dashboard_api/deploy_ecs.py` performs the whole sequence idempotently
+  and prints a rollback runbook. The Weekly Report placeholder tab was removed
+  from the SPA (its nightly ETL job is kept). `dashboard_api` also emits the
+  `Dashboard/UserRequestCount` metric (scale-to-zero idle signal), gated on
+  `DASHBOARD_SERVICE_NAME`.
+- **Repository reorganization (moves-only, behavior-preserving).** Shared
+  infrastructure that lived inside the legacy `dashboards` package moved into
+  the `bituslabs_ds` library so the Dash package can be deleted after the bake:
+  `metrics/user_stats_aggregates.py` (DataMetrics + `_bootstrap_ci`),
+  `confluence/{client,export_html,references}.py`, and `aws_secrets.py`.
+  One-line re-export shims remain at the old `dashboards.*` paths so the frozen
+  legacy image stays rebuildable until deletion; `dashboard_api`, `ai_agent`,
+  `rag_service`, and tests import from the new paths, and the three service
+  Dockerfiles drop their per-file `src/dashboards` COPY lines (the modules ride
+  the existing `COPY src/bituslabs_ds`). The six `dashboard_config-*.yaml`
+  moved out of `src/dashboards/` to a top-level `configs/dashboard/`, resolved
+  via `DASHBOARD_CONFIG_DIR` everywhere — which also fixed a latent bug where
+  `ai_agent`'s `chat_api` resolved configs from a directory that never held
+  any YAMLs, silently dropping every `dashboard_config` request. Eleven
+  root-level one-off scripts moved to `jobs/analyses/` (scheduled job paths are
+  frozen — EventBridge bakes them into rule targets — and stayed put); see the
+  new `jobs/README.md`.
 - Renamed `src/dashboards/secrets.py` → `src/dashboards/aws_secrets.py`
   to avoid shadowing the Python stdlib ``secrets`` module. Running any
   module under ``src/dashboards/`` as a path (e.g. ``python
@@ -312,6 +348,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **dashboard_api served the wrong game's data after a config switch.** The
+  in-process window cache (`services/common.py`, added with the OOM fixes
+  below) keyed each cached user-row frame on `cfg.get("id")` — but the raw
+  config YAML has no `id` (it's derived from the filename), so the key was
+  `(None, granularity, start, end)` for *every* config. Switching games with
+  the same granularity and date window (e.g. ss02 → ss03) hit the previous
+  game's cached frame and rendered its numbers under the new config. Affected
+  all three data tabs (series, deep dive, group distribution).
+  - Surfaced two ways: (1) the freshly loaded config showed the previous
+    game's values; (2) **retention appeared to "change" when the date range
+    changed** — not a retention-calculation problem, but because the range is
+    part of the cache key, so changing it forced a cache *miss* that finally
+    fetched the correct config's data. With the cache keyed correctly, both
+    go away.
+  - Fix: `load_raw_config` now stamps `cfg["id"] = config_id` (the single load
+    chokepoint every data route uses), and `collect_window` raises rather than
+    caching under a `None` id, so a future caller that forgets fails loudly
+    instead of silently serving another game's rows. Regression tests cover
+    the no-collision keying and the missing-id guard. Verified in production:
+    ss02 vs ss03 `user_total_bet` now return distinct means (1041.80 vs
+    1082.78), stable across a round-trip.
+- **dashboard_api task OOM-killed under real dashboard load (502s).** Three
+  compounding causes, fixed in sequence: (1) the per-config parquet cache is
+  held in-process, so two uvicorn workers doubled it — pinned to a single
+  worker; (2) a tab render fires one `/api/data/*` request per panel in
+  parallel, and each collected its own copy of the same user-row window —
+  added the single-flight, byte-budgeted `collect_window` cache so one render
+  collects once; (3) `_bootstrap_ci` allocated the full `(n_boot × len(arr))`
+  resample matrix at once (~800 MB for a 200k-row per-user metric, several
+  landing concurrently) — now resampled in batches (~80 MB transient,
+  statistically identical CIs). Task sized to 8 GB / 1 vCPU.
+
 - **Chat agent silently fell back to live Confluence instead of RAG.**
   `search_confluence_rag` raised `ImportError` inside the slim
   ai-agent Docker image because `rag_service/client.py` wasn't copied
@@ -364,6 +432,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run; the reader now drops an unreadable cache and reloads from source.
 - **ETL partition columns are built in a single concat** rather than inserted
   one at a time, avoiding pandas DataFrame-fragmentation warnings.
+
+### Removed
+
+- **Legacy Dash dashboard decommissioned (frontend redesign Phase 5
+  complete).** After a clean one-week production bake of the React dashboard
+  (steady traffic, zero errors, legacy service idle at desired 0), the old Dash
+  app and its infra were deleted: `src/dashboards/` (the ~7,200-LOC
+  `game_stats_monitor.py`, `weekly_report.py`, the legacy `report_agent`
+  exporter/data_summary, and the back-compat shims left by the reorg) and
+  `infra/dashboard/`. The `dashboards` package entry and the `dashboard` poetry
+  group (dash, plotly, kaleido, gunicorn, matplotlib) were dropped from
+  `pyproject.toml` — every shared dep in that group remains available via the
+  `ds`/`dev`/`dashboard_api` groups. AWS teardown removed the
+  `game-stats-dashboard` ECS service, its task-definition family,
+  `game-stats-dashboard-tg`, the legacy task security group, the
+  `/ecs/game-stats-dashboard` log group, and the `bituslabs-ds-dashboard` ECR
+  repository. **Kept:** the production ALB (`game-stats-dashboard-alb`, now
+  fronting `dashboard-api`) and its security group; the weekly-report ETL job
+  and its scheduled-jobs registry entry. Rollback to Dash is no longer a
+  one-line ALB flip — it requires rebuilding from a pre-deletion git SHA.
 
 ## [0.2.0] - 2026-05-06
 

@@ -1,6 +1,6 @@
 # Makefile for bituslabs_ds project
 
-.PHONY: help install install-dev test test-unit test-integration test-coverage test-fast lint format clean build docs
+.PHONY: help install install-dev test test-unit test-integration test-coverage test-fast lint lint-new format clean build docs openapi
 
 # Default target
 help:
@@ -14,6 +14,7 @@ help:
 	@echo "  test-fast      Run fast tests (exclude slow tests)"
 	@echo "  lint           Run linting checks"
 	@echo "  format         Format code with black and isort"
+	@echo "  openapi        Regenerate the dashboard_api OpenAPI schema + frontend TS client"
 	@echo "  clean          Clean build artifacts"
 	@echo "  build          Build the package"
 	@echo "  docs           Build documentation"
@@ -51,9 +52,27 @@ lint:
 	poetry run black --check src/ tests/
 	poetry run isort --check-only src/ tests/
 
+# CI lint scope (Phase 0): the new/migrated React-redesign surfaces only. The
+# legacy tree has pre-existing flake8 debt (see .flake8) and is NOT gated yet;
+# add paths here as the rewrite ports each module so the gate tightens tab by
+# tab. `make lint` above still covers the whole repo for local cleanup work.
+LINT_PATHS_NEW = src/dashboard_api src/bituslabs_ds/metrics src/bituslabs_ds/confluence src/bituslabs_ds/aws_secrets.py \
+	tests/unit/test_dashboard_api.py tests/unit/test_ai_agent_actions.py
+
+lint-new:
+	poetry run flake8 $(LINT_PATHS_NEW)
+	poetry run mypy $(LINT_PATHS_NEW)
+	poetry run black --check $(LINT_PATHS_NEW)
+	poetry run isort --check-only $(LINT_PATHS_NEW)
+
 format:
 	poetry run black src/ tests/
 	poetry run isort src/ tests/
+
+# Regenerate the OpenAPI schema from dashboard_api and the frontend's typed
+# client from it. Run after changing any dashboard_api request/response model.
+openapi:
+	bash scripts/gen_openapi_client.sh
 
 # Build and clean
 clean:

@@ -1,7 +1,7 @@
 """
 Resolve ``ConfluenceSource`` entries into raw page content.
 
-Wraps the existing ``dashboards.confluence_client`` helpers so we don't
+Wraps the existing ``bituslabs_ds.confluence.client`` helpers so we don't
 duplicate auth or HTML-stripping logic. The loader expands page trees,
 deduplicates, and yields ``(page_id, title, text, url, space_key)``.
 """
@@ -21,13 +21,13 @@ PageRecord = Tuple[str, str, str, str, str]  # page_id, title, text, url, space_
 
 def _client():
     """Lazy import so the module loads even when atlassian-python-api is absent."""
-    from dashboards.confluence_client import _get_client
+    from bituslabs_ds.confluence.client import _get_client
 
     return _get_client()
 
 
 def _strip(html: str) -> str:
-    from dashboards.confluence_client import _strip_html
+    from bituslabs_ds.confluence.client import _strip_html
 
     return _strip_html(html or "")
 
@@ -80,7 +80,7 @@ def _to_record(page: Dict, source_name: str) -> PageRecord:
 
 def iter_source_pages(source: ConfluenceSource) -> Iterable[PageRecord]:
     """Yield page records for a single source entry, deduplicated by page_id."""
-    from dashboards.confluence_client import list_pages_in_folder
+    from bituslabs_ds.confluence.client import list_pages_in_folder
 
     confluence = _client()
     seen: set = set(source.exclude_page_ids)

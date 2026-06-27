@@ -39,7 +39,7 @@ poetry run python jobs/<script>.py
 
 **Four source packages** (all under `src/`, configured in pyproject.toml):
 - `bituslabs_ds` — Core library: ETL, S3 utilities, ML, EDA, Athena, PySpark helpers
-- `dashboards` — Dash web app (game stats, Report tab UI) + a small set of shared utilities (`confluence_client.py`, `secrets.py`, `user_stats_aggregates.py`) that the ai_agent and rag_service also import
+- `dashboards` — LEGACY Dash web app (replaced in production by dashboard_api + the React SPA; deleted after the post-cutover bake). Shared utilities formerly here now live in `bituslabs_ds` (`metrics/user_stats_aggregates.py`, `confluence/{client,export_html,references}.py`, `aws_secrets.py`); one-line shims remain at the old import paths until deletion
 - `ai_agent` — FastAPI chat service: LangChain ReAct agent, Slack bot, metadata cache, Report-tab LLM endpoints
 - `rag_service` — FastAPI retrieval microservice: Confluence loader, embeddings, Faiss/OpenSearch backed retriever
 
@@ -59,11 +59,11 @@ Redshift (prod) → SSH bastion tunnel → DataLoader (etl.py) → S3 parquet ca
 **Entry points:**
 - `jobs/run_scheduled_etl_jobs.py` — Master ETL orchestrator (EventBridge/Fargate)
 - `entry_points/etl_dispatcher.py` — Dynamic job runner
-- `infra/dashboard/deploy_ecs.py` — Dashboard deployment to ECS
+- `infra/dashboard_api/deploy_ecs.py` — Dashboard (React SPA + data/report API) deployment to ECS
 - `infra/ai_agent/deploy_ecs.py` — AI agent deployment to ECS
 - `infra/emr/deploy.py` — EMR cluster management
 
-**Infrastructure:** `infra/` is organized one subfolder per service — `dashboard/`, `ai_agent/`, `rag_service/`, `etl/`, `sagemaker/`, `operation_report/`, `emr/` — each containing its own `Dockerfile`, `build.sh`, deploy script, and README where relevant. Shared deploy plumbing (base Docker image, ECS helpers) lives in `infra/shared/`. See `infra/README.md` for the index.
+**Infrastructure:** `infra/` is organized one subfolder per service — `dashboard_api/`, `ai_agent/`, `rag_service/`, `etl/`, `sagemaker/`, `operation_report/`, `emr/` — each containing its own `Dockerfile`, `build.sh`, deploy script, and README where relevant. Shared deploy plumbing (base Docker image, ECS helpers) lives in `infra/shared/`. See `infra/README.md` for the index.
 
 ## Code Style
 
@@ -146,6 +146,15 @@ features and should be split.
 ## Credentials
 
 Never commit secrets. Copy `.env.example` → `.env` and set `REDSHIFT_USER`, `REDSHIFT_PASSWORD`, `BASTION_KEY_PATH`. On ECS, secrets come from environment variables / Secrets Manager.
+
+A populated `.env` is present locally with the full set of credentials the services and jobs use:
+- **Redshift + bastion:** `REDSHIFT_USER`, `REDSHIFT_PASSWORD`, `BASTION_KEY_PATH` — run ground-truth Redshift queries via `bituslabs_ds.etl.DataLoader` (e.g. to validate dashboard/ETL numbers against the source).
+- **Confluence:** `CONFLUENCE_URL`, `CONFLUENCE_EMAIL`, `CONFLUENCE_TOKEN`.
+- **LLM:** `GOOGLE_API_KEY` (Gemini).
+- **Slack:** `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_USER_TOKEN`, `SLACK_CHANNEL_ID`.
+- **Services:** `RAG_SERVICE_URL`.
+
+The bastion **IP is not stored** (it changes) — pass the current one to `DataLoader(bastion_ip=...)` or a job's `--bastion-ip`. Never print `.env` values or commit them (`.env` is gitignored).
 
 ## Branch & Merge Workflow
 
