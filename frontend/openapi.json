@@ -672,9 +672,27 @@
             "title": "Description",
             "type": "string"
           },
+          "html": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Html"
+          },
           "png_base64": {
-            "title": "Png Base64",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Png Base64"
           },
           "title": {
             "default": "",
@@ -682,9 +700,6 @@
             "type": "string"
           }
         },
-        "required": [
-          "png_base64"
-        ],
         "title": "ExportFigure",
         "type": "object"
       },
@@ -1249,7 +1264,8 @@
               "mapping": {
                 "stats-by-date": "#/components/schemas/DateFigureSource",
                 "stats-by-group": "#/components/schemas/GroupFigureSource",
-                "stats-deepdive": "#/components/schemas/DeepdiveFigureSource"
+                "stats-deepdive": "#/components/schemas/DeepdiveFigureSource",
+                "summary-table": "#/components/schemas/SummaryTableFigureSource-Input"
               },
               "propertyName": "kind"
             },
@@ -1262,6 +1278,9 @@
               },
               {
                 "$ref": "#/components/schemas/DeepdiveFigureSource"
+              },
+              {
+                "$ref": "#/components/schemas/SummaryTableFigureSource-Input"
               }
             ],
             "title": "Source"
@@ -1300,7 +1319,8 @@
               "mapping": {
                 "stats-by-date": "#/components/schemas/DateFigureSource",
                 "stats-by-group": "#/components/schemas/GroupFigureSource",
-                "stats-deepdive": "#/components/schemas/DeepdiveFigureSource"
+                "stats-deepdive": "#/components/schemas/DeepdiveFigureSource",
+                "summary-table": "#/components/schemas/SummaryTableFigureSource-Output"
               },
               "propertyName": "kind"
             },
@@ -1313,6 +1333,9 @@
               },
               {
                 "$ref": "#/components/schemas/DeepdiveFigureSource"
+              },
+              {
+                "$ref": "#/components/schemas/SummaryTableFigureSource-Output"
               }
             ],
             "title": "Source"
@@ -1822,6 +1845,475 @@
         "title": "SeriesResponse",
         "type": "object"
       },
+      "SummaryCell": {
+        "properties": {
+          "max": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max"
+          },
+          "mean": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean"
+          },
+          "median": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Median"
+          },
+          "min": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min"
+          },
+          "n": {
+            "title": "N",
+            "type": "integer"
+          },
+          "q1": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Q1"
+          },
+          "q3": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Q3"
+          },
+          "std": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Std"
+          }
+        },
+        "required": [
+          "n",
+          "mean",
+          "median",
+          "q1",
+          "q3",
+          "std",
+          "min",
+          "max"
+        ],
+        "title": "SummaryCell",
+        "type": "object"
+      },
+      "SummaryColumn": {
+        "properties": {
+          "cohort": {
+            "title": "Cohort",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "range_index": {
+            "title": "Range Index",
+            "type": "integer"
+          },
+          "range_label": {
+            "title": "Range Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "cohort",
+          "range_index",
+          "range_label"
+        ],
+        "title": "SummaryColumn",
+        "type": "object"
+      },
+      "SummaryMetricOption": {
+        "properties": {
+          "clip": {
+            "$ref": "#/components/schemas/ClipOpts"
+          },
+          "log": {
+            "default": false,
+            "title": "Log",
+            "type": "boolean"
+          }
+        },
+        "title": "SummaryMetricOption",
+        "type": "object"
+      },
+      "SummaryRow": {
+        "properties": {
+          "cells": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/SummaryCell"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Cells",
+            "type": "array"
+          },
+          "group_id": {
+            "title": "Group Id",
+            "type": "string"
+          },
+          "group_label": {
+            "title": "Group Label",
+            "type": "string"
+          },
+          "metric": {
+            "title": "Metric",
+            "type": "string"
+          },
+          "missing": {
+            "default": false,
+            "title": "Missing",
+            "type": "boolean"
+          },
+          "pvalue": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pvalue"
+          },
+          "test": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Test"
+          }
+        },
+        "required": [
+          "metric",
+          "group_id",
+          "group_label",
+          "cells"
+        ],
+        "title": "SummaryRow",
+        "type": "object"
+      },
+      "SummaryTableFigureSource-Input": {
+        "properties": {
+          "cohort_selection": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Cohort Selection",
+            "type": "object"
+          },
+          "config": {
+            "title": "Config",
+            "type": "string"
+          },
+          "granularity": {
+            "default": "day",
+            "enum": [
+              "day",
+              "week",
+              "month"
+            ],
+            "title": "Granularity",
+            "type": "string"
+          },
+          "kind": {
+            "const": "summary-table",
+            "default": "summary-table",
+            "title": "Kind",
+            "type": "string"
+          },
+          "metric_options": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SummaryMetricOption"
+            },
+            "title": "Metric Options",
+            "type": "object"
+          },
+          "metrics": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Metrics",
+            "type": "object"
+          },
+          "pvalues": {
+            "default": false,
+            "title": "Pvalues",
+            "type": "boolean"
+          },
+          "ranges": {
+            "items": {
+              "$ref": "#/components/schemas/DateRange"
+            },
+            "title": "Ranges",
+            "type": "array"
+          },
+          "reference_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Key"
+          },
+          "stats": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Stats",
+            "type": "array"
+          }
+        },
+        "required": [
+          "config"
+        ],
+        "title": "SummaryTableFigureSource",
+        "type": "object"
+      },
+      "SummaryTableFigureSource-Output": {
+        "properties": {
+          "cohort_selection": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Cohort Selection",
+            "type": "object"
+          },
+          "config": {
+            "title": "Config",
+            "type": "string"
+          },
+          "granularity": {
+            "default": "day",
+            "enum": [
+              "day",
+              "week",
+              "month"
+            ],
+            "title": "Granularity",
+            "type": "string"
+          },
+          "kind": {
+            "const": "summary-table",
+            "default": "summary-table",
+            "title": "Kind",
+            "type": "string"
+          },
+          "metric_options": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SummaryMetricOption"
+            },
+            "title": "Metric Options",
+            "type": "object"
+          },
+          "metrics": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Metrics",
+            "type": "object"
+          },
+          "pvalues": {
+            "default": false,
+            "title": "Pvalues",
+            "type": "boolean"
+          },
+          "ranges": {
+            "items": {
+              "$ref": "#/components/schemas/DateRange"
+            },
+            "title": "Ranges",
+            "type": "array"
+          },
+          "reference_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Key"
+          },
+          "stats": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Stats",
+            "type": "array"
+          }
+        },
+        "required": [
+          "config"
+        ],
+        "title": "SummaryTableFigureSource",
+        "type": "object"
+      },
+      "SummaryTableRequest": {
+        "properties": {
+          "config": {
+            "title": "Config",
+            "type": "string"
+          },
+          "granularity": {
+            "default": "day",
+            "enum": [
+              "day",
+              "week",
+              "month"
+            ],
+            "title": "Granularity",
+            "type": "string"
+          },
+          "group_values": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Group Values",
+            "type": "object"
+          },
+          "metric_options": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SummaryMetricOption"
+            },
+            "title": "Metric Options",
+            "type": "object"
+          },
+          "pvalues": {
+            "default": false,
+            "title": "Pvalues",
+            "type": "boolean"
+          },
+          "ranges": {
+            "items": {
+              "$ref": "#/components/schemas/DateRange"
+            },
+            "minItems": 1,
+            "title": "Ranges",
+            "type": "array"
+          }
+        },
+        "required": [
+          "config",
+          "ranges"
+        ],
+        "title": "SummaryTableRequest",
+        "type": "object"
+      },
+      "SummaryTableResponse": {
+        "properties": {
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/SummaryColumn"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "config": {
+            "title": "Config",
+            "type": "string"
+          },
+          "granularity": {
+            "enum": [
+              "day",
+              "week",
+              "month"
+            ],
+            "title": "Granularity",
+            "type": "string"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/SummaryRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "config",
+          "granularity",
+          "columns",
+          "rows"
+        ],
+        "title": "SummaryTableResponse",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "loc": {
@@ -2265,6 +2757,48 @@
           }
         },
         "summary": "Post Series",
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/api/data/summary-table": {
+      "post": {
+        "description": "API endpoint: POST /api/data/summary-table \u2014 Summary-table tab.\n\nOne grid for all metrics at once: rows are metrics (grouped by the config's\nmetric groups), columns are the selected cohort \u00d7 date-range combinations.\nEach cell is a metric's mean/median/quartiles for that column; the frontend\nflags one column as the reference and renders the rest as ``value (\u00b1%)``.\nWith ``pvalues=true`` each row also carries a Welch t-test (2 columns) or\none-way ANOVA (3+) p-value.",
+        "operationId": "post_summary_table_api_data_summary_table_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SummaryTableRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SummaryTableResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Summary Table",
         "tags": [
           "data"
         ]

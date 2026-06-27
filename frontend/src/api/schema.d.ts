@@ -189,6 +189,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/data/summary-table": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Summary Table
+         * @description API endpoint: POST /api/data/summary-table — Summary-table tab.
+         *
+         *     One grid for all metrics at once: rows are metrics (grouped by the config's
+         *     metric groups), columns are the selected cohort × date-range combinations.
+         *     Each cell is a metric's mean/median/quartiles for that column; the frontend
+         *     flags one column as the reference and renders the rest as ``value (±%)``.
+         *     With ``pvalues=true`` each row also carries a Welch t-test (2 columns) or
+         *     one-way ANOVA (3+) p-value.
+         */
+        post: operations["post_summary_table_api_data_summary_table_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/health": {
         parameters: {
             query?: never;
@@ -667,8 +694,10 @@ export interface components {
              * @default
              */
             description: string;
+            /** Html */
+            html?: string | null;
             /** Png Base64 */
-            png_base64: string;
+            png_base64?: string | null;
             /**
              * Title
              * @default
@@ -877,7 +906,7 @@ export interface components {
              */
             inherit_period: boolean;
             /** Source */
-            source: components["schemas"]["DateFigureSource"] | components["schemas"]["GroupFigureSource"] | components["schemas"]["DeepdiveFigureSource"];
+            source: components["schemas"]["DateFigureSource"] | components["schemas"]["GroupFigureSource"] | components["schemas"]["DeepdiveFigureSource"] | components["schemas"]["SummaryTableFigureSource-Input"];
             /**
              * Title
              * @default
@@ -899,7 +928,7 @@ export interface components {
              */
             inherit_period: boolean;
             /** Source */
-            source: components["schemas"]["DateFigureSource"] | components["schemas"]["GroupFigureSource"] | components["schemas"]["DeepdiveFigureSource"];
+            source: components["schemas"]["DateFigureSource"] | components["schemas"]["GroupFigureSource"] | components["schemas"]["DeepdiveFigureSource"] | components["schemas"]["SummaryTableFigureSource-Output"];
             /**
              * Title
              * @default
@@ -1088,6 +1117,183 @@ export interface components {
             missing: string[];
             /** Series */
             series: components["schemas"]["Series"][];
+        };
+        /** SummaryCell */
+        SummaryCell: {
+            /** Max */
+            max: number | null;
+            /** Mean */
+            mean: number | null;
+            /** Median */
+            median: number | null;
+            /** Min */
+            min: number | null;
+            /** N */
+            n: number;
+            /** Q1 */
+            q1: number | null;
+            /** Q3 */
+            q3: number | null;
+            /** Std */
+            std: number | null;
+        };
+        /** SummaryColumn */
+        SummaryColumn: {
+            /** Cohort */
+            cohort: string;
+            /** Key */
+            key: string;
+            /** Range Index */
+            range_index: number;
+            /** Range Label */
+            range_label: string;
+        };
+        /** SummaryMetricOption */
+        SummaryMetricOption: {
+            clip?: components["schemas"]["ClipOpts"];
+            /**
+             * Log
+             * @default false
+             */
+            log: boolean;
+        };
+        /** SummaryRow */
+        SummaryRow: {
+            /** Cells */
+            cells: (components["schemas"]["SummaryCell"] | null)[];
+            /** Group Id */
+            group_id: string;
+            /** Group Label */
+            group_label: string;
+            /** Metric */
+            metric: string;
+            /**
+             * Missing
+             * @default false
+             */
+            missing: boolean;
+            /** Pvalue */
+            pvalue?: number | null;
+            /** Test */
+            test?: string | null;
+        };
+        /** SummaryTableFigureSource */
+        "SummaryTableFigureSource-Input": {
+            /** Cohort Selection */
+            cohort_selection?: {
+                [key: string]: string[];
+            };
+            /** Config */
+            config: string;
+            /**
+             * Granularity
+             * @default day
+             * @enum {string}
+             */
+            granularity: "day" | "week" | "month";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "summary-table";
+            /** Metric Options */
+            metric_options?: {
+                [key: string]: components["schemas"]["SummaryMetricOption"];
+            };
+            /** Metrics */
+            metrics?: {
+                [key: string]: string[];
+            };
+            /**
+             * Pvalues
+             * @default false
+             */
+            pvalues: boolean;
+            /** Ranges */
+            ranges?: components["schemas"]["DateRange"][];
+            /** Reference Key */
+            reference_key?: string | null;
+            /** Stats */
+            stats?: string[];
+        };
+        /** SummaryTableFigureSource */
+        "SummaryTableFigureSource-Output": {
+            /** Cohort Selection */
+            cohort_selection?: {
+                [key: string]: string[];
+            };
+            /** Config */
+            config: string;
+            /**
+             * Granularity
+             * @default day
+             * @enum {string}
+             */
+            granularity: "day" | "week" | "month";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "summary-table";
+            /** Metric Options */
+            metric_options?: {
+                [key: string]: components["schemas"]["SummaryMetricOption"];
+            };
+            /** Metrics */
+            metrics?: {
+                [key: string]: string[];
+            };
+            /**
+             * Pvalues
+             * @default false
+             */
+            pvalues: boolean;
+            /** Ranges */
+            ranges?: components["schemas"]["DateRange"][];
+            /** Reference Key */
+            reference_key?: string | null;
+            /** Stats */
+            stats?: string[];
+        };
+        /** SummaryTableRequest */
+        SummaryTableRequest: {
+            /** Config */
+            config: string;
+            /**
+             * Granularity
+             * @default day
+             * @enum {string}
+             */
+            granularity: "day" | "week" | "month";
+            /** Group Values */
+            group_values?: {
+                [key: string]: string[];
+            };
+            /** Metric Options */
+            metric_options?: {
+                [key: string]: components["schemas"]["SummaryMetricOption"];
+            };
+            /**
+             * Pvalues
+             * @default false
+             */
+            pvalues: boolean;
+            /** Ranges */
+            ranges: components["schemas"]["DateRange"][];
+        };
+        /** SummaryTableResponse */
+        SummaryTableResponse: {
+            /** Columns */
+            columns: components["schemas"]["SummaryColumn"][];
+            /** Config */
+            config: string;
+            /**
+             * Granularity
+             * @enum {string}
+             */
+            granularity: "day" | "week" | "month";
+            /** Rows */
+            rows: components["schemas"]["SummaryRow"][];
         };
         /** ValidationError */
         ValidationError: {
@@ -1354,6 +1560,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SeriesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_summary_table_api_data_summary_table_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SummaryTableRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SummaryTableResponse"];
                 };
             };
             /** @description Validation Error */
