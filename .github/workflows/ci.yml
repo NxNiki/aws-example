@@ -16,6 +16,13 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# The repo commits poetry.toml with virtualenvs.create=false (devs install into
+# their conda env). On CI that aims Poetry at the runner's base Python, whose
+# Debian-managed packages pip can't uninstall — so force a real venv here. An
+# env var outranks the committed config file.
+env:
+  POETRY_VIRTUALENVS_CREATE: "true"
+
 jobs:
   backend:
     name: Backend (lint-new + dashboard_api tests)
@@ -29,11 +36,9 @@ jobs:
       - name: Install Poetry
         run: pipx install poetry
       - name: Install dependencies
-        run: |
-          poetry config virtualenvs.create false
-          poetry install --with dev,test,dashboard_api --no-interaction
+        run: poetry install --with dev,test,dashboard_api --no-interaction
       - name: Lint (new/migrated surfaces only)
-        run: make lint-new
+        run: make lint-new   # Makefile recipes already wrap tools in `poetry run`
       - name: Test dashboard_api
         run: poetry run pytest tests/unit/test_dashboard_api.py
 
@@ -76,11 +81,10 @@ jobs:
         run: pipx install poetry
       - name: Install backend (dashboard_api) + frontend deps
         run: |
-          poetry config virtualenvs.create false
           poetry install --with dashboard_api --no-interaction
           npm --prefix frontend ci
       - name: Regenerate OpenAPI schema + TS client
-        run: make openapi
+        run: poetry run make openapi   # gen script calls bare `python`; run it in the venv
       - name: Fail if the generated client drifted
         run: |
           git diff --exit-code frontend/openapi.json frontend/src/api/schema.d.ts \
