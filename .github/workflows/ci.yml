@@ -30,10 +30,12 @@ jobs:
         run: pipx install poetry
       - name: Install dependencies
         run: |
-          poetry config virtualenvs.create false
+          # Use Poetry's own venv (NOT the runner's base Python, which carries
+          # Debian-managed packages pip can't uninstall → install failures).
+          poetry env use python
           poetry install --with dev,test,dashboard_api --no-interaction
       - name: Lint (new/migrated surfaces only)
-        run: make lint-new
+        run: make lint-new   # Makefile recipes already wrap tools in `poetry run`
       - name: Test dashboard_api
         run: poetry run pytest tests/unit/test_dashboard_api.py
 
@@ -76,11 +78,12 @@ jobs:
         run: pipx install poetry
       - name: Install backend (dashboard_api) + frontend deps
         run: |
-          poetry config virtualenvs.create false
+          # Poetry's own venv (see backend job note) — not the runner base Python.
+          poetry env use python
           poetry install --with dashboard_api --no-interaction
           npm --prefix frontend ci
       - name: Regenerate OpenAPI schema + TS client
-        run: make openapi
+        run: poetry run make openapi   # gen script calls bare `python`; run it in the venv
       - name: Fail if the generated client drifted
         run: |
           git diff --exit-code frontend/openapi.json frontend/src/api/schema.d.ts \
