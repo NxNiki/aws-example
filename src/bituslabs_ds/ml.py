@@ -13,14 +13,14 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import joblib
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
 from joblib import parallel_backend
 from scipy.stats import skew
-from skl2onnx import convert_sklearn
-from skl2onnx.common.data_types import FloatTensorType
+
+# matplotlib / seaborn (group: ds) and skl2onnx (ONNX export) are imported lazily
+# inside the handful of methods that use them, so importing this module for
+# clustering/prediction works with just the `ml` group (no viz/onnx stack needed).
 from sklearn.base import ClusterMixin
 from sklearn.cluster import DBSCAN, AgglomerativeClustering, KMeans
 from sklearn.compose import ColumnTransformer
@@ -591,6 +591,9 @@ class ClusterAnalysisPipeline:
 
     def _plot_feature_importance(self, feature_importance: pd.DataFrame):
 
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+
         plt.figure(figsize=(9, 12))
         colors = sns.color_palette("viridis", len(feature_importance))
         sns.barplot(x="Importance", y="Feature", hue="Feature", data=feature_importance, palette=colors, legend=False)
@@ -786,6 +789,8 @@ class ClusterAnalysisPipeline:
         """
 
         title = f"Elbow Method for Optimal {param_label} n_features({n_features})"
+        import matplotlib.pyplot as plt
+
         fig, ax1 = plt.subplots(figsize=(12, 9))
 
         x_label = "Number of Clusters (k)" if param_label == "k" else "DBSCAN eps"
@@ -1054,6 +1059,9 @@ class ClusterAnalysisPipeline:
         output_file_name: str = "PCA_Clusters",
     ) -> None:
         """Plot PCA visualization of clusters and pairwise plots for n_components > 3 using seaborn.pairplot."""
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+
         pca = PCA(n_components=n_components)
         x_pca = pca.fit_transform(data)
         n_clusters = len(np.unique(cluster_label))
@@ -1113,6 +1121,8 @@ class ClusterAnalysisPipeline:
         categories = cluster_means.index
         angles = np.linspace(0, 2 * np.pi, len(categories), endpoint=False).tolist()
         angles += angles[:1]
+
+        import matplotlib.pyplot as plt
 
         fig, ax = plt.subplots(figsize=(20, 16), subplot_kw=dict(polar=True))
         for cluster, values in cluster_means.items():
@@ -1193,6 +1203,9 @@ class ClusterAnalysisPipeline:
         if self.cluster_model == "kmeans":
             onnx_opset_version = self.onnx_opset_version
             logger.info(f"Using ONNX opset version: {onnx_opset_version}")
+            from skl2onnx import convert_sklearn
+            from skl2onnx.common.data_types import FloatTensorType
+
             initial_type = [("float_input", FloatTensorType([None, self.n_top_features]))]
             onnx_convert_result = convert_sklearn(pipeline, initial_types=initial_type, target_opset=onnx_opset_version)
             onnx_model = onnx_convert_result[0] if isinstance(onnx_convert_result, tuple) else onnx_convert_result
