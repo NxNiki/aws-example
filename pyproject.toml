@@ -20,6 +20,7 @@ pyarrow = "^14.0.1"
 fastparquet = "2024.11.0"
 pyyaml = "^6.0.2"
 python-dotenv = "^1.2.1"
+polars = "^1.38.1"  # core: bituslabs_ds.s3_utils imports it; every service that touches S3 IO needs it (avoid 1.38.0, yanked)
 # stable_baselines3 = "^2.2.1"
 # gymnasium = "^0.29.0"
 # imitation = "^1.0.1"
@@ -65,7 +66,7 @@ optional = true
 [tool.poetry.group.dashboard_api.dependencies]
 fastapi = ">=0.115.0"
 uvicorn = {extras = ["standard"], version = ">=0.30.0"}
-polars = "^1.38.1"  # avoid 1.38.0 (yanked on PyPI)
+# polars moved to core [tool.poetry.dependencies] — s3_utils (core) imports it.
 
 # LangChain / LangGraph stack — only the ai_agent service runs the LLM
 # in-process now (the dashboard calls it over HTTP via /api/chat and
