@@ -5,8 +5,9 @@ import { colorForIndex } from "./styles";
 // Deep Dive scatter: plot metric[xi] vs metric[yi] from the server's
 // outlier-filtered, down-sampled points, overlaying each (cohort × range)
 // series. Reused for the single pair plot and for each off-diagonal cell of the
-// scatter matrix. log x/y use ECharts' native log axes (non-positive values are
-// dropped by the axis).
+// scatter matrix. log x/y use ECharts' native log axes; we drop points that are
+// non-positive on a log axis so they don't poison the axis extent (a stray ≤0
+// value made log-y range differently from log-x).
 export function buildScatterOption(
   scatters: ScatterSeries[],
   xi: number,
@@ -50,7 +51,9 @@ export function buildScatterOption(
     series: scatters.map((s) => ({
       type: "scatter",
       name: `${s.cohort} · ${s.range_label}`,
-      data: s.points.map((p) => [p[xi], p[yi]]),
+      data: s.points
+        .map((p) => [p[xi], p[yi]])
+        .filter(([x, y]) => (!opts.logX || x > 0) && (!opts.logY || y > 0)),
       symbolSize: compact ? 3 : 5,
       large: true,
       largeThreshold: 2000,

@@ -36,7 +36,13 @@ export function buildHistogramOption(series: HistogramSeries[], opts: { logY: bo
     series: series.map((s) => {
       const color = colorForIndex(Math.max(0, cohorts.indexOf(s.cohort)));
       const isPrimary = s.range_index === 0;
-      const data = s.counts.map((c, i) => [s.bin_edges[i], s.bin_edges[i + 1], c]);
+      // On a log y-axis, empty (0-count) bins would poison ECharts' extent
+      // computation (log(0) is invalid → it falls back to a 1–10 range, glaring
+      // once normalized to <1). Drop them so the axis ranges over the real
+      // positive values; on a linear axis they're invisible anyway.
+      const data = s.counts
+        .map((c, i) => [s.bin_edges[i], s.bin_edges[i + 1], c])
+        .filter((d) => !opts.logY || d[2] > 0);
       return {
         type: "custom",
         name: `${s.cohort} · ${s.range_label}`,
