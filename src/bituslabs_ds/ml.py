@@ -375,15 +375,23 @@ class ClusterAnalysisPipeline:
         raise ValueError(f"unsupported cache file format: {base_name}")
 
     def load_raw_data(self, data_label, reload: bool = False) -> pd.DataFrame:
-        """
-        load preprocessed data from s3.
+        """Load the raw S3 pull (column-projected, NOT row-filtered) with local caching.
+
+        ``row_filters`` are deliberately NOT applied here. ``read_files`` bakes whatever
+        filter it receives into the cached parquet and never re-checks it on a cache hit,
+        so passing the volatile filters (currency / math_table_id / ai_group) would freeze
+        them into the cache: a later run with a broadened/changed filter would silently get
+        the stale narrower rows. Instead the cache holds the row-unfiltered pull (still
+        scoped by ``columns`` + the per-group S3 ``prefix``), and the callers
+        (:meth:`load_cluster_data` / :meth:`load_attach_data`) apply ``row_filters`` at read
+        time via ``apply_row_filters``. Changing a filter then needs no manual cache bust;
+        only a source-data change needs ``reload=True``.
         """
 
         if data_label == "attach_data":
             files = self._attach_data_files
             output_file = self._data_loader["attach_data"]["local_cache"]
             columns = self._data_loader["attach_data"]["columns_to_read"]
-            row_filters = self._data_loader["attach_data"]["row_filters"]
             data_types = self.get_data_types("attach_data")
         elif data_label == "cluster_data":
             files = self._cluster_data_files
@@ -393,7 +401,6 @@ class ClusterAnalysisPipeline:
             # load_cluster_data can drop incomplete bins.
             if self.remove_short_sessions and self.session_count_column not in columns:
                 columns = columns + [self.session_count_column]
-            row_filters = self._data_loader["cluster_data"]["row_filters"]
             data_types = self.get_data_types("cluster_data")
         else:
             raise ValueError(f"unsupported data_label: {data_label!r}")
@@ -409,7 +416,6 @@ class ClusterAnalysisPipeline:
             files,
             local_cache_path=f"{self.work_dir}/{raw_output_file}",
             columns=columns,
-            row_filters=row_filters,
             data_types=data_types,
             reload=reload,
             lazy_load=False,
