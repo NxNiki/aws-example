@@ -88,6 +88,11 @@ TG_HEALTHY_THRESHOLD = 2
 TG_DEREGISTRATION_DELAY = 30
 
 S3_BUCKET = "bituslabs-team-ai"
+# Dashboard config YAMLs are read from S3 at runtime (not baked into the image), so a
+# new config is just an S3 upload — no rebuild/redeploy. Deploy syncs the repo's
+# configs/dashboard/*.yaml here (without deleting S3-only configs added ad hoc).
+CONFIG_S3_PREFIX = "dashboard-configs"
+CONFIG_S3_PATH = f"s3://{S3_BUCKET}/{CONFIG_S3_PREFIX}"
 S3_POLICY_NAME = "ecsTaskExecutionRole-s3-dashboard-api-rw"
 S3_POLICY = {
     "Version": "2012-10-17",
@@ -105,6 +110,23 @@ S3_POLICY = {
         },
     ],
 }
+
+
+def sync_configs_to_s3(session: "boto3.Session") -> None:
+    """Upload the repo's dashboard_config-*.yaml to S3 (no delete).
+
+    Keeps the repo configs as the source of truth in S3 while preserving any configs
+    added directly to the bucket (the whole point: add a config without a redeploy).
+    """
+    config_dir = PROJECT_ROOT / "configs" / "dashboard"
+    files = sorted(config_dir.glob("dashboard_config-*.yaml"))
+    if not files:
+        print(f"  No configs found under {config_dir}; skipping S3 sync.")
+        return
+    s3 = session.client("s3")
+    for path in files:
+        s3.upload_file(str(path), S3_BUCKET, f"{CONFIG_S3_PREFIX}/{path.name}")
+    print(f"  Synced {len(files)} config(s) to {CONFIG_S3_PATH} (no delete).")
 
 
 def main() -> None:
@@ -143,6 +165,9 @@ def main() -> None:
     ensure_ecr_repo(session.client("ecr"), IMAGE_NAME)
     require_active_cluster(ecs)
 
+    print(f"\n1b. Syncing dashboard configs to {CONFIG_S3_PATH}...")
+    sync_configs_to_s3(session)
+
     print(f"\n2. Production ALB: {args.alb_name}")
     alb = elbv2.describe_load_balancers(Names=[args.alb_name])["LoadBalancers"][0]
     alb_arn, alb_dns = alb["LoadBalancerArn"], alb["DNSName"]
@@ -179,7 +204,7 @@ def main() -> None:
         agent_api_url = f"http://{agent_albs[0]['DNSName']}"
         print(f"  Auto-detected AI agent ALB: {agent_api_url}")
     env_vars = [
-        {"name": "DASHBOARD_CONFIG_DIR", "value": "/app/configs/dashboard"},
+        {"name": "DASHBOARD_CONFIG_DIR", "value": CONFIG_S3_PATH},
         {"name": "DASHBOARD_FRONTEND_DIST", "value": "/app/frontend/dist"},
         # Enables the UserRequestCount middleware (scale-to-zero idle signal).
         {"name": "DASHBOARD_SERVICE_NAME", "value": SERVICE_NAME},
