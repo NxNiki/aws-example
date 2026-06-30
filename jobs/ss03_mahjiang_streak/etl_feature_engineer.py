@@ -13,10 +13,13 @@ each containing:
 
 SS03 has four partition_ab buckets (AI / AB_TEST_A / AB_TEST_B / Default).
 ``--group`` selects which slice to materialise: ``default`` (the training group
-for cluster analysis) or ``ai`` (the inference group). Run once per group:
+for cluster analysis), ``ai`` (the inference group), or the two AB-test arms
+``ab_test_a`` / ``ab_test_b``. Run once per group:
 
     poetry run python jobs/ss03_mahjiang_streak/etl_feature_engineer.py --group default --overwrite
     poetry run python jobs/ss03_mahjiang_streak/etl_feature_engineer.py --group ai --overwrite
+    poetry run python jobs/ss03_mahjiang_streak/etl_feature_engineer.py --group ab_test_a --overwrite
+    poetry run python jobs/ss03_mahjiang_streak/etl_feature_engineer.py --group ab_test_b --overwrite
 
 Runs incrementally by default. ``session_start_date`` / ``session_group``
 are stable across runs, so the lookback-window merge is safe. Default
@@ -30,22 +33,26 @@ import argparse
 
 from bituslabs_ds.features import FeaturePipelineRunner, GameFeatureConfig
 
-# ai_group slice -> (output_prefix, selected_groups, bin_size). Separate prefixes keep the
-# Default and AI datasets isolated; the cluster pipeline reads each via its own group.
-# bin_size is per-group so each matches the set already materialised on S3 (keeping
-# incremental runs drift-free); the clustering itself only consumes binsize_50.
+# ai_group slice -> (output_prefix, selected_groups, bin_size, date_start). Separate
+# prefixes keep each slice's dataset isolated; the cluster pipeline reads each via its
+# own group. bin_size is per-group so each matches the set already materialised on S3
+# (keeping incremental runs drift-free); the clustering itself only consumes binsize_50.
+# The AB-test arms were added later, so they start at 2026-06-10 (the experiment window)
+# rather than backfilling the full 2026-01-01 history.
 GROUPS = {
-    "default": ("output_ss03_feature_engineer", ("Default",), [50, 70]),
-    "ai": ("output_ss03_feature_engineer_ai", ("AI",), [30, 50, 70, 100]),
+    "default": ("output_ss03_feature_engineer", ("Default",), [50, 70], "2026-01-01"),
+    "ai": ("output_ss03_feature_engineer_ai", ("AI",), [30, 50, 70, 100], "2026-01-01"),
+    "ab_test_a": ("output_ss03_feature_engineer_ab_test_a", ("AB_TEST_A",), [50, 70], "2026-06-10"),
+    "ab_test_b": ("output_ss03_feature_engineer_ab_test_b", ("AB_TEST_B",), [50, 70], "2026-06-10"),
 }
 
 
 def build_config(group: str) -> GameFeatureConfig:
-    output_prefix, selected_groups, bin_size = GROUPS[group]
+    output_prefix, selected_groups, bin_size, date_start = GROUPS[group]
     return GameFeatureConfig(
         game_id="SS03",
         output_prefix=output_prefix,
-        date_start="2026-01-01",
+        date_start=date_start,
         date_end="2026-07-01",
         ai_groups=("AI", "AB_TEST_A", "AB_TEST_B", "Default"),
         selected_groups=selected_groups,
