@@ -107,10 +107,13 @@ def main(config_path: str, group: str | None = None, run_id: str | None = None):
         cluster_pipeline.get_cluster_stats()
 
     if cluster_pipeline.run_upload_result_to_s3:
+        # Key the S3 folder on run_id (not a per-process timestamp) so groups sharing a
+        # --run-id (the three apply groups, or a train+inference pair) land in ONE folder
+        # instead of one folder per invocation.
         upload_folder_to_s3(
             cluster_pipeline.output_path,
             S3_BUCKET,
-            f"{cluster_pipeline.s3_prefix}/{cluster_pipeline.cluster_model}_{time_tag}",
+            f"{cluster_pipeline.s3_prefix}/{cluster_pipeline.run_id}",
         )
 
     elapsed_time = time.time() - start_time
