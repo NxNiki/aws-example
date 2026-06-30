@@ -78,3 +78,37 @@ def test_load_raw_config_stamps_id():
     config_dir = str(Path(__file__).resolve().parents[2] / "configs" / "dashboard")
     cfg = load_raw_config(config_dir, "ss02")
     assert cfg is not None and cfg["id"] == "ss02"
+
+
+def test_load_config_from_s3(monkeypatch, mock_s3_client):
+    """config_dir may be an s3:// URI: configs are listed/parsed straight from S3 so a
+    new dashboard_config-*.yaml needs only an upload, no image rebuild."""
+    import yaml
+
+    from bituslabs_ds import s3_utils
+    from dashboard_api.services import configs
+
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-west-2")
+    monkeypatch.setenv("AWS_REGION", "us-west-2")
+    # Rebind the cached s3 client (and config cache) to the moto-mocked backend.
+    s3_utils._get_s3_client_for_pid.cache_clear()
+    configs.clear_config_cache()
+
+    mock_s3_client.put_object(
+        Bucket="test-bucket",
+        Key="dashboard-configs/dashboard_config-foo.yaml",
+        Body=yaml.safe_dump({"title": "From S3", "stats_by_date": {"date_col": "d"}}),
+    )
+    mock_s3_client.put_object(Bucket="test-bucket", Key="dashboard-configs/notes.txt", Body=b"ignore me")
+
+    config_dir = "s3://test-bucket/dashboard-configs"
+    summaries = configs.list_config_summaries(config_dir)
+    assert {s.id for s in summaries} == {"foo"}  # non-yaml ignored
+    assert summaries[0].title == "From S3"
+
+    cfg = configs.load_raw_config(config_dir, "foo")
+    assert cfg is not None and cfg["id"] == "foo" and cfg["title"] == "From S3"
+    assert configs.load_raw_config(config_dir, "missing") is None
+
+    configs.clear_config_cache()
+    s3_utils._get_s3_client_for_pid.cache_clear()

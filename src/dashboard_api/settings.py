@@ -23,6 +23,9 @@ def _split_csv(value: str) -> list[str]:
 
 @dataclass(frozen=True)
 class Settings:
+    # config_dir may be a local directory OR an ``s3://bucket/prefix`` URI. In prod set
+    # DASHBOARD_CONFIG_DIR to the S3 path so new dashboard_config-*.yaml files are picked
+    # up from S3 without rebuilding/redeploying the image (see services/configs.py).
     config_dir: str = field(default_factory=lambda: os.environ.get("DASHBOARD_CONFIG_DIR", _default_config_dir()))
     frontend_dist: str = field(
         default_factory=lambda: os.environ.get("DASHBOARD_FRONTEND_DIST", _default_frontend_dist())

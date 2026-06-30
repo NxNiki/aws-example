@@ -3,15 +3,28 @@
 Wraps `bituslabs_ds.dashboard_utils.load_config` so the React frontend gets
 the same per-game config (metrics, groups, granularities, tabs) the legacy
 Dash app reads, without depending on the Dash app.
+
+``config_dir`` (``settings.config_dir`` / ``DASHBOARD_CONFIG_DIR``) may be either a
+local directory or an ``s3://bucket/prefix`` URI. When it is an S3 URI the configs
+are read straight from the bucket, so adding a new ``dashboard_config-*.yaml`` only
+needs an S3 upload — no dashboard image rebuild / redeploy. Reads are cached for a
+short TTL (``DASHBOARD_CONFIG_CACHE_TTL`` seconds, default 60) so the per-request API
+calls don't hit S3 every time.
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import re
+import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
+
+import yaml
 
 from bituslabs_ds.dashboard_utils import load_config
+from bituslabs_ds.s3_utils import get_s3_client, list_s3_files, parse_s3_path
 from dashboard_api.schemas.data import ConfigDetail, ConfigSummary, MetricGroup
 
 logger = logging.getLogger(__name__)
@@ -19,40 +32,98 @@ logger = logging.getLogger(__name__)
 CONFIG_PREFIX = "dashboard_config-"
 _GRANULARITIES = ("day", "week", "month")
 
-
-def _config_id(path: Path) -> str:
-    name = path.stem
-    return name[len(CONFIG_PREFIX) :] if name.startswith(CONFIG_PREFIX) else name
-
-
-def list_config_files(config_dir: str) -> list[Path]:
-    return sorted(Path(config_dir).glob(f"{CONFIG_PREFIX}*.yaml"))
+# Short TTL cache so listing/parsing configs (especially from S3) isn't repeated on
+# every API request. Set DASHBOARD_CONFIG_CACHE_TTL=0 to disable (e.g. in tests).
+_CACHE_TTL_SECONDS = float(os.environ.get("DASHBOARD_CONFIG_CACHE_TTL", "60"))
+_cache: dict[str, tuple[float, Any]] = {}
 
 
-def find_config_path(config_dir: str, config_id: str) -> Optional[Path]:
-    for path in list_config_files(config_dir):
-        if _config_id(path) == config_id:
-            return path
+def clear_config_cache() -> None:
+    """Drop the config list/parse cache (used by tests, or to force a refresh)."""
+    _cache.clear()
+
+
+def _cached(key: str, producer: Callable[[], Any]) -> Any:
+    if _CACHE_TTL_SECONDS <= 0:
+        return producer()
+    now = time.monotonic()
+    hit = _cache.get(key)
+    if hit is not None and now - hit[0] < _CACHE_TTL_SECONDS:
+        return hit[1]
+    value = producer()
+    _cache[key] = (now, value)
+    return value
+
+
+def _is_s3(uri: str) -> bool:
+    return uri.startswith("s3://")
+
+
+def _uri_name(uri: str) -> str:
+    """Basename of a local path or s3:// URI."""
+    return uri.rstrip("/").rsplit("/", 1)[-1]
+
+
+def _config_id(uri: str) -> str:
+    name = _uri_name(uri)
+    stem = name[: -len(".yaml")] if name.endswith(".yaml") else name
+    return stem[len(CONFIG_PREFIX) :] if stem.startswith(CONFIG_PREFIX) else stem
+
+
+def list_config_files(config_dir: str) -> list[str]:
+    """All ``dashboard_config-*.yaml`` sources under ``config_dir``.
+
+    Returns local paths or ``s3://`` URIs (strings) depending on ``config_dir``.
+    """
+
+    def _produce() -> list[str]:
+        if _is_s3(config_dir):
+            bucket, prefix = parse_s3_path(config_dir)
+            prefix = (prefix.rstrip("/") + "/") if prefix else ""
+            # ``[^/]*`` keeps it to files directly under the prefix (no nested keys).
+            pattern = rf"{re.escape(CONFIG_PREFIX)}[^/]*\.yaml$"
+            return sorted(list_s3_files(bucket, prefix, pattern=pattern))
+        return [str(p) for p in sorted(Path(config_dir).glob(f"{CONFIG_PREFIX}*.yaml"))]
+
+    return _cached(f"list::{config_dir}", _produce)
+
+
+def _load_yaml(uri: str) -> dict[str, Any]:
+    def _produce() -> dict[str, Any]:
+        if _is_s3(uri):
+            bucket, key = parse_s3_path(uri)
+            body = get_s3_client().get_object(Bucket=bucket, Key=key)["Body"].read().decode("utf-8")
+            return yaml.safe_load(body)
+        return load_config(uri)
+
+    return _cached(f"yaml::{uri}", _produce)
+
+
+def find_config_path(config_dir: str, config_id: str) -> Optional[str]:
+    for uri in list_config_files(config_dir):
+        if _config_id(uri) == config_id:
+            return uri
     return None
 
 
 def list_config_summaries(config_dir: str) -> list[ConfigSummary]:
     summaries: list[ConfigSummary] = []
-    for path in list_config_files(config_dir):
+    for uri in list_config_files(config_dir):
+        config_id = _config_id(uri)
         try:
-            cfg = load_config(str(path))
+            cfg = _load_yaml(uri)
         except Exception:  # a malformed config shouldn't blank the whole picker
-            logger.exception("Failed to load config %s", path)
+            logger.exception("Failed to load config %s", uri)
             continue
-        summaries.append(ConfigSummary(id=_config_id(path), title=str(cfg.get("title", _config_id(path)))))
+        summaries.append(ConfigSummary(id=config_id, title=str(cfg.get("title", config_id))))
     return summaries
 
 
 def load_raw_config(config_dir: str, config_id: str) -> Optional[dict[str, Any]]:
-    path = find_config_path(config_dir, config_id)
-    if path is None:
+    uri = find_config_path(config_dir, config_id)
+    if uri is None:
         return None
-    cfg = load_config(str(path))
+    cfg = _load_yaml(uri)
     # Stamp the id (the YAML has no id of its own — it comes from the filename).
     # The window cache in services/common.py keys on it; without this every
     # config collides on the same cache key and serves another game's rows.
