@@ -512,6 +512,26 @@ columns:
     category: retention
     description: "Number of day-0 cohort users who also appeared 3 days later."
 
+  day5_num_users:
+    category: retention
+    description: "Number of day-0 cohort users who also appeared 5 days later."
+
+  day7_num_users:
+    category: retention
+    description: "Number of day-0 cohort users who also appeared 7 days later."
+
+  day10_num_users:
+    category: retention
+    description: "Number of day-0 cohort users who also appeared 10 days later."
+
+  day15_num_users:
+    category: retention
+    description: "Number of day-0 cohort users who also appeared 15 days later."
+
+  day30_num_users:
+    category: retention
+    description: "Number of day-0 cohort users who also appeared 30 days later."
+
   retention_rate_day1:
     category: retention
     description: "Day-1 retention rate: day1_num_users / day0_num_users."
@@ -519,6 +539,26 @@ columns:
   retention_rate_day3:
     category: retention
     description: "Day-3 retention rate: day3_num_users / day0_num_users."
+
+  retention_rate_day5:
+    category: retention
+    description: "Day-5 retention rate: day5_num_users / day0_num_users."
+
+  retention_rate_day7:
+    category: retention
+    description: "Day-7 retention rate: day7_num_users / day0_num_users."
+
+  retention_rate_day10:
+    category: retention
+    description: "Day-10 retention rate: day10_num_users / day0_num_users."
+
+  retention_rate_day15:
+    category: retention
+    description: "Day-15 retention rate: day15_num_users / day0_num_users."
+
+  retention_rate_day30:
+    category: retention
+    description: "Day-30 retention rate: day30_num_users / day0_num_users."
 
   # === Fish Hunter (FM01) Specific ===
   user_killed_fish:
