@@ -25,7 +25,7 @@ stats_by_date:
     "num_new_users",
     "day0_num_users",
     "day1_num_users",
-    "day2_num_users",
+    "day3_num_users",
     "day5_num_users",
     "day7_num_users",
     "day10_num_users",
