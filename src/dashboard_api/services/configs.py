@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from bituslabs_ds.dashboard_utils import load_config
-from bituslabs_ds.s3_utils import list_s3_files, parse_s3_path, read_yaml_from_s3
+from bituslabs_ds.s3_utils import is_s3_path, list_s3_files, parse_s3_path, read_yaml_from_s3, uri_basename
 from dashboard_api.schemas.data import ConfigDetail, ConfigSummary, MetricGroup
 
 logger = logging.getLogger(__name__)
@@ -53,17 +53,8 @@ def _cached(key: str, producer: Callable[[], Any]) -> Any:
     return value
 
 
-def _is_s3(uri: str) -> bool:
-    return uri.startswith("s3://")
-
-
-def _uri_name(uri: str) -> str:
-    """Basename of a local path or s3:// URI."""
-    return uri.rstrip("/").rsplit("/", 1)[-1]
-
-
 def _config_id(uri: str) -> str:
-    name = _uri_name(uri)
+    name = uri_basename(uri)
     stem = name[: -len(".yaml")] if name.endswith(".yaml") else name
     return stem[len(CONFIG_PREFIX) :] if stem.startswith(CONFIG_PREFIX) else stem
 
@@ -75,7 +66,7 @@ def list_config_files(config_dir: str) -> list[str]:
     """
 
     def _produce() -> list[str]:
-        if _is_s3(config_dir):
+        if is_s3_path(config_dir):
             bucket, prefix = parse_s3_path(config_dir)
             prefix = (prefix.rstrip("/") + "/") if prefix else ""
             # ``[^/]*`` keeps it to files directly under the prefix (no nested keys).
@@ -88,7 +79,7 @@ def list_config_files(config_dir: str) -> list[str]:
 
 def _load_yaml(uri: str) -> dict[str, Any]:
     def _produce() -> dict[str, Any]:
-        return read_yaml_from_s3(uri) if _is_s3(uri) else load_config(uri)
+        return read_yaml_from_s3(uri) if is_s3_path(uri) else load_config(uri)
 
     return _cached(f"yaml::{uri}", _produce)
 

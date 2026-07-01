@@ -501,6 +501,11 @@ def is_s3_path(path: OutputDir) -> bool:
     return _is_s3_path(str(path).strip())
 
 
+def uri_basename(uri: OutputDir) -> str:
+    """Last path component of a local path or s3:// URI (trailing slash ignored)."""
+    return str(uri).rstrip("/").rsplit("/", 1)[-1]
+
+
 def normalize_storage_root(storage_root: OutputDir) -> Tuple[bool, OutputDir]:
     """
     Normalize a storage root for use in ETL: local paths become Path (and dir is created),
