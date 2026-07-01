@@ -504,10 +504,6 @@ columns:
     category: retention
     description: "Number of day-0 cohort users who also appeared 1 day later."
 
-  day2_num_users:
-    category: retention
-    description: "Number of day-0 cohort users who also appeared 2 days later."
-
   day3_num_users:
     category: retention
     description: "Number of day-0 cohort users who also appeared 3 days later."

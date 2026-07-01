@@ -67,6 +67,10 @@ logger = logging.getLogger(__name__)
 # Retention window constants
 # ---------------------------------------------------------------------------
 
+# Offset 2 has no exposed day2_num_users metric; it is retained so the follow-up
+# horizon indices stay aligned (day3->idx 2, day5->idx 3, ...) and, at week/month
+# granularity where only the first 3 horizons exist, day5+ still resolve to None
+# (see _horizon_dates and test_day5_day7_unavailable_for_week_granularity).
 RETENTION_DAY_OFFSETS: Tuple[int, ...] = (1, 2, 3, 5, 7, 10, 15, 30)
 RETENTION_LOAD_EXTRA_DAYS: int = max(RETENTION_DAY_OFFSETS)
 
@@ -110,9 +114,10 @@ def _bootstrap_ci(
 def _horizon_dates(d0: Union[date, datetime], granularity: str) -> Tuple[datetime, ...]:
     """Follow-up datetimes for a cohort starting at ``d0``.
 
-    Day granularity has one horizon per ``RETENTION_DAY_OFFSETS`` entry (day 1/2/3/5/7).
-    Week/month keep three period-based horizons; the day-5/day-7 metrics are
-    day-granularity concepts and resolve to no data there (the caller guards the index).
+    Day granularity has one horizon per ``RETENTION_DAY_OFFSETS`` entry.
+    Week/month keep three period-based horizons; the day-5/day-7 (and 10/15/30)
+    metrics are day-granularity concepts and resolve to no data there (the caller
+    guards the index).
     """
     t0 = _to_datetime(d0)
     g = (granularity or "day").lower()
@@ -153,7 +158,6 @@ class DataMetrics:
             "num_active_user_0_rtp",
             "day0_num_users",
             "day1_num_users",
-            "day2_num_users",
             "day3_num_users",
             "day5_num_users",
             "day7_num_users",
@@ -220,7 +224,6 @@ class DataMetrics:
             # retention
             "day0_num_users",
             "day1_num_users",
-            "day2_num_users",
             "day3_num_users",
             "day5_num_users",
             "day7_num_users",
@@ -1070,15 +1073,8 @@ class DataMetrics:
         return frame.rename({"_n": "day1_num_users"})
 
     @cached_property
-    def _day2_num_users(self) -> Optional[pl.DataFrame]:
-        frame = self._count_at_horizon(1)
-        if frame is None:
-            return None
-        return frame.rename({"_n": "day2_num_users"})
-
-    @cached_property
     def _day3_num_users(self) -> Optional[pl.DataFrame]:
-        frame = self._count_at_horizon(2)
+        frame = self._count_at_horizon(2)  # RETENTION_DAY_OFFSETS index of 3
         if frame is None:
             return None
         return frame.rename({"_n": "day3_num_users"})
