@@ -21,10 +21,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-import yaml
-
 from bituslabs_ds.dashboard_utils import load_config
-from bituslabs_ds.s3_utils import get_s3_client, list_s3_files, parse_s3_path
+from bituslabs_ds.s3_utils import list_s3_files, parse_s3_path, read_yaml_from_s3
 from dashboard_api.schemas.data import ConfigDetail, ConfigSummary, MetricGroup
 
 logger = logging.getLogger(__name__)
@@ -90,11 +88,7 @@ def list_config_files(config_dir: str) -> list[str]:
 
 def _load_yaml(uri: str) -> dict[str, Any]:
     def _produce() -> dict[str, Any]:
-        if _is_s3(uri):
-            bucket, key = parse_s3_path(uri)
-            body = get_s3_client().get_object(Bucket=bucket, Key=key)["Body"].read().decode("utf-8")
-            return yaml.safe_load(body)
-        return load_config(uri)
+        return read_yaml_from_s3(uri) if _is_s3(uri) else load_config(uri)
 
     return _cached(f"yaml::{uri}", _produce)
 

@@ -19,6 +19,7 @@ import pandas as pd
 import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
+import yaml
 from botocore.config import Config
 from botocore.exceptions import NoCredentialsError
 from pyarrow import fs
@@ -209,6 +210,15 @@ def read_json_from_s3(s3_path: str) -> Dict[str, Any]:
     response = get_s3_client().get_object(Bucket=bucket, Key=key)
     body = response["Body"].read().decode("utf-8")
     return json.loads(body)
+
+
+def read_yaml_from_s3(s3_path: str) -> Dict[str, Any]:
+    """Read a YAML file from S3 and return as dict."""
+    bucket, key = parse_s3_path(s3_path)
+    bucket = parse_bucket_name(bucket)
+    response = get_s3_client().get_object(Bucket=bucket, Key=key)
+    body = response["Body"].read().decode("utf-8")
+    return yaml.safe_load(body)
 
 
 def write_spark_to_s3(data: "SparkDataFrame", bucket: str, key: str, file_format: str = "csv") -> None:
