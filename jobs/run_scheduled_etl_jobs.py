@@ -94,6 +94,12 @@ def main() -> int:
             True,
         ),
         (
+            "ss06_pocket_soccer ETL",
+            JOBS_DIR / "ss06_pocket_soccer" / "etl_game_stats_daily_by_user_group.py",
+            [],
+            True,
+        ),
+        (
             "fish_hunter ETL",
             JOBS_DIR / "fish_hunter" / "etl_game_stats_daily_by_user.py",
             [],
