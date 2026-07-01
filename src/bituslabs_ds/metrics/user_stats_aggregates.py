@@ -67,7 +67,7 @@ logger = logging.getLogger(__name__)
 # Retention window constants
 # ---------------------------------------------------------------------------
 
-RETENTION_DAY_OFFSETS: Tuple[int, ...] = (1, 2, 3, 5, 7)
+RETENTION_DAY_OFFSETS: Tuple[int, ...] = (1, 2, 3, 5, 7, 10, 15, 30)
 RETENTION_LOAD_EXTRA_DAYS: int = max(RETENTION_DAY_OFFSETS)
 
 # ---------------------------------------------------------------------------
@@ -157,6 +157,9 @@ class DataMetrics:
             "day3_num_users",
             "day5_num_users",
             "day7_num_users",
+            "day10_num_users",
+            "day15_num_users",
+            "day30_num_users",
             # bet / payout / profit totals
             "total_num_bets",
             "total_num_bets_bg",
@@ -221,10 +224,16 @@ class DataMetrics:
             "day3_num_users",
             "day5_num_users",
             "day7_num_users",
+            "day10_num_users",
+            "day15_num_users",
+            "day30_num_users",
             "retention_rate_day1",
             "retention_rate_day3",
             "retention_rate_day5",
             "retention_rate_day7",
+            "retention_rate_day10",
+            "retention_rate_day15",
+            "retention_rate_day30",
         }
     )
 
@@ -1089,6 +1098,27 @@ class DataMetrics:
         return frame.rename({"_n": "day7_num_users"})
 
     @cached_property
+    def _day10_num_users(self) -> Optional[pl.DataFrame]:
+        frame = self._count_at_horizon(5)  # RETENTION_DAY_OFFSETS index of 10
+        if frame is None:
+            return None
+        return frame.rename({"_n": "day10_num_users"})
+
+    @cached_property
+    def _day15_num_users(self) -> Optional[pl.DataFrame]:
+        frame = self._count_at_horizon(6)  # RETENTION_DAY_OFFSETS index of 15
+        if frame is None:
+            return None
+        return frame.rename({"_n": "day15_num_users"})
+
+    @cached_property
+    def _day30_num_users(self) -> Optional[pl.DataFrame]:
+        frame = self._count_at_horizon(7)  # RETENTION_DAY_OFFSETS index of 30
+        if frame is None:
+            return None
+        return frame.rename({"_n": "day30_num_users"})
+
+    @cached_property
     def _retention_rate_day1(self) -> Optional[pl.DataFrame]:
         day0 = self._day0_num_users
         day1 = self._day1_num_users
@@ -1142,6 +1172,48 @@ class DataMetrics:
                 (pl.col("day7_num_users") / pl.col("day0_num_users").replace(0, None)).alias("retention_rate_day7")
             )
             .select(self._key_cols + ["retention_rate_day7"])
+        )
+
+    @cached_property
+    def _retention_rate_day10(self) -> Optional[pl.DataFrame]:
+        day0 = self._day0_num_users
+        day10 = self._day10_num_users
+        if day0 is None or day10 is None:
+            return None
+        return (
+            day0.join(day10, on=self._key_cols, how="left")
+            .with_columns(
+                (pl.col("day10_num_users") / pl.col("day0_num_users").replace(0, None)).alias("retention_rate_day10")
+            )
+            .select(self._key_cols + ["retention_rate_day10"])
+        )
+
+    @cached_property
+    def _retention_rate_day15(self) -> Optional[pl.DataFrame]:
+        day0 = self._day0_num_users
+        day15 = self._day15_num_users
+        if day0 is None or day15 is None:
+            return None
+        return (
+            day0.join(day15, on=self._key_cols, how="left")
+            .with_columns(
+                (pl.col("day15_num_users") / pl.col("day0_num_users").replace(0, None)).alias("retention_rate_day15")
+            )
+            .select(self._key_cols + ["retention_rate_day15"])
+        )
+
+    @cached_property
+    def _retention_rate_day30(self) -> Optional[pl.DataFrame]:
+        day0 = self._day0_num_users
+        day30 = self._day30_num_users
+        if day0 is None or day30 is None:
+            return None
+        return (
+            day0.join(day30, on=self._key_cols, how="left")
+            .with_columns(
+                (pl.col("day30_num_users") / pl.col("day0_num_users").replace(0, None)).alias("retention_rate_day30")
+            )
+            .select(self._key_cols + ["retention_rate_day30"])
         )
 
 

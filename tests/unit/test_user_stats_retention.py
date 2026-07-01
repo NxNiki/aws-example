@@ -116,3 +116,40 @@ def test_day5_day7_unavailable_for_week_granularity():
     dm = DataMetrics(df, start_dt=d0, end_dt=d0, key_cols=KEY_COLS, granularity="week")
     assert dm["retention_rate_day5"] is None  # guarded, no IndexError
     assert dm["retention_rate_day7"] is None
+
+
+def test_day10_day15_day30_retention_day_granularity():
+    """day10 / day15 / day30 retention compute at day granularity (offsets 10, 15, 30)."""
+    d0 = datetime(2026, 6, 1)
+    df = pl.DataFrame(
+        {
+            "user_id": ["u1", "u2", "u3", "u4", "u1", "u2", "u3"],
+            "activity_date": [
+                d0,
+                d0,
+                d0,
+                d0,
+                datetime(2026, 6, 11),  # +10
+                datetime(2026, 6, 16),  # +15
+                datetime(2026, 7, 1),  # +30
+            ],
+            "ai_group": ["A", "A", "A", "A", "A", "A", "A"],
+        }
+    )
+    dm = DataMetrics(df, start_dt=d0, end_dt=d0, key_cols=KEY_COLS)
+    r10 = dm["retention_rate_day10"].filter(pl.col("ai_group") == "A")["retention_rate_day10"][0]
+    r15 = dm["retention_rate_day15"].filter(pl.col("ai_group") == "A")["retention_rate_day15"][0]
+    r30 = dm["retention_rate_day30"].filter(pl.col("ai_group") == "A")["retention_rate_day30"][0]
+    assert r10 == pytest.approx(0.25)  # u1 back on D+10 -> 1/4
+    assert r15 == pytest.approx(0.25)  # u2 back on D+15 -> 1/4
+    assert r30 == pytest.approx(0.25)  # u3 back on D+30 -> 1/4
+
+
+def test_day10_day15_day30_unavailable_for_week_granularity():
+    """day10/day15/day30 are day-granularity concepts — week granularity has no such horizon."""
+    d0 = datetime(2026, 6, 1)
+    df = pl.DataFrame({"user_id": ["u1"], "activity_date": [d0], "ai_group": ["A"]})
+    dm = DataMetrics(df, start_dt=d0, end_dt=d0, key_cols=KEY_COLS, granularity="week")
+    assert dm["retention_rate_day10"] is None  # guarded, no IndexError
+    assert dm["retention_rate_day15"] is None
+    assert dm["retention_rate_day30"] is None
