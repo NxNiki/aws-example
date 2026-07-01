@@ -39,10 +39,12 @@ COPY src/bituslabs_ds ./src/bituslabs_ds
 COPY src/dashboard_api ./src/dashboard_api
 # The shared modules (DataMetrics engine, Confluence client + secrets, report
 # HTML builders) live in bituslabs_ds and ride the COPY above.
-COPY configs/dashboard ./configs/dashboard
+# Dashboard config YAMLs are NOT baked into the image — they live in S3 and are
+# read at runtime (DASHBOARD_CONFIG_DIR below), so a new config is just an S3
+# upload with no image rebuild/redeploy. See src/dashboard_api/services/configs.py.
 COPY --from=spa /frontend/dist ./frontend/dist
 
-ENV DASHBOARD_CONFIG_DIR=/app/configs/dashboard \
+ENV DASHBOARD_CONFIG_DIR=s3://bituslabs-team-ai/dashboard-configs \
     DASHBOARD_FRONTEND_DIST=/app/frontend/dist \
     AGENT_API_URL=http://localhost:8051
 EXPOSE 8050

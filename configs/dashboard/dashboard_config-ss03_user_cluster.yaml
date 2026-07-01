@@ -1,0 +1,60 @@
+title: "SS03 Cluster & AB Test"
+
+# User-level daily stats produced by jobs/ss03_mahjiang_streak/etl_user_daily_stats.py.
+# One row per (user_id, session_start_date, cluster); aggregate_stats_from_user_rows lets
+# the dashboard derive group metrics + retention from these user rows.
+# Two selectable user-group dimensions (user_group_cols):
+#   ab_group -- AB-test cohort (Default / AB_TEST_A / AB_TEST_B), the user's dominant by bet count
+#   cluster  -- kmeans segment 0/1/2 of the bet's 50-bet bin ("NA" = not in a labelled complete bin)
+stats_by_date:
+  files:
+    # Daily user-rows only; the source is per-day grain. Weekly/monthly views are empty
+    # (no pre-aggregated week/month user-row datasets for this source).
+    day: [
+      "s3://bituslabs-team-ai/ds-data-ss03_majiang_streak/user_cluster_daily_stats",
+    ]
+
+  group_col: "ab_group"
+  date_col: "session_start_date"
+  user_group_cols: [ab_group, cluster]
+  aggregate_stats_from_user_rows: true
+
+  group1_label: "DAU and Retention"
+  group1_columns: [
+    "num_active_users",
+    "day0_num_users",
+    "day1_num_users",
+    "day3_num_users",
+    "retention_rate_day1",
+    "retention_rate_day3",
+    "num_active_user_0_rtp",
+    "active_user_0_rtp_ratio",
+    "active_user_rtp_less_0_3_ratio",
+    "active_user_rtp_less_0_5_ratio",
+  ]
+
+  group2_label: "Per-User Bet and RTP"
+  group2_columns: [
+    "user_num_bets",
+    "user_total_bet",
+    "user_avg_bet_amount",
+    "user_rtp",
+    "total_num_bets_per_user",
+    "total_bet_per_user",
+    "user_rtp_median",
+  ]
+
+  group3_label: "Group Totals"
+  group3_columns: [
+    "total_num_bets",
+    "total_bet",
+    "total_payout",
+    "rtp",
+  ]
+
+stats_by_bet:
+  files: [
+
+  ]
+
+  group_col: ""

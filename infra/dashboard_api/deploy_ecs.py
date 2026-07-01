@@ -41,6 +41,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from bituslabs_ds.config import DASHBOARD_CONFIG_S3_PATH, S3_BUCKET  # noqa: E402
+from bituslabs_ds.s3_utils import parse_s3_path, upload_file_to_s3  # noqa: E402
 from infra.shared.ecs_helpers import (  # noqa: E402
     ECS_CLUSTER_NAME,
     ECS_TASK_EXECUTION_ROLE_NAME,
@@ -87,7 +89,10 @@ TG_HEALTH_CHECK_INTERVAL = 30
 TG_HEALTHY_THRESHOLD = 2
 TG_DEREGISTRATION_DELAY = 30
 
-S3_BUCKET = "bituslabs-team-ai"
+# S3_BUCKET / DASHBOARD_CONFIG_S3_PATH come from bituslabs_ds.config (single source of
+# truth). Dashboard config YAMLs are read from that S3 path at runtime (not baked into
+# the image), so a new config is just an S3 upload — no rebuild/redeploy. Deploy syncs
+# the repo's configs/dashboard/*.yaml there (without deleting S3-only configs).
 S3_POLICY_NAME = "ecsTaskExecutionRole-s3-dashboard-api-rw"
 S3_POLICY = {
     "Version": "2012-10-17",
@@ -105,6 +110,24 @@ S3_POLICY = {
         },
     ],
 }
+
+
+def sync_configs_to_s3() -> None:
+    """Upload the repo's dashboard_config-*.yaml to S3 (no delete).
+
+    Keeps the repo configs as the source of truth in S3 while preserving any configs
+    added directly to the bucket (the whole point: add a config without a redeploy).
+    """
+    config_dir = PROJECT_ROOT / "configs" / "dashboard"
+    files = sorted(config_dir.glob("dashboard_config-*.yaml"))
+    if not files:
+        print(f"  No configs found under {config_dir}; skipping S3 sync.")
+        return
+    _, prefix = parse_s3_path(DASHBOARD_CONFIG_S3_PATH)
+    prefix = prefix.rstrip("/")
+    for path in files:
+        upload_file_to_s3(path, S3_BUCKET, f"{prefix}/{path.name}")
+    print(f"  Synced {len(files)} config(s) to {DASHBOARD_CONFIG_S3_PATH} (no delete).")
 
 
 def main() -> None:
@@ -143,6 +166,9 @@ def main() -> None:
     ensure_ecr_repo(session.client("ecr"), IMAGE_NAME)
     require_active_cluster(ecs)
 
+    print(f"\n1b. Syncing dashboard configs to {DASHBOARD_CONFIG_S3_PATH}...")
+    sync_configs_to_s3()
+
     print(f"\n2. Production ALB: {args.alb_name}")
     alb = elbv2.describe_load_balancers(Names=[args.alb_name])["LoadBalancers"][0]
     alb_arn, alb_dns = alb["LoadBalancerArn"], alb["DNSName"]
@@ -179,7 +205,7 @@ def main() -> None:
         agent_api_url = f"http://{agent_albs[0]['DNSName']}"
         print(f"  Auto-detected AI agent ALB: {agent_api_url}")
     env_vars = [
-        {"name": "DASHBOARD_CONFIG_DIR", "value": "/app/configs/dashboard"},
+        {"name": "DASHBOARD_CONFIG_DIR", "value": DASHBOARD_CONFIG_S3_PATH},
         {"name": "DASHBOARD_FRONTEND_DIST", "value": "/app/frontend/dist"},
         # Enables the UserRequestCount middleware (scale-to-zero idle signal).
         {"name": "DASHBOARD_SERVICE_NAME", "value": SERVICE_NAME},
