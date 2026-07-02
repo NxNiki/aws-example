@@ -8,8 +8,9 @@ ETL job: "SS03 user daily stats" — per (user_id, session_start_date, cluster):
     user_rtp            = user_total_payout / user_total_bet   (null when bet == 0)
 
 Plus two user-group dimensions for the dashboard (config user_group_cols):
-    cluster  -- the kmeans segment of the bet's 50-bet bin (0/1/2), from the apply
-                run's cluster_labels; bets not in a labelled complete bin -> "NA".
+    cluster  -- the kmeans segment of the bet's 50-bet bin, labelled "cluster 0/1/2"
+                (nominal, not ordinal) from the apply run's cluster_labels; bets not
+                in a labelled complete bin -> "NA".
     ab_group -- the user's dominant AB-test cohort by bet count (Default /
                 AB_TEST_A / AB_TEST_B), constant across that user's rows.
 
@@ -100,9 +101,10 @@ def _aggregate_chunk(chunk: pd.DataFrame, labels: pd.DataFrame) -> pd.DataFrame:
     chunk = _cast_keys(chunk.copy())
     chunk["agg_group"] = (chunk["session_bet_index"].astype("int64") - 1) // BIN_SIZE
     merged = chunk.merge(labels, on=JOIN_KEYS, how="left")
-    merged["cluster"] = np.where(
-        merged["cluster_idx"].isna(), NA_CLUSTER, merged["cluster_idx"].astype("Int64").astype(str)
-    )
+    # Categorical label ("cluster 0/1/2"), not a bare int, so the dashboard / LLM agent
+    # treats it as a nominal group rather than an ordinal / continuous value.
+    labelled = "cluster " + merged["cluster_idx"].astype("Int64").astype(str)
+    merged["cluster"] = np.where(merged["cluster_idx"].isna(), NA_CLUSTER, labelled)
     return (
         merged.groupby(STAT_KEYS, observed=True)
         .agg(
