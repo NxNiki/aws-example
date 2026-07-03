@@ -1,33 +1,33 @@
 """
-One-shot ETL: build random control-user groups and extract raw bullet events.
+One-shot ETL: build random control-user groups and aggregate their
+``public.bullet`` events server-side in Redshift (same aggregate contract as
+``etl_get_risk_user_stats.py`` — see ``aggregate_queries.py``).
 
 Behavior:
 1) Read ``control_users.json``.
 2) If ``group1`` is empty, randomly sample 100 usernames into group1.
 3) Else if ``group2`` is empty, randomly sample 100 usernames into group2.
 4) Save ``control_users.json``.
-5) Query bullet events for all control users and write parquet to S3.
+5) Aggregate bullet events for all control users and write two parquet
+   datasets under ``S3_OUTPUT_PREFIX`` (``user_summary/`` and
+   ``category_counts/``), partitioned by ``control_user_group`` with
+   ``overwrite_partitions``.
 """
 
+import importlib.util
 import json
 import logging
 import os
-from datetime import datetime
 from pathlib import Path
 from textwrap import dedent
-
-import awswrangler as wr
-import pandas as pd
+from types import ModuleType
 
 from bituslabs_ds.config import (
     DEFAULT_BASTION_IP,
     DEFAULT_ETL_OUTPUT,
-    ETL_CURRENCY_CODES,
-    ETL_EXCLUDED_OP_CODES,
     LOCAL_ROOT,
     REDSHIFT_HOST,
     REDSHIFT_PORT,
-    TIMEZONE_SHANGHAI,
     get_redshift_password,
     get_redshift_user,
     setup_logging,
@@ -36,10 +36,27 @@ from bituslabs_ds.etl import DataLoader, RedshiftBackend
 
 logger = logging.getLogger(__name__)
 
-S3_OUTPUT_PREFIX = f"{DEFAULT_ETL_OUTPUT}/jobs/output_risk_control/control_user_stats"
+S3_OUTPUT_PREFIX = f"{DEFAULT_ETL_OUTPUT}/jobs/output_risk_control/control_user_agg"
 CONTROL_USERS_JSON = Path(__file__).with_name("control_users.json")
 RISK_USERS_JSON = Path(__file__).with_name("risk_users.json")
 GROUP_SIZE = 100
+
+EVENT_START = "2026-04-01"
+GROUP_COL = "control_user_group"
+
+
+def _load_sibling(name: str) -> ModuleType:
+    """Side-load a sibling module (``jobs/risk_control`` is not a package)."""
+    path = Path(__file__).with_name(f"{name}.py")
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_AGG = _load_sibling("aggregate_queries")
 
 
 def _load_risk_user_names() -> set[str]:
@@ -112,64 +129,35 @@ def _ensure_control_groups(loader: DataLoader) -> list[tuple[str, str]]:
     return rows
 
 
-def _sql_user_group_union(rows: list[tuple[str, str]]) -> str:
-    lines: list[str] = []
-    for idx, (user_name, group_label) in enumerate(rows):
-        user_escaped = user_name.replace("'", "''")
-        group_escaped = group_label.replace("'", "''")
-        prefix = "SELECT" if idx == 0 else "UNION ALL SELECT"
-        lines.append(f"                {prefix} '{user_escaped}' AS user_name, '{group_escaped}' AS control_user_group")
-    return "\n".join(lines)
+def sql_resolved_users(rows: list[tuple[str, str]]) -> str:
+    """SELECT resolving control usernames to (user_id, user_name, control_user_group).
+
+    Control identifiers are always user_names (sampled from dim_user_latest),
+    so digit-only entries are NOT treated as user_ids.
+    """
+    return _AGG.sql_resolved_users(rows, GROUP_COL, treat_digits_as_ids=False)
 
 
-def build_query(rows: list[tuple[str, str]]) -> str:
+def build_user_summary_query(
+    rows: list[tuple[str, str]],
+    event_start: str | None = None,
+    event_end: str | None = None,
+) -> str:
+    """Render the per-user summary SQL for control users."""
     if not rows:
         raise ValueError("No control users available; please populate control groups first.")
-    union_list = _sql_user_group_union(rows)
-    return dedent(
-        f"""
-        WITH control_user_group_map AS (
-{union_list}
-        ),
-        user_id AS (
-            SELECT
-                d.user_id,
-                d.user_name,
-                m.control_user_group
-            FROM public.dim_user_latest AS d
-            INNER JOIN control_user_group_map AS m ON d.user_name = m.user_name
-        )
+    return _AGG.build_user_summary_query(sql_resolved_users(rows), GROUP_COL, event_start or EVENT_START, event_end)
 
-        SELECT
-            t.event_timestamp,
-            TRUNC(CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.event_timestamp)) AS data_date,
-            t.user_id,
-            t2.user_name,
-            t2.control_user_group,
-            t.game_id,
-            t.ip,
-            t.currency_type,
-            t.op_code,
-            t.strategy_name,
-            t.bullet_level,
-            t.killed,
-            t.bet,
-            t.payout,
-            t.profit,
-            t.curr_balance,
-            t.fish_value,
-            t.multiplier,
-            t.device_type
 
-        FROM public.bullet AS t
-        INNER JOIN user_id AS t2 ON t.user_id = t2.user_id
-        WHERE
-            t.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
-            AND t.currency_type IN {ETL_CURRENCY_CODES}
-            AND t.event_timestamp > '2025-01-01'
-        ORDER BY t2.user_name, t.event_timestamp
-        """
-    ).strip()
+def build_category_counts_query(
+    rows: list[tuple[str, str]],
+    event_start: str | None = None,
+    event_end: str | None = None,
+) -> str:
+    """Render the per-user category-counts SQL for control users."""
+    if not rows:
+        raise ValueError("No control users available; please populate control groups first.")
+    return _AGG.build_category_counts_query(sql_resolved_users(rows), GROUP_COL, event_start or EVENT_START, event_end)
 
 
 def main() -> None:
@@ -189,39 +177,30 @@ def main() -> None:
     )
     try:
         control_rows = _ensure_control_groups(loader)
-        sql = build_query(control_rows)
-        df = loader.query_to_df(query=sql)
+        summary_df = loader.query_to_df(query=build_user_summary_query(control_rows))
+        counts_df = loader.query_to_df(query=build_category_counts_query(control_rows))
     finally:
         loader.close()
 
-    if df is None or df.empty:
-        logger.warning("Query returned no rows; skipping S3 write.")
-        return
-
-    df["_processed_at"] = datetime.now()
-    skip_numeric = {
-        "event_timestamp",
-        "data_date",
-        "user_name",
-        "ip",
-        "currency_type",
-        "op_code",
-        "strategy_name",
-        "device_type",
-        "_processed_at",
-        "control_user_group",
-    }
-    for col in df.columns:
-        if col in skip_numeric or df[col].dtype != "object":
-            continue
-        try:
-            df[col] = pd.to_numeric(df[col], errors="raise")
-        except Exception:
-            pass
-
-    out_uri = f"{S3_OUTPUT_PREFIX}/control_user_stats.parquet"
-    wr.s3.to_parquet(df=df, path=out_uri, index=False)
-    logger.info("Wrote %s rows to %s", len(df), out_uri)
+    requested = sorted({g for _, g in control_rows})
+    _AGG.write_aggregate_dataset(
+        summary_df,
+        "user_summary",
+        output_prefix=S3_OUTPUT_PREFIX,
+        group_col=GROUP_COL,
+        requested_groups=requested,
+        numeric_cols=_AGG.SUMMARY_NUMERIC_COLS,
+        ts_cols=_AGG.SUMMARY_TS_COLS,
+    )
+    _AGG.write_aggregate_dataset(
+        counts_df,
+        "category_counts",
+        output_prefix=S3_OUTPUT_PREFIX,
+        group_col=GROUP_COL,
+        requested_groups=requested,
+        numeric_cols=_AGG.COUNTS_NUMERIC_COLS,
+        ts_cols=[],
+    )
 
 
 if __name__ == "__main__":

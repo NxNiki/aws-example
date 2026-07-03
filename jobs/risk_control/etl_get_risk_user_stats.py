@@ -1,38 +1,43 @@
 """
-One-shot ETL: extract raw ``public.bullet`` events for a fixed set of usernames
-from ``dim_user_latest`` and write Parquet to S3.
+One-shot ETL: aggregate ``public.bullet`` events for configured risk-user
+groups server-side in Redshift and write per-user aggregate parquet datasets
+to S3.
 
-**Output columns**
+This replaces the former raw-event pull: raw events do not scale (group4
+alone is ~52M rows — a 22s server-side scan but 30+ minutes to stream through
+the bastion tunnel), and the report only consumes per-user aggregates.
 
-``event_timestamp``, ``data_date``, ``user_id``, ``user_name``, ``risk_user_group``, ``game_id``,
-``ip``, ``currency_type``, ``op_code``, ``strategy_name``, ``bullet_level``,
-``killed``, ``bet``, ``payout``, ``profit``, ``curr_balance``, ``fish_value``,
-``multiplier``, ``device_type``, then ``_processed_at`` (added in Python before
-upload).
+**Outputs** — two datasets under ``S3_OUTPUT_PREFIX``, partitioned by
+``risk_user_group`` and written with ``overwrite_partitions`` (re-running a
+subset of groups replaces only those groups' partitions):
 
-Filters: ``op_code`` / ``currency_type`` use ``ETL_EXCLUDED_OP_CODES`` and ``ETL_CURRENCY_CODES`` (SQL IN-list strings from config),
-``event_timestamp > '2025-01-01'``.
+- ``user_summary/`` — one row per user: ``n_orders``, ``total_bet``,
+  ``total_payout``, ``total_profit``, ``first_event_ts``, ``last_event_ts``,
+  ``avg_bet_interval_s``, ``median_bet_interval_s``, ``n_bet_sessions``.
+- ``category_counts/`` — narrow rows ``(user, metric, category, n)`` for the
+  report metrics: bullet_level, strategy_name, ip, fish_value,
+  multiplier_x_bullet.
+
+Run configuration: ``PROCESS_GROUPS`` selects which ``groupN`` keys from
+``risk_users.json`` to process (None = all), ``EVENT_START`` bounds the event
+window. Entries in ``risk_users.json`` are matched against
+``dim_user_latest`` by ``user_name``, except digit-only entries which are
+matched by ``user_id``.
 """
 
+import importlib.util
 import json
 import logging
 import os
-from datetime import datetime
 from pathlib import Path
-from textwrap import dedent
-
-import awswrangler as wr
-import pandas as pd
+from types import ModuleType
 
 from bituslabs_ds.config import (
     DEFAULT_BASTION_IP,
     DEFAULT_ETL_OUTPUT,
-    ETL_CURRENCY_CODES,
-    ETL_EXCLUDED_OP_CODES,
     LOCAL_ROOT,
     REDSHIFT_HOST,
     REDSHIFT_PORT,
-    TIMEZONE_SHANGHAI,
     get_redshift_password,
     get_redshift_user,
     setup_logging,
@@ -41,16 +46,39 @@ from bituslabs_ds.etl import DataLoader, RedshiftBackend
 
 logger = logging.getLogger(__name__)
 
-S3_OUTPUT_PREFIX = f"{DEFAULT_ETL_OUTPUT}/jobs/output_risk_control/risk_user_stats"
+S3_OUTPUT_PREFIX = f"{DEFAULT_ETL_OUTPUT}/jobs/output_risk_control/risk_user_agg"
 
 RISK_USERS_JSON = Path(__file__).with_name("risk_users.json")
 
+# --- run configuration ---
+# Which groupN keys from risk_users.json to process (None = all groups), and
+# the event_timestamp lower bound shared by all processed groups.
+PROCESS_GROUPS: list[str] | None = None
+EVENT_START = "2026-04-01"
+
+GROUP_COL = "risk_user_group"
+
+
+def _load_sibling(name: str) -> ModuleType:
+    """Side-load a sibling module (``jobs/risk_control`` is not a package)."""
+    path = Path(__file__).with_name(f"{name}.py")
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_AGG = _load_sibling("aggregate_queries")
+
 
 def _load_risk_user_groups() -> list[tuple[str, str]]:
-    """Load username groups from JSON and return (user_name, group_label) rows.
+    """Load user groups from JSON and return (identifier, group_label) rows.
 
-    Accepts any number of ``groupN`` keys (e.g. ``group1``, ``group2``, ``group3``).
-    Earlier groups take precedence: a username appearing in multiple groups is
+    Identifiers are user_names, or user_ids when digit-only. Accepts any number
+    of ``groupN`` keys (e.g. ``group1``, ``group2``, ``group3``).
+    Earlier groups take precedence: an identifier appearing in multiple groups is
     only emitted under the first ``groupN`` it appears in (by ascending N).
     """
     payload = json.loads(RISK_USERS_JSON.read_text(encoding="utf-8"))
@@ -78,72 +106,39 @@ def _load_risk_user_groups() -> list[tuple[str, str]]:
     return rows
 
 
-# Usernames resolved via ``dim_user_latest`` for the bullet aggregate below.
-RISK_USER_GROUPS = _load_risk_user_groups()
-RISK_USER_NAMES = [name for name, _ in RISK_USER_GROUPS]
+# Identifiers resolved via ``dim_user_latest`` for the bullet aggregates below.
+RISK_USER_GROUPS = [
+    (name, group) for name, group in _load_risk_user_groups() if PROCESS_GROUPS is None or group in PROCESS_GROUPS
+]
 
 
-def _sql_user_group_union(rows: list[tuple[str, str]]) -> str:
-    """Redshift-safe UNION ALL SELECT rows for (user_name, risk_user_group)."""
-    lines: list[str] = []
-    for idx, (user_name, group_label) in enumerate(rows):
-        user_escaped = user_name.replace("'", "''")
-        group_escaped = group_label.replace("'", "''")
-        prefix = "SELECT" if idx == 0 else "UNION ALL SELECT"
-        lines.append(f"                {prefix} '{user_escaped}' AS user_name, '{group_escaped}' AS risk_user_group")
-    return "\n".join(lines)
+def sql_resolved_users(rows: list[tuple[str, str]]) -> str:
+    """SELECT resolving identifiers to (user_id, user_name, risk_user_group)."""
+    return _AGG.sql_resolved_users(rows, GROUP_COL)
 
 
-def build_query() -> str:
-    """Return the Redshift SQL for raw risk-user bullet events."""
-    if not RISK_USER_GROUPS:
-        raise ValueError("RISK_USER_GROUPS must not be empty")
+def build_user_summary_query(
+    rows: list[tuple[str, str]] | None = None,
+    event_start: str | None = None,
+    event_end: str | None = None,
+) -> str:
+    """Render the per-user summary SQL (defaults to module run configuration)."""
+    rows = RISK_USER_GROUPS if rows is None else rows
+    if not rows:
+        raise ValueError("No risk user groups to process")
+    return _AGG.build_user_summary_query(sql_resolved_users(rows), GROUP_COL, event_start or EVENT_START, event_end)
 
-    union_list = _sql_user_group_union(RISK_USER_GROUPS)
-    return dedent(
-        f"""
-        WITH risk_user_group_map AS (
-{union_list}
-        ),
-        user_id AS (
-            SELECT
-                d.user_id,
-                d.user_name,
-                m.risk_user_group
-            FROM public.dim_user_latest AS d
-            INNER JOIN risk_user_group_map AS m ON d.user_name = m.user_name
-        )
 
-        SELECT
-            t.event_timestamp,
-            TRUNC(CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.event_timestamp)) AS data_date,
-            t.user_id,
-            t2.user_name,
-            t2.risk_user_group,
-            t.game_id,
-            t.ip,
-            t.currency_type,
-            t.op_code,
-            t.strategy_name,
-            t.bullet_level,
-            t.killed,
-            t.bet,
-            t.payout,
-            t.profit,
-            t.curr_balance,
-            t.fish_value,
-            t.multiplier,
-            t.device_type
-
-        FROM public.bullet AS t
-        INNER JOIN user_id AS t2 ON t.user_id = t2.user_id
-        WHERE
-            t.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
-            AND t.currency_type IN {ETL_CURRENCY_CODES}
-            AND t.event_timestamp > '2025-01-01'
-        ORDER BY t2.user_name, t.event_timestamp
-        """
-    ).strip()
+def build_category_counts_query(
+    rows: list[tuple[str, str]] | None = None,
+    event_start: str | None = None,
+    event_end: str | None = None,
+) -> str:
+    """Render the per-user category-counts SQL (defaults to module run configuration)."""
+    rows = RISK_USER_GROUPS if rows is None else rows
+    if not rows:
+        raise ValueError("No risk user groups to process")
+    return _AGG.build_category_counts_query(sql_resolved_users(rows), GROUP_COL, event_start or EVENT_START, event_end)
 
 
 def main() -> None:
@@ -151,8 +146,6 @@ def main() -> None:
         f"{LOCAL_ROOT}/jobs/log",
         log_filename=os.path.splitext(os.path.basename(__file__))[0] + ".log",
     )
-
-    sql = build_query()
 
     loader = DataLoader(
         backend=RedshiftBackend(
@@ -165,38 +158,30 @@ def main() -> None:
         )
     )
     try:
-        df = loader.query_to_df(query=sql)
+        summary_df = loader.query_to_df(query=build_user_summary_query())
+        counts_df = loader.query_to_df(query=build_category_counts_query())
     finally:
         loader.close()
 
-    if df is None or df.empty:
-        logger.warning("Query returned no rows; skipping S3 write.")
-        return
-
-    df["_processed_at"] = datetime.now()
-
-    skip_numeric = {
-        "event_timestamp",
-        "data_date",
-        "user_name",
-        "ip",
-        "currency_type",
-        "op_code",
-        "strategy_name",
-        "device_type",
-        "_processed_at",
-    }
-    for col in df.columns:
-        if col in skip_numeric or df[col].dtype != "object":
-            continue
-        try:
-            df[col] = pd.to_numeric(df[col], errors="raise")
-        except Exception:
-            pass
-
-    out_uri = f"{S3_OUTPUT_PREFIX}/risk_user_stats.parquet"
-    wr.s3.to_parquet(df=df, path=out_uri, index=False)
-    logger.info("Wrote %s rows to %s", len(df), out_uri)
+    requested = sorted({g for _, g in RISK_USER_GROUPS})
+    _AGG.write_aggregate_dataset(
+        summary_df,
+        "user_summary",
+        output_prefix=S3_OUTPUT_PREFIX,
+        group_col=GROUP_COL,
+        requested_groups=requested,
+        numeric_cols=_AGG.SUMMARY_NUMERIC_COLS,
+        ts_cols=_AGG.SUMMARY_TS_COLS,
+    )
+    _AGG.write_aggregate_dataset(
+        counts_df,
+        "category_counts",
+        output_prefix=S3_OUTPUT_PREFIX,
+        group_col=GROUP_COL,
+        requested_groups=requested,
+        numeric_cols=_AGG.COUNTS_NUMERIC_COLS,
+        ts_cols=[],
+    )
 
 
 if __name__ == "__main__":

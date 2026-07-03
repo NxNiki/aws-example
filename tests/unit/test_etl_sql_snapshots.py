@@ -76,3 +76,28 @@ def _check_snapshot(actual: str, snapshot_path: Path, label: str) -> None:
 def test_etl_stats_snapshot(module: ModuleType, stem: str, label: str, agg_col: str) -> None:
     actual = module.generate_query(agg_col, _FULL_HISTORY_START).strip() + "\n"
     _check_snapshot(actual, SNAPSHOTS_DIR / f"{stem}_{label}.sql", f"{stem} {label}")
+
+
+_RISK_CONTROL_CASES = ["risk_user_summary", "risk_category_counts", "control_user_summary", "control_category_counts"]
+
+
+@pytest.mark.parametrize("case", _RISK_CONTROL_CASES)
+def test_risk_control_aggregate_snapshot(case: str) -> None:
+    """Snapshot the risk/control per-user aggregate queries.
+
+    Risk cases render all groups from risk_users.json explicitly (independent
+    of the PROCESS_GROUPS run knob; covers both the name-match and the
+    user_id-match paths of sql_resolved_users). Control cases render the
+    checked-in control_users.json groups.
+    """
+    side, dataset = case.split("_", 1)
+    if side == "risk":
+        module = _load_job_module("jobs/risk_control/etl_get_risk_user_stats.py")
+        rows = module._load_risk_user_groups()
+    else:
+        module = _load_job_module("jobs/risk_control/etl_get_control_user_stats.py")
+        payload = module._load_control_payload()
+        rows = [(name, group) for group in ("group1", "group2") for name in payload[group]]
+    builder = module.build_user_summary_query if dataset == "user_summary" else module.build_category_counts_query
+    actual = builder(rows, event_start=_FULL_HISTORY_START).strip() + "\n"
+    _check_snapshot(actual, SNAPSHOTS_DIR / f"{case}.sql", case)

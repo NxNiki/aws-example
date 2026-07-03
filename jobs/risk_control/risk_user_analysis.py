@@ -1,8 +1,11 @@
 """
-Risk vs control analysis from ETL parquet outputs.
+Risk vs control analysis from ETL aggregate outputs.
 
-Loads risk and control bullet aggregates, then writes one interactive HTML
-(dual charts) and one Markdown summary under ``<repo_parent>/data_fishhunter``.
+Loads the per-user aggregate datasets written by ``etl_get_risk_user_stats.py``
+and ``etl_get_control_user_stats.py`` (``user_summary`` + ``category_counts``,
+partitioned by group — see ``aggregate_queries.py`` for the schema), then
+writes one interactive HTML (dual charts) and one Markdown summary under
+``<repo_parent>/data_fishhunter``. Raw bullet events never leave Redshift.
 
 Optional: ``analyze_user_by_name`` can still build per-user markdown + plots
 when called from code.
@@ -15,26 +18,22 @@ import os
 from pathlib import Path
 from typing import Any, cast
 
+import awswrangler as wr
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import pandas as pd
 
 from bituslabs_ds.config import DEFAULT_ETL_OUTPUT, LOCAL_ROOT, setup_logging
-from bituslabs_ds.s3_utils import read_files
-from bituslabs_ds.utils import get_ip_location
+from bituslabs_ds.utils import get_ip_location, get_ip_locations
 
 logger = logging.getLogger(__name__)
 
-S3_RISK_USER_STATS_URI = f"{DEFAULT_ETL_OUTPUT}/jobs/output_risk_control/risk_user_stats/risk_user_stats.parquet"
-S3_CONTROL_USER_STATS_URI = (
-    f"{DEFAULT_ETL_OUTPUT}/jobs/output_risk_control/control_user_stats/control_user_stats.parquet"
-)
+S3_RISK_AGG_PREFIX = f"{DEFAULT_ETL_OUTPUT}/jobs/output_risk_control/risk_user_agg"
+S3_CONTROL_AGG_PREFIX = f"{DEFAULT_ETL_OUTPUT}/jobs/output_risk_control/control_user_agg"
 DATA_ROOT = LOCAL_ROOT.parent / "data_fishhunter"
 CACHE_DIR = DATA_ROOT / "risk_control_cache"
 REPORT_DIR = DATA_ROOT / "risk_control_reports"
 PLOT_DIR = REPORT_DIR / "plots"
-LOCAL_CACHE_FILE = CACHE_DIR / "risk_user_stats.parquet"
-LOCAL_CONTROL_CACHE_FILE = CACHE_DIR / "control_user_stats.parquet"
 HTML_TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 
 
@@ -51,7 +50,6 @@ def _render_html_from_template(template_name: str, replacements: dict[str, str])
     return text
 
 
-IP_STACK_TOP_N = 20
 CITY_LEGEND_TOP_N = 20
 ALL_USERS_MD_NAME = "risk_user_all_users.md"
 ALL_USERS_HTML_NAME = "risk_user_all_users_stats.html"
@@ -72,94 +70,76 @@ MAX_STRATEGY_CATEGORIES = 40
 MAX_FISH_VALUE_CATEGORIES = 60
 MAX_MULTIPLIER_BULLET_CATEGORIES = 60
 
+NUMERIC_SORT_METRICS = {"bullet_level", "fish_value"}
+
 
 def _sanitize_filename(value: str) -> str:
     return "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in value).strip("_")
 
 
-def _value_counts(
-    df: pd.DataFrame,
-    column: str,
+def _load_aggregates(
+    prefix: str,
+    cache_stem: str,
+    group_col: str,
     *,
-    numeric_int: bool = False,
-    fill_unknown: bool = False,
-    sort_index: bool = False,
-) -> pd.Series:
-    if column not in df.columns:
-        return pd.Series(dtype="int64")
-    s = pd.Series(df[column])
-    if fill_unknown:
-        s = s.fillna("UNKNOWN")
-    else:
-        s = s.dropna()
-    if numeric_int:
-        s = pd.Series(pd.to_numeric(s, errors="coerce")).dropna().astype(int)
-    counts = pd.Series(s).value_counts()
-    return counts.sort_index() if sort_index else counts
+    refresh_cache: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Load (user_summary, category_counts) for one pipeline side.
+
+    Reads the partitioned datasets with ``wr.s3.read_parquet(dataset=True)``
+    (the group column lives in the hive partition path) and keeps a plain
+    local parquet cache per dataset under ``CACHE_DIR``.
+    """
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    frames: dict[str, pd.DataFrame] = {}
+    for name in ("user_summary", "category_counts"):
+        cache_file = CACHE_DIR / f"{cache_stem}_{name}.parquet"
+        if cache_file.exists() and not refresh_cache:
+            df = pd.read_parquet(cache_file)
+        else:
+            df = wr.s3.read_parquet(path=f"{prefix}/{name}/", dataset=True)
+            df.to_parquet(cache_file, index=False)
+        frames[name] = df
+
+    summary, counts = frames["user_summary"], frames["category_counts"]
+    if group_col not in summary.columns or group_col not in counts.columns:
+        raise ValueError(f"Missing '{group_col}' column under {prefix}. Please rerun the aggregate ETL.")
+
+    summary[group_col] = summary[group_col].astype(str)
+    summary["user_name"] = summary["user_name"].astype(str)
+    for col in ("first_event_ts", "last_event_ts"):
+        summary[col] = pd.to_datetime(summary[col], errors="coerce")
+    for col in ("avg_bet_interval_s", "median_bet_interval_s"):
+        summary[col] = pd.to_numeric(summary[col], errors="coerce").fillna(0.0)
+    duration = (summary["last_event_ts"] - summary["first_event_ts"]).dt.total_seconds() / 3600.0
+    summary["account_duration_hours"] = duration.fillna(0.0)
+
+    counts[group_col] = counts[group_col].astype(str)
+    counts["user_name"] = counts["user_name"].astype(str)
+    counts["category"] = counts["category"].astype(str)
+    counts["n"] = pd.to_numeric(counts["n"], errors="raise").astype(int)
+    return summary, counts
 
 
-def _combo_counts(df: pd.DataFrame) -> pd.Series:
-    if "multiplier" not in df.columns or "bullet_level" not in df.columns:
-        return pd.Series(dtype="int64")
-    raw_counts = df.dropna(subset=["multiplier", "bullet_level"]).groupby(["multiplier", "bullet_level"]).size()
-    return cast(pd.Series, cast(Any, raw_counts).sort_values(ascending=False))
+def _user_metric_counts(cat_df: pd.DataFrame, user_name: str, metric: str) -> pd.Series:
+    """Per-user category counts for one metric (index=category, values=n).
+
+    Numeric metrics sort by category value ascending (like the old
+    ``value_counts().sort_index()``); the rest sort by count descending.
+    """
+    rows = cat_df.loc[(cat_df["user_name"] == user_name) & (cat_df["metric"] == metric)]
+    s = pd.Series(rows["n"].to_numpy(), index=rows["category"].to_numpy(), dtype="int64")
+    if metric in NUMERIC_SORT_METRICS:
+        return s.sort_index(key=lambda idx: idx.astype(int))
+    return s.sort_values(ascending=False)
 
 
-def _plot_count_bar(
-    ax: Any,
-    counts: pd.Series,
-    *,
-    title: str,
-    color: str,
-    x_label: str,
-    y_label: str = "Count",
-    rotate_x: int = 0,
-) -> None:
-    ax.bar(counts.index.astype(str), counts.values, color=color)
-    ax.set_title(title)
-    ax.set_xlabel(x_label)
-    ax.set_ylabel(y_label)
-    if rotate_x:
-        ax.tick_params(axis="x", rotation=rotate_x)
-
-
-def _sum_numeric(df: pd.DataFrame, column: str) -> float:
-    if column not in df.columns:
-        return 0.0
-    s = pd.Series(pd.to_numeric(df[column], errors="coerce")).fillna(0)
-    return float(s.sum())
-
-
-def _user_time_stats(df_user: pd.DataFrame, *, session_gap_seconds: int = 30 * 60) -> dict[str, float | int]:
-    if "event_timestamp" not in df_user.columns:
-        return {
-            "account_duration_hours": 0.0,
-            "average_bet_interval_seconds": 0.0,
-            "median_bet_interval_seconds": 0.0,
-            "num_bet_sessions": 0,
-        }
-
-    ts = pd.to_datetime(pd.Series(df_user["event_timestamp"]), errors="coerce").dropna().sort_values()
-    if ts.empty:
-        return {
-            "account_duration_hours": 0.0,
-            "average_bet_interval_seconds": 0.0,
-            "median_bet_interval_seconds": 0.0,
-            "num_bet_sessions": 0,
-        }
-
-    duration_hours = float((ts.iloc[-1] - ts.iloc[0]).total_seconds() / 3600.0) if len(ts) > 1 else 0.0
-    diffs = ts.diff().dt.total_seconds().dropna()
-    valid_diffs = diffs[(diffs >= 0) & (diffs <= session_gap_seconds)]
-    avg_interval = float(valid_diffs.mean()) if len(valid_diffs) > 0 else 0.0
-    median_interval = float(valid_diffs.median()) if len(valid_diffs) > 0 else 0.0
-    num_sessions = int(1 + (diffs > session_gap_seconds).sum())
-
+def _time_stats_from_summary(row: pd.Series) -> dict[str, float | int]:
     return {
-        "account_duration_hours": duration_hours,
-        "average_bet_interval_seconds": avg_interval,
-        "median_bet_interval_seconds": median_interval,
-        "num_bet_sessions": num_sessions,
+        "account_duration_hours": float(row["account_duration_hours"]),
+        "average_bet_interval_seconds": float(row["avg_bet_interval_s"]),
+        "median_bet_interval_seconds": float(row["median_bet_interval_s"]),
+        "num_bet_sessions": int(row["n_bet_sessions"]),
     }
 
 
@@ -188,87 +168,70 @@ def _city_style_map(cities: list[str]) -> dict[str, dict[str, str]]:
     return styles
 
 
-def _combo_label_rows(combo_counts: pd.Series) -> list[tuple[str, int]]:
-    rows: list[tuple[str, int]] = []
-    for idx, c in combo_counts.items():
-        if not isinstance(idx, tuple) or len(idx) != 2:
-            continue
-        m, b = idx
-        rows.append((f"{m}x_L{int(float(b))}", int(c)))
-    return rows
+def _ip_locations(ips: list[str]) -> dict[str, str]:
+    """Bulk ip->location map (batch endpoint; 'UNKNOWN' maps to 'N/A')."""
+    loc_map = get_ip_locations(ip for ip in ips if ip != "UNKNOWN")
+    if "UNKNOWN" in ips:
+        loc_map["UNKNOWN"] = "N/A"
+    return loc_map
 
 
-def _ordered_user_names(events_df: pd.DataFrame, user_names: list[str] | None) -> list[str]:
+def _ip_counts_to_city_counts(ip_counts: pd.Series) -> pd.Series:
+    """Aggregate per-ip counts into per-city counts (count-desc)."""
+    loc_map = _ip_locations([str(ip) for ip in ip_counts.index])
+    cities = pd.Series([_city_or_ip_label(str(ip), loc_map[str(ip)]) for ip in ip_counts.index], index=ip_counts.index)
+    return ip_counts.groupby(cities).sum().sort_values(ascending=False)
+
+
+def _ordered_user_names(summary_df: pd.DataFrame, user_names: list[str] | None) -> list[str]:
     if user_names is None:
-        return sorted(events_df["user_name"].dropna().unique().tolist())
+        return sorted(summary_df["user_name"].dropna().unique().tolist())
     requested = [str(u) for u in user_names]
-    present = set(events_df["user_name"].dropna().astype(str).unique().tolist())
+    present = set(summary_df["user_name"].dropna().astype(str).unique().tolist())
     return [u for u in requested if u in present]
 
 
 def _counts_matrix(
-    events_df: pd.DataFrame,
+    cat_df: pd.DataFrame,
     user_names: list[str],
     metric: str,
 ) -> dict[str, Any]:
-    df = cast(pd.DataFrame, events_df.loc[events_df["user_name"].isin(user_names)].copy())
+    df = cast(pd.DataFrame, cat_df.loc[cat_df["user_name"].isin(user_names) & (cat_df["metric"] == metric)].copy())
     if df.empty:
         return {"labels": [], "traces": [], "showlegend": True}
+
+    df["_metric"] = df["category"]
     if metric == "bullet_level":
-        values = (
-            pd.Series(pd.to_numeric(pd.Series(df["bullet_level"]), errors="coerce")).dropna().astype(int).astype(str)
-        )
-        df = df.loc[values.index].copy()
-        df["_metric"] = values
         categories = sorted(df["_metric"].unique().tolist(), key=lambda x: int(x))
-        showlegend = True
     elif metric == "strategy_name":
-        df["_metric"] = df["strategy_name"].fillna("UNKNOWN").astype(str)
-        top_metric = df["_metric"].value_counts().head(MAX_STRATEGY_CATEGORIES)
+        top_metric = df.groupby("_metric")["n"].sum().sort_values(ascending=False).head(MAX_STRATEGY_CATEGORIES)
         categories = [str(x) for x in top_metric.index.tolist()]
         df = cast(pd.DataFrame, df.loc[df["_metric"].isin(categories)].copy())
-        showlegend = True
     elif metric == "fish_value":
-        values = pd.Series(pd.to_numeric(pd.Series(df["fish_value"]), errors="coerce")).dropna().astype(int).astype(str)
-        df = df.loc[values.index].copy()
-        df["_metric"] = values
-        top_metric = df["_metric"].value_counts().head(MAX_FISH_VALUE_CATEGORIES)
+        top_metric = df.groupby("_metric")["n"].sum().sort_values(ascending=False).head(MAX_FISH_VALUE_CATEGORIES)
         categories = sorted([str(x) for x in top_metric.index.tolist()], key=lambda x: int(x))
         df = cast(pd.DataFrame, df.loc[df["_metric"].isin(categories)].copy())
-        showlegend = True
     elif metric == "multiplier_x_bullet":
-        combo_df = df.dropna(subset=["multiplier", "bullet_level"]).copy()
-        combo_df["_metric"] = (
-            combo_df["multiplier"].astype(str)
-            + "x_L"
-            + pd.Series(pd.to_numeric(pd.Series(combo_df["bullet_level"]), errors="coerce"))
-            .fillna(0)
-            .astype(int)
-            .astype(str)
+        top_metric = (
+            df.groupby("_metric")["n"].sum().sort_values(ascending=False).head(MAX_MULTIPLIER_BULLET_CATEGORIES)
         )
-        df = combo_df
-        top_metric = df["_metric"].value_counts().head(MAX_MULTIPLIER_BULLET_CATEGORIES)
         categories = [str(x) for x in top_metric.index.tolist()]
         df = cast(pd.DataFrame, df.loc[df["_metric"].isin(categories)].copy())
-        showlegend = True
     elif metric == "ip":
-        df["_ip_value"] = df["ip"].fillna("UNKNOWN").astype(str)
-        ip_values = [str(v) for v in df["_ip_value"].dropna().astype(str).unique().tolist()]
-        loc_map = {ip: get_ip_location(ip) if ip != "UNKNOWN" else "N/A" for ip in ip_values}
+        ip_values = [str(v) for v in df["category"].unique().tolist()]
+        loc_map = _ip_locations(ip_values)
         city_map = {ip: _city_or_ip_label(ip, loc_map[ip]) for ip in ip_values}
-        df["_city"] = df["_ip_value"].apply(lambda ip: city_map.get(str(ip), "Unknown"))
-        city_totals = df["_city"].value_counts()
+        df["_city"] = df["category"].apply(lambda ip: city_map.get(str(ip), "Unknown"))
+        city_totals = df.groupby("_city")["n"].sum().sort_values(ascending=False)
         top_cities = [str(city) for city in city_totals.head(CITY_LEGEND_TOP_N).index.tolist()]
         df["_metric"] = df["_city"].apply(lambda city: city if str(city) in top_cities else "Others")
         categories = top_cities.copy()
-        has_others = bool((df["_metric"] == "Others").any())
-        if has_others:
+        if bool((df["_metric"] == "Others").any()):
             categories.append("Others")
-        showlegend = True
     else:
         raise ValueError(f"Unsupported metric: {metric}")
 
-    pivot_raw = cast(pd.DataFrame, cast(Any, df.groupby(["_metric", "user_name"]).size().unstack(fill_value=0)))
+    pivot_raw = df.pivot_table(index="_metric", columns="user_name", values="n", aggfunc="sum", fill_value=0)
     pivot_idx = cast(pd.DataFrame, cast(Any, pivot_raw).reindex(index=categories, fill_value=0))
     pivot = cast(pd.DataFrame, cast(Any, pivot_idx).reindex(user_names, axis=1, fill_value=0))
 
@@ -287,39 +250,11 @@ def _counts_matrix(
             trace["hovertemplate"] = "city=%{fullData.name}<br>" "user=%{x}<br>" "count=%{y}<extra></extra>"
         traces.append(trace)
 
-    return {"labels": categories, "traces": traces, "showlegend": showlegend}
-
-
-def _load_events_df(
-    *,
-    s3_uri: str = S3_RISK_USER_STATS_URI,
-    local_cache_file: Path = LOCAL_CACHE_FILE,
-    refresh_cache: bool = False,
-) -> pd.DataFrame:
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    df = cast(
-        pd.DataFrame,
-        read_files(
-            files=s3_uri,
-            local_cache_path=str(local_cache_file),
-            reload=refresh_cache,
-            lazy_load=False,
-        ),
-    )
-
-    if "event_timestamp" in df.columns:
-        df["event_timestamp"] = pd.to_datetime(df["event_timestamp"], errors="coerce")
-    if "data_date" in df.columns:
-        df["data_date"] = pd.to_datetime(df["data_date"], errors="coerce").dt.date
-
-    for col in ("bet", "payout", "profit", "bullet_level", "multiplier", "fish_value"):
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-    return df
+    return {"labels": categories, "traces": traces, "showlegend": True}
 
 
 def _plot_user_distributions(
-    df_user: pd.DataFrame,
+    counts_by_metric: dict[str, pd.Series],
     target_name: str,
     user_dir: Path,
 ) -> Path:
@@ -330,30 +265,31 @@ def _plot_user_distributions(
     fig, axes = plt.subplots(5, 1, figsize=(16, 28), dpi=120)
     fig.subplots_adjust(hspace=0.45)
 
-    bullet_counts = _value_counts(df_user, "bullet_level", numeric_int=True, sort_index=True)
+    def _plot_count_bar(ax: Any, counts: pd.Series, *, title: str, color: str, x_label: str, rotate_x: int = 0) -> None:
+        ax.bar(counts.index.astype(str), counts.values, color=color)
+        ax.set_title(title)
+        ax.set_xlabel(x_label)
+        ax.set_ylabel("Count")
+        if rotate_x:
+            ax.tick_params(axis="x", rotation=rotate_x)
+
     _plot_count_bar(
         axes[0],
-        bullet_counts,
+        counts_by_metric["bullet_level"],
         title="Bullet Level Count",
         color="#3266ad",
         x_label="Bullet Level",
     )
-
-    strategy_counts = _value_counts(df_user, "strategy_name", fill_unknown=True)
     _plot_count_bar(
         axes[1],
-        strategy_counts,
+        counts_by_metric["strategy_name"],
         title="Strategy Name Count",
         color="#6dac4f",
         x_label="Strategy Name",
         rotate_x=20,
     )
 
-    ip_values = pd.Series(df_user["ip"]).fillna("UNKNOWN").astype(str)
-    unique_ips = [str(v) for v in ip_values.unique().tolist()]
-    loc_map = {ip: get_ip_location(ip) if ip != "UNKNOWN" else "N/A" for ip in unique_ips}
-    city_series = ip_values.apply(lambda ip: _city_or_ip_label(str(ip), loc_map.get(str(ip), "N/A")))
-    city_counts = city_series.value_counts()
+    city_counts = _ip_counts_to_city_counts(counts_by_metric["ip"])
     top_city_counts = city_counts.head(CITY_LEGEND_TOP_N)
     other_city_count = int(city_counts.iloc[CITY_LEGEND_TOP_N:].sum()) if len(city_counts) > CITY_LEGEND_TOP_N else 0
 
@@ -396,20 +332,16 @@ def _plot_user_distributions(
     if legend_handles:
         axes[2].legend(handles=legend_handles, title="City", loc="upper right")
 
-    fish_counts = _value_counts(df_user, "fish_value", numeric_int=True, sort_index=True)
     _plot_count_bar(
         axes[3],
-        fish_counts,
+        counts_by_metric["fish_value"],
         title="Fish Value Count",
         color="#e07b39",
         x_label="Fish Value",
     )
 
-    combo_counts = _combo_counts(df_user)
-    combo_rows = _combo_label_rows(combo_counts)
-    combo_labels = [label for label, _ in combo_rows]
-    combo_values = [count for _, count in combo_rows]
-    axes[4].bar(combo_labels, combo_values, color="#b05dc4")
+    combo_counts = counts_by_metric["multiplier_x_bullet"]
+    axes[4].bar(combo_counts.index.astype(str), combo_counts.values, color="#b05dc4")
     axes[4].set_title("Multiplier x Bullet Level Count")
     axes[4].set_ylabel("Count")
     axes[4].tick_params(axis="x", rotation=45)
@@ -426,39 +358,38 @@ def _plot_user_distributions(
 
 def analyze_user_by_name(
     target_name: str,
-    events_df: pd.DataFrame,
+    summary_df: pd.DataFrame,
+    cat_df: pd.DataFrame,
     report_root: Path = REPORT_DIR,
 ) -> dict[str, Any] | None:
-    """Build one markdown report + plots for a target user."""
-    df_user = cast(pd.DataFrame, events_df.loc[events_df["user_name"] == target_name].copy())
-    if df_user.empty:
-        logger.warning("No events found for user_name=%s", target_name)
+    """Build one markdown report + plots for a target user from aggregates."""
+    user_rows = summary_df.loc[summary_df["user_name"] == target_name]
+    if user_rows.empty:
+        logger.warning("No aggregate data found for user_name=%s", target_name)
         return None
+    row = user_rows.iloc[0]
 
     report_root.mkdir(parents=True, exist_ok=True)
     PLOT_DIR.mkdir(parents=True, exist_ok=True)
 
+    counts_by_metric = {
+        m: _user_metric_counts(cat_df, target_name, m)
+        for m in ("bullet_level", "strategy_name", "ip", "fish_value", "multiplier_x_bullet")
+    }
+
     safe_name = _sanitize_filename(target_name)
     user_dir = PLOT_DIR / safe_name
-    plot_path = _plot_user_distributions(df_user, target_name, user_dir)
+    plot_path = _plot_user_distributions(counts_by_metric, target_name, user_dir)
 
-    if "user_id" in df_user.columns:
-        user_id = str(pd.Series(df_user["user_id"]).iloc[0])
-    else:
-        user_id = "N/A"
-    total_orders = int(len(df_user))
-    total_bet = _sum_numeric(df_user, "bet")
-    total_payout = _sum_numeric(df_user, "payout")
-    total_profit = _sum_numeric(df_user, "profit")
+    user_id = str(int(row["user_id"]))
+    total_orders = int(row["n_orders"])
+    total_bet = float(row["total_bet"])
+    total_payout = float(row["total_payout"])
+    total_profit = float(row["total_profit"])
     rtp = (total_payout / total_bet) * 100 if total_bet > 0 else 0.0
-    time_stats = _user_time_stats(df_user)
+    time_stats = _time_stats_from_summary(row)
 
-    bullet_counts = _value_counts(df_user, "bullet_level", numeric_int=True, sort_index=True)
-    strategy_counts = _value_counts(df_user, "strategy_name", fill_unknown=True)
-    fish_counts = _value_counts(df_user, "fish_value", numeric_int=True, sort_index=True)
-    combo_counts = _combo_counts(df_user)
-    ip_counts = _value_counts(df_user, "ip", fill_unknown=True)
-
+    ip_counts = counts_by_metric["ip"]
     top_ip_table_rows = []
     for ip, count in ip_counts.head(20).items():
         top_ip_table_rows.append((str(ip), get_ip_location(str(ip)), int(count)))
@@ -486,7 +417,7 @@ def analyze_user_by_name(
         "| bullet_level | count |",
         "|---|---:|",
     ]
-    lines.extend([f"| {idx} | {int(val)} |" for idx, val in bullet_counts.items()])
+    lines.extend([f"| {idx} | {int(val)} |" for idx, val in counts_by_metric["bullet_level"].items()])
     lines.extend(
         [
             "",
@@ -495,7 +426,7 @@ def analyze_user_by_name(
             "|---|---:|",
         ]
     )
-    lines.extend([f"| {idx} | {int(val)} |" for idx, val in strategy_counts.items()])
+    lines.extend([f"| {idx} | {int(val)} |" for idx, val in counts_by_metric["strategy_name"].items()])
     lines.extend(
         [
             "",
@@ -504,7 +435,7 @@ def analyze_user_by_name(
             "|---|---:|",
         ]
     )
-    lines.extend([f"| {idx} | {int(val)} |" for idx, val in fish_counts.items()])
+    lines.extend([f"| {idx} | {int(val)} |" for idx, val in counts_by_metric["fish_value"].items()])
     lines.extend(
         [
             "",
@@ -513,7 +444,7 @@ def analyze_user_by_name(
             "|---|---:|",
         ]
     )
-    lines.extend([f"| {label} | {count} |" for label, count in _combo_label_rows(combo_counts)])
+    lines.extend([f"| {label} | {int(count)} |" for label, count in counts_by_metric["multiplier_x_bullet"].items()])
     lines.extend(
         [
             "",
@@ -534,19 +465,21 @@ def analyze_user_by_name(
     }
 
 
-def _sort_names_by_profit(events_df: pd.DataFrame, user_names: list[str]) -> list[str]:
+def _sort_names_by_profit(summary_df: pd.DataFrame, user_names: list[str]) -> list[str]:
     if not user_names:
         return []
-    filtered_df = cast(pd.DataFrame, events_df.loc[events_df["user_name"].isin(user_names)].copy())
-    if filtered_df.empty:
+    filtered = summary_df.loc[summary_df["user_name"].isin(user_names)]
+    if filtered.empty:
         return []
-    profit_series = pd.Series(pd.to_numeric(pd.Series(filtered_df["profit"]), errors="coerce")).fillna(0)
-    grouped_profit = cast(pd.Series, cast(Any, profit_series.groupby(filtered_df["user_name"])).sum())
-    profit_order = cast(pd.Series, cast(Any, grouped_profit).sort_values(ascending=False))
-    return [str(name) for name in profit_order.index.tolist()]
+    ordered = filtered.sort_values(by="total_profit", ascending=False)
+    return [str(name) for name in ordered["user_name"].tolist()]
 
 
-def _build_group_plot_bundle(events_df: pd.DataFrame, user_names: list[str]) -> dict[str, Any]:
+def _build_group_plot_bundle(
+    summary_df: pd.DataFrame,
+    cat_df: pd.DataFrame,
+    user_names: list[str],
+) -> dict[str, Any]:
     metrics = [
         ("bullet_level", "Bullet Level Counts"),
         ("strategy_name", "Strategy Name Counts"),
@@ -554,28 +487,15 @@ def _build_group_plot_bundle(events_df: pd.DataFrame, user_names: list[str]) -> 
         ("fish_value", "Fish Value Counts"),
         ("multiplier_x_bullet", "Multiplier x Bullet Level Counts"),
     ]
-    per_user = (
-        events_df.groupby("user_name")[["bet", "payout", "profit"]].sum(min_count=1).reindex(user_names).fillna(0)
-    )
-    rtp_vals = []
-    profit_vals = []
-    account_duration_vals = []
-    avg_bet_interval_vals = []
-    median_bet_interval_vals = []
-    num_sessions_vals = []
-    for _, row in per_user.iterrows():
-        bet = float(row["bet"])
-        payout = float(row["payout"])
-        profit = float(row["profit"])
-        rtp_vals.append((payout / bet) * 100 if bet > 0 else 0.0)
-        profit_vals.append(profit)
-    for user_name in user_names:
-        df_user = cast(pd.DataFrame, events_df.loc[events_df["user_name"] == user_name].copy())
-        time_stats = _user_time_stats(df_user)
-        account_duration_vals.append(float(time_stats["account_duration_hours"]))
-        avg_bet_interval_vals.append(float(time_stats["average_bet_interval_seconds"]))
-        median_bet_interval_vals.append(float(time_stats["median_bet_interval_seconds"]))
-        num_sessions_vals.append(int(time_stats["num_bet_sessions"]))
+    per_user = summary_df.set_index("user_name").reindex(user_names)
+    bet = per_user["total_bet"].fillna(0.0)
+    payout = per_user["total_payout"].fillna(0.0)
+    rtp_vals = [(float(p) / float(b)) * 100 if float(b) > 0 else 0.0 for b, p in zip(bet, payout)]
+    profit_vals = [float(v) for v in per_user["total_profit"].fillna(0.0)]
+    account_duration_vals = [float(v) for v in per_user["account_duration_hours"].fillna(0.0)]
+    avg_bet_interval_vals = [float(v) for v in per_user["avg_bet_interval_s"].fillna(0.0)]
+    median_bet_interval_vals = [float(v) for v in per_user["median_bet_interval_s"].fillna(0.0)]
+    num_sessions_vals = [int(v) for v in per_user["n_bet_sessions"].fillna(0)]
 
     line_payload = {
         "none": {"name": "None", "y": []},
@@ -588,7 +508,7 @@ def _build_group_plot_bundle(events_df: pd.DataFrame, user_names: list[str]) -> 
     }
     payload: dict[str, Any] = {}
     for metric_key, metric_title in metrics:
-        matrix = _counts_matrix(events_df, user_names, metric_key)
+        matrix = _counts_matrix(cat_df, user_names, metric_key)
         payload[metric_key] = {
             "title": metric_title,
             "data": matrix["traces"],
@@ -605,58 +525,34 @@ def _build_group_plot_bundle(events_df: pd.DataFrame, user_names: list[str]) -> 
 
 def _append_markdown_group_section(
     lines: list[str],
-    events_df: pd.DataFrame,
+    summary_df: pd.DataFrame,
     user_names: list[str],
     section_title: str,
 ) -> None:
+    group_summary = summary_df.loc[summary_df["user_name"].isin(user_names)]
     lines.extend(
         [
             "",
             f"## {section_title}",
             "",
             f"- users_included: `{len(user_names)}`",
-            f"- total_rows: `{len(events_df)}`",
+            f"- total_rows: `{int(group_summary['n_orders'].sum())}`",
             "",
         ]
     )
-    user_blocks: list[dict[str, Any]] = []
-    for user_name in user_names:
-        df_user = cast(pd.DataFrame, events_df.loc[events_df["user_name"] == user_name].copy())
-        if df_user.empty:
-            continue
-        user_id = str(pd.Series(df_user["user_id"]).iloc[0]) if "user_id" in df_user.columns else "N/A"
-        total_orders = int(len(df_user))
-        total_bet = _sum_numeric(df_user, "bet")
-        total_payout = _sum_numeric(df_user, "payout")
-        total_profit = _sum_numeric(df_user, "profit")
-        rtp = (total_payout / total_bet) * 100 if total_bet > 0 else 0.0
-        time_stats = _user_time_stats(df_user)
-        user_blocks.append(
-            {
-                "user_name": user_name,
-                "user_id": user_id,
-                "total_orders": total_orders,
-                "total_bet": total_bet,
-                "total_payout": total_payout,
-                "total_profit": total_profit,
-                "rtp_pct": rtp,
-                "account_duration_hours": float(time_stats["account_duration_hours"]),
-                "average_bet_interval_seconds": float(time_stats["average_bet_interval_seconds"]),
-                "num_bet_sessions": int(time_stats["num_bet_sessions"]),
-            }
-        )
-    summary_df = pd.DataFrame(user_blocks)
-    if summary_df.empty:
+    if group_summary.empty:
         lines.append("- no matching data rows found")
         return
-    summary_df = summary_df.sort_values(by="total_profit", ascending=False)
+    ordered = group_summary.sort_values(by="total_profit", ascending=False)
     lines.append("| user_name | user_id | total_orders | total_bet | total_payout | total_profit | rtp | sessions |")
     lines.append("|---|---|---:|---:|---:|---:|---:|---:|")
-    for _, row in summary_df.iterrows():
+    for _, row in ordered.iterrows():
+        total_bet = float(row["total_bet"])
+        rtp = (float(row["total_payout"]) / total_bet) * 100 if total_bet > 0 else 0.0
         lines.append(
-            f"| {str(row['user_name'])} | {str(row['user_id'])} | {int(row['total_orders'])} | "
-            f"{float(row['total_bet']):,.2f} | {float(row['total_payout']):,.2f} | {float(row['total_profit']):,.2f} | "
-            f"{float(row['rtp_pct']):.2f}% | {int(row['num_bet_sessions'])} |"
+            f"| {str(row['user_name'])} | {str(int(row['user_id']))} | {int(row['n_orders'])} | "
+            f"{total_bet:,.2f} | {float(row['total_payout']):,.2f} | {float(row['total_profit']):,.2f} | "
+            f"{rtp:.2f}% | {int(row['n_bet_sessions'])} |"
         )
 
 
@@ -671,41 +567,40 @@ def _discover_groups(df: pd.DataFrame, group_col: str) -> list[str]:
     )
 
 
-def generate_risk_control_reports(*, refresh_cache: bool = False) -> list[dict[str, Any]]:
-    risk_df = _load_events_df(
-        s3_uri=S3_RISK_USER_STATS_URI,
-        local_cache_file=LOCAL_CACHE_FILE,
-        refresh_cache=refresh_cache,
+def generate_risk_control_reports(
+    *,
+    refresh_cache: bool = False,
+    risk_agg_prefix: str = S3_RISK_AGG_PREFIX,
+    control_agg_prefix: str = S3_CONTROL_AGG_PREFIX,
+) -> list[dict[str, Any]]:
+    risk_summary, risk_counts = _load_aggregates(
+        risk_agg_prefix, "risk", "risk_user_group", refresh_cache=refresh_cache
     )
-    control_df = _load_events_df(
-        s3_uri=S3_CONTROL_USER_STATS_URI,
-        local_cache_file=LOCAL_CONTROL_CACHE_FILE,
-        refresh_cache=refresh_cache,
+    control_summary, control_counts = _load_aggregates(
+        control_agg_prefix, "control", "control_user_group", refresh_cache=refresh_cache
     )
-
-    if "risk_user_group" not in risk_df.columns:
-        raise ValueError("Missing 'risk_user_group' column in ETL parquet. Please rerun etl_get_risk_user_stats.py.")
-    if "control_user_group" not in control_df.columns:
-        raise ValueError(
-            "Missing 'control_user_group' column in ETL parquet. Please rerun etl_get_control_user_stats.py."
-        )
 
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
-    risk_groups = _discover_groups(risk_df, "risk_user_group")
-    control_groups = _discover_groups(control_df, "control_user_group")
+    risk_groups = _discover_groups(risk_summary, "risk_user_group")
+    control_groups = _discover_groups(control_summary, "control_user_group")
 
-    risk_group_payload: dict[str, dict[str, Any]] = {}
-    for group in risk_groups:
-        risk_group_df = cast(pd.DataFrame, risk_df.loc[risk_df["risk_user_group"] == group].copy())
-        risk_group_names = _sort_names_by_profit(risk_group_df, _ordered_user_names(risk_group_df, None))
-        risk_group_payload[group] = _build_group_plot_bundle(risk_group_df, risk_group_names)
+    def _group_payload(
+        summary_df: pd.DataFrame,
+        counts_df: pd.DataFrame,
+        groups: list[str],
+        group_col: str,
+    ) -> dict[str, dict[str, Any]]:
+        payload: dict[str, dict[str, Any]] = {}
+        for group in groups:
+            g_summary = summary_df.loc[summary_df[group_col] == group]
+            g_counts = counts_df.loc[counts_df[group_col] == group]
+            names = _sort_names_by_profit(g_summary, _ordered_user_names(g_summary, None))
+            payload[group] = _build_group_plot_bundle(g_summary, g_counts, names)
+        return payload
 
-    control_group_payload: dict[str, dict[str, Any]] = {}
-    for group in control_groups:
-        control_group_df = cast(pd.DataFrame, control_df.loc[control_df["control_user_group"] == group].copy())
-        control_group_names = _sort_names_by_profit(control_group_df, _ordered_user_names(control_group_df, None))
-        control_group_payload[group] = _build_group_plot_bundle(control_group_df, control_group_names)
+    risk_group_payload = _group_payload(risk_summary, risk_counts, risk_groups, "risk_user_group")
+    control_group_payload = _group_payload(control_summary, control_counts, control_groups, "control_user_group")
 
     html_path = REPORT_DIR / ALL_USERS_HTML_NAME
     md_path = REPORT_DIR / ALL_USERS_MD_NAME
@@ -725,7 +620,7 @@ def generate_risk_control_reports(*, refresh_cache: bool = False) -> list[dict[s
     lines = [
         "# Risk vs Control User Report",
         "",
-        "- note: group labels come from ETL parquet columns `risk_user_group` and `control_user_group`",
+        "- note: group labels come from ETL aggregate partitions `risk_user_group` and `control_user_group`",
         f"- risk_groups: `{', '.join(risk_groups) or '(none)'}`",
         f"- control_groups: `{', '.join(control_groups) or '(none)'}`",
         f"- html_stats_report: `{html_path.name}`",
@@ -734,13 +629,11 @@ def generate_risk_control_reports(*, refresh_cache: bool = False) -> list[dict[s
         "",
     ]
     for group in risk_groups:
-        group_df = cast(pd.DataFrame, risk_df.loc[risk_df["risk_user_group"] == group].copy())
-        group_names = _sort_names_by_profit(group_df, _ordered_user_names(group_df, None))
-        _append_markdown_group_section(lines, group_df, group_names, f"Risk {group}")
+        names = risk_group_payload[group]["user_names"]
+        _append_markdown_group_section(lines, risk_summary, names, f"Risk {group}")
     for group in control_groups:
-        group_df = cast(pd.DataFrame, control_df.loc[control_df["control_user_group"] == group].copy())
-        group_names = _sort_names_by_profit(group_df, _ordered_user_names(group_df, None))
-        _append_markdown_group_section(lines, group_df, group_names, f"Control {group}")
+        names = control_group_payload[group]["user_names"]
+        _append_markdown_group_section(lines, control_summary, names, f"Control {group}")
     md_path.write_text("\n".join(lines), encoding="utf-8")
 
     logger.info("Generated combined markdown report: %s", md_path)
@@ -762,7 +655,17 @@ def _parse_args() -> argparse.Namespace:
         "--refresh-cache",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="Reload parquet from S3 instead of using local cache (default: false).",
+        help="Reload aggregates from S3 instead of using the local cache (default: false).",
+    )
+    parser.add_argument(
+        "--risk-agg-prefix",
+        default=S3_RISK_AGG_PREFIX,
+        help="S3 prefix of the risk aggregate datasets (user_summary/ + category_counts/).",
+    )
+    parser.add_argument(
+        "--control-agg-prefix",
+        default=S3_CONTROL_AGG_PREFIX,
+        help="S3 prefix of the control aggregate datasets (user_summary/ + category_counts/).",
     )
     return parser.parse_args()
 
@@ -773,7 +676,11 @@ def main() -> None:
         f"{LOCAL_ROOT}/jobs/log",
         log_filename=os.path.splitext(os.path.basename(__file__))[0] + ".log",
     )
-    generate_risk_control_reports(refresh_cache=bool(args.refresh_cache))
+    generate_risk_control_reports(
+        refresh_cache=bool(args.refresh_cache),
+        risk_agg_prefix=str(args.risk_agg_prefix),
+        control_agg_prefix=str(args.control_agg_prefix),
+    )
 
 
 if __name__ == "__main__":

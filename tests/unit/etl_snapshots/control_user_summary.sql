@@ -1,0 +1,81 @@
+WITH user_map AS (
+    SELECT
+        d.user_id,
+        d.user_name,
+        CASE
+            WHEN d.user_name IN ('BU7p02dong33696', 'JN1kgan_1218692298', 'KV3GvkjP_ad14084925', 'JN1jiali_624313219', 'KV3GvkjG_yz33068311', 'LV3mk_3737753', 'A6802agdg191464', 'BU7p02xiaoxiao969', 'KV3GvkuI_zh5244663', 'A0401m04131846', 'JN1tc_820336714', 'A0401m2537719280', 'JN1xg_1516387008', 'NN99BDZ_1814500638', 'JN1jinf_1700169146', 'KV3GvkuI_155345232', 'JN1wxia_801709802', 'JO5TSLA0321421821', 'NV2FENIX_109742', 'JN1zhifu_772897631', 'KV3Gvkug_ym283696', 'KV3GvktK_153599943', 'JN1wfei_1655850685', 'JN1cshuang_1087501874', 'JL6zzk20050102_abk', 'BH619j9755474887', 'HS1m1jd17627', 'HV3d2ksk64946', 'A5802j9pqm150700', 'LV3ls_1097536', 'FJ8wxg0000j10z', 'KV3GvkjS_a13660111', 'FM5mark2368', 'KV3GvkjR_TW6353188', 'LW3p05mn12ysruw12', 'JN1qn_1834038172', 'KV3GvkjG_cd26403908', 'A5802pasdf05000', 'C17uulajiang5923', 'KV3GvkuJ_zi4423617', 'MG1ag6f070312068', 'KV3GvkuH_ma7594123', 'KV3Gvkrz_Zx24427849', 'EW3x9932269803155', 'JN1zhenz_452099319', 'JN1xhy_2009192684', 'KV3GvkjR_966346649', 'KV3Gvkrz_qa27532512', 'JN1wanx_1546548013', 'LX5lh1aa199492', 'JN1aile_1633386031', 'HY854be2026010872270', 'C167CPJ_xbd666', 'JN1shaonv_1247880945', 'KV3Gvkrx_ko7047168', 'JN1tui1_1065309666', 'JX7xkkty1212k', 'FK00218871542850', 'C81vip24728440hab', 'JN1huaji_1407070612', 'JN1juhua_805322796', 'DY7dy7g2yhg2qianyiman', 'KV3GvkjG_Aa37817858', 'GY977baby_7889002', 'JN1sidian_1352641766', 'JN1lian_1268365919', 'JN1yues_392637531', 'JN1qiux_61129660', 'JN1dj_2073380714', 'A5801j902252421', 'JN1hanbao_1389036042', 'JN1xm_923669398', 'KV3GvkjP_a114377613', 'JM4proma8888', 'KV3GvkjP_jw10143661', 'HQ1assd02365', 'JN1tmi_954683072', 'KV3GvkjG_zg35540536', 'BU7p02ai1970616', 'JN1wanx_1441866305', 'A1302masdzxcvdgd', 'KV3GvkvH_ad1740615', 'JN1tmi_589117631', 'BH608121839139', 'KV3Gvkrz_LZ25348228', 'LA4qq_q627879', 'HX91_XU13688298660', 'FC3very16803882', 'JN1lemi_1198485953', 'JN1lemi_1332316590', 'JN1juzi_93502883', 'JU43P3CXIS02', 'KV3GvkvH_n21433792', 'GY8KY7900526', 'JN1naisi_1949161659', 'A0401mm6753296', 'JN1wxia_1797551279', 'KV3GvkjU_sb9420442', 'JN1naisi_261447625', 'NE2NE2AGINLX6659612') THEN 'group1'
+            WHEN d.user_name IN ('MY4pa_46466243T52', 'KV3GvkjG_mm36443584', 'GY8gy7872800', 'GY8KY7828524', 'KV3GvktK_yi185965', 'KV3Gvkrz_sh27781560', 'JN1cuican_2041875636', 'JN1lieqi_2060100358', 'KV3GvkvH_hj227903', 'JN1wy_1829876533', 'JN1rum_1816471282', 'KV3Gvkug_201443305', 'NN99BDZ_1455548366', 'DY7dy7g2pgg2lhm888', 'DY7dy7g2pgg2a1518415903', 'KV3GvkjS_wl9556889', 'KV3Gvkrz_gy497444', 'DJ0djnYU0812', 'A0201cjndog666', 'KV3GvkvH_bb1625427', 'JN1007_1983748155', 'KV3GvkvF_kk544062', 'KV3Gvkry_xh481920', 'JN1xbt_730280896', 'JN1tyi_1924903678', 'JN1xai_665406843', 'KV3GvkjU_ly8065003', 'JN1cs_373589100', 'FJ8wxg0000nyse', 'A6802agvvj134117', 'JN1chunx_543522290', 'KV3GvkjP_W11801444', 'JN1sequ_1523727460', 'JN1zhenz_801867302', 'A6802j9vws135231', 'JN1cshuang_1735982308', 'LJ9msl_106815114', 'JN1xinxin_1364722490', 'KV3GvkvF_cs54772', 'JN1xai_944734522', 'A0201ckf999e23f5', 'KV3GvkvH_aa33925', 'JN1xcao_972877675', 'KV3GvkjG_3211222155', 'KV3GvkjP_Va13147681', 'KV3GvkjP_hu13312290', 'JN1wenc_2030287252', 'JN1yeyan_2045885962', 'JN1aaii_909121899', 'FA7df53298139', 'DN7xuan90', 'JN1aaii_839309623', 'KV3GvkjG_yy9306523', 'BU7p02waihha123', 'MG1ag6f053283062', 'JN1rum_392120327', 'LV3lx_3192276', 'JN1xigua_1911205733', 'KV3Gvkrz_ly8593555', 'KV3Gvkry_qq16718872', 'HV9m1ergh34636', 'KV3GvktK_Ll3202565', 'CY5ybjj22n3ln', 'KV3GvkvH_yz1369469', 'JN1zhenz_337951630', 'JN1dayu_464667693', 'HX71_co18613843625', 'KV3GvkuI_zo7008452', 'JN1shaonv_937649781', 'JN1yexia_620815312', 'KV3GvkjQ_wz3919753', 'JN1jj_1726739493', 'KV3Gvkrz_lh24774419', 'JN1md_1085998290', 'KV3Gvkry_le1191423', 'A5802agyu7l7khn3', 'JN1lemi_435448547', 'LV3hw_3258103', 'KV3Gvkry_LT21960664', 'A5802j9lj678', 'JO5TSLA0319772049', 'MQ2svgr4490560', 'JN1wuyou_898573847', 'JN1xihu_1176811565', 'KV3GvkuH_186461092', 'KV3GvkjG_sm23723162', 'JN1meiy_2077028840', 'EW3y89bdgball611394', 'A0102ggpj6767', 'JN1bibi_936747011', 'N23player79116792', 'KV3GvkvF_qa157625', 'JN1qcao_1227180120', 'KV3GvkvF_lh785570', 'JN1yaoji_735549999', 'JN1sejie_2081752232', 'KV3GvkjG_tz34418255', 'JN1yanse_1638488521', 'MD5hgty_zq8zhangqiqi', 'JN1lfeng_1724562054') THEN 'group2'
+        END AS control_user_group
+    FROM public.dim_user_latest AS d
+    WHERE d.user_name IN ('BU7p02dong33696', 'JN1kgan_1218692298', 'KV3GvkjP_ad14084925', 'JN1jiali_624313219', 'KV3GvkjG_yz33068311', 'LV3mk_3737753', 'A6802agdg191464', 'BU7p02xiaoxiao969', 'KV3GvkuI_zh5244663', 'A0401m04131846', 'JN1tc_820336714', 'A0401m2537719280', 'JN1xg_1516387008', 'NN99BDZ_1814500638', 'JN1jinf_1700169146', 'KV3GvkuI_155345232', 'JN1wxia_801709802', 'JO5TSLA0321421821', 'NV2FENIX_109742', 'JN1zhifu_772897631', 'KV3Gvkug_ym283696', 'KV3GvktK_153599943', 'JN1wfei_1655850685', 'JN1cshuang_1087501874', 'JL6zzk20050102_abk', 'BH619j9755474887', 'HS1m1jd17627', 'HV3d2ksk64946', 'A5802j9pqm150700', 'LV3ls_1097536', 'FJ8wxg0000j10z', 'KV3GvkjS_a13660111', 'FM5mark2368', 'KV3GvkjR_TW6353188', 'LW3p05mn12ysruw12', 'JN1qn_1834038172', 'KV3GvkjG_cd26403908', 'A5802pasdf05000', 'C17uulajiang5923', 'KV3GvkuJ_zi4423617', 'MG1ag6f070312068', 'KV3GvkuH_ma7594123', 'KV3Gvkrz_Zx24427849', 'EW3x9932269803155', 'JN1zhenz_452099319', 'JN1xhy_2009192684', 'KV3GvkjR_966346649', 'KV3Gvkrz_qa27532512', 'JN1wanx_1546548013', 'LX5lh1aa199492', 'JN1aile_1633386031', 'HY854be2026010872270', 'C167CPJ_xbd666', 'JN1shaonv_1247880945', 'KV3Gvkrx_ko7047168', 'JN1tui1_1065309666', 'JX7xkkty1212k', 'FK00218871542850', 'C81vip24728440hab', 'JN1huaji_1407070612', 'JN1juhua_805322796', 'DY7dy7g2yhg2qianyiman', 'KV3GvkjG_Aa37817858', 'GY977baby_7889002', 'JN1sidian_1352641766', 'JN1lian_1268365919', 'JN1yues_392637531', 'JN1qiux_61129660', 'JN1dj_2073380714', 'A5801j902252421', 'JN1hanbao_1389036042', 'JN1xm_923669398', 'KV3GvkjP_a114377613', 'JM4proma8888', 'KV3GvkjP_jw10143661', 'HQ1assd02365', 'JN1tmi_954683072', 'KV3GvkjG_zg35540536', 'BU7p02ai1970616', 'JN1wanx_1441866305', 'A1302masdzxcvdgd', 'KV3GvkvH_ad1740615', 'JN1tmi_589117631', 'BH608121839139', 'KV3Gvkrz_LZ25348228', 'LA4qq_q627879', 'HX91_XU13688298660', 'FC3very16803882', 'JN1lemi_1198485953', 'JN1lemi_1332316590', 'JN1juzi_93502883', 'JU43P3CXIS02', 'KV3GvkvH_n21433792', 'GY8KY7900526', 'JN1naisi_1949161659', 'A0401mm6753296', 'JN1wxia_1797551279', 'KV3GvkjU_sb9420442', 'JN1naisi_261447625', 'NE2NE2AGINLX6659612', 'MY4pa_46466243T52', 'KV3GvkjG_mm36443584', 'GY8gy7872800', 'GY8KY7828524', 'KV3GvktK_yi185965', 'KV3Gvkrz_sh27781560', 'JN1cuican_2041875636', 'JN1lieqi_2060100358', 'KV3GvkvH_hj227903', 'JN1wy_1829876533', 'JN1rum_1816471282', 'KV3Gvkug_201443305', 'NN99BDZ_1455548366', 'DY7dy7g2pgg2lhm888', 'DY7dy7g2pgg2a1518415903', 'KV3GvkjS_wl9556889', 'KV3Gvkrz_gy497444', 'DJ0djnYU0812', 'A0201cjndog666', 'KV3GvkvH_bb1625427', 'JN1007_1983748155', 'KV3GvkvF_kk544062', 'KV3Gvkry_xh481920', 'JN1xbt_730280896', 'JN1tyi_1924903678', 'JN1xai_665406843', 'KV3GvkjU_ly8065003', 'JN1cs_373589100', 'FJ8wxg0000nyse', 'A6802agvvj134117', 'JN1chunx_543522290', 'KV3GvkjP_W11801444', 'JN1sequ_1523727460', 'JN1zhenz_801867302', 'A6802j9vws135231', 'JN1cshuang_1735982308', 'LJ9msl_106815114', 'JN1xinxin_1364722490', 'KV3GvkvF_cs54772', 'JN1xai_944734522', 'A0201ckf999e23f5', 'KV3GvkvH_aa33925', 'JN1xcao_972877675', 'KV3GvkjG_3211222155', 'KV3GvkjP_Va13147681', 'KV3GvkjP_hu13312290', 'JN1wenc_2030287252', 'JN1yeyan_2045885962', 'JN1aaii_909121899', 'FA7df53298139', 'DN7xuan90', 'JN1aaii_839309623', 'KV3GvkjG_yy9306523', 'BU7p02waihha123', 'MG1ag6f053283062', 'JN1rum_392120327', 'LV3lx_3192276', 'JN1xigua_1911205733', 'KV3Gvkrz_ly8593555', 'KV3Gvkry_qq16718872', 'HV9m1ergh34636', 'KV3GvktK_Ll3202565', 'CY5ybjj22n3ln', 'KV3GvkvH_yz1369469', 'JN1zhenz_337951630', 'JN1dayu_464667693', 'HX71_co18613843625', 'KV3GvkuI_zo7008452', 'JN1shaonv_937649781', 'JN1yexia_620815312', 'KV3GvkjQ_wz3919753', 'JN1jj_1726739493', 'KV3Gvkrz_lh24774419', 'JN1md_1085998290', 'KV3Gvkry_le1191423', 'A5802agyu7l7khn3', 'JN1lemi_435448547', 'LV3hw_3258103', 'KV3Gvkry_LT21960664', 'A5802j9lj678', 'JO5TSLA0319772049', 'MQ2svgr4490560', 'JN1wuyou_898573847', 'JN1xihu_1176811565', 'KV3GvkuH_186461092', 'KV3GvkjG_sm23723162', 'JN1meiy_2077028840', 'EW3y89bdgball611394', 'A0102ggpj6767', 'JN1bibi_936747011', 'N23player79116792', 'KV3GvkvF_qa157625', 'JN1qcao_1227180120', 'KV3GvkvF_lh785570', 'JN1yaoji_735549999', 'JN1sejie_2081752232', 'KV3GvkjG_tz34418255', 'JN1yanse_1638488521', 'MD5hgty_zq8zhangqiqi', 'JN1lfeng_1724562054')
+),
+events AS (
+    SELECT
+        t.user_id,
+        u.user_name,
+        u.control_user_group,
+        t.event_timestamp,
+        t.bet,
+        t.payout,
+        t.profit
+    FROM public.bullet AS t
+    INNER JOIN user_map AS u ON t.user_id = u.user_id
+    WHERE t.op_code NOT IN ('B26', 'TST', 'TSB', 'TSO')
+      AND t.currency_type IN ('CNY')
+      AND t.event_timestamp > '2025-01-01'
+),
+ordered AS (
+    SELECT
+        user_id,
+        user_name,
+        control_user_group,
+        event_timestamp,
+        bet,
+        payout,
+        profit,
+        DATEDIFF(
+            microsecond,
+            LAG(event_timestamp) OVER (PARTITION BY user_id ORDER BY event_timestamp),
+            event_timestamp
+        ) / 1000000.0 AS gap_s
+    FROM events
+),
+base AS (
+    SELECT
+        user_id,
+        user_name,
+        control_user_group,
+        COUNT(*) AS n_orders,
+        SUM(bet) AS total_bet,
+        SUM(payout) AS total_payout,
+        SUM(profit) AS total_profit,
+        MIN(event_timestamp) AS first_event_ts,
+        MAX(event_timestamp) AS last_event_ts,
+        AVG(CASE WHEN gap_s >= 0 AND gap_s <= 1800 THEN gap_s END) AS avg_bet_interval_s,
+        1 + COALESCE(SUM(CASE WHEN gap_s > 1800 THEN 1 ELSE 0 END), 0) AS n_bet_sessions
+    FROM ordered
+    GROUP BY 1, 2, 3
+),
+med AS (
+    SELECT
+        user_id,
+        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY gap_s) AS median_bet_interval_s
+    FROM ordered
+    WHERE gap_s >= 0 AND gap_s <= 1800
+    GROUP BY user_id
+)
+SELECT
+    b.user_id,
+    b.user_name,
+    b.control_user_group,
+    b.n_orders,
+    b.total_bet,
+    b.total_payout,
+    b.total_profit,
+    b.first_event_ts,
+    b.last_event_ts,
+    b.avg_bet_interval_s,
+    m.median_bet_interval_s,
+    b.n_bet_sessions
+FROM base AS b
+LEFT JOIN med AS m ON b.user_id = m.user_id
