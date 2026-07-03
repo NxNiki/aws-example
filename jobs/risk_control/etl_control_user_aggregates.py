@@ -1,7 +1,7 @@
 """
 One-shot ETL: build random control-user groups and aggregate their
 ``public.bullet`` events server-side in Redshift (same aggregate contract as
-``etl_get_risk_user_stats.py`` — see ``aggregate_queries.py``).
+``etl_risk_user_aggregates.py`` — see ``aggregate_queries.py``).
 
 Behavior:
 1) Read ``control_users.json``.

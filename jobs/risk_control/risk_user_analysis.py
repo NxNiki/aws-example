@@ -1,8 +1,8 @@
 """
 Risk vs control analysis from ETL aggregate outputs.
 
-Loads the per-user aggregate datasets written by ``etl_get_risk_user_stats.py``
-and ``etl_get_control_user_stats.py`` (``user_summary`` + ``category_counts``,
+Loads the per-user aggregate datasets written by ``etl_risk_user_aggregates.py``
+and ``etl_control_user_aggregates.py`` (``user_summary`` + ``category_counts``,
 partitioned by group — see ``aggregate_queries.py`` for the schema), then
 writes one interactive HTML (dual charts) and one Markdown summary under
 ``<repo_parent>/data_fishhunter``. Raw bullet events never leave Redshift.

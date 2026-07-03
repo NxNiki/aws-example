@@ -92,10 +92,10 @@ def test_risk_control_aggregate_snapshot(case: str) -> None:
     """
     side, dataset = case.split("_", 1)
     if side == "risk":
-        module = _load_job_module("jobs/risk_control/etl_get_risk_user_stats.py")
+        module = _load_job_module("jobs/risk_control/etl_risk_user_aggregates.py")
         rows = module._load_risk_user_groups()
     else:
-        module = _load_job_module("jobs/risk_control/etl_get_control_user_stats.py")
+        module = _load_job_module("jobs/risk_control/etl_control_user_aggregates.py")
         payload = module._load_control_payload()
         rows = [(name, group) for group in ("group1", "group2") for name in payload[group]]
     builder = module.build_user_summary_query if dataset == "user_summary" else module.build_category_counts_query
