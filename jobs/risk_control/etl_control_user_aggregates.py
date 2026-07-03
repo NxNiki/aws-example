@@ -41,7 +41,9 @@ CONTROL_USERS_JSON = Path(__file__).with_name("control_users.json")
 RISK_USERS_JSON = Path(__file__).with_name("risk_users.json")
 GROUP_SIZE = 100
 
-EVENT_START = "2026-04-01"
+# Full history: control users are randomly sampled from the whole user base,
+# so a short window leaves almost none of them active (14/200 in 3 months).
+EVENT_START = "2025-01-01"
 GROUP_COL = "control_user_group"
 
 
