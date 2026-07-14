@@ -189,8 +189,6 @@ def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input-root", required=True, help="s3://... root of bullet parquet (year=/month=/day=)")
     parser.add_argument("--output-root", required=True, help="s3://... root for all outputs")
-    parser.add_argument("--scan-start", required=True, help="first day of raw data to scan, YYYY-MM-DD")
-    parser.add_argument("--scan-end", required=True, help="last day of raw data to scan (inclusive), YYYY-MM-DD")
     parser.add_argument("--output-start", required=True, help="keep rows with bet_date >= this, YYYY-MM-DD")
     parser.add_argument("--output-end", required=True, help="keep rows with bet_date < this, YYYY-MM-DD")
     parser.add_argument("--game-id", default="FM01")
@@ -198,31 +196,25 @@ def parse_args():
     return parser.parse_args()
 
 
-def month_jobs(scan_start, scan_end, output_start, output_end):
-    """Split the scan range into per-month jobs of (label, scan window, output window).
+def month_jobs(output_start, output_end):
+    """Split [output_start, output_end) into per-month jobs of (label, scan window, output window).
 
     Sessions are dated by their FIRST bet, so a session crossing midnight is
     attributed entirely to the day it started. To keep that invariant at month
-    boundaries, each month's scan window extends one day before the month
-    (so an after-midnight fragment on the 1st is recognized as a continuation
-    of a session started the previous day, not a new day-1 session) and one
-    day after (so the last day's sessions run to completion). The output
-    window then keeps only bet_dates inside the month itself, making each
-    user-day the responsibility of exactly one month job.
-
-    Months whose output window is empty (outside [output_start, output_end))
-    are skipped entirely.
+    boundaries, each month's scan window extends one day before its first
+    output day (so an after-midnight fragment is recognized as a continuation
+    of a session started the previous day, not a new session) and one day
+    after its last (so the last day's sessions run to completion). The output
+    window keeps only bet_dates inside the month itself, making each user-day
+    the responsibility of exactly one month job.
     """
     jobs = []
-    cur = date(scan_start.year, scan_start.month, 1)
-    while cur <= scan_end:
+    cur = date(output_start.year, output_start.month, 1)
+    while cur < output_end:
         nxt = date(cur.year + cur.month // 12, cur.month % 12 + 1, 1)
         out_lo = max(cur, output_start)
         out_hi = min(nxt, output_end)
-        if out_lo < out_hi:
-            scan_lo = max(cur - timedelta(days=1), scan_start)
-            scan_hi = min(nxt, scan_end)
-            jobs.append((cur.strftime("%Y-%m"), scan_lo, scan_hi, out_lo, out_hi))
+        jobs.append((cur.strftime("%Y-%m"), out_lo - timedelta(days=1), out_hi, out_lo, out_hi))
         cur = nxt
     return jobs
 
@@ -239,8 +231,6 @@ def show_summary(df, label):
 
 def main():
     args = parse_args()
-    scan_start = date.fromisoformat(args.scan_start)
-    scan_end = date.fromisoformat(args.scan_end)
 
     spark = (
         SparkSession.builder.appName("FM01_lifecycle_feature_engineering")  # type: ignore[attr-defined]
@@ -261,7 +251,7 @@ def main():
     output_start = date.fromisoformat(args.output_start)
     output_end = date.fromisoformat(args.output_end)
 
-    for label, scan_lo, scan_hi, out_lo, out_hi in month_jobs(scan_start, scan_end, output_start, output_end):
+    for label, scan_lo, scan_hi, out_lo, out_hi in month_jobs(output_start, output_end):
         raw = bullet.filter(partition_date.between(F.to_date(F.lit(str(scan_lo))), F.to_date(F.lit(str(scan_hi)))))
         if raw.limit(1).count() == 0:
             print("no data, skip:", label)

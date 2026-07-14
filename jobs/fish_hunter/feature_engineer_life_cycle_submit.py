@@ -14,8 +14,8 @@ from bituslabs_ds.config import LOCAL_ROOT, REGION, S3_BUCKET, SAGEMAKER_ROLE
 INPUT_ROOT = "s3://oceanhunter-production-data-warehouse/transformed_data/cold_data/bullet"
 OUTPUT_ROOT = f"s3://{S3_BUCKET}/etl-results/lifecycle_feature_engineering/fm01_cny"
 
-SCAN_START = "2025-05-01"  # first day of raw data to scan
-SCAN_END = "2026-06-10"  # last day of raw data to scan (inclusive)
+# The job derives the raw-data scan range from this window (one extra day on
+# each side to keep sessions crossing midnight whole).
 OUTPUT_START = "2025-05-01"  # keep rows with bet_date >= this
 OUTPUT_END = "2026-06-01"  # keep rows with bet_date < this
 
@@ -43,10 +43,6 @@ processor.run(
         INPUT_ROOT,
         "--output-root",
         OUTPUT_ROOT,
-        "--scan-start",
-        SCAN_START,
-        "--scan-end",
-        SCAN_END,
         "--output-start",
         OUTPUT_START,
         "--output-end",
