@@ -9,14 +9,17 @@ CSV exports under ``csv/``.
 
 Behavior: reads bullet order parquet directly from S3 (partition-pruned
 by year=/month=/day=; no local download), sessionizes bets (180s gap),
-aggregates to user-day month by month, dedups the month-boundary scan
-overlap, then derives history/trend features with per-user windows.
+and aggregates to user-day month by month. A session is dated by its
+FIRST bet, so play crossing midnight stays on the day it started; each
+month scans one day beyond both edges to keep that invariant at month
+boundaries. History/trend features are then derived with per-user
+windows over the combined table.
 Runs standalone on the SageMaker Spark container — no bituslabs_ds
 imports. Submit with feature_engineer_life_cycle_submit.py.
 """
 
 import argparse
-from datetime import date
+from datetime import date, timedelta
 
 from pyspark.sql import SparkSession, functions as F
 from pyspark.sql.window import Window
@@ -195,19 +198,31 @@ def parse_args():
     return parser.parse_args()
 
 
-def month_jobs(scan_start, scan_end):
-    """Split [scan_start, scan_end] into per-month scan windows.
+def month_jobs(scan_start, scan_end, output_start, output_end):
+    """Split the scan range into per-month jobs of (label, scan window, output window).
 
-    Each window deliberately extends one day into the next month
-    (inclusive end = next month's 1st) so sessions running past the last
-    midnight are complete; the duplicated boundary user-days this creates
-    are removed later by the native-month dedup.
+    Sessions are dated by their FIRST bet, so a session crossing midnight is
+    attributed entirely to the day it started. To keep that invariant at month
+    boundaries, each month's scan window extends one day before the month
+    (so an after-midnight fragment on the 1st is recognized as a continuation
+    of a session started the previous day, not a new day-1 session) and one
+    day after (so the last day's sessions run to completion). The output
+    window then keeps only bet_dates inside the month itself, making each
+    user-day the responsibility of exactly one month job.
+
+    Months whose output window is empty (outside [output_start, output_end))
+    are skipped entirely.
     """
     jobs = []
     cur = date(scan_start.year, scan_start.month, 1)
     while cur <= scan_end:
         nxt = date(cur.year + cur.month // 12, cur.month % 12 + 1, 1)
-        jobs.append((cur.strftime("%Y-%m"), max(cur, scan_start), min(nxt, scan_end)))
+        out_lo = max(cur, output_start)
+        out_hi = min(nxt, output_end)
+        if out_lo < out_hi:
+            scan_lo = max(cur - timedelta(days=1), scan_start)
+            scan_hi = min(nxt, scan_end)
+            jobs.append((cur.strftime("%Y-%m"), scan_lo, scan_hi, out_lo, out_hi))
         cur = nxt
     return jobs
 
@@ -228,7 +243,7 @@ def main():
     scan_end = date.fromisoformat(args.scan_end)
 
     spark = (
-        SparkSession.builder.appName("FM01_lifecycle_feature_engineering")
+        SparkSession.builder.appName("FM01_lifecycle_feature_engineering")  # type: ignore[attr-defined]
         .config("spark.sql.session.timeZone", "UTC")
         .config("spark.sql.adaptive.enabled", "true")
         .getOrCreate()
@@ -243,18 +258,19 @@ def main():
     bullet = spark.read.parquet(args.input_root)
     partition_date = F.make_date("year", "month", "day")
 
-    for label, month_start, month_end in month_jobs(scan_start, scan_end):
-        raw = bullet.filter(
-            partition_date.between(F.to_date(F.lit(str(month_start))), F.to_date(F.lit(str(month_end))))
-        )
+    output_start = date.fromisoformat(args.output_start)
+    output_end = date.fromisoformat(args.output_end)
+
+    for label, scan_lo, scan_hi, out_lo, out_hi in month_jobs(scan_start, scan_end, output_start, output_end):
+        raw = bullet.filter(partition_date.between(F.to_date(F.lit(str(scan_lo))), F.to_date(F.lit(str(scan_hi)))))
         if raw.limit(1).count() == 0:
             print("no data, skip:", label)
             continue
         raw.createOrReplaceTempView("bullet_raw")
         df = spark.sql(
             USER_DAY_BASE_SQL.format(
-                output_start=args.output_start,
-                output_end=args.output_end,
+                output_start=str(out_lo),
+                output_end=str(out_hi),
                 game_id=args.game_id,
                 currency=args.currency,
             )
@@ -264,8 +280,9 @@ def main():
         show_summary(spark.read.parquet(out), f"saved {out}")
 
     # ---- stage 2: cross-month dedup ----------------------------------------
-    # A user-day scanned in two adjacent month windows keeps the row from its
-    # own month's window (the complete one); ties broken by activity volume.
+    # Safety net: month jobs emit disjoint bet_date windows, so duplicates only
+    # appear after partial re-runs with different scan/output arguments. Keeps
+    # the row from its own month's window; ties broken by activity volume.
     base_all = spark.read.parquet(base_root)
     w = Window.partitionBy("user_id", "bet_date").orderBy(
         (F.col("month") == F.date_format("bet_date", "yyyy-MM")).cast("int").desc(),

@@ -6,7 +6,7 @@ bucket; all outputs are written to S3 under OUTPUT_ROOT.
 """
 
 import boto3
-import sagemaker
+from sagemaker.session import Session
 from sagemaker.spark.processing import PySparkProcessor
 
 from bituslabs_ds.config import LOCAL_ROOT, REGION, S3_BUCKET, SAGEMAKER_ROLE
@@ -33,7 +33,7 @@ processor = PySparkProcessor(
     instance_type=INSTANCE_TYPE,
     instance_count=INSTANCE_COUNT,
     max_runtime_in_seconds=6 * 60 * 60,
-    sagemaker_session=sagemaker.Session(boto3.Session(region_name=REGION)),
+    sagemaker_session=Session(boto3.Session(region_name=REGION)),
 )
 
 processor.run(
