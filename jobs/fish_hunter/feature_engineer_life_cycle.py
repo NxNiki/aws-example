@@ -266,7 +266,8 @@ def main():
             )
         )
         out = f"{base_root}/month={label}"
-        df.repartition(64).write.mode("overwrite").parquet(out)
+        # a month of user-day aggregates is small (<150k rows) -- one file each
+        df.repartition(1).write.mode("overwrite").parquet(out)
         show_summary(spark.read.parquet(out), f"saved {out}")
 
     # ---- stage 2: cross-month dedup ----------------------------------------
@@ -280,7 +281,7 @@ def main():
         F.col("bet_amount_today").desc(),
     )
     base_dedup = base_all.withColumn("rn", F.row_number().over(w)).filter(F.col("rn") == 1).drop("rn")
-    base_dedup.repartition(128).write.mode("overwrite").parquet(dedup_root)
+    base_dedup.repartition("month").write.partitionBy("month").mode("overwrite").parquet(dedup_root)
 
     base = spark.read.parquet(dedup_root)
     show_summary(base, f"saved {dedup_root}")
@@ -389,7 +390,9 @@ def main():
         )
     )
 
-    selected_features.repartition(128).write.mode("overwrite").parquet(feature_root)
+    selected_features = selected_features.withColumn("month", F.date_format("bet_date", "yyyy-MM"))
+    # repartition by month => exactly one parquet file per month=* directory
+    selected_features.repartition("month").write.partitionBy("month").mode("overwrite").parquet(feature_root)
     show_summary(spark.read.parquet(feature_root), f"saved {feature_root}")
 
     # ---- stage 4: single-file CSV exports -----------------------------------

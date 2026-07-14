@@ -19,8 +19,11 @@ OUTPUT_ROOT = f"s3://{S3_BUCKET}/etl-results/lifecycle_feature_engineering/fm01_
 OUTPUT_START = "2025-05-01"  # keep rows with bet_date >= this
 OUTPUT_END = "2026-06-01"  # keep rows with bet_date < this
 
-INSTANCE_TYPE = "ml.m5.2xlarge"  # 8 vCPU, 32 GB memory per node
+INSTANCE_TYPE = "ml.m5.4xlarge"  # 16 vCPU, 64 GB memory per node
 INSTANCE_COUNT = 3
+# Shuffle spill from the sessionization windows lands on local disk; the
+# SageMaker default of 30 GB per node is far too small for the larger months.
+VOLUME_SIZE_GB = 300
 
 # True blocks and streams the job logs (per-month summaries) to this terminal;
 # False submits and returns -- watch the job in SageMaker console -> Processing jobs.
@@ -32,6 +35,7 @@ processor = PySparkProcessor(
     role=SAGEMAKER_ROLE,
     instance_type=INSTANCE_TYPE,
     instance_count=INSTANCE_COUNT,
+    volume_size_in_gb=VOLUME_SIZE_GB,
     max_runtime_in_seconds=6 * 60 * 60,
     sagemaker_session=Session(boto3.Session(region_name=REGION)),
 )
