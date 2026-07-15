@@ -7,31 +7,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-14
+
+Major release. The legacy Dash dashboard is replaced by a FastAPI `dashboard_api`
+service + a React/TypeScript SPA, alongside new metrics, two new game pipelines,
+and the SS03 clustering / AB-test workflow.
+
 ### Added
 
+- **New dashboard: `dashboard_api` (FastAPI) + React/TypeScript SPA (`frontend/`).**
+  Replaces the Dash `game_stats_monitor`. Tabs: Stats-by-Date, Stats-by-Group,
+  Deep Dive, Summary Table, and Report; plus a group-distribution endpoint and an
+  OpenAPI-generated typed frontend client (`scripts/gen_openapi_client.sh`).
+  Deployed to ECS Fargate via `infra/dashboard_api/`.
+- **Dashboard configs served from S3 at runtime.** `dashboard_api` reads
+  `dashboard_config-*.yaml` from an `s3://` `config_dir` (default
+  `s3://<bucket>/dashboard-configs`) with a short TTL cache, so adding a config is
+  an S3 upload — no image rebuild/redeploy. Added `read_yaml_from_s3` and
+  `uri_basename` to `s3_utils`.
+- **Summary Table tab** (dedicated Stat column, per-metric red→green colormap for
+  ±%) with Confluence HTML export; Report-tab figure reordering and
+  summary-above-figures.
+- **Retention metrics day-5/7/10/15/30** (and `dayN_num_users`) in `DataMetrics`,
+  exposed in dashboard configs + agent metadata.
+- **numpy-only Welch t-test and one-way ANOVA** for group comparisons.
+- **SS06 (pocket_soccer)** ETL pipeline + dashboard config.
+- **risk_control user-aggregate ETLs** (`etl_{risk,control}_user_aggregates`,
+  aggregated in Redshift), a `get_ip_locations` ip-api `/batch` helper, and
+  anomaly-flagged user-id groups (group4/5) in `risk_users.json`.
+- **Apply a pretrained KMeans model to new cohorts from S3 (no retraining).**
+  `ClusterAnalysisPipeline` gains `pretrained_model_dir`,
+  `ensure_pretrained_artifacts()` (fetch model + `feature_order.json` +
+  `clip_bounds.json` from a prior S3 run into the current run) and
+  `save_apply_run_info()`; apply-only groups (`default`/`ab_test_a`/`ab_test_b`) in
+  the SS03 cluster config; run_id-keyed S3 upload so groups sharing a `--run-id`
+  land in one folder.
+- **SS03 user daily stats ETL** (`etl_user_daily_stats.py`): per
+  `(user_id, session_start_date, cluster)` rows with a dominant `ab_group` label
+  and nominal `"cluster N"` labels; feeds the "SS03 Cluster & AB Test" dashboard.
+- **SS03 AB-test feature-engineering groups** (`ab_test_a` / `ab_test_b`) with
+  per-group `date_start`.
+- **fish_hunter FTUE report** enhancements: per-bin bet-behavior time series with
+  95% CI bands, per-active-user means / raw totals / grouped metrics, bet
+  increase/decrease counts and ratios, a strategy-comparison section, and a
+  bet-behavior markdown export.
+- **fish_hunter SQL query snapshots** in `tests/unit/etl_snapshots/` with a
+  self-verifying `tests/unit/test_etl_sql_snapshots.py` (regenerate via
+  `REGENERATE_SNAPSHOTS=1`).
 - **Feature engineering feature reference** in `docs/feature_engineering.md`:
   feature dictionary for the SS01/SS02/SS03 bet-segmentation pipeline
   (`src/bituslabs_ds/features/`) covering the pipeline key steps, the common
   `features_enriched` / `features_grouped_binsize_{N}` columns, per-game
   configuration differences, and a placeholder section for future
   game-specific features.
-- **fish_hunter daily/weekly/monthly SQL query snapshots** in
-  `tests/unit/etl_snapshots/fish_hunter_{daily,weekly,monthly}.sql` (rendered
-  `etl_game_stats_daily_by_user.generate_query`, the dashboard fish_hunter feed),
-  with a self-verifying `tests/unit/test_etl_sql_snapshots.py` that fails on SQL
-  drift (regenerate via `REGENERATE_SNAPSHOTS=1`).
+
+### Changed
+
+- **`ml` lazily imports matplotlib/seaborn/skl2onnx** so the module imports with
+  just the `ml` dependency group (no viz/onnx stack needed for
+  clustering/prediction).
+- **`load_raw_data` no longer bakes `row_filters` into the local cache** — filters
+  are applied at read time by `load_cluster_data`/`load_attach_data`, so changing a
+  filter no longer needs a manual cache bust (only a source-data change needs
+  `reload`).
+- **risk_control stats are aggregated in Redshift** instead of pulling raw bullet
+  events; the control ETL uses full history (short random windows sampled mostly
+  inactive users).
+- **`dashboard_api` ECS deploy is a steady-state deployer** (one-time cutover
+  logic removed).
+- Frontend polish: per-tab granularity/date/cohort controls, incremental
+  per-panel loading with request cancellation, number precision/formatting, and
+  chart sizing.
 
 ### Fixed
 
-- **fish_hunter daily/weekly/monthly user stats only counted fish-killers.** The
-  `stats_by_user_date` CTE in `etl_game_stats_daily_by_user.py` had a
-  `HAVING MAX(b.killed) > 0`, dropping every user-day where the user bet but
-  never killed a fish. Downstream dashboard metrics that count distinct users
-  (`day0_num_users`, retention, `num_active_users`, kill ratios, RTP) were
-  therefore computed over killers only and undercounted/skewed. Removed the
-  filter so all betting users are emitted; kill-specific metrics still degrade
-  to NULL/0 for non-killers, and `user_killed_fish` can segment killers when
-  needed. Re-run with `--overwrite` to backfill corrected history.
+- **fish_hunter daily/weekly/monthly user stats only counted fish-killers**
+  (`HAVING MAX(b.killed) > 0` in `stats_by_user_date`), skewing distinct-user
+  metrics (retention, `num_active_users`, RTP). All betting users are now emitted;
+  re-run with `--overwrite` to backfill.
+- **SS03 `AB_TEST_A` / `AB_TEST_B` partition_ab ids were swapped**, so the ETL
+  labeled the cohorts inversely; ids corrected and historical datasets relabeled
+  with `--overwrite`.
+- **`dashboard_api` memory / caching**: single-flight window cache shared across
+  Stats-by-Group / Deep Dive, batched bootstrap-CI resampling, and 8 GB / 1 vCPU /
+  single-worker task sizing to stop OOMs; the window cache no longer served the
+  wrong game's data across config switches.
+- **Any-group retention** read the cohort slice instead of the full population.
+- **Deep-dive log axes** broke on non-positive values.
+- Frontend: `crypto.randomUUID` crash on HTTP; chat sent on IME-composition Enter;
+  tooltip CI bounds; assorted display fixes.
+- Infra: associate target groups with the ALB before ECS attach; unblock the
+  `dashboard_api` image build.
+
+### Removed
+
+- **Legacy Dash dashboard decommissioned:** `src/dashboards/game_stats_monitor.py`,
+  `weekly_report.py`, `report_agent/`, and the old `infra/dashboard/` deploy —
+  superseded by `dashboard_api` + `frontend/`.
+- `jobs/risk_control/etl_get_risk_user_stats.py` (replaced by the aggregate ETLs).
 
 ## [0.4.0] - 2026-06-17
 
