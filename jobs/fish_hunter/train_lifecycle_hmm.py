@@ -3,7 +3,8 @@
 ETL job: retrains the lifecycle churn model (Low/Engaged/Lapsed + absorbing
 STOP) on the ``selected_hmm_features_fm01_cny`` CSV produced by
 feature_engineer_life_cycle.py, and uploads the two artifacts to S3 under
-``<features-root>/hmm/<run-date>/``:
+``<output-root>/<run-timestamp>/`` (default
+``s3://bituslabs-team-ai/fishunter_life_cycle/hmm/YYYY-MM-DD_HH-MM-SS/``):
 ``selected_hmm_features_fm01_cny_iohmm_labels.csv`` (per user-bet-day: stage,
 p_stop, risk tier) and ``..._iohmm_model.json`` (deployable artifact for
 io_hmm_infer-style online scoring).
@@ -17,7 +18,7 @@ Run: poetry run python jobs/fish_hunter/train_lifecycle_hmm.py [--max-users N]
 """
 
 import argparse
-from datetime import date
+from datetime import datetime
 from pathlib import Path
 
 import boto3
@@ -27,12 +28,14 @@ from bituslabs_ds.models.hmm_player_states.io_hmm import fit_iohmm
 from bituslabs_ds.s3_utils import list_s3_files, parse_s3_path, upload_file_to_s3
 
 FEATURES_ROOT = f"s3://{S3_BUCKET}/etl-results/lifecycle_feature_engineering/fm01_cny"
+OUTPUT_ROOT = f"s3://{S3_BUCKET}/fishunter_life_cycle/hmm"
 CSV_NAME = "selected_hmm_features_fm01_cny"
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--features-root", default=FEATURES_ROOT, help="s3://... root of the feature outputs")
+    parser.add_argument("--output-root", default=OUTPUT_ROOT, help="s3://... root for model/label artifacts")
     parser.add_argument("--work-dir", default="jobs/output_fish_hunter/lifecycle_hmm", help="local working directory")
     parser.add_argument("--n-behavior", type=int, default=3)
     parser.add_argument("--max-users", type=int, default=None, help="subsample for a smoke run (no artifacts written)")
@@ -63,8 +66,8 @@ def main():
         print("smoke run only -- artifacts not uploaded")
         return
 
-    bucket, root_prefix = parse_s3_path(args.features_root)
-    run_prefix = f"{root_prefix}/hmm/{date.today().isoformat()}"
+    bucket, root_prefix = parse_s3_path(args.output_root)
+    run_prefix = f"{root_prefix}/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
     for suffix in ["_iohmm_labels.csv", "_iohmm_model.json"]:
         local = csv_path.with_name(csv_path.stem + suffix)
         uri = upload_file_to_s3(local, bucket, f"{run_prefix}/{local.name}")
