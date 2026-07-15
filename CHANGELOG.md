@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Feature engineering feature reference** in `docs/feature_engineering.md`:
+  feature dictionary for the SS01/SS02/SS03 bet-segmentation pipeline
+  (`src/bituslabs_ds/features/`) covering the pipeline key steps, the common
+  `features_enriched` / `features_grouped_binsize_{N}` columns, per-game
+  configuration differences, and a placeholder section for future
+  game-specific features.
 - **fish_hunter daily/weekly/monthly SQL query snapshots** in
   `tests/unit/etl_snapshots/fish_hunter_{daily,weekly,monthly}.sql` (rendered
   `etl_game_stats_daily_by_user.generate_query`, the dashboard fish_hunter feed),
