@@ -515,6 +515,14 @@ class ClusterAnalysisPipeline:
             save_local_cache(cast(pd.DataFrame, data), local_cache_path)
 
         data = apply_row_filters(cast(pd.DataFrame, data), row_filters)
+        # Drop rows where these columns are NaN, BEFORE the runner's fillna(0): for
+        # datasets where NaN means "undefined" (e.g. history features on a user's
+        # first bet-day), filling zeros would invent rows the model should not see.
+        dropna_columns = self._data_loader["cluster_data"].get("dropna_columns")
+        if dropna_columns:
+            before = len(data)
+            data = data.dropna(subset=dropna_columns)
+            logger.info(f"dropna_columns {dropna_columns}: dropped {before - len(data)} of {before} rows")
         return cast(pd.DataFrame, data)
 
     def preprocess_data(self, data: pd.DataFrame) -> pd.DataFrame:
