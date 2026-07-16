@@ -523,6 +523,19 @@ class ClusterAnalysisPipeline:
             before = len(data)
             data = data.dropna(subset=dropna_columns)
             logger.info(f"dropna_columns {dropna_columns}: dropped {before - len(data)} of {before} rows")
+        # Fixed log1p at load time, for features whose producing codebase defines
+        # them on a log1p scale (e.g. the HMM's LOG1P_FEATURES). Unlike the
+        # pipeline's PowerTransformer this is not fitted, so the same transform
+        # is guaranteed at train and apply time. Downstream consumers see these
+        # columns already transformed.
+        log1p_columns = self._data_loader["cluster_data"].get("log1p_columns")
+        if log1p_columns:
+            if (data[log1p_columns] < 0).any().any():
+                bad = [c for c in log1p_columns if (data[c] < 0).any()]
+                raise ValueError(f"log1p_columns contain negative values: {bad}")
+            data = data.copy()
+            data[log1p_columns] = np.log1p(data[log1p_columns])
+            logger.info(f"applied log1p to {log1p_columns}")
         return cast(pd.DataFrame, data)
 
     def preprocess_data(self, data: pd.DataFrame) -> pd.DataFrame:

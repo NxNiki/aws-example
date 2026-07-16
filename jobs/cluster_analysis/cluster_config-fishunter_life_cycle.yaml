@@ -34,6 +34,13 @@ data_loader:
       - "loss_streak_ratio_today"
       - "current_balance_max_to_avg_bet_ratio"
       - "target_selection_entropy"
+    # Same transform the HMM codebase applies to these three heavy-tailed
+    # features (churn_helpers.LOG1P_FEATURES): fixed log1p, then only
+    # standardization -- no fitted PowerTransformer on top.
+    log1p_columns:
+      - "bet_amount_ratio_today_vs_history"
+      - "rtp_7_bet_days"
+      - "current_balance_max_to_avg_bet_ratio"
 
     data_types:
       # NOT "category": the cache writer pins the first file's schema, and a small
@@ -89,13 +96,13 @@ features:
     - "user_id"
     - "bet_date"
 
-  skewed_features:  # heavy-tailed -> power transformed (the HMM log1p's the first three; streak is also long-tailed)
+  skewed_features:  # power transform only where necessary: the HMM leaves this raw, but kmeans can't take the tail
     - "no_bet_streak_days"
+
+  normal_features:  # already log-scaled (natively or via log1p_columns) or bounded [0, 1]
     - "bet_amount_ratio_today_vs_history"
     - "rtp_7_bet_days"
     - "current_balance_max_to_avg_bet_ratio"
-
-  normal_features:  # already log-scaled or bounded [0, 1]
     - "avg_bet_one_time_today_log"
     - "loss_streak_ratio_today"
     - "target_selection_entropy"
