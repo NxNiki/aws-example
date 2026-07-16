@@ -1,0 +1,215 @@
+# FM01 (fish_hunter) per-user-day cluster analysis -- the slot-machine (ss03)
+# style kmeans on fish_hunter, over the daily grouped features produced by
+# jobs/fish_hunter/feature_engineer_daily.py:
+#   s3://bituslabs-team-ai/etl-results/jobs/output_fishunter_feature_engineer/features_user_daily/
+# One row per (user_id, bet_date); bet_date is the session-start date (180s
+# session break, same daily grain as the lifecycle HMM features).
+#
+# Run:
+#   poetry run python jobs/cluster_analysis/cluster_analysis_pipeline.py \
+#     --config_file jobs/cluster_analysis/cluster_config-fishunter_daily.yaml \
+#     --run-id $(date +%F_%H-%M-%S)
+# Results upload to s3://bituslabs-team-ai/fishunter_cluster_analysis/<run-id>/
+
+project_name: "fishunter_daily"
+work_dir: "output_fish_hunter/daily_kmeans"  # local cache + per-run output folders
+s3_prefix: ""
+
+data_loader:
+  cluster_data:
+    bucket: "bituslabs-team-ai"
+    prefix: "etl-results/jobs/output_fishunter_feature_engineer/features_user_daily/"
+    pattern: '\.parquet$'
+    outlier_threshold: 0
+    clip_threshold: [.025, .975]
+    local_cache: "fishunter_daily_features.parquet"
+
+    data_types:
+      # NOT "category" for user_id: int16 category codes from a small first
+      # month overflow in the incremental cache writer (see fishunter_life_cycle config).
+      user_id: "int64"
+      bet_rounds: "int64"
+
+  attach_data:  # same daily table; labels re-attach onto user-day rows
+    bucket: "bituslabs-team-ai"
+    prefix: "etl-results/jobs/output_fishunter_feature_engineer/features_user_daily/"
+    pattern: '\.parquet$'
+    bin_size: 1  # the grain is one row per (user_id, bet_date)
+    local_cache: "fishunter_daily_features_attach.parquet"
+
+    columns_to_read:
+      - "user_id"
+      - "bet_date"
+      - "bet_rounds"
+      - "min_created_at"
+      - "max_created_at"
+      - "bet_amount_avg"
+      - "bet_amount_median"
+      - "delta_t_seconds_nogap_median"
+      - "rtp_mean"
+      - "payout_rate"
+      - "profit_avg"
+      - "profit_rate"
+      - "accum_neg_profit"
+      - "balance_after_bet_median"
+      - "num_deposit"
+      - "accum_deposit"
+      - "lose_streak_max"
+      - "win_streak_max"
+      - "kill_rate"
+      - "low_ratio"
+      - "medium_ratio"
+      - "high_ratio"
+      - "ultra_ratio"
+
+    cluster_stats_columns: ["user_id", "min_created_at", "balance_after_bet_median", "bet_amount_avg"]
+
+  merge_on: ["user_id", "bet_date"]
+
+output:
+  bucket: "bituslabs-team-ai"
+  prefix: "fishunter_cluster_analysis"  # uploads land at <prefix>/<run-id>/...
+  onnx:
+    opset_version: 19
+
+features:
+  key_features:
+    - "user_id"
+    - "bet_date"
+
+  skewed_features:  # power-transformed (mirrors the ss03 selection)
+    - "rtp_mean"
+    - "rtp_min"
+    - "rtp_max"
+    - "rtp_p25"
+    - "rtp_median"
+    - "rtp_p75"
+    - "bet_amount_min"
+    - "bet_amount_max"
+    - "bet_amount_cv"
+    - "bet_amount_avg"
+    - "bet_amount_p25"
+    - "bet_amount_median"
+    - "bet_amount_p75"
+    - "bet_amount_drawdown_ratio"
+    - "bet_amount_spike_ratio"
+    - "delta_bet_amount_min"
+    - "delta_bet_amount_max"
+    - "delta_bet_amount_cv"
+    - "delta_bet_amount_avg"
+    - "delta_bet_amount_p25"
+    - "delta_bet_amount_median"
+    - "delta_bet_amount_p75"
+    - "delta_bet_amount_drawdown_ratio"
+    - "delta_bet_amount_spike_ratio"
+    - "accum_pos_delta_bet_amount"
+    - "accum_neg_delta_bet_amount"
+    - "accum_pos_delta_bet_amount_ratio"
+    - "accum_neg_delta_bet_amount_ratio"
+    - "balance_after_bet_min"
+    - "balance_after_bet_max"
+    - "balance_after_bet_avg"
+    - "balance_after_bet_p25"
+    - "balance_after_bet_median"
+    - "balance_after_bet_p75"
+    - "balance_after_bet_cv"
+    - "balance_after_bet_drawdown_ratio"
+    - "balance_after_bet_spike_ratio"
+    - "payout_min"
+    - "payout_max"
+    - "payout_avg"
+    - "payout_p25"
+    - "payout_median"
+    - "payout_p75"
+    - "payout_cv"
+    - "payout_drawdown_ratio"
+    - "payout_spike_ratio"
+    - "delta_payout_min"
+    - "delta_payout_max"
+    - "delta_payout_avg"
+    - "delta_payout_p25"
+    - "delta_payout_median"
+    - "delta_payout_p75"
+    - "delta_payout_cv"
+    - "delta_payout_drawdown_ratio"
+    - "delta_payout_spike_ratio"
+    - "profit_min"
+    - "profit_max"
+    - "profit_avg"
+    - "profit_p25"
+    - "profit_median"
+    - "profit_p75"
+    - "profit_cv"
+    - "min_profit_ratio"
+    - "max_profit_ratio"
+    - "accum_pos_profit"
+    - "accum_pos_profit_ratio"
+    - "accum_neg_profit"
+    - "accum_neg_profit_ratio"
+    - "delta_t_seconds_nogap_avg"
+    - "delta_t_seconds_nogap_std"
+    - "delta_t_seconds_nogap_min"
+    - "delta_t_seconds_nogap_max"
+    - "delta_t_seconds_nogap_p25"
+    - "delta_t_seconds_nogap_median"
+    - "delta_t_seconds_nogap_p75"
+    - "streak_min"
+    - "streak_max"
+    - "streak_avg"
+    - "streak_p25"
+    - "streak_median"
+    - "streak_p75"
+    - "streak_std"
+    - "win_streak_min"
+    - "win_streak_max"
+    - "win_streak_avg"
+    - "win_streak_p25"
+    - "win_streak_median"
+    - "win_streak_p75"
+    - "win_streak_std"
+    - "lose_streak_min"
+    - "lose_streak_max"
+    - "lose_streak_avg"
+    - "lose_streak_p25"
+    - "lose_streak_median"
+    - "lose_streak_p75"
+    - "lose_streak_std"
+    - "num_deposit"
+    - "accum_deposit"
+    - "accum_deposit_ratio"
+    - "num_withdraw"
+    - "accum_withdraw"
+    - "accum_withdraw_ratio"
+    - "bet_rounds"
+
+  normal_features:  # rates / bounded shares
+    - "payout_rate"
+    - "profit_rate"
+    - "kill_rate"
+    - "low_ratio"
+    - "medium_ratio"
+    - "high_ratio"
+    - "ultra_ratio"
+
+feature_selection:
+  correlation_threshold: 0.9
+  variance_threshold: 0.01
+
+elbow_method:
+  top_features: [25, 30, 35, 40, 45, 50]
+  k_range: [2, 3, 4, 5, 6, 7]
+
+cluster_analysis:
+  model: 'kmeans'
+  random_state: 42
+  n_init: 10
+  n_clusters: 3
+  top_features: 40
+
+pipeline:
+  elbow_method: true
+  cluster_analysis: true
+  apply_model: false
+  attach_cluster_label: true
+  get_cluster_stats: false
+  upload_result_to_s3: true
