@@ -212,7 +212,7 @@ cluster_analysis:
   random_state: 42
   n_init: 10
   n_clusters: 3
-  top_features: 40
+  top_features: 35
 
 pipeline:
   elbow_method: true
