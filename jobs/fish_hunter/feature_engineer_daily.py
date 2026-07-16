@@ -20,7 +20,10 @@ fish-type share columns (``low/medium/high/ultra_ratio``; fish_value
 <=10/<=130/<=200/else). Rows are attributed to the month of ``bet_date``;
 each month scans one margin day on both sides and outputs only its own
 bet_dates (exactly-once tiling). ``bet_rounds`` carries the user-day's bullet
-count.
+count. A final full-window pass adds ``day_index`` (the user's 1-based
+bet-day rank, the HMM's tenure ``k``) and ``is_first_bet_day`` so consumers
+can match the HMM's k>=2 training population by filtering
+``is_first_bet_day == 0``.
 
 Submit with feature_engineer_daily_submit.py.
 """
@@ -29,6 +32,7 @@ import argparse
 from datetime import date, timedelta
 
 from pyspark.sql import SparkSession, functions as F
+from pyspark.sql.window import Window as W
 
 # Same session definition as the lifecycle HMM feature job.
 SESSION_BREAK_SECONDS = 180
@@ -337,6 +341,7 @@ def main():
         nogap=NOGAP_SECONDS,
     )
 
+    staging_root = f"{daily_root}_staging"
     for label, scan_lo, scan_hi, out_lo, out_hi in month_jobs(output_start, output_end):
         raw = bullet.filter(partition_date.between(F.to_date(F.lit(str(scan_lo))), F.to_date(F.lit(str(scan_hi)))))
         if raw.limit(1).count() == 0:
@@ -344,7 +349,7 @@ def main():
             continue
         raw.createOrReplaceTempView("bullet_raw")
         grouped = spark.sql(pre_agg + build_grouped_select(out_lo, out_hi))
-        out = f"{daily_root}/month={label}"
+        out = f"{staging_root}/month={label}"
         grouped.repartition(1).write.mode("overwrite").parquet(out)
         check = spark.read.parquet(out)
         check.selectExpr(
@@ -353,7 +358,27 @@ def main():
             "min(bet_date) as min_date",
             "max(bet_date) as max_date",
         ).show(truncate=False)
-        print("saved:", out)
+        print("staged:", out)
+
+    # ---- global per-user day_index (the HMM's tenure k) needs all months ----
+    # is_first_bet_day == 1 marks each user's first bet-day within the window;
+    # the cluster config filters it out to match the HMM's k>=2 population.
+    full = spark.read.parquet(staging_root)
+    w_user = W.partitionBy("user_id").orderBy("bet_date")
+    full = full.withColumn("day_index", F.row_number().over(w_user).cast("int"))
+    full = full.withColumn("is_first_bet_day", (F.col("day_index") == 1).cast("int"))
+    full.repartition("month").write.partitionBy("month").mode("overwrite").parquet(daily_root)
+    print("saved:", daily_root)
+    spark.read.parquet(daily_root).selectExpr(
+        "count(*) as user_days",
+        "count(distinct user_id) as users",
+        "sum(is_first_bet_day) as first_bet_days",
+    ).show(truncate=False)
+
+    hadoop_path = spark._jvm.org.apache.hadoop.fs.Path(staging_root)  # type: ignore[attr-defined]
+    fs = hadoop_path.getFileSystem(spark.sparkContext._jsc.hadoopConfiguration())  # type: ignore[attr-defined]
+    fs.delete(hadoop_path, True)
+    print("removed staging:", staging_root)
 
     spark.stop()
 

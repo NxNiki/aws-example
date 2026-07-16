@@ -23,6 +23,9 @@ data_loader:
     outlier_threshold: 0
     clip_threshold: [.025, .975]
     local_cache: "fishunter_daily_features.parquet"
+    # Match the HMM's k>=2 training population: exclude each user's first
+    # bet-day (the HMM never labels k=1 rows).
+    row_filters: {is_first_bet_day: 0}
 
     data_types:
       # NOT "category" for user_id: int16 category codes from a small first
@@ -36,10 +39,13 @@ data_loader:
     pattern: '\.parquet$'
     bin_size: 1  # the grain is one row per (user_id, bet_date)
     local_cache: "fishunter_daily_features_attach.parquet"
+    row_filters: {is_first_bet_day: 0}
 
     columns_to_read:
       - "user_id"
       - "bet_date"
+      - "day_index"
+      - "is_first_bet_day"
       - "bet_rounds"
       - "min_created_at"
       - "max_created_at"
@@ -73,9 +79,11 @@ output:
     opset_version: 19
 
 features:
-  key_features:
+  key_features:  # identifiers, never clustered on; is_first_bet_day must be read for the row filter
     - "user_id"
     - "bet_date"
+    - "day_index"
+    - "is_first_bet_day"
 
   skewed_features:  # power-transformed (mirrors the ss03 selection)
     - "rtp_mean"
