@@ -2,7 +2,11 @@
 Run scheduled ETL/report jobs in a fixed sequence.
 
 Intended usage:
-  poetry run python jobs/run_scheduled_etl_jobs.py [--skip-daily_report] [--overwrite] [--lookback-days N]
+  poetry run python jobs/run_scheduled_etl_jobs.py [--skip-daily_report] [--lookback-days N]
+
+Always runs the ETLs incrementally. To force a full reload of a game's data,
+run that job directly with its own --overwrite flag (long full reloads over the
+bastion tunnel are fragile, so overwrite one job at a time and verify).
 
 This orchestrator is code-level job logic and should live under `jobs/`.
 Infrastructure tooling (EventBridge/ECS/Step Functions/Terraform/CDK) should call
@@ -55,11 +59,6 @@ def main() -> int:
         help="Skip the first job in the scheduled jobs list (operation daily report).",
     )
     parser.add_argument(
-        "--overwrite",
-        action="store_true",
-        help="Pass --overwrite to ETL jobs that support it.",
-    )
-    parser.add_argument(
         "--lookback-days",
         type=int,
         default=3,
@@ -67,51 +66,44 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    # Set args per script directly in this list, and mark whether --overwrite is supported.
-    jobs: list[tuple[str, Path, list[str], bool]] = [
+    # Set args per script directly in this list.
+    jobs: list[tuple[str, Path, list[str]]] = [
         (
             # --skip-report disables the SS01 stats daily-report table; the job
             # still runs the HG ETL and the PID difference check (sent to Slack).
             "operation daily report (PID check only)",
             JOBS_DIR / "operation_daily_report" / "run_daily_report.py",
             ["--lookback-days", str(args.lookback_days), "--send-slack", "--skip-report"],
-            False,
         ),
         (
             "ss01_wucaishen ETL",
             JOBS_DIR / "ss01_wucaishen" / "etl_game_stats_daily_by_user_group.py",
             [],
-            True,
         ),
         (
             "ss02_deepdive ETL",
             JOBS_DIR / "ss02_deepdive" / "etl_game_stats_daily_by_user_group.py",
             [],
-            True,
         ),
         (
             "ss03_mahjiang_streak ETL",
             JOBS_DIR / "ss03_mahjiang_streak" / "etl_game_stats_daily_by_user_group.py",
             [],
-            True,
         ),
         (
             "ss06_pocket_soccer ETL",
             JOBS_DIR / "ss06_pocket_soccer" / "etl_game_stats_daily_by_user_group.py",
             [],
-            True,
         ),
         (
             "fish_hunter ETL",
             JOBS_DIR / "fish_hunter" / "etl_game_stats_daily_by_user.py",
             [],
-            True,
         ),
         (
             "operation daily weekly report ETL",
             JOBS_DIR / "operation_daily_report" / "etl_weekly_report_all_games.py",
             [],
-            False,
         ),
     ]
 
@@ -121,15 +113,11 @@ def main() -> int:
 
     failures: list[str] = []
 
-    for name, script_path, base_args, supports_overwrite in jobs:
+    for name, script_path, script_args in jobs:
         if not script_path.exists():
             print(f"[ERROR] Missing script: {script_path}")
             failures.append(name)
             continue
-
-        script_args = [*base_args]
-        if args.overwrite and supports_overwrite:
-            script_args.append("--overwrite")
 
         ok = _run_python_script(script_path, script_args)
         if not ok:
