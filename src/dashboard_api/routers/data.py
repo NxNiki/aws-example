@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 
@@ -20,6 +21,7 @@ from dashboard_api.schemas.data import (
     GroupStat,
     GroupValues,
     HistogramSeries,
+    LifecycleGroup,
     ScatterSeries,
     Series,
     SeriesRequest,
@@ -41,6 +43,10 @@ from dashboard_api.settings import settings
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/data", tags=["data"])
+
+
+def _lifecycle(groups: Optional[list[LifecycleGroup]]) -> Optional[list[dict]]:
+    return [g.model_dump() for g in groups] if groups else None
 
 
 @router.get("/configs", response_model=ConfigList)
@@ -81,7 +87,13 @@ def post_series(req: SeriesRequest) -> SeriesResponse:
         raise HTTPException(status_code=404, detail=f"Unknown config '{req.config}'")
     try:
         date_col, series, missing = load_series(
-            cfg, req.granularity, req.metrics, req.date_from, req.date_to, req.group_values
+            cfg,
+            req.granularity,
+            req.metrics,
+            req.date_from,
+            req.date_to,
+            req.group_values,
+            lifecycle=_lifecycle(req.lifecycle_groups),
         )
     except SeriesError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -157,6 +169,7 @@ def post_group_distribution(req: GroupDistributionRequest) -> GroupDistributionR
             req.metric,
             [(r.start, r.end) for r in req.ranges],
             req.group_values,
+            _lifecycle(req.lifecycle_groups),
             req.clip.enable,
             req.clip.min,
             req.clip.max,
@@ -199,6 +212,7 @@ def post_summary_table(req: SummaryTableRequest) -> SummaryTableResponse:
             req.granularity,
             [(r.start, r.end) for r in req.ranges],
             req.group_values,
+            _lifecycle(req.lifecycle_groups),
             {
                 m: {"log": o.log, "clip_enable": o.clip.enable, "clip_min": o.clip.min, "clip_max": o.clip.max}
                 for m, o in req.metric_options.items()
@@ -249,6 +263,7 @@ def post_deepdive(req: DeepdiveRequest) -> DeepdiveResponse:
             req.metrics,
             [(r.start, r.end) for r in req.ranges],
             req.group_values,
+            _lifecycle(req.lifecycle_groups),
             req.clip.enable,
             req.clip.min,
             req.clip.max,

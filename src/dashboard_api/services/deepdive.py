@@ -142,6 +142,7 @@ def load_deepdive(
     metrics: list[str],
     ranges: list[tuple[Optional[str], Optional[str]]],
     group_values: Optional[dict[str, list[str]]] = None,
+    lifecycle: Optional[list[dict[str, Any]]] = None,
     clip_enable: bool = False,
     clip_min: Optional[float] = None,
     clip_max: Optional[float] = None,
@@ -184,7 +185,7 @@ def load_deepdive(
     scatters: list[dict[str, Any]] = []
     produced: set[str] = set()
 
-    for label, df_c in iter_cohorts(cfg, df_raw, group_values):
+    for label, df_c in iter_cohorts(cfg, df_raw, group_values, lifecycle=lifecycle, date_col=date_col):
         dm = (
             DataMetrics(
                 df_c,

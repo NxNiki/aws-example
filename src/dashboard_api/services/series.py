@@ -52,6 +52,7 @@ def load_series(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     group_values: Optional[dict[str, list[str]]] = None,
+    lifecycle: Optional[list[dict[str, Any]]] = None,
 ) -> tuple[str, list[dict[str, Any]], list[str]]:
     """Return (date_col, series, missing).
 
@@ -91,7 +92,7 @@ def load_series(
     series: list[dict[str, Any]] = []
     produced: set[str] = set()
 
-    for label, df_c in iter_cohorts(cfg, df_raw, group_values):
+    for label, df_c in iter_cohorts(cfg, df_raw, group_values, lifecycle=lifecycle, date_col=date_col):
         df_c_date = df_c.filter((pl.col(date_col) >= start_dt) & (pl.col(date_col) <= end_dt))
         if df_c_date.is_empty():
             continue

@@ -142,6 +142,102 @@ def test_percentile_filter_drops_tails():
     assert kept[:, 1].min() >= 10 and kept[:, 1].max() <= 90
 
 
+def _lifecycle_fixture():
+    """4 user-day rows: u1 at day 0 and 2, u2 at day 40, u3 never bet (no first-bet)."""
+    import polars as pl
+
+    df = pl.DataFrame(
+        {
+            "d": ["2026-06-01", "2026-06-03", "2026-06-10", "2026-06-10"],
+            "user_id": ["u1", "u1", "u2", "u3"],
+            "ai_group": ["A", "A", "A", "A"],
+            "user_group": ["new", "new", "old", "old"],
+        }
+    ).with_columns(pl.col("d").str.to_datetime())
+    first = pl.DataFrame({"user_id": ["u1", "u2"], "first_bet_date": ["2026-06-01", "2026-05-01"]}).with_columns(
+        pl.col("first_bet_date").str.to_datetime()
+    )
+    return df, first
+
+
+def test_iter_cohorts_lifecycle_groups(monkeypatch):
+    """Custom lifecycle groups redefine user_group by day-since-first-bet range:
+    labels come from the request, ranges may overlap, day_to=None is open-ended,
+    'all' is no-filter, and users without a first bet fall only into 'all'."""
+    from dashboard_api.services import common
+
+    df, first = _lifecycle_fixture()
+    monkeypatch.setattr(common, "load_first_bet_dates", lambda cfg: first)
+    cfg = {"id": "g", "stats_by_date": {"user_group_cols": ["ai_group", "user_group"]}}
+    lifecycle = [
+        {"label": "day0", "day_from": 0, "day_to": 0},
+        {"label": "day0-3", "day_from": 0, "day_to": 3},  # overlaps day0 on purpose
+        {"label": "rest", "day_from": 4, "day_to": None},
+        {"label": "all", "day_from": 0, "day_to": None},
+    ]
+    out = dict(common.iter_cohorts(cfg, df, {"ai_group": ["A"]}, lifecycle=lifecycle, date_col="d"))
+
+    # cohort_label collapses "all" (same as the stored-label pickers): "A | all" → "A".
+    assert set(out) == {"A | day0", "A | day0-3", "A | rest", "A"}
+    assert set(out["A | day0"]["user_id"]) == {"u1"} and out["A | day0"].height == 1
+    assert out["A | day0-3"].height == 2  # both u1 rows: overlapping ranges both keep them
+    assert set(out["A | rest"]["user_id"]) == {"u2"}
+    assert out["A"].height == 4  # "all" = no filter — includes u3, who never bet
+    assert all(common.DAYS_COL not in c.columns for c in out.values())  # helper col not leaked
+
+
+def test_iter_cohorts_without_lifecycle_uses_stored_labels(monkeypatch):
+    """No lifecycle_groups in the request → unchanged behavior: equality filter
+    on the ETL-stored user_group labels."""
+    from dashboard_api.services import common
+
+    df, _ = _lifecycle_fixture()
+    monkeypatch.setattr(
+        common, "load_first_bet_dates", lambda cfg: (_ for _ in ()).throw(AssertionError("must not derive"))
+    )
+    cfg = {"id": "g", "stats_by_date": {"user_group_cols": ["ai_group", "user_group"]}}
+    out = dict(common.iter_cohorts(cfg, df, {"user_group": ["new"]}))
+    assert set(out) == {"new"}
+    assert set(out["new"]["user_id"]) == {"u1"}
+
+    # A config without a user_group dimension ignores lifecycle entirely.
+    cfg2 = {"id": "g2", "stats_by_date": {"user_group_cols": ["ab_group"]}}
+    out2 = dict(common.iter_cohorts(cfg2, df, {}, lifecycle=[{"label": "day0", "day_from": 0, "day_to": 0}]))
+    assert set(out2) == {"all"} and out2["all"].height == 4
+
+
+def test_lifecycle_group_schema_validation():
+    import pytest
+    from pydantic import ValidationError
+
+    from dashboard_api.schemas.data import LifecycleGroup, SeriesRequest
+
+    g = LifecycleGroup(label="new", day_from=0, day_to=3)
+    assert g.day_to == 3
+    assert LifecycleGroup(label="old", day_from=8).day_to is None  # open-ended
+    with pytest.raises(ValidationError):
+        LifecycleGroup(label="bad", day_from=5, day_to=2)  # inverted range
+    with pytest.raises(ValidationError):
+        LifecycleGroup(label="neg", day_from=-1)
+
+    req = SeriesRequest(config="c", metrics=["m"])
+    assert req.lifecycle_groups is None  # absent for old clients → unchanged behavior
+
+
+def test_config_detail_exposes_lifecycle_col():
+    """The frontend shows the global lifecycle picker only when the config has a
+    user_group cohort dimension."""
+    from pathlib import Path
+
+    from dashboard_api.services.configs import build_config_detail, load_raw_config
+
+    config_dir = str(Path(__file__).resolve().parents[2] / "configs" / "dashboard")
+    ss02 = load_raw_config(config_dir, "ss02")
+    assert ss02 is not None and build_config_detail("ss02", ss02).lifecycle_col == "user_group"
+    cluster = load_raw_config(config_dir, "ss03_user_cluster")
+    assert cluster is not None and build_config_detail("ss03_user_cluster", cluster).lifecycle_col is None
+
+
 def test_group_distribution_and_deepdive_requests_accept_filter():
     from dashboard_api.schemas.data import DeepdiveRequest, FilterOpts, GroupDistributionRequest
 
