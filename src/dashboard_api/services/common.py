@@ -98,8 +98,9 @@ def effective_cohort_cols(cfg: dict[str, Any]) -> tuple[Optional[str], Optional[
 
 # The stored ETL cohort column (new/beginner/old) the lifecycle picker redefines.
 LIFECYCLE_COL = "user_group"
-# Helper column carrying each row's day offset from the user's first bet.
-DAYS_COL = "_days_since_first_bet"
+# Helper column carrying each row's period offset (days / weeks / months,
+# matching the request granularity) from the user's first bet.
+PERIODS_COL = "_periods_since_first_bet"
 
 
 def lifecycle_col(cfg: dict[str, Any]) -> Optional[str]:
@@ -147,22 +148,32 @@ def load_first_bet_dates(cfg: dict[str, Any]) -> pl.DataFrame:
         return df
 
 
-def attach_lifecycle_days(cfg: dict[str, Any], df: pl.DataFrame, date_col: str) -> pl.DataFrame:
-    """Add DAYS_COL = whole days between the user's first bet and the row's date
-    (null for users never seen betting in the daily data).
+def attach_lifecycle_periods(cfg: dict[str, Any], df: pl.DataFrame, date_col: str, granularity: str) -> pl.DataFrame:
+    """Add PERIODS_COL = the row's offset from the user's first bet, in units of
+    the granularity (null for users never seen betting in the daily data).
 
-    Week/month rows carry the PERIOD START in date_col, which usually precedes a
-    mid-period first bet, making the raw difference negative for the user's
-    starting period — the majority of weekly/monthly rows in these games. The
-    ETL's ``DATEDIFF <= 3`` CASE still labels those rows 'new', so negatives
-    clamp to 0 ("the period you started is day 0"); with the clamp the derived
-    buckets reproduce the stored weekly/monthly user_group exactly (validated
-    100% on ss02/ss03 week+month). Nulls stay null (never-bet users match only
-    'all')."""
+    day   → whole days between first bet and the row's date.
+    week  → calendar-week index: both dates truncate to their Monday week start
+            (matching the ETL's Redshift ``DATE_TRUNC('week', …)``), so 0 is the
+            week the user first bet, 1 the next week, … A weekly row aggregates
+            the whole week, so units finer than a week would slice users by
+            start weekday, not by age.
+    month → calendar-month index, same reasoning.
+
+    Negatives clamp to 0 (a rare pre-first-bet activity day — the ETL's
+    ``DATEDIFF <= 3`` CASE also labels those 'new'). Nulls stay null, so
+    never-bet users match only 'all'."""
     joined = df.join(load_first_bet_dates(cfg), on="user_id", how="left")
-    days = (pl.col(date_col).cast(pl.Datetime, strict=False) - pl.col("first_bet_date")).dt.total_days()
-    days = pl.when(days < 0).then(pl.lit(0)).otherwise(days)
-    return joined.with_columns(days.alias(DAYS_COL)).drop("first_bet_date")
+    d = pl.col(date_col).cast(pl.Datetime, strict=False)
+    fb = pl.col("first_bet_date")
+    if granularity == "week":
+        periods = (d.dt.truncate("1w") - fb.dt.truncate("1w")).dt.total_days() // 7
+    elif granularity == "month":
+        periods = (d.dt.year() - fb.dt.year()) * 12 + (d.dt.month().cast(pl.Int32) - fb.dt.month().cast(pl.Int32))
+    else:
+        periods = (d - fb).dt.total_days()
+    periods = pl.when(periods < 0).then(pl.lit(0)).otherwise(periods)
+    return joined.with_columns(periods.alias(PERIODS_COL)).drop("first_bet_date")
 
 
 def load_lazy(cfg: dict[str, Any], granularity: str) -> tuple[pl.LazyFrame, str]:
@@ -233,25 +244,26 @@ def iter_cohorts(
     group_values: dict[str, list[str]],
     lifecycle: Optional[list[dict[str, Any]]] = None,
     date_col: Optional[str] = None,
+    granularity: str = "day",
 ) -> Iterator[tuple[str, pl.DataFrame]]:
     """Yield (cohort_label, cohort_df) over the cross-product of selected
     user-group values — the same cohorts the legacy tabs overlay. Filtering
     happens before any DataMetrics aggregation, so each cohort's metrics are
     computed on just its rows.
 
-    Dashboard feature: the global "Lifecycle groups" picker (day ranges since
-    first bet) above the tab bar. When ``lifecycle`` is given (dicts with
-    label/day_from/day_to, day_to None = open-ended), it redefines the
-    LIFECYCLE_COL dimension: its labels become the selection for that column
-    and each cohort filters rows by day range instead of the stored ETL label.
-    A group labeled "all" means no filter. Ranges may overlap — each group is
-    an independent filter, not a partition.
+    Dashboard feature: the global "Lifecycle groups" picker above the tab bar.
+    When ``lifecycle`` is given (dicts with label/start/end, end None =
+    open-ended, units = ``granularity`` periods since first bet), it redefines
+    the LIFECYCLE_COL dimension: its labels become the selection for that
+    column and each cohort filters rows by period range instead of the stored
+    ETL label. A group labeled "all" means no filter. Ranges may overlap —
+    each group is an independent filter, not a partition.
     """
     col1, col2 = effective_cohort_cols(cfg)
     lc = lifecycle_col(cfg) if lifecycle else None
     by_label = {str(g["label"]): g for g in lifecycle or []}
     if lc is not None and lc in (col1, col2) and date_col and "user_id" in df.columns:
-        df = attach_lifecycle_days(cfg, df, date_col)
+        df = attach_lifecycle_periods(cfg, df, date_col, granularity)
     else:
         lc = None
 
@@ -263,9 +275,9 @@ def iter_cohorts(
     def apply(df_: pl.DataFrame, col: Optional[str], value: str) -> pl.DataFrame:
         if col is not None and col == lc and value != "all":
             g = by_label[value]
-            cond = pl.col(DAYS_COL) >= int(g["day_from"])
-            if g.get("day_to") is not None:
-                cond = cond & (pl.col(DAYS_COL) <= int(g["day_to"]))
+            cond = pl.col(PERIODS_COL) >= int(g["start"])
+            if g.get("end") is not None:
+                cond = cond & (pl.col(PERIODS_COL) <= int(g["end"]))
             return df_.filter(cond)
         return apply_cohort(df_, col, value)
 
@@ -277,4 +289,4 @@ def iter_cohorts(
                 continue
             seen.add(label)
             df_c = apply(apply(df, col1, v1), col2, v2)
-            yield label, (df_c.drop(DAYS_COL) if lc else df_c)
+            yield label, (df_c.drop(PERIODS_COL) if lc else df_c)

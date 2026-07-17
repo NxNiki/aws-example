@@ -40,7 +40,7 @@ export function SummaryTable() {
     gran: c.granularity,
     ranges: c.ranges.map((r) => [r.start, r.end, r.show]),
     cohorts: c.cohortSelection,
-    lifecycle: activeLifecycleGroups(s),
+    lifecycle: activeLifecycleGroups(s, c.granularity),
     metricOptions: t.metricOptions,
     pvalues: t.showPValues,
   });
@@ -118,7 +118,7 @@ export function SummaryTable() {
                 granularity: c.granularity,
                 ranges: c.ranges.filter((r) => r.show && r.start && r.end).map((r) => ({ start: r.start, end: r.end })),
                 cohort_selection: c.cohortSelection,
-                lifecycle_groups: activeLifecycleGroups(s) ?? null,
+                lifecycle_groups: activeLifecycleGroups(s, c.granularity) ?? null,
                 metrics: t.metrics,
                 stats: t.stats,
                 reference_key: t.referenceKey,

@@ -33,6 +33,21 @@ export default function App() {
   const lifecycleAll = useDashboardStore((s) => s.lifecycleAll);
   const setLifecycleGroup = useDashboardStore((s) => s.setLifecycleGroup);
   const setLifecycleAll = useDashboardStore((s) => s.setLifecycleAll);
+  // The picker edits the unit matching the active tab's granularity (each tab
+  // fetches with its own unit's definition; the Report tab shows day's).
+  const lifecycleUnit = useDashboardStore((s) => {
+    const tabKey =
+      s.activeTab === "stats-by-date"
+        ? ("date" as const)
+        : s.activeTab === "stats-by-group"
+          ? ("group" as const)
+          : s.activeTab === "summary-table"
+            ? ("summaryTable" as const)
+            : s.activeTab === "stats-deepdive"
+              ? ("viz" as const)
+              : null;
+    return tabKey ? s.controls[tabKey].granularity : "day";
+  });
   const [viewName, setViewName] = useState("");
 
   useEffect(() => {
@@ -129,7 +144,13 @@ export default function App() {
           Only shown when the config has a lifecycle cohort dimension. */}
       {hasLifecycle && (
         <div className="sticky top-14 z-30 flex h-11 items-center overflow-x-auto border-b bg-white px-4">
-          <LifecycleGroups groups={lifecycle} all={lifecycleAll} onChange={setLifecycleGroup} onSetAll={setLifecycleAll} />
+          <LifecycleGroups
+            unit={lifecycleUnit}
+            groups={lifecycle[lifecycleUnit]}
+            all={lifecycleAll}
+            onChange={(i, g) => setLifecycleGroup(lifecycleUnit, i, g)}
+            onSetAll={setLifecycleAll}
+          />
         </div>
       )}
 

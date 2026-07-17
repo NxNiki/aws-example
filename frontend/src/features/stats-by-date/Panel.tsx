@@ -70,7 +70,7 @@ export function Panel(props: {
                   date_from: dateControls.dateFrom,
                   date_to: dateControls.dateTo,
                   cohort_selection: dateControls.cohortSelection,
-                  lifecycle_groups: activeLifecycleGroups(useDashboardStore.getState()) ?? null,
+                  lifecycle_groups: activeLifecycleGroups(useDashboardStore.getState(), dateControls.granularity) ?? null,
                   panel_id: group.id,
                   left: panel.left,
                   right: panel.right,

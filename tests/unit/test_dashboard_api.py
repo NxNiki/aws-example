@@ -170,10 +170,10 @@ def test_iter_cohorts_lifecycle_groups(monkeypatch):
     monkeypatch.setattr(common, "load_first_bet_dates", lambda cfg: first)
     cfg = {"id": "g", "stats_by_date": {"user_group_cols": ["ai_group", "user_group"]}}
     lifecycle = [
-        {"label": "day0", "day_from": 0, "day_to": 0},
-        {"label": "day0-3", "day_from": 0, "day_to": 3},  # overlaps day0 on purpose
-        {"label": "rest", "day_from": 4, "day_to": None},
-        {"label": "all", "day_from": 0, "day_to": None},
+        {"label": "day0", "start": 0, "end": 0},
+        {"label": "day0-3", "start": 0, "end": 3},  # overlaps day0 on purpose
+        {"label": "rest", "start": 4, "end": None},
+        {"label": "all", "start": 0, "end": None},
     ]
     out = dict(common.iter_cohorts(cfg, df, {"ai_group": ["A"]}, lifecycle=lifecycle, date_col="d"))
 
@@ -183,19 +183,20 @@ def test_iter_cohorts_lifecycle_groups(monkeypatch):
     assert out["A | day0-3"].height == 2  # both u1 rows: overlapping ranges both keep them
     assert set(out["A | rest"]["user_id"]) == {"u2"}
     assert out["A"].height == 4  # "all" = no filter — includes u3, who never bet
-    assert all(common.DAYS_COL not in c.columns for c in out.values())  # helper col not leaked
+    assert all(common.PERIODS_COL not in c.columns for c in out.values())  # helper col not leaked
 
 
-def test_iter_cohorts_lifecycle_clamps_period_start(monkeypatch):
-    """Weekly/monthly rows carry the period START, which precedes a mid-period
-    first bet (negative day diff) for the user's starting period. Those rows
-    clamp to day 0 — matching the ETL's DATEDIFF<=3 'new' labeling — while
-    users with no first bet (null) still match only 'all'."""
+def test_iter_cohorts_lifecycle_week_month_use_period_index(monkeypatch):
+    """On weekly/monthly granularity the range unit is the calendar week/month
+    index since the user's first bet (a week/month row aggregates the whole
+    period, so day units would slice by start weekday). Week 0 = the week of
+    the first bet even when the row's week-start precedes a mid-week first
+    bet; users with no first bet (null) still match only 'all'."""
     import polars as pl
 
     from dashboard_api.services import common
 
-    # Week rows (period start Monday 06-01); u1 first bet Thu 06-04 of that week.
+    # Week rows (period start Monday 06-01 / 06-08); u1 first bet Thu 06-04.
     df = pl.DataFrame(
         {
             "d": ["2026-06-01", "2026-06-08", "2026-06-01"],
@@ -209,14 +210,25 @@ def test_iter_cohorts_lifecycle_clamps_period_start(monkeypatch):
     monkeypatch.setattr(common, "load_first_bet_dates", lambda cfg: first)
     cfg = {"id": "g", "stats_by_date": {"user_group_cols": ["user_group"]}}
     lifecycle = [
-        {"label": "new", "day_from": 0, "day_to": 3},
-        {"label": "beginner", "day_from": 4, "day_to": 7},
-        {"label": "all", "day_from": 0, "day_to": None},
+        {"label": "new", "start": 0, "end": 0},
+        {"label": "beginner", "start": 1, "end": 1},
+        {"label": "all", "start": 0, "end": None},
     ]
-    out = dict(common.iter_cohorts(cfg, df, {}, lifecycle=lifecycle, date_col="d"))
-    assert out["new"]["d"].dt.strftime("%Y-%m-%d").to_list() == ["2026-06-01"]  # -3 days → clamped day 0
-    assert out["beginner"]["d"].dt.strftime("%Y-%m-%d").to_list() == ["2026-06-08"]  # +4 days
-    assert out["all"].height == 3  # u9 (null days) only appears here
+    out = dict(common.iter_cohorts(cfg, df, {}, lifecycle=lifecycle, date_col="d", granularity="week"))
+    assert out["new"]["d"].dt.strftime("%Y-%m-%d").to_list() == ["2026-06-01"]  # week 0 (first-bet week)
+    assert out["beginner"]["d"].dt.strftime("%Y-%m-%d").to_list() == ["2026-06-08"]  # week 1
+    assert out["all"].height == 3  # u9 (null periods) only appears here
+
+    # Month rows; u1 first bet 06-20 → 06-01 row is month 0, 07-01 row month 1.
+    dfm = pl.DataFrame({"d": ["2026-06-01", "2026-07-01"], "user_id": ["u1", "u1"], "user_group": ["new", "old"]})
+    dfm = dfm.with_columns(pl.col("d").str.to_datetime())
+    firstm = pl.DataFrame({"user_id": ["u1"], "first_bet_date": ["2026-06-20"]}).with_columns(
+        pl.col("first_bet_date").str.to_datetime()
+    )
+    monkeypatch.setattr(common, "load_first_bet_dates", lambda cfg: firstm)
+    outm = dict(common.iter_cohorts(cfg, dfm, {}, lifecycle=lifecycle, date_col="d", granularity="month"))
+    assert outm["new"]["d"].dt.strftime("%Y-%m-%d").to_list() == ["2026-06-01"]
+    assert outm["beginner"]["d"].dt.strftime("%Y-%m-%d").to_list() == ["2026-07-01"]
 
 
 def test_iter_cohorts_without_lifecycle_uses_stored_labels(monkeypatch):
@@ -235,7 +247,7 @@ def test_iter_cohorts_without_lifecycle_uses_stored_labels(monkeypatch):
 
     # A config without a user_group dimension ignores lifecycle entirely.
     cfg2 = {"id": "g2", "stats_by_date": {"user_group_cols": ["ab_group"]}}
-    out2 = dict(common.iter_cohorts(cfg2, df, {}, lifecycle=[{"label": "day0", "day_from": 0, "day_to": 0}]))
+    out2 = dict(common.iter_cohorts(cfg2, df, {}, lifecycle=[{"label": "day0", "start": 0, "end": 0}]))
     assert set(out2) == {"all"} and out2["all"].height == 4
 
 
@@ -245,13 +257,13 @@ def test_lifecycle_group_schema_validation():
 
     from dashboard_api.schemas.data import LifecycleGroup, SeriesRequest
 
-    g = LifecycleGroup(label="new", day_from=0, day_to=3)
-    assert g.day_to == 3
-    assert LifecycleGroup(label="old", day_from=8).day_to is None  # open-ended
+    g = LifecycleGroup(label="new", start=0, end=3)
+    assert g.end == 3
+    assert LifecycleGroup(label="old", start=8).end is None  # open-ended
     with pytest.raises(ValidationError):
-        LifecycleGroup(label="bad", day_from=5, day_to=2)  # inverted range
+        LifecycleGroup(label="bad", start=5, end=2)  # inverted range
     with pytest.raises(ValidationError):
-        LifecycleGroup(label="neg", day_from=-1)
+        LifecycleGroup(label="neg", start=-1)
 
     req = SeriesRequest(config="c", metrics=["m"])
     assert req.lifecycle_groups is None  # absent for old clients → unchanged behavior

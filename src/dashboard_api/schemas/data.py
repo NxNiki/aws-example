@@ -52,23 +52,26 @@ class ConfigDetail(BaseModel):
 
 
 class LifecycleGroup(BaseModel):
-    """One user-defined lifecycle cohort: users whose activity falls day_from..day_to
-    days (inclusive) after their first bet.
+    """One user-defined lifecycle cohort: users whose activity falls start..end
+    periods (inclusive) after their first bet, where the period unit IS the
+    request's granularity — days on daily data, calendar weeks on weekly data,
+    calendar months on monthly data (week/month rows aggregate a whole period,
+    so sub-period day ranges would slice by start weekday, not user age).
 
     Dashboard feature: the global "Lifecycle groups" picker above the tab bar.
-    ``day_to=None`` means open-ended (day_from and later). The label "all" is a
+    ``end=None`` means open-ended (start and later). The label "all" is a
     sentinel meaning no filter (the full population), mirroring group_values.
     Ranges may overlap (e.g. compare day 0–3 against day 0–7).
     """
 
     label: str = Field(min_length=1)
-    day_from: int = Field(ge=0)
-    day_to: Optional[int] = Field(default=None, ge=0)
+    start: int = Field(ge=0)
+    end: Optional[int] = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def _check_range(self) -> "LifecycleGroup":
-        if self.day_to is not None and self.day_to < self.day_from:
-            raise ValueError(f"day_to ({self.day_to}) must be >= day_from ({self.day_from})")
+        if self.end is not None and self.end < self.start:
+            raise ValueError(f"end ({self.end}) must be >= start ({self.start})")
         return self
 
 

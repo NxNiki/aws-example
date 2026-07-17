@@ -113,7 +113,9 @@ def load_group_distribution(
 
     stats: list[dict[str, Any]] = []
     produced = False
-    for label, df_c in iter_cohorts(cfg, df_raw, group_values, lifecycle=lifecycle, date_col=date_col):
+    for label, df_c in iter_cohorts(
+        cfg, df_raw, group_values, lifecycle=lifecycle, date_col=date_col, granularity=granularity
+    ):
         dm = DataMetrics(
             df_c,
             start_dt=overall_start,

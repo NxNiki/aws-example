@@ -1271,14 +1271,9 @@
         "type": "object"
       },
       "LifecycleGroup": {
-        "description": "One user-defined lifecycle cohort: users whose activity falls day_from..day_to\ndays (inclusive) after their first bet.\n\nDashboard feature: the global \"Lifecycle groups\" picker above the tab bar.\n``day_to=None`` means open-ended (day_from and later). The label \"all\" is a\nsentinel meaning no filter (the full population), mirroring group_values.\nRanges may overlap (e.g. compare day 0\u20133 against day 0\u20137).",
+        "description": "One user-defined lifecycle cohort: users whose activity falls start..end\nperiods (inclusive) after their first bet, where the period unit IS the\nrequest's granularity \u2014 days on daily data, calendar weeks on weekly data,\ncalendar months on monthly data (week/month rows aggregate a whole period,\nso sub-period day ranges would slice by start weekday, not user age).\n\nDashboard feature: the global \"Lifecycle groups\" picker above the tab bar.\n``end=None`` means open-ended (start and later). The label \"all\" is a\nsentinel meaning no filter (the full population), mirroring group_values.\nRanges may overlap (e.g. compare day 0\u20133 against day 0\u20137).",
         "properties": {
-          "day_from": {
-            "minimum": 0.0,
-            "title": "Day From",
-            "type": "integer"
-          },
-          "day_to": {
+          "end": {
             "anyOf": [
               {
                 "minimum": 0.0,
@@ -1288,17 +1283,22 @@
                 "type": "null"
               }
             ],
-            "title": "Day To"
+            "title": "End"
           },
           "label": {
             "minLength": 1,
             "title": "Label",
             "type": "string"
+          },
+          "start": {
+            "minimum": 0.0,
+            "title": "Start",
+            "type": "integer"
           }
         },
         "required": [
           "label",
-          "day_from"
+          "start"
         ],
         "title": "LifecycleGroup",
         "type": "object"

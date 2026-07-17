@@ -92,7 +92,9 @@ def load_series(
     series: list[dict[str, Any]] = []
     produced: set[str] = set()
 
-    for label, df_c in iter_cohorts(cfg, df_raw, group_values, lifecycle=lifecycle, date_col=date_col):
+    for label, df_c in iter_cohorts(
+        cfg, df_raw, group_values, lifecycle=lifecycle, date_col=date_col, granularity=granularity
+    ):
         df_c_date = df_c.filter((pl.col(date_col) >= start_dt) & (pl.col(date_col) <= end_dt))
         if df_c_date.is_empty():
             continue

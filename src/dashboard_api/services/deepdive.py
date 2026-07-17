@@ -185,7 +185,9 @@ def load_deepdive(
     scatters: list[dict[str, Any]] = []
     produced: set[str] = set()
 
-    for label, df_c in iter_cohorts(cfg, df_raw, group_values, lifecycle=lifecycle, date_col=date_col):
+    for label, df_c in iter_cohorts(
+        cfg, df_raw, group_values, lifecycle=lifecycle, date_col=date_col, granularity=granularity
+    ):
         dm = (
             DataMetrics(
                 df_c,

@@ -197,7 +197,7 @@ function DeepdivePanelView(props: {
                   .filter((r) => r.show && r.start && r.end)
                   .map((r) => ({ start: r.start, end: r.end })),
                 cohort_selection: vizControls.cohortSelection,
-                lifecycle_groups: activeLifecycleGroups(useDashboardStore.getState()) ?? null,
+                lifecycle_groups: activeLifecycleGroups(useDashboardStore.getState(), vizControls.granularity) ?? null,
                 panel: props.panelId,
                 mode: panel.mode,
                 metrics: panel.metrics,
@@ -272,7 +272,7 @@ export function DeepDive() {
     gran: c.granularity,
     ranges: c.ranges.map((r) => [r.start, r.end, r.show]),
     cohorts: c.cohortSelection,
-    lifecycle: activeLifecycleGroups(s),
+    lifecycle: activeLifecycleGroups(s, c.granularity),
     panels: (["derived", "user"] as PanelId[]).map((id) => {
       const p = s.deepdive[id];
       return [id, p.mode, p.metrics, p.nbins, p.normalize, p.clip, p.filter, p.outliersStd];

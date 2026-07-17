@@ -894,21 +894,24 @@ export interface components {
         };
         /**
          * LifecycleGroup
-         * @description One user-defined lifecycle cohort: users whose activity falls day_from..day_to
-         *     days (inclusive) after their first bet.
+         * @description One user-defined lifecycle cohort: users whose activity falls start..end
+         *     periods (inclusive) after their first bet, where the period unit IS the
+         *     request's granularity — days on daily data, calendar weeks on weekly data,
+         *     calendar months on monthly data (week/month rows aggregate a whole period,
+         *     so sub-period day ranges would slice by start weekday, not user age).
          *
          *     Dashboard feature: the global "Lifecycle groups" picker above the tab bar.
-         *     ``day_to=None`` means open-ended (day_from and later). The label "all" is a
+         *     ``end=None`` means open-ended (start and later). The label "all" is a
          *     sentinel meaning no filter (the full population), mirroring group_values.
          *     Ranges may overlap (e.g. compare day 0–3 against day 0–7).
          */
         LifecycleGroup: {
-            /** Day From */
-            day_from: number;
-            /** Day To */
-            day_to?: number | null;
+            /** End */
+            end?: number | null;
             /** Label */
             label: string;
+            /** Start */
+            start: number;
         };
         /** MetricGroup */
         MetricGroup: {

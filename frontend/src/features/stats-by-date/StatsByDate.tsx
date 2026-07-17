@@ -31,7 +31,7 @@ export function StatsByDate() {
     df: c.dateFrom,
     dt: c.dateTo,
     cohorts: c.cohortSelection,
-    lifecycle: activeLifecycleGroups(s),
+    lifecycle: activeLifecycleGroups(s, c.granularity),
     metrics: Object.entries(s.panels).map(([id, p]) => [id, p.left, p.right]),
   });
   const debouncedKey = useDebouncedValue(fetchKey);

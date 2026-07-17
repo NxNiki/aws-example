@@ -103,7 +103,9 @@ def load_summary_table(
     load_end = overall_end + timedelta(days=RETENTION_LOAD_EXTRA_DAYS) if aggregate_from_rows else overall_end
 
     df_raw = collect_window(cfg, granularity, lf, date_col, overall_start, load_end)
-    cohorts = list(iter_cohorts(cfg, df_raw, group_values, lifecycle=lifecycle, date_col=date_col))
+    cohorts = list(
+        iter_cohorts(cfg, df_raw, group_values, lifecycle=lifecycle, date_col=date_col, granularity=granularity)
+    )
     n_ranges = len(parsed)
     n_cols = len(cohorts) * n_ranges
 

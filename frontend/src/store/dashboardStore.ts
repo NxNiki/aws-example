@@ -72,27 +72,45 @@ const defaultControls = (): TabControls => ({
 
 // ── Global lifecycle groups ────────────────────────────────────────────────
 // UNLIKE the per-tab controls above, the lifecycle-group definitions are
-// dashboard-wide (one definition per game, shared by every tab). Defaults
-// mirror the ETL's stored cohorts; nothing shown → no lifecycle filter, so the
-// dashboard behaves exactly as before the picker existed.
-const defaultLifecycle = (): LifecycleGroupState[] => [
-  { label: "new", dayFrom: 0, dayTo: 3, show: false },
-  { label: "beginner", dayFrom: 4, dayTo: 7, show: false },
-  { label: "old", dayFrom: 8, dayTo: null, show: false },
-];
+// dashboard-wide (one definition per game, shared by every tab). There is one
+// definition PER UNIT (day/week/month): ranges mean periods since first bet in
+// the fetching tab's granularity, and the bar shows/edits the active tab's
+// unit. Defaults mirror the ETL's stored day cohorts (week/month analogs pick
+// whole periods); nothing shown → no lifecycle filter, so the dashboard
+// behaves exactly as before the picker existed.
+export type LifecycleByUnit = Record<Granularity, LifecycleGroupState[]>;
 
-// The lifecycle_groups request payload for the current selection, or undefined
-// when the config has no lifecycle dimension / nothing is toggled on (→ the
-// backend falls back to plain "all", i.e. pre-picker behavior).
+const defaultLifecycle = (): LifecycleByUnit => ({
+  day: [
+    { label: "new", start: 0, end: 3, show: false },
+    { label: "beginner", start: 4, end: 7, show: false },
+    { label: "old", start: 8, end: null, show: false },
+  ],
+  week: [
+    { label: "new", start: 0, end: 0, show: false },
+    { label: "beginner", start: 1, end: 1, show: false },
+    { label: "old", start: 2, end: null, show: false },
+  ],
+  month: [
+    { label: "new", start: 0, end: 0, show: false },
+    { label: "beginner", start: 1, end: 1, show: false },
+    { label: "old", start: 2, end: null, show: false },
+  ],
+});
+
+// The lifecycle_groups request payload for a tab fetching at `granularity`, or
+// undefined when the config has no lifecycle dimension / nothing is toggled on
+// (→ the backend falls back to plain "all", i.e. pre-picker behavior).
 export function activeLifecycleGroups(
   s: Pick<DashboardState, "config" | "lifecycle" | "lifecycleAll">,
+  granularity: Granularity,
 ): LifecycleGroup[] | undefined {
   if (!s.config?.lifecycle_col) return undefined;
-  const groups = s.lifecycle
-    .filter((g) => g.show && g.label.trim() && (g.dayTo === null || g.dayTo >= g.dayFrom))
-    .map((g) => ({ label: g.label.trim(), day_from: g.dayFrom, day_to: g.dayTo }));
+  const groups = (s.lifecycle[granularity] ?? [])
+    .filter((g) => g.show && g.label.trim() && (g.end === null || g.end >= g.start))
+    .map((g) => ({ label: g.label.trim(), start: g.start, end: g.end }));
   if (groups.length === 0) return undefined;
-  return s.lifecycleAll ? [{ label: "all", day_from: 0, day_to: null }, ...groups] : groups;
+  return s.lifecycleAll ? [{ label: "all", start: 0, end: null }, ...groups] : groups;
 }
 
 // Cohort columns for the per-tab pickers: the lifecycle column is owned by the
@@ -245,8 +263,9 @@ export interface ViewSnapshot {
   group: Record<string, GroupPanelState>;
   deepdive: Record<DeepdivePanel, DeepdivePanelState>;
   summaryTable?: SummaryTableState; // optional: pre-summary-table snapshots omit it
-  // Global lifecycle groups (optional: pre-lifecycle snapshots omit them).
-  lifecycle?: LifecycleGroupState[];
+  // Global lifecycle groups (optional: pre-lifecycle snapshots omit them; an
+  // early-format plain array is read as the day-unit definition).
+  lifecycle?: LifecycleByUnit | LifecycleGroupState[];
   lifecycleAll?: boolean;
   // Active report-spec name when the view was saved; loading the view reloads it.
   reportSpec?: string | null;
@@ -296,11 +315,12 @@ interface DashboardState {
   // granularity, and tabs can sit on different granularities).
   groupValuesByGran: Partial<Record<Granularity, Record<string, string[]>>>;
 
-  // Global lifecycle groups (day ranges since first bet): defined once per
-  // game, shared by every tab. `lifecycleAll` overlays the full population.
-  lifecycle: LifecycleGroupState[];
+  // Global lifecycle groups (period ranges since first bet, one definition per
+  // day/week/month unit): defined once per game, shared by every tab.
+  // `lifecycleAll` overlays the full population.
+  lifecycle: LifecycleByUnit;
   lifecycleAll: boolean;
-  setLifecycleGroup: (index: number, group: LifecycleGroupState) => void;
+  setLifecycleGroup: (unit: Granularity, index: number, group: LifecycleGroupState) => void;
   setLifecycleAll: (all: boolean) => void;
 
   panels: Record<string, PanelState>; // Stats-by-Date
@@ -487,8 +507,10 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   groupValuesByGran: {},
   lifecycle: defaultLifecycle(),
   lifecycleAll: false,
-  setLifecycleGroup: (index, group) =>
-    set((s) => ({ lifecycle: s.lifecycle.map((g, i) => (i === index ? group : g)) })),
+  setLifecycleGroup: (unit, index, group) =>
+    set((s) => ({
+      lifecycle: { ...s.lifecycle, [unit]: s.lifecycle[unit].map((g, i) => (i === index ? group : g)) },
+    })),
   setLifecycleAll: (all) => set({ lifecycleAll: all }),
   panels: {},
   group: {},
@@ -638,7 +660,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     const { configId, controls, panels } = get();
     if (!configId) return;
     const { granularity, dateFrom, dateTo, cohortSelection } = controls.date;
-    const lifecycleGroups = activeLifecycleGroups(get());
+    const lifecycleGroups = activeLifecycleGroups(get(), granularity);
     const ctxSig = JSON.stringify({ configId, granularity, dateFrom, dateTo, cohortSelection, lifecycleGroups });
     await Promise.all(
       Object.entries(panels).map(([panelId, panel]) => {
@@ -713,7 +735,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     const { granularity, ranges, cohortSelection } = controls.group;
     const reqRanges = activeRanges(ranges);
     if (reqRanges.length === 0) return;
-    const lifecycleGroups = activeLifecycleGroups(get());
+    const lifecycleGroups = activeLifecycleGroups(get(), granularity);
     await Promise.all(
       Object.entries(group).map(([panelId, p]) => {
         const key = `group:${panelId}`;
@@ -781,7 +803,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     const { granularity, ranges, cohortSelection } = controls.summaryTable;
     const reqRanges = activeRanges(ranges);
     if (reqRanges.length === 0) return;
-    const lifecycleGroups = activeLifecycleGroups(get());
+    const lifecycleGroups = activeLifecycleGroups(get(), granularity);
     const key = "summary-table";
     const sig = JSON.stringify({
       configId,
@@ -880,7 +902,10 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         configId: snap.configId,
         config,
         controls,
-        lifecycle: snap.lifecycle ?? defaultLifecycle(),
+        // Early snapshots stored a plain array (day-unit only); merge over defaults.
+        lifecycle: Array.isArray(snap.lifecycle)
+          ? { ...defaultLifecycle(), day: snap.lifecycle }
+          : { ...defaultLifecycle(), ...(snap.lifecycle ?? {}) },
         lifecycleAll: snap.lifecycleAll ?? false,
         groupValuesByGran: {},
         panels: { ...defaultPanels(config), ...(snap.panels ?? {}) },
@@ -979,7 +1004,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     const { granularity, ranges, cohortSelection } = controls.viz;
     const reqRanges = activeRanges(ranges);
     if (reqRanges.length === 0) return;
-    const lifecycleGroups = activeLifecycleGroups(get());
+    const lifecycleGroups = activeLifecycleGroups(get(), granularity);
     const panels: DeepdivePanel[] = ["derived", "user"];
     await Promise.all(
       panels.map((panel) => {

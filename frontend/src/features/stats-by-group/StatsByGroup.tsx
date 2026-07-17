@@ -71,7 +71,7 @@ function GroupPanel(props: {
                   .filter((r) => r.show && r.start && r.end)
                   .map((r) => ({ start: r.start, end: r.end })),
                 cohort_selection: groupControls.cohortSelection,
-                lifecycle_groups: activeLifecycleGroups(useDashboardStore.getState()) ?? null,
+                lifecycle_groups: activeLifecycleGroups(useDashboardStore.getState(), groupControls.granularity) ?? null,
                 panel_id: group.id,
                 metric: panel.metric ?? "",
                 mode: panel.mode,
@@ -102,7 +102,7 @@ export function StatsByGroup() {
     gran: c.granularity,
     ranges: c.ranges.map((r) => [r.start, r.end, r.show]),
     cohorts: c.cohortSelection,
-    lifecycle: activeLifecycleGroups(s),
+    lifecycle: activeLifecycleGroups(s, c.granularity),
     panels: Object.entries(s.group).map(([id, p]) => [id, p.metric, p.clip, p.filter]),
   });
   const debouncedKey = useDebouncedValue(fetchKey);
