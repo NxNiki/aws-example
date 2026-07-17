@@ -22,6 +22,7 @@ export type DateBounds = Schemas["DateBounds"];
 
 export type DateRange = Schemas["DateRange"];
 export type ClipOpts = Schemas["ClipOpts"];
+export type FilterOpts = Schemas["FilterOpts"];
 export type GroupDistributionRequest = Schemas["GroupDistributionRequest"];
 export type GroupStat = Schemas["GroupStat"];
 export type GroupDistributionResponse = Schemas["GroupDistributionResponse"];
@@ -64,6 +65,7 @@ export interface GroupFigureSource {
   metric: string;
   mode: "box" | "bar";
   clip: ClipOpts;
+  filter: FilterOpts;
 }
 
 export interface DeepdiveFigureSource {
@@ -82,6 +84,7 @@ export interface DeepdiveFigureSource {
   scatter_log_y: boolean;
   log_y: boolean;
   clip: ClipOpts;
+  filter: FilterOpts;
 }
 
 export interface SummaryTableFigureSource {

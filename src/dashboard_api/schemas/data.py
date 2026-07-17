@@ -110,6 +110,15 @@ class ClipOpts(BaseModel):
     max: Optional[float] = None
 
 
+# Percentile filter: DROP samples below the min / above the max percentile
+# (both in 0–100). Unlike clip (which pins values and keeps every sample),
+# filtered samples are removed before any stats/binning. Applied before clip.
+class FilterOpts(BaseModel):
+    enable: bool = False
+    min: Optional[float] = Field(default=None, ge=0, le=100)
+    max: Optional[float] = Field(default=None, ge=0, le=100)
+
+
 class GroupDistributionRequest(BaseModel):
     config: str
     granularity: Granularity = "day"
@@ -117,6 +126,7 @@ class GroupDistributionRequest(BaseModel):
     ranges: list[DateRange] = Field(min_length=1)
     group_values: dict[str, list[str]] = Field(default_factory=dict)
     clip: ClipOpts = Field(default_factory=ClipOpts)
+    filter: FilterOpts = Field(default_factory=FilterOpts)
 
 
 # Per (cohort × date-range) distribution summary — enough to draw either a box
@@ -223,6 +233,7 @@ class DeepdiveRequest(BaseModel):
     ranges: list[DateRange] = Field(min_length=1)
     group_values: dict[str, list[str]] = Field(default_factory=dict)
     clip: ClipOpts = Field(default_factory=ClipOpts)
+    filter: FilterOpts = Field(default_factory=FilterOpts)
     nbins: int = 50  # histogram only
     normalize: bool = False  # histogram only: density vs counts
     outliers_std: Optional[float] = None  # scatter only: drop rows beyond N std (None = off)

@@ -112,3 +112,47 @@ def test_load_config_from_s3(monkeypatch, mock_s3_client):
 
     configs.clear_config_cache()
     s3_utils._get_s3_client_for_pid.cache_clear()
+
+
+def test_percentile_filter_drops_tails():
+    """The Stats-by-Group / Deep Dive "filter [min]% [max]%" control removes
+    samples outside the percentile bounds (unlike clip, which pins them)."""
+    import numpy as np
+
+    from dashboard_api.services.deepdive import _percentile_filter, _percentile_row_mask
+    from dashboard_api.services.group_distribution import _percentile_filter as _gd_filter
+
+    vals = np.arange(101, dtype=float)  # 0..100: value == its own percentile
+    for fn in (_percentile_filter, _gd_filter):
+        out = fn(vals, True, 10, 90)
+        assert out.min() == 10 and out.max() == 90 and len(out) == 81
+        assert len(fn(vals, False, 10, 90)) == 101  # disabled → untouched
+        assert len(fn(vals, True, None, None)) == 101  # no bounds → untouched
+        assert fn(vals, True, 0, 100).tolist() == vals.tolist()  # full range keeps all
+        assert len(fn(np.array([]), True, 10, 90)) == 0  # empty stays empty
+
+    one_sided = _percentile_filter(vals, True, None, 50)
+    assert one_sided.max() == 50 and one_sided.min() == 0
+
+    # Row mask: a row is kept only when EVERY column is inside its own bounds.
+    arr = np.column_stack([vals, vals[::-1]])
+    mask = _percentile_row_mask(arr, 10, 90)
+    kept = arr[mask]
+    assert kept[:, 0].min() >= 10 and kept[:, 0].max() <= 90
+    assert kept[:, 1].min() >= 10 and kept[:, 1].max() <= 90
+
+
+def test_group_distribution_and_deepdive_requests_accept_filter():
+    from dashboard_api.schemas.data import DeepdiveRequest, FilterOpts, GroupDistributionRequest
+
+    req = GroupDistributionRequest(config="c", metric="m", ranges=[{"start": "2026-01-01", "end": "2026-01-02"}])
+    assert req.filter == FilterOpts()  # defaults off, so old clients are unaffected
+    dd = DeepdiveRequest(
+        config="c",
+        panel="derived",
+        mode="histogram",
+        metrics=["m"],
+        ranges=[{"start": "2026-01-01", "end": "2026-01-02"}],
+        filter={"enable": True, "min": 1, "max": 99},
+    )
+    assert dd.filter.enable and dd.filter.min == 1 and dd.filter.max == 99

@@ -366,6 +366,9 @@
             "title": "Config",
             "type": "string"
           },
+          "filter": {
+            "$ref": "#/components/schemas/FilterOpts"
+          },
           "granularity": {
             "default": "day",
             "enum": [
@@ -505,6 +508,9 @@
           "config": {
             "title": "Config",
             "type": "string"
+          },
+          "filter": {
+            "$ref": "#/components/schemas/FilterOpts"
           },
           "granularity": {
             "default": "day",
@@ -768,6 +774,43 @@
         "title": "ExportResponse",
         "type": "object"
       },
+      "FilterOpts": {
+        "properties": {
+          "enable": {
+            "default": false,
+            "title": "Enable",
+            "type": "boolean"
+          },
+          "max": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max"
+          },
+          "min": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min"
+          }
+        },
+        "title": "FilterOpts",
+        "type": "object"
+      },
       "GenerateProxyResponse": {
         "properties": {
           "elapsed_ms": {
@@ -804,6 +847,9 @@
           "config": {
             "title": "Config",
             "type": "string"
+          },
+          "filter": {
+            "$ref": "#/components/schemas/FilterOpts"
           },
           "granularity": {
             "default": "day",
@@ -905,6 +951,9 @@
           "config": {
             "title": "Config",
             "type": "string"
+          },
+          "filter": {
+            "$ref": "#/components/schemas/FilterOpts"
           },
           "granularity": {
             "default": "day",

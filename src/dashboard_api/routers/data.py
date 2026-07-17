@@ -160,6 +160,9 @@ def post_group_distribution(req: GroupDistributionRequest) -> GroupDistributionR
             req.clip.enable,
             req.clip.min,
             req.clip.max,
+            req.filter.enable,
+            req.filter.min,
+            req.filter.max,
         )
     except SeriesError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -249,6 +252,9 @@ def post_deepdive(req: DeepdiveRequest) -> DeepdiveResponse:
             req.clip.enable,
             req.clip.min,
             req.clip.max,
+            req.filter.enable,
+            req.filter.min,
+            req.filter.max,
             req.nbins,
             req.normalize,
             req.outliers_std,
