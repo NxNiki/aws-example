@@ -14,7 +14,7 @@ from typing import Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
-from dashboard_api.schemas.data import ClipOpts, DateRange, Granularity, SummaryMetricOption
+from dashboard_api.schemas.data import ClipOpts, DateRange, FilterOpts, Granularity, SummaryMetricOption
 
 ReportLanguage = Literal["en", "zh-Hans", "zh-Hant"]
 
@@ -46,6 +46,7 @@ class GroupFigureSource(BaseModel):
     metric: str
     mode: Literal["box", "bar"] = "bar"
     clip: ClipOpts = Field(default_factory=ClipOpts)
+    filter: FilterOpts = Field(default_factory=FilterOpts)
 
 
 class DeepdiveFigureSource(BaseModel):
@@ -64,6 +65,7 @@ class DeepdiveFigureSource(BaseModel):
     scatter_log_y: bool = False
     log_y: bool = False
     clip: ClipOpts = Field(default_factory=ClipOpts)
+    filter: FilterOpts = Field(default_factory=FilterOpts)
 
 
 class SummaryTableFigureSource(BaseModel):

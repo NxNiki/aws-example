@@ -549,6 +549,7 @@ export interface components {
             };
             /** Config */
             config: string;
+            filter?: components["schemas"]["FilterOpts"];
             /**
              * Granularity
              * @default day
@@ -622,6 +623,7 @@ export interface components {
             clip?: components["schemas"]["ClipOpts"];
             /** Config */
             config: string;
+            filter?: components["schemas"]["FilterOpts"];
             /**
              * Granularity
              * @default day
@@ -727,6 +729,18 @@ export interface components {
             /** Page Version */
             page_version: number | null;
         };
+        /** FilterOpts */
+        FilterOpts: {
+            /**
+             * Enable
+             * @default false
+             */
+            enable: boolean;
+            /** Max */
+            max?: number | null;
+            /** Min */
+            min?: number | null;
+        };
         /** GenerateProxyResponse */
         GenerateProxyResponse: {
             /** Elapsed Ms */
@@ -743,6 +757,7 @@ export interface components {
             clip?: components["schemas"]["ClipOpts"];
             /** Config */
             config: string;
+            filter?: components["schemas"]["FilterOpts"];
             /**
              * Granularity
              * @default day
@@ -783,6 +798,7 @@ export interface components {
             };
             /** Config */
             config: string;
+            filter?: components["schemas"]["FilterOpts"];
             /**
              * Granularity
              * @default day
