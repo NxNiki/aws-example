@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useDashboardStore } from "./store/dashboardStore";
+import { LifecycleGroups } from "./components/LifecycleGroups";
 import { Notifications } from "./components/Notifications";
 import { ChatPanel } from "./features/agent/ChatPanel";
 import { StatsByDate } from "./features/stats-by-date/StatsByDate";
@@ -27,6 +28,11 @@ export default function App() {
   const chatOpen = useDashboardStore((s) => s.chat.open);
   const chatWidth = useDashboardStore((s) => s.chat.width);
   const toggleChat = useDashboardStore((s) => s.toggleChat);
+  const hasLifecycle = useDashboardStore((s) => Boolean(s.config?.lifecycle_col));
+  const lifecycle = useDashboardStore((s) => s.lifecycle);
+  const lifecycleAll = useDashboardStore((s) => s.lifecycleAll);
+  const setLifecycleGroup = useDashboardStore((s) => s.setLifecycleGroup);
+  const setLifecycleAll = useDashboardStore((s) => s.setLifecycleAll);
   const [viewName, setViewName] = useState("");
 
   useEffect(() => {
@@ -38,8 +44,9 @@ export default function App() {
     // Right padding reserves room for the docked chat panel (user-resizable);
     // ECharts re-sizes via its ResizeObserver when the panel opens/resizes.
     <div className="min-h-full bg-gray-50 text-gray-900" style={{ paddingRight: chatOpen ? chatWidth : 0 }}>
-      {/* Sticky stack: header (top-0, h-14) → tab bar (top-14, h-11) → per-tab
-          controls (top-[6.25rem] = 3.5 + 2.75rem). Keep the heights in sync. */}
+      {/* Sticky stack: header (top-0, h-14) → [lifecycle bar (top-14, h-11), when
+          the config has one] → tab bar (top-14 or top-[6.25rem]) → per-tab
+          controls (top-[6.25rem] or top-[9rem]). Keep the heights in sync. */}
       <header className="sticky top-0 z-40 flex h-14 items-center justify-between border-b bg-white px-4">
         <div className="flex min-w-0 items-center gap-3">
           {/* Full title on wide windows; compact glyph below lg. */}
@@ -117,7 +124,18 @@ export default function App() {
         </div>
       </header>
 
-      <nav className="sticky top-14 z-30 flex h-11 gap-1 border-b bg-white px-4">
+      {/* Global lifecycle-group picker: one definition per game, shared by every
+          tab (so switching tabs never asks the user to redefine the day ranges).
+          Only shown when the config has a lifecycle cohort dimension. */}
+      {hasLifecycle && (
+        <div className="sticky top-14 z-30 flex h-11 items-center overflow-x-auto border-b bg-white px-4">
+          <LifecycleGroups groups={lifecycle} all={lifecycleAll} onChange={setLifecycleGroup} onSetAll={setLifecycleAll} />
+        </div>
+      )}
+
+      <nav
+        className={`sticky ${hasLifecycle ? "top-[6.25rem]" : "top-14"} z-30 flex h-11 gap-1 border-b bg-white px-4`}
+      >
         {TABS.map((t) => (
           <button
             key={t.id}

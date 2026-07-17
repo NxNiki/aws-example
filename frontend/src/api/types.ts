@@ -19,6 +19,8 @@ export type SeriesResponse = Schemas["SeriesResponse"];
 export type Granularity = SeriesResponse["granularity"];
 export type GroupValues = Schemas["GroupValues"];
 export type DateBounds = Schemas["DateBounds"];
+// One custom lifecycle cohort (day range since first bet); label "all" = no filter.
+export type LifecycleGroup = Schemas["LifecycleGroup"];
 
 export type DateRange = Schemas["DateRange"];
 export type ClipOpts = Schemas["ClipOpts"];
@@ -48,6 +50,7 @@ export interface DateFigureSource {
   date_from: string | null;
   date_to: string | null;
   cohort_selection: Record<string, string[]>;
+  lifecycle_groups?: LifecycleGroup[] | null;
   panel_id: string;
   left: string[];
   right: string[];
@@ -61,6 +64,7 @@ export interface GroupFigureSource {
   granularity: Granularity;
   ranges: DateRange[];
   cohort_selection: Record<string, string[]>;
+  lifecycle_groups?: LifecycleGroup[] | null;
   panel_id: string;
   metric: string;
   mode: "box" | "bar";
@@ -74,6 +78,7 @@ export interface DeepdiveFigureSource {
   granularity: Granularity;
   ranges: DateRange[];
   cohort_selection: Record<string, string[]>;
+  lifecycle_groups?: LifecycleGroup[] | null;
   panel: "derived" | "user";
   mode: "histogram" | "heatmap" | "scatter";
   metrics: string[];
@@ -93,6 +98,7 @@ export interface SummaryTableFigureSource {
   granularity: Granularity;
   ranges: DateRange[];
   cohort_selection: Record<string, string[]>;
+  lifecycle_groups?: LifecycleGroup[] | null;
   metrics: Record<string, string[]>; // per metric-group (group id → selected metrics)
   stats: SummaryStat[];
   reference_key: string | null;
@@ -149,6 +155,7 @@ export interface SummaryTableRequest {
   granularity: Granularity;
   ranges: DateRange[];
   group_values: Record<string, string[]>;
+  lifecycle_groups?: LifecycleGroup[] | null;
   metric_options: Record<string, SummaryMetricOption>; // keyed by metric name
   pvalues: boolean;
 }

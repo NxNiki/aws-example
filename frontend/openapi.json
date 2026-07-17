@@ -67,6 +67,17 @@
             "title": "Id",
             "type": "string"
           },
+          "lifecycle_col": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lifecycle Col"
+          },
           "tabs": {
             "items": {
               "type": "string"
@@ -532,6 +543,20 @@
             "title": "Group Values",
             "type": "object"
           },
+          "lifecycle_groups": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/LifecycleGroup"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lifecycle Groups"
+          },
           "metrics": {
             "items": {
               "type": "string"
@@ -870,6 +895,20 @@
             },
             "title": "Group Values",
             "type": "object"
+          },
+          "lifecycle_groups": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/LifecycleGroup"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lifecycle Groups"
           },
           "metric": {
             "title": "Metric",
@@ -1229,6 +1268,39 @@
           "counts"
         ],
         "title": "HistogramSeries",
+        "type": "object"
+      },
+      "LifecycleGroup": {
+        "description": "One user-defined lifecycle cohort: users whose activity falls day_from..day_to\ndays (inclusive) after their first bet.\n\nDashboard feature: the global \"Lifecycle groups\" picker above the tab bar.\n``day_to=None`` means open-ended (day_from and later). The label \"all\" is a\nsentinel meaning no filter (the full population), mirroring group_values.\nRanges may overlap (e.g. compare day 0\u20133 against day 0\u20137).",
+        "properties": {
+          "day_from": {
+            "minimum": 0.0,
+            "title": "Day From",
+            "type": "integer"
+          },
+          "day_to": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Day To"
+          },
+          "label": {
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "day_from"
+        ],
+        "title": "LifecycleGroup",
         "type": "object"
       },
       "MetricGroup": {
@@ -1834,6 +1906,20 @@
             "title": "Group Values",
             "type": "object"
           },
+          "lifecycle_groups": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/LifecycleGroup"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lifecycle Groups"
+          },
           "metrics": {
             "items": {
               "type": "string"
@@ -2295,6 +2381,20 @@
             },
             "title": "Group Values",
             "type": "object"
+          },
+          "lifecycle_groups": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/LifecycleGroup"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lifecycle Groups"
           },
           "metric_options": {
             "additionalProperties": {

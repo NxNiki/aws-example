@@ -9,7 +9,7 @@ import { ClipControls } from "../../components/ClipControls";
 import { DateRanges } from "../../components/DateRanges";
 import { FilterControls } from "../../components/FilterControls";
 import { MetricCheckList } from "../../components/MetricCheckList";
-import { useDashboardStore } from "../../store/dashboardStore";
+import { activeLifecycleGroups, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
 import { AddToReportButton } from "../report/AddToReport";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import type { DeepdivePanel as PanelId, Granularity, HistogramSeries } from "../../api/types";
@@ -197,6 +197,7 @@ function DeepdivePanelView(props: {
                   .filter((r) => r.show && r.start && r.end)
                   .map((r) => ({ start: r.start, end: r.end })),
                 cohort_selection: vizControls.cohortSelection,
+                lifecycle_groups: activeLifecycleGroups(useDashboardStore.getState()) ?? null,
                 panel: props.panelId,
                 mode: panel.mode,
                 metrics: panel.metrics,
@@ -271,6 +272,7 @@ export function DeepDive() {
     gran: c.granularity,
     ranges: c.ranges.map((r) => [r.start, r.end, r.show]),
     cohorts: c.cohortSelection,
+    lifecycle: activeLifecycleGroups(s),
     panels: (["derived", "user"] as PanelId[]).map((id) => {
       const p = s.deepdive[id];
       return [id, p.mode, p.metrics, p.nbins, p.normalize, p.clip, p.filter, p.outliersStd];
@@ -288,7 +290,9 @@ export function DeepDive() {
   return (
     <div className="p-6 pt-0 w-full">
       {/* Pinned below the sticky header + tab bar (see App.tsx height comment). */}
-      <div className="sticky top-[6.25rem] z-20 -mx-6 mb-6 flex flex-wrap gap-6 items-start border-b bg-gray-50 px-6 py-3">
+      <div
+        className={`sticky ${s.config?.lifecycle_col ? "top-[9rem]" : "top-[6.25rem]"} z-20 -mx-6 mb-6 flex flex-wrap gap-6 items-start border-b bg-gray-50 px-6 py-3`}
+      >
         <label className="flex flex-col text-base">
           <span className="text-gray-600 mb-1">Granularity</span>
           <select
@@ -305,7 +309,7 @@ export function DeepDive() {
         </label>
         <DateRanges ranges={c.ranges} onChange={(i, r) => s.setTabRange("viz", i, r)} />
         <CohortSelect
-          groupValues={s.groupValuesByGran[c.granularity] ?? {}}
+          groupValues={visibleGroupValues(s.config, s.groupValuesByGran[c.granularity] ?? {})}
           selection={c.cohortSelection}
           onSetCohort={(col, values) => s.setTabCohort("viz", col, values)}
         />

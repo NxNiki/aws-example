@@ -447,6 +447,8 @@ export interface components {
             groups: components["schemas"]["MetricGroup"][];
             /** Id */
             id: string;
+            /** Lifecycle Col */
+            lifecycle_col?: string | null;
             /** Tabs */
             tabs: string[];
             /** Title */
@@ -634,6 +636,8 @@ export interface components {
             group_values?: {
                 [key: string]: string[];
             };
+            /** Lifecycle Groups */
+            lifecycle_groups?: components["schemas"]["LifecycleGroup"][] | null;
             /** Metrics */
             metrics: string[];
             /**
@@ -768,6 +772,8 @@ export interface components {
             group_values?: {
                 [key: string]: string[];
             };
+            /** Lifecycle Groups */
+            lifecycle_groups?: components["schemas"]["LifecycleGroup"][] | null;
             /** Metric */
             metric: string;
             /** Ranges */
@@ -885,6 +891,24 @@ export interface components {
             range_index: number;
             /** Range Label */
             range_label: string;
+        };
+        /**
+         * LifecycleGroup
+         * @description One user-defined lifecycle cohort: users whose activity falls day_from..day_to
+         *     days (inclusive) after their first bet.
+         *
+         *     Dashboard feature: the global "Lifecycle groups" picker above the tab bar.
+         *     ``day_to=None`` means open-ended (day_from and later). The label "all" is a
+         *     sentinel meaning no filter (the full population), mirroring group_values.
+         *     Ranges may overlap (e.g. compare day 0–3 against day 0–7).
+         */
+        LifecycleGroup: {
+            /** Day From */
+            day_from: number;
+            /** Day To */
+            day_to?: number | null;
+            /** Label */
+            label: string;
         };
         /** MetricGroup */
         MetricGroup: {
@@ -1115,6 +1139,8 @@ export interface components {
             group_values?: {
                 [key: string]: string[];
             };
+            /** Lifecycle Groups */
+            lifecycle_groups?: components["schemas"]["LifecycleGroup"][] | null;
             /** Metrics */
             metrics: string[];
         };
@@ -1285,6 +1311,8 @@ export interface components {
             group_values?: {
                 [key: string]: string[];
             };
+            /** Lifecycle Groups */
+            lifecycle_groups?: components["schemas"]["LifecycleGroup"][] | null;
             /** Metric Options */
             metric_options?: {
                 [key: string]: components["schemas"]["SummaryMetricOption"];

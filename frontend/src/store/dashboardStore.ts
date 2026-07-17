@@ -6,6 +6,7 @@ import { dispatchAction } from "./actionDispatcher";
 // Cycle-safe: reportStore only references this store inside function bodies.
 import { useReportStore } from "./reportStore";
 import type { RangeState } from "../components/DateRanges";
+import type { LifecycleGroupState } from "../components/LifecycleGroups";
 import type {
   ClipOpts,
   ConfigDetail,
@@ -17,6 +18,7 @@ import type {
   Granularity,
   GroupStat,
   HistogramSeries,
+  LifecycleGroup,
   ScatterSeries,
   Series,
   SummaryColumn,
@@ -67,6 +69,44 @@ const defaultControls = (): TabControls => ({
   viz: { granularity: "day", ranges: defaultRanges(), cohortSelection: {} },
   summaryTable: { granularity: "day", ranges: defaultRanges(), cohortSelection: {} },
 });
+
+// ── Global lifecycle groups ────────────────────────────────────────────────
+// UNLIKE the per-tab controls above, the lifecycle-group definitions are
+// dashboard-wide (one definition per game, shared by every tab). Defaults
+// mirror the ETL's stored cohorts; nothing shown → no lifecycle filter, so the
+// dashboard behaves exactly as before the picker existed.
+const defaultLifecycle = (): LifecycleGroupState[] => [
+  { label: "new", dayFrom: 0, dayTo: 3, show: false },
+  { label: "beginner", dayFrom: 4, dayTo: 7, show: false },
+  { label: "old", dayFrom: 8, dayTo: null, show: false },
+];
+
+// The lifecycle_groups request payload for the current selection, or undefined
+// when the config has no lifecycle dimension / nothing is toggled on (→ the
+// backend falls back to plain "all", i.e. pre-picker behavior).
+export function activeLifecycleGroups(
+  s: Pick<DashboardState, "config" | "lifecycle" | "lifecycleAll">,
+): LifecycleGroup[] | undefined {
+  if (!s.config?.lifecycle_col) return undefined;
+  const groups = s.lifecycle
+    .filter((g) => g.show && g.label.trim() && (g.dayTo === null || g.dayTo >= g.dayFrom))
+    .map((g) => ({ label: g.label.trim(), day_from: g.dayFrom, day_to: g.dayTo }));
+  if (groups.length === 0) return undefined;
+  return s.lifecycleAll ? [{ label: "all", day_from: 0, day_to: null }, ...groups] : groups;
+}
+
+// Cohort columns for the per-tab pickers: the lifecycle column is owned by the
+// global picker, so it's hidden from CohortSelect when the config has one.
+export function visibleGroupValues(
+  config: ConfigDetail | null,
+  values: Record<string, string[]>,
+): Record<string, string[]> {
+  const col = config?.lifecycle_col;
+  if (!col || !(col in values)) return values;
+  const rest = { ...values };
+  delete rest[col];
+  return rest;
+}
 
 // ── Per-panel state ────────────────────────────────────────────────────────
 
@@ -205,6 +245,9 @@ export interface ViewSnapshot {
   group: Record<string, GroupPanelState>;
   deepdive: Record<DeepdivePanel, DeepdivePanelState>;
   summaryTable?: SummaryTableState; // optional: pre-summary-table snapshots omit it
+  // Global lifecycle groups (optional: pre-lifecycle snapshots omit them).
+  lifecycle?: LifecycleGroupState[];
+  lifecycleAll?: boolean;
   // Active report-spec name when the view was saved; loading the view reloads it.
   reportSpec?: string | null;
 }
@@ -252,6 +295,13 @@ interface DashboardState {
   // Available cohort values per granularity (the data can differ by
   // granularity, and tabs can sit on different granularities).
   groupValuesByGran: Partial<Record<Granularity, Record<string, string[]>>>;
+
+  // Global lifecycle groups (day ranges since first bet): defined once per
+  // game, shared by every tab. `lifecycleAll` overlays the full population.
+  lifecycle: LifecycleGroupState[];
+  lifecycleAll: boolean;
+  setLifecycleGroup: (index: number, group: LifecycleGroupState) => void;
+  setLifecycleAll: (all: boolean) => void;
 
   panels: Record<string, PanelState>; // Stats-by-Date
   group: Record<string, GroupPanelState>; // Stats-by-Group
@@ -435,6 +485,11 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   setActiveTab: (tab) => set({ activeTab: tab }),
   controls: defaultControls(),
   groupValuesByGran: {},
+  lifecycle: defaultLifecycle(),
+  lifecycleAll: false,
+  setLifecycleGroup: (index, group) =>
+    set((s) => ({ lifecycle: s.lifecycle.map((g, i) => (i === index ? group : g)) })),
+  setLifecycleAll: (all) => set({ lifecycleAll: all }),
   panels: {},
   group: {},
   summaryTable: emptySummaryTable(),
@@ -479,6 +534,9 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         viz: { ...s.controls.viz, cohortSelection: {} },
         summaryTable: { ...s.controls.summaryTable, cohortSelection: {} },
       },
+      // Lifecycle definitions are per-game — back to defaults on a switch.
+      lifecycle: defaultLifecycle(),
+      lifecycleAll: false,
     }));
     try {
       const config = await api.getConfig(id);
@@ -580,7 +638,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     const { configId, controls, panels } = get();
     if (!configId) return;
     const { granularity, dateFrom, dateTo, cohortSelection } = controls.date;
-    const ctxSig = JSON.stringify({ configId, granularity, dateFrom, dateTo, cohortSelection });
+    const lifecycleGroups = activeLifecycleGroups(get());
+    const ctxSig = JSON.stringify({ configId, granularity, dateFrom, dateTo, cohortSelection, lifecycleGroups });
     await Promise.all(
       Object.entries(panels).map(([panelId, panel]) => {
         const key = `series:${panelId}`;
@@ -607,7 +666,15 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
           set,
           async (signal): Promise<Series[]> => {
             const resp = await api.series(
-              { config: configId, granularity, metrics: toFetch, date_from: dateFrom, date_to: dateTo, group_values: cohortSelection },
+              {
+                config: configId,
+                granularity,
+                metrics: toFetch,
+                date_from: dateFrom,
+                date_to: dateTo,
+                group_values: cohortSelection,
+                lifecycle_groups: lifecycleGroups,
+              },
               signal,
             );
             return resp.series;
@@ -646,6 +713,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     const { granularity, ranges, cohortSelection } = controls.group;
     const reqRanges = activeRanges(ranges);
     if (reqRanges.length === 0) return;
+    const lifecycleGroups = activeLifecycleGroups(get());
     await Promise.all(
       Object.entries(group).map(([panelId, p]) => {
         const key = `group:${panelId}`;
@@ -654,6 +722,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
           granularity,
           reqRanges,
           cohortSelection,
+          lifecycleGroups,
           metric: p.metric,
           clip: p.clip,
           filter: p.filter,
@@ -672,6 +741,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
                 metric: p.metric,
                 ranges: reqRanges,
                 group_values: cohortSelection,
+                lifecycle_groups: lifecycleGroups,
                 clip: p.clip,
                 filter: p.filter,
               },
@@ -711,12 +781,14 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     const { granularity, ranges, cohortSelection } = controls.summaryTable;
     const reqRanges = activeRanges(ranges);
     if (reqRanges.length === 0) return;
+    const lifecycleGroups = activeLifecycleGroups(get());
     const key = "summary-table";
     const sig = JSON.stringify({
       configId,
       granularity,
       reqRanges,
       cohortSelection,
+      lifecycleGroups,
       metricOptions: summaryTable.metricOptions,
       pvalues: summaryTable.showPValues,
     });
@@ -732,6 +804,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
             granularity,
             ranges: reqRanges,
             group_values: cohortSelection,
+            lifecycle_groups: lifecycleGroups,
             metric_options: summaryTable.metricOptions,
             pvalues: summaryTable.showPValues,
           },
@@ -779,6 +852,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       version: 2,
       configId: s.configId,
       controls: s.controls,
+      lifecycle: s.lifecycle,
+      lifecycleAll: s.lifecycleAll,
       panels: Object.fromEntries(Object.entries(s.panels).map(([k, v]) => [k, { ...v, series: [] }])),
       group: Object.fromEntries(Object.entries(s.group).map(([k, v]) => [k, { ...v, stats: [], missing: false }])),
       // Keep the display options (stats / p-values / reference); drop fetched data.
@@ -805,6 +880,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         configId: snap.configId,
         config,
         controls,
+        lifecycle: snap.lifecycle ?? defaultLifecycle(),
+        lifecycleAll: snap.lifecycleAll ?? false,
         groupValuesByGran: {},
         panels: { ...defaultPanels(config), ...(snap.panels ?? {}) },
         // Merge each saved panel over a default one so snapshots from before a
@@ -902,6 +979,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     const { granularity, ranges, cohortSelection } = controls.viz;
     const reqRanges = activeRanges(ranges);
     if (reqRanges.length === 0) return;
+    const lifecycleGroups = activeLifecycleGroups(get());
     const panels: DeepdivePanel[] = ["derived", "user"];
     await Promise.all(
       panels.map((panel) => {
@@ -912,6 +990,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
           granularity,
           reqRanges,
           cohortSelection,
+          lifecycleGroups,
           mode: p.mode,
           metrics: p.metrics,
           nbins: p.nbins,
@@ -949,6 +1028,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
                 metrics: p.metrics,
                 ranges: reqRanges,
                 group_values: cohortSelection,
+                lifecycle_groups: lifecycleGroups,
                 clip: p.clip,
                 filter: p.filter,
                 nbins: p.nbins,

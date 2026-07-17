@@ -3,7 +3,7 @@ import { EChart } from "../../charts/EChart";
 import { buildStatsByDateOption } from "../../charts/statsByDateOption";
 import { AxisMetricPicker } from "../../components/AxisMetricPicker";
 import { AddToReportButton } from "../report/AddToReport";
-import { useDashboardStore } from "../../store/dashboardStore";
+import { activeLifecycleGroups, useDashboardStore } from "../../store/dashboardStore";
 import type { Granularity, MetricGroup } from "../../api/types";
 import type { PanelState } from "../../store/dashboardStore";
 
@@ -70,6 +70,7 @@ export function Panel(props: {
                   date_from: dateControls.dateFrom,
                   date_to: dateControls.dateTo,
                   cohort_selection: dateControls.cohortSelection,
+                  lifecycle_groups: activeLifecycleGroups(useDashboardStore.getState()) ?? null,
                   panel_id: group.id,
                   left: panel.left,
                   right: panel.right,

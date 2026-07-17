@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { CohortSelect } from "../../components/CohortSelect";
 import { DateRanges } from "../../components/DateRanges";
-import { useDashboardStore } from "../../store/dashboardStore";
+import { activeLifecycleGroups, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { AddToReportButton } from "../report/AddToReport";
 import { MetricSelector } from "./MetricSelector";
@@ -40,6 +40,7 @@ export function SummaryTable() {
     gran: c.granularity,
     ranges: c.ranges.map((r) => [r.start, r.end, r.show]),
     cohorts: c.cohortSelection,
+    lifecycle: activeLifecycleGroups(s),
     metricOptions: t.metricOptions,
     pvalues: t.showPValues,
   });
@@ -61,7 +62,9 @@ export function SummaryTable() {
   return (
     <div className="p-6 pt-0 w-full">
       {/* Pinned below the sticky header + tab bar (see App.tsx height comment). */}
-      <div className="sticky top-[6.25rem] z-20 -mx-6 mb-6 flex flex-wrap gap-6 items-start border-b bg-gray-50 px-6 py-3">
+      <div
+        className={`sticky ${s.config?.lifecycle_col ? "top-[9rem]" : "top-[6.25rem]"} z-20 -mx-6 mb-6 flex flex-wrap gap-6 items-start border-b bg-gray-50 px-6 py-3`}
+      >
         <label className="flex flex-col text-base">
           <span className="text-gray-600 mb-1">Granularity</span>
           <select
@@ -78,7 +81,7 @@ export function SummaryTable() {
         </label>
         <DateRanges ranges={c.ranges} onChange={(i, r) => s.setTabRange("summaryTable", i, r)} />
         <CohortSelect
-          groupValues={s.groupValuesByGran[c.granularity] ?? {}}
+          groupValues={visibleGroupValues(s.config, s.groupValuesByGran[c.granularity] ?? {})}
           selection={c.cohortSelection}
           onSetCohort={(col, values) => s.setTabCohort("summaryTable", col, values)}
         />
@@ -115,6 +118,7 @@ export function SummaryTable() {
                 granularity: c.granularity,
                 ranges: c.ranges.filter((r) => r.show && r.start && r.end).map((r) => ({ start: r.start, end: r.end })),
                 cohort_selection: c.cohortSelection,
+                lifecycle_groups: activeLifecycleGroups(s) ?? null,
                 metrics: t.metrics,
                 stats: t.stats,
                 reference_key: t.referenceKey,

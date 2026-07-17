@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { useDashboardStore } from "../../store/dashboardStore";
+import { activeLifecycleGroups, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { Controls } from "./Controls";
 import { Panel } from "./Panel";
@@ -31,6 +31,7 @@ export function StatsByDate() {
     df: c.dateFrom,
     dt: c.dateTo,
     cohorts: c.cohortSelection,
+    lifecycle: activeLifecycleGroups(s),
     metrics: Object.entries(s.panels).map(([id, p]) => [id, p.left, p.right]),
   });
   const debouncedKey = useDebouncedValue(fetchKey);
@@ -49,7 +50,9 @@ export function StatsByDate() {
   return (
     <div className="p-6 pt-0 w-full">
       {/* Pinned below the sticky header + tab bar while the charts scroll underneath. */}
-      <div className="sticky top-[6.25rem] z-20 -mx-6 mb-6 border-b bg-gray-50 px-6 py-3">
+      <div
+        className={`sticky ${s.config?.lifecycle_col ? "top-[9rem]" : "top-[6.25rem]"} z-20 -mx-6 mb-6 border-b bg-gray-50 px-6 py-3`}
+      >
         <Controls
           granularity={c.granularity}
           granularities={s.config?.granularities ?? ["day"]}
@@ -57,7 +60,7 @@ export function StatsByDate() {
           dateFrom={c.dateFrom}
           dateTo={c.dateTo}
           onSetDateRange={(from, to) => s.patchControls("date", { dateFrom: from, dateTo: to })}
-          groupValues={s.groupValuesByGran[c.granularity] ?? {}}
+          groupValues={visibleGroupValues(s.config, s.groupValuesByGran[c.granularity] ?? {})}
           cohortSelection={c.cohortSelection}
           onSetCohort={(col, values) => s.setTabCohort("date", col, values)}
         />
