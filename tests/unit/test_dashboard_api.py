@@ -186,6 +186,39 @@ def test_iter_cohorts_lifecycle_groups(monkeypatch):
     assert all(common.DAYS_COL not in c.columns for c in out.values())  # helper col not leaked
 
 
+def test_iter_cohorts_lifecycle_clamps_period_start(monkeypatch):
+    """Weekly/monthly rows carry the period START, which precedes a mid-period
+    first bet (negative day diff) for the user's starting period. Those rows
+    clamp to day 0 — matching the ETL's DATEDIFF<=3 'new' labeling — while
+    users with no first bet (null) still match only 'all'."""
+    import polars as pl
+
+    from dashboard_api.services import common
+
+    # Week rows (period start Monday 06-01); u1 first bet Thu 06-04 of that week.
+    df = pl.DataFrame(
+        {
+            "d": ["2026-06-01", "2026-06-08", "2026-06-01"],
+            "user_id": ["u1", "u1", "u9"],  # u9 never bet
+            "user_group": ["new", "beginner", "old"],
+        }
+    ).with_columns(pl.col("d").str.to_datetime())
+    first = pl.DataFrame({"user_id": ["u1"], "first_bet_date": ["2026-06-04"]}).with_columns(
+        pl.col("first_bet_date").str.to_datetime()
+    )
+    monkeypatch.setattr(common, "load_first_bet_dates", lambda cfg: first)
+    cfg = {"id": "g", "stats_by_date": {"user_group_cols": ["user_group"]}}
+    lifecycle = [
+        {"label": "new", "day_from": 0, "day_to": 3},
+        {"label": "beginner", "day_from": 4, "day_to": 7},
+        {"label": "all", "day_from": 0, "day_to": None},
+    ]
+    out = dict(common.iter_cohorts(cfg, df, {}, lifecycle=lifecycle, date_col="d"))
+    assert out["new"]["d"].dt.strftime("%Y-%m-%d").to_list() == ["2026-06-01"]  # -3 days → clamped day 0
+    assert out["beginner"]["d"].dt.strftime("%Y-%m-%d").to_list() == ["2026-06-08"]  # +4 days
+    assert out["all"].height == 3  # u9 (null days) only appears here
+
+
 def test_iter_cohorts_without_lifecycle_uses_stored_labels(monkeypatch):
     """No lifecycle_groups in the request → unchanged behavior: equality filter
     on the ETL-stored user_group labels."""

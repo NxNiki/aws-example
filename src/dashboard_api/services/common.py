@@ -149,9 +149,19 @@ def load_first_bet_dates(cfg: dict[str, Any]) -> pl.DataFrame:
 
 def attach_lifecycle_days(cfg: dict[str, Any], df: pl.DataFrame, date_col: str) -> pl.DataFrame:
     """Add DAYS_COL = whole days between the user's first bet and the row's date
-    (null for users never seen betting in the daily data)."""
+    (null for users never seen betting in the daily data).
+
+    Week/month rows carry the PERIOD START in date_col, which usually precedes a
+    mid-period first bet, making the raw difference negative for the user's
+    starting period — the majority of weekly/monthly rows in these games. The
+    ETL's ``DATEDIFF <= 3`` CASE still labels those rows 'new', so negatives
+    clamp to 0 ("the period you started is day 0"); with the clamp the derived
+    buckets reproduce the stored weekly/monthly user_group exactly (validated
+    100% on ss02/ss03 week+month). Nulls stay null (never-bet users match only
+    'all')."""
     joined = df.join(load_first_bet_dates(cfg), on="user_id", how="left")
     days = (pl.col(date_col).cast(pl.Datetime, strict=False) - pl.col("first_bet_date")).dt.total_days()
+    days = pl.when(days < 0).then(pl.lit(0)).otherwise(days)
     return joined.with_columns(days.alias(DAYS_COL)).drop("first_bet_date")
 
 
