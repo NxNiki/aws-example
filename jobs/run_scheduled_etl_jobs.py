@@ -70,9 +70,11 @@ def main() -> int:
     # Set args per script directly in this list, and mark whether --overwrite is supported.
     jobs: list[tuple[str, Path, list[str], bool]] = [
         (
-            "operation daily report",
+            # --skip-report disables the SS01 stats daily-report table; the job
+            # still runs the HG ETL and the PID difference check (sent to Slack).
+            "operation daily report (PID check only)",
             JOBS_DIR / "operation_daily_report" / "run_daily_report.py",
-            ["--lookback-days", str(args.lookback_days), "--send-slack"],
+            ["--lookback-days", str(args.lookback_days), "--send-slack", "--skip-report"],
             False,
         ),
         (
