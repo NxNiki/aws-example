@@ -224,6 +224,7 @@ export const useReportStore = create<ReportState>((set, get) => ({
           ranges: src.ranges,
           group_values: src.cohort_selection,
           clip: src.clip,
+          filter: src.filter,
         });
         setData({ stats: resp.stats });
       } else if (src.kind === "summary-table") {
@@ -246,6 +247,7 @@ export const useReportStore = create<ReportState>((set, get) => ({
           ranges: src.ranges,
           group_values: src.cohort_selection,
           clip: src.clip,
+          filter: src.filter,
           nbins: src.nbins,
           normalize: src.normalize,
           outliers_std: src.outliers_std,

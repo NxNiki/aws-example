@@ -9,6 +9,7 @@ import type { RangeState } from "../components/DateRanges";
 import type {
   ClipOpts,
   ConfigDetail,
+  FilterOpts,
   ConfigSummary,
   CorrMatrix,
   DeepdiveMode,
@@ -78,11 +79,12 @@ export interface PanelState {
   series: Series[];
 }
 
-// Stats-by-Group: one metric, box-or-bar, clip; results are per (cohort×range).
+// Stats-by-Group: one metric, box-or-bar, clip/filter; results are per (cohort×range).
 export interface GroupPanelState {
   metric: string | null;
   mode: "box" | "bar";
   clip: ClipOpts;
+  filter: FilterOpts; // percentile filter: drop samples outside [min%, max%]
   stats: GroupStat[];
   missing: boolean;
 }
@@ -110,6 +112,7 @@ export interface DeepdivePanelState {
   logY: boolean; // histogram count axis (display)
   normalize: boolean;
   clip: ClipOpts;
+  filter: FilterOpts; // percentile filter: drop samples outside [min%, max%]
   outliersStd: number | null; // scatter: drop rows beyond N std (null = off)
   scatterLogX: boolean; // scatter x axis (display)
   scatterLogY: boolean; // scatter y axis (display)
@@ -121,6 +124,7 @@ export interface DeepdivePanelState {
 
 const DEFAULT_THRESHOLD = 10;
 const noClip = (): ClipOpts => ({ enable: false, min: null, max: null });
+const noFilter = (): FilterOpts => ({ enable: false, min: null, max: null });
 
 function defaultPanels(config: ConfigDetail): Record<string, PanelState> {
   const panels: Record<string, PanelState> = {};
@@ -130,10 +134,19 @@ function defaultPanels(config: ConfigDetail): Record<string, PanelState> {
   return panels;
 }
 
+const defaultGroupPanel = (): GroupPanelState => ({
+  metric: null,
+  mode: "bar",
+  clip: noClip(),
+  filter: noFilter(),
+  stats: [],
+  missing: false,
+});
+
 function defaultGroupPanels(config: ConfigDetail): Record<string, GroupPanelState> {
   const panels: Record<string, GroupPanelState> = {};
   for (const g of config.groups) {
-    panels[g.id] = { metric: g.metrics[0] ?? null, mode: "bar", clip: noClip(), stats: [], missing: false };
+    panels[g.id] = { ...defaultGroupPanel(), metric: g.metrics[0] ?? null };
   }
   return panels;
 }
@@ -164,6 +177,7 @@ const emptyDeepdivePanel = (): DeepdivePanelState => ({
   logY: false,
   normalize: false,
   clip: noClip(),
+  filter: noFilter(),
   outliersStd: null,
   scatterLogX: false,
   scatterLogY: false,
@@ -269,6 +283,7 @@ interface DashboardState {
   setGroupMetric: (panelId: string, metric: string) => void;
   setGroupMode: (panelId: string, mode: "box" | "bar") => void;
   setGroupClip: (panelId: string, clip: ClipOpts) => void;
+  setGroupFilter: (panelId: string, filter: FilterOpts) => void;
   loadGroupDistribution: () => Promise<void>;
 
   // Summary table
@@ -622,6 +637,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     set((s) => (s.group[panelId] ? { group: { ...s.group, [panelId]: { ...s.group[panelId], mode } } } : {})),
   setGroupClip: (panelId, clip) =>
     set((s) => (s.group[panelId] ? { group: { ...s.group, [panelId]: { ...s.group[panelId], clip } } } : {})),
+  setGroupFilter: (panelId, filter) =>
+    set((s) => (s.group[panelId] ? { group: { ...s.group, [panelId]: { ...s.group[panelId], filter } } } : {})),
 
   loadGroupDistribution: async () => {
     const { configId, controls, group } = get();
@@ -632,7 +649,15 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     await Promise.all(
       Object.entries(group).map(([panelId, p]) => {
         const key = `group:${panelId}`;
-        const sig = JSON.stringify({ configId, granularity, reqRanges, cohortSelection, metric: p.metric, clip: p.clip });
+        const sig = JSON.stringify({
+          configId,
+          granularity,
+          reqRanges,
+          cohortSelection,
+          metric: p.metric,
+          clip: p.clip,
+          filter: p.filter,
+        });
         if (_panelSig[key] === sig) return;
         return runExclusive(
           key,
@@ -641,7 +666,15 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
           async (signal) => {
             if (!p.metric) return { stats: [] as GroupStat[], missing: false };
             const resp = await api.groupDistribution(
-              { config: configId, granularity, metric: p.metric, ranges: reqRanges, group_values: cohortSelection, clip: p.clip },
+              {
+                config: configId,
+                granularity,
+                metric: p.metric,
+                ranges: reqRanges,
+                group_values: cohortSelection,
+                clip: p.clip,
+                filter: p.filter,
+              },
               signal,
             );
             return { stats: resp.stats, missing: resp.missing };
@@ -774,7 +807,14 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         controls,
         groupValuesByGran: {},
         panels: { ...defaultPanels(config), ...(snap.panels ?? {}) },
-        group: { ...defaultGroupPanels(config), ...(snap.group ?? {}) },
+        // Merge each saved panel over a default one so snapshots from before a
+        // field existed (e.g. pre-filter) still restore with complete state.
+        group: {
+          ...defaultGroupPanels(config),
+          ...Object.fromEntries(
+            Object.entries(snap.group ?? {}).map(([k, v]) => [k, { ...defaultGroupPanel(), ...v }]),
+          ),
+        },
         summaryTable: {
           ...emptySummaryTable(),
           ...(snap.summaryTable ?? {}),
@@ -877,6 +917,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
           nbins: p.nbins,
           normalize: p.normalize,
           clip: p.clip,
+          filter: p.filter,
           outliersStd: p.outliersStd,
         });
         if (_panelSig[key] === sig) return;
@@ -909,6 +950,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
                 ranges: reqRanges,
                 group_values: cohortSelection,
                 clip: p.clip,
+                filter: p.filter,
                 nbins: p.nbins,
                 normalize: p.normalize,
                 outliers_std: p.outliersStd,

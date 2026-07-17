@@ -1,13 +1,15 @@
 import { useEffect, useMemo } from "react";
 import { EChart } from "../../charts/EChart";
 import { buildGroupDistributionOption, groupChartWidth } from "../../charts/groupDistributionOption";
+import { clipFilterInfo } from "../../charts/clipFilterInfo";
 import { CohortSelect } from "../../components/CohortSelect";
 import { ClipControls } from "../../components/ClipControls";
 import { DateRanges } from "../../components/DateRanges";
+import { FilterControls } from "../../components/FilterControls";
 import { useDashboardStore } from "../../store/dashboardStore";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { AddToReportButton } from "../report/AddToReport";
-import type { ClipOpts, Granularity, MetricGroup } from "../../api/types";
+import type { ClipOpts, FilterOpts, Granularity, MetricGroup } from "../../api/types";
 import type { GroupPanelState } from "../../store/dashboardStore";
 
 // Stats-by-Group tab: per metric group, compare one metric's distribution across
@@ -19,13 +21,15 @@ function GroupPanel(props: {
   onMetric: (m: string) => void;
   onMode: (mode: "box" | "bar") => void;
   onClip: (c: ClipOpts) => void;
+  onFilter: (f: FilterOpts) => void;
 }) {
   const { group, panel } = props;
   const configId = useDashboardStore((s) => s.configId);
   const groupControls = useDashboardStore((s) => s.controls.group);
   const option = useMemo(
-    () => buildGroupDistributionOption(panel.stats, panel.mode, panel.metric ?? ""),
-    [panel.stats, panel.mode, panel.metric],
+    () =>
+      buildGroupDistributionOption(panel.stats, panel.mode, panel.metric ?? "", clipFilterInfo(panel.clip, panel.filter)),
+    [panel.stats, panel.mode, panel.metric, panel.clip, panel.filter],
   );
   return (
     <div className="border rounded p-3 mb-6">
@@ -55,6 +59,7 @@ function GroupPanel(props: {
             ))}
           </div>
           <ClipControls clip={panel.clip} onChange={props.onClip} />
+          <FilterControls filter={panel.filter} onChange={props.onFilter} />
           <AddToReportButton
             getFigure={() => ({
               title: `${group.label} — ${panel.metric ?? "?"} (${panel.mode})`,
@@ -70,6 +75,7 @@ function GroupPanel(props: {
                 metric: panel.metric ?? "",
                 mode: panel.mode,
                 clip: panel.clip,
+                filter: panel.filter,
               },
             })}
           />
@@ -88,14 +94,14 @@ export function StatsByGroup() {
   const c = s.controls.group; // this tab's own granularity / ranges / cohorts
   const groups = s.config?.groups ?? [];
 
-  // Refetch on config / granularity / range / cohort / metric / clip changes
-  // (box-vs-bar is a pure display switch and intentionally excluded).
+  // Refetch on config / granularity / range / cohort / metric / clip / filter
+  // changes (box-vs-bar is a pure display switch and intentionally excluded).
   const fetchKey = JSON.stringify({
     cfg: s.configId,
     gran: c.granularity,
     ranges: c.ranges.map((r) => [r.start, r.end, r.show]),
     cohorts: c.cohortSelection,
-    panels: Object.entries(s.group).map(([id, p]) => [id, p.metric, p.clip]),
+    panels: Object.entries(s.group).map(([id, p]) => [id, p.metric, p.clip, p.filter]),
   });
   const debouncedKey = useDebouncedValue(fetchKey);
   useEffect(() => {
@@ -145,6 +151,7 @@ export function StatsByGroup() {
             onMetric={(m) => s.setGroupMetric(g.id, m)}
             onMode={(mode) => s.setGroupMode(g.id, mode)}
             onClip={(c) => s.setGroupClip(g.id, c)}
+            onFilter={(f) => s.setGroupFilter(g.id, f)}
           />
         );
       })}

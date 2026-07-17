@@ -1,5 +1,6 @@
 import type { EChartsOption } from "echarts";
 import type { CorrMatrix } from "../api/types";
+import { infoGraphic } from "./clipFilterInfo";
 
 // Deep Dive correlation heatmap: a Pearson correlation matrix for one
 // (cohort × range). RdBu-style diverging scale centered at 0; cell labels show
@@ -16,7 +17,7 @@ export function heatmapSize(n: number): { width: number; height: number } {
   return { width: HM_MARGIN.left + plot + HM_MARGIN.right, height: HM_MARGIN.top + plot + HM_MARGIN.bottom };
 }
 
-export function buildHeatmapOption(matrix: CorrMatrix): EChartsOption {
+export function buildHeatmapOption(matrix: CorrMatrix, info = ""): EChartsOption {
   const { metrics, corr } = matrix;
   const data: [number, number, number | null][] = [];
   for (let i = 0; i < metrics.length; i++) {
@@ -26,6 +27,7 @@ export function buildHeatmapOption(matrix: CorrMatrix): EChartsOption {
   }
 
   return {
+    graphic: infoGraphic(info),
     tooltip: {
       position: "top",
       formatter: (p) => {

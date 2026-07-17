@@ -1,5 +1,6 @@
 import type { EChartsOption } from "echarts";
 import type { GroupStat } from "../api/types";
+import { infoGraphic } from "./clipFilterInfo";
 import { colorForIndex } from "./styles";
 
 // Stats-by-Group: one box (5-number summary) or bar (mean ± bootstrap CI) per
@@ -65,11 +66,17 @@ function statText(s: GroupStat): string {
   ].join("\n");
 }
 
-export function buildGroupDistributionOption(stats: GroupStat[], mode: "box" | "bar", metric: string): EChartsOption {
+export function buildGroupDistributionOption(
+  stats: GroupStat[],
+  mode: "box" | "bar",
+  metric: string,
+  info = "", // active clip/filter tag, e.g. "clip: [0, 100], filter: [1%, 99%]"
+): EChartsOption {
   const colors = cohortColors(stats);
   const categories = stats.map(label);
   const tips = stats.map(tooltipText);
   const base: EChartsOption = {
+    graphic: infoGraphic(info),
     tooltip: { trigger: "axis", formatter: (p) => tips[(Array.isArray(p) ? p[0] : p).dataIndex] ?? "" },
     grid: { left: 96, right: 24, top: 24, bottom: 88 },
     xAxis: { type: "category", data: categories, axisLabel: { interval: 0, fontSize: 16, lineHeight: 20 } },

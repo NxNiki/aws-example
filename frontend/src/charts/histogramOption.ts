@@ -1,6 +1,7 @@
 import * as echarts from "echarts";
 import type { EChartsOption } from "echarts";
 import type { HistogramSeries } from "../api/types";
+import { infoGraphic } from "./clipFilterInfo";
 import { colorForIndex } from "./styles";
 
 // Deep Dive histogram: real bars (one per server-computed bin) that tile by bin
@@ -8,11 +9,15 @@ import { colorForIndex } from "./styles";
 // as a custom rectangle from bin_edges[i]→bin_edges[i+1] grounded at the axis
 // bottom, so it works on a value x-axis and a linear or log count axis.
 
-export function buildHistogramOption(series: HistogramSeries[], opts: { logY: boolean; normalize: boolean }): EChartsOption {
+export function buildHistogramOption(
+  series: HistogramSeries[],
+  opts: { logY: boolean; normalize: boolean; info?: string },
+): EChartsOption {
   const cohorts: string[] = [];
   for (const s of series) if (!cohorts.includes(s.cohort)) cohorts.push(s.cohort);
 
   return {
+    graphic: infoGraphic(opts.info ?? ""),
     tooltip: { trigger: "item" },
     legend: { type: "scroll", bottom: 0, textStyle: { fontSize: 13 } },
     grid: { left: 76, right: 24, top: 24, bottom: 48 },

@@ -3,9 +3,11 @@ import { EChart } from "../../charts/EChart";
 import { buildHeatmapOption, heatmapSize } from "../../charts/heatmapOption";
 import { buildHistogramOption } from "../../charts/histogramOption";
 import { buildScatterOption } from "../../charts/scatterOption";
+import { clipFilterInfo } from "../../charts/clipFilterInfo";
 import { CohortSelect } from "../../components/CohortSelect";
 import { ClipControls } from "../../components/ClipControls";
 import { DateRanges } from "../../components/DateRanges";
+import { FilterControls } from "../../components/FilterControls";
 import { MetricCheckList } from "../../components/MetricCheckList";
 import { useDashboardStore } from "../../store/dashboardStore";
 import { AddToReportButton } from "../report/AddToReport";
@@ -30,6 +32,7 @@ function DeepdivePanelView(props: {
   const { panel } = props;
   const configId = useDashboardStore((s) => s.configId);
   const vizControls = useDashboardStore((s) => s.controls.viz);
+  const info = clipFilterInfo(panel.clip, panel.filter);
 
   const histsByMetric: Record<string, HistogramSeries[]> = {};
   for (const h of panel.histograms) (histsByMetric[h.metric] ??= []).push(h);
@@ -48,7 +51,7 @@ function DeepdivePanelView(props: {
       return (
         <div className="overflow-x-auto">
           <EChart
-            option={buildScatterOption(sc, 0, 1, { ...axes, xLabel: sm[0], yLabel: sm[1], showLegend: true })}
+            option={buildScatterOption(sc, 0, 1, { ...axes, xLabel: sm[0], yLabel: sm[1], showLegend: true, info })}
             width={PAIR}
             height={PAIR}
           />
@@ -58,6 +61,7 @@ function DeepdivePanelView(props: {
     const n = sm.length;
     return (
       <div className="overflow-x-auto">
+        {info && <div className="text-base text-gray-500 mb-1">{info}</div>}
         <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${n}, ${CELL}px)` }}>
           {sm.flatMap((_, i) =>
             sm.map((__, j) =>
@@ -181,6 +185,7 @@ function DeepdivePanelView(props: {
             </div>
           )}
           <ClipControls clip={panel.clip} onChange={(clip) => props.onPatch({ clip })} />
+          <FilterControls filter={panel.filter} onChange={(filter) => props.onPatch({ filter })} />
           <AddToReportButton
             getFigure={() => ({
               title: `Deep Dive ${props.panelId} — ${panel.mode}: ${panel.metrics.join(", ") || "no metrics"}`,
@@ -202,6 +207,7 @@ function DeepdivePanelView(props: {
                 scatter_log_y: panel.scatterLogY,
                 log_y: panel.logY,
                 clip: panel.clip,
+                filter: panel.filter,
               },
             })}
           />
@@ -224,7 +230,10 @@ function DeepdivePanelView(props: {
               {Object.entries(histsByMetric).map(([metric, series]) => (
                 <div key={metric}>
                   <div className="text-base text-gray-500 mb-1">{metric}</div>
-                  <EChart option={buildHistogramOption(series, { logY: panel.logY, normalize: panel.normalize })} height={380} />
+                  <EChart
+                    option={buildHistogramOption(series, { logY: panel.logY, normalize: panel.normalize, info })}
+                    height={380}
+                  />
                 </div>
               ))}
             </div>
@@ -237,7 +246,7 @@ function DeepdivePanelView(props: {
                     <div className="text-base text-gray-500 mb-1">
                       {m.cohort} · {m.range_label}
                     </div>
-                    <EChart option={buildHeatmapOption(m)} width={width} height={height} />
+                    <EChart option={buildHeatmapOption(m, info)} width={width} height={height} />
                   </div>
                 );
               })}
@@ -256,7 +265,7 @@ export function DeepDive() {
   const c = s.controls.viz; // this tab's own granularity / ranges / cohorts
 
   // Refetch on config / granularity / range / cohort / per-panel
-  // mode/metrics/nbins/normalize/clip/outliers changes (log axes are display-only).
+  // mode/metrics/nbins/normalize/clip/filter/outliers changes (log axes are display-only).
   const fetchKey = JSON.stringify({
     cfg: s.configId,
     gran: c.granularity,
@@ -264,7 +273,7 @@ export function DeepDive() {
     cohorts: c.cohortSelection,
     panels: (["derived", "user"] as PanelId[]).map((id) => {
       const p = s.deepdive[id];
-      return [id, p.mode, p.metrics, p.nbins, p.normalize, p.clip, p.outliersStd];
+      return [id, p.mode, p.metrics, p.nbins, p.normalize, p.clip, p.filter, p.outliersStd];
     }),
   });
   const debouncedKey = useDebouncedValue(fetchKey);

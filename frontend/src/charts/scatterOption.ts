@@ -1,5 +1,6 @@
 import type { EChartsOption } from "echarts";
 import type { ScatterSeries } from "../api/types";
+import { infoGraphic } from "./clipFilterInfo";
 import { colorForIndex } from "./styles";
 
 // Deep Dive scatter: plot metric[xi] vs metric[yi] from the server's
@@ -12,13 +13,16 @@ export function buildScatterOption(
   scatters: ScatterSeries[],
   xi: number,
   yi: number,
-  opts: { logX: boolean; logY: boolean; xLabel?: string; yLabel?: string; showLegend?: boolean; compact?: boolean },
+  opts: { logX: boolean; logY: boolean; xLabel?: string; yLabel?: string; showLegend?: boolean; compact?: boolean; info?: string },
 ): EChartsOption {
   const cohorts: string[] = [];
   for (const s of scatters) if (!cohorts.includes(s.cohort)) cohorts.push(s.cohort);
   const compact = opts.compact ?? false;
 
   return {
+    // Info tag top-LEFT: the legend owns the top-right corner. Matrix cells
+    // (compact) skip it — the caller shows one tag above the grid instead.
+    graphic: compact ? undefined : infoGraphic(opts.info ?? "", "left"),
     tooltip: { trigger: "item" },
     legend: opts.showLegend ? { type: "scroll", top: 8, right: 8, textStyle: { fontSize: 13 } } : undefined,
     // Square GRID (plot rectangle) via explicit equal width/height — not derived

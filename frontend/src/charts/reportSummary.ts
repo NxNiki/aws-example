@@ -10,6 +10,7 @@ import type {
   SummaryRow,
 } from "../api/types";
 import type { FigureData } from "../store/reportStore";
+import { clipFilterInfo } from "./clipFilterInfo";
 
 // Build the compact JSON "data_summary" the LLM description/summary endpoints
 // consume, from the RAW data a report figure was rendered from (the legacy app
@@ -130,15 +131,18 @@ export function buildDataSummary(fig: ReportFigure, data: FigureData): Record<st
     return { ...base, period: { from: src.date_from, to: src.date_to }, traces: dateTraces(data.series) };
   }
   if (src.kind === "stats-by-group" && data.stats) {
-    return { ...base, metric: src.metric, display: src.mode, groups: groupTraces(data.stats) };
+    const reshape = clipFilterInfo(src.clip, src.filter);
+    return { ...base, metric: src.metric, display: src.mode, ...(reshape ? { reshape } : {}), groups: groupTraces(data.stats) };
   }
   if (src.kind === "summary-table" && data.columns && data.rows) {
     return { ...base, ...summaryTableData(data.columns, data.rows, src.metrics, src.reference_key, src.metric_options) };
   }
   if (src.kind === "stats-deepdive") {
-    if (src.mode === "histogram" && data.histograms) return { ...base, traces: histogramTraces(data.histograms) };
-    if (src.mode === "heatmap" && data.heatmaps) return { ...base, matrices: heatmapTraces(data.heatmaps) };
-    if (src.mode === "scatter" && data.scatters) return { ...base, traces: scatterTraces(data.scatters) };
+    const reshape = clipFilterInfo(src.clip, src.filter);
+    const dd = { ...base, ...(reshape ? { reshape } : {}) };
+    if (src.mode === "histogram" && data.histograms) return { ...dd, traces: histogramTraces(data.histograms) };
+    if (src.mode === "heatmap" && data.heatmaps) return { ...dd, matrices: heatmapTraces(data.heatmaps) };
+    if (src.mode === "scatter" && data.scatters) return { ...dd, traces: scatterTraces(data.scatters) };
   }
   return base;
 }

@@ -5,6 +5,7 @@ import { buildGroupDistributionOption, groupChartWidth } from "../../charts/grou
 import { buildHistogramOption } from "../../charts/histogramOption";
 import { buildHeatmapOption, heatmapSize } from "../../charts/heatmapOption";
 import { buildScatterOption } from "../../charts/scatterOption";
+import { clipFilterInfo } from "../../charts/clipFilterInfo";
 import { SummaryGrid } from "../summary-table/SummaryGrid";
 import { useReportStore } from "../../store/reportStore";
 import type { FigureData } from "../../store/reportStore";
@@ -45,7 +46,7 @@ function FigureChart({ fig, data }: { fig: ReportFigure; data: FigureData }) {
       });
     }
     if (src.kind === "stats-by-group" && data.stats) {
-      return buildGroupDistributionOption(data.stats, src.mode, src.metric);
+      return buildGroupDistributionOption(data.stats, src.mode, src.metric, clipFilterInfo(src.clip, src.filter));
     }
     return null;
   }, [src, data]);
@@ -81,6 +82,7 @@ function FigureChart({ fig, data }: { fig: ReportFigure; data: FigureData }) {
   }
 
   if (src.kind === "stats-deepdive") {
+    const info = clipFilterInfo(src.clip, src.filter);
     if (src.mode === "histogram" && data.histograms?.length) {
       const byMetric: Record<string, typeof data.histograms> = {};
       for (const h of data.histograms) (byMetric[h.metric] ??= []).push(h);
@@ -90,7 +92,7 @@ function FigureChart({ fig, data }: { fig: ReportFigure; data: FigureData }) {
             <div key={metric}>
               <div className="text-sm text-gray-500">{metric}</div>
               <EChart
-                option={buildHistogramOption(series, { logY: src.log_y, normalize: src.normalize })}
+                option={buildHistogramOption(series, { logY: src.log_y, normalize: src.normalize, info })}
                 height={300}
                 onReady={i === 0 ? onReady : undefined}
               />
@@ -109,7 +111,7 @@ function FigureChart({ fig, data }: { fig: ReportFigure; data: FigureData }) {
                 <div className="text-sm text-gray-500">
                   {m.cohort} · {m.range_label}
                 </div>
-                <EChart option={buildHeatmapOption(m)} width={width} height={height} onReady={i === 0 ? onReady : undefined} />
+                <EChart option={buildHeatmapOption(m, info)} width={width} height={height} onReady={i === 0 ? onReady : undefined} />
               </div>
             );
           })}
@@ -127,6 +129,7 @@ function FigureChart({ fig, data }: { fig: ReportFigure; data: FigureData }) {
               xLabel: sm[0],
               yLabel: sm[1],
               showLegend: true,
+              info,
             })}
             width={520}
             height={520}
