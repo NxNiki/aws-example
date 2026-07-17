@@ -28,7 +28,7 @@ poetry run python jobs/operation_daily_report/run_daily_report.py --lookback-day
 | `--bastion-ip IP` | — | Bastion IP for Redshift tunnel |
 | `--skip-hg-etl` | off | Skip HG ETL (step 1) |
 | `--skip-pa-etl` | on | Skip PA ETL (step 2). Use `--no-skip-pa-etl` to run when refreshing year-ago data |
-| `--skip-report` | off | Skip display report (step 3) |
+| `--skip-ss01` | off | Skip the SS01 stats report display and the HG/PA ETLs feeding it (step 1–3); PID check still runs |
 | `--skip-pid-check` | off | Skip PID diff check (step 4) |
 | `--lookback-days N` | 7 | Number of days for daily report (step 3) |
 | `--reload-cached-etl` | off | Force re-run ETL for stats_by_day_pa, fishhunter_product_id_pa, slot_product_id_pa |
