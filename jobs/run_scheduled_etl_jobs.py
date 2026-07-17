@@ -69,8 +69,9 @@ def main() -> int:
     # Set args per script directly in this list.
     jobs: list[tuple[str, Path, list[str]]] = [
         (
-            # --skip-report disables the SS01 stats daily-report table; the job
-            # still runs the HG ETL and the PID difference check (sent to Slack).
+            # --skip-report disables the SS01 stats daily-report table and the
+            # HG/PA ETLs that only feed it; the job still runs the PID
+            # difference check (sent to Slack).
             "operation daily report (PID check only)",
             JOBS_DIR / "operation_daily_report" / "run_daily_report.py",
             ["--lookback-days", str(args.lookback_days), "--send-slack", "--skip-report"],

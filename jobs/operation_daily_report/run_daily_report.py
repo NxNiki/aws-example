@@ -126,7 +126,7 @@ def main():
     parser.add_argument(
         "--skip-report",
         action="store_true",
-        help="Skip step 3 (display daily report)",
+        help="Skip the daily report display AND the HG/PA ETLs that only feed it",
     )
     parser.add_argument(
         "--skip-pid-check",
@@ -164,9 +164,11 @@ def main():
     # --- ETL steps (subprocess) ---
     scripts = [
         (
+            # SS01 stats pull whose output (stats_by_date.parquet) feeds ONLY the
+            # report display; the dashboard uses the ss01_wucaishen ETL instead.
             "ETL game stats daily by group (HG)",
             OP_DIR / "etl_game_stats_daily_by_group.py",
-            True,
+            not args.skip_report,
             [],
         ),
         ("ETL game stats daily by group PA", OP_DIR / "etl_game_stats_daily_by_group_pa.py", run_pa_etl, pa_etl_args),
