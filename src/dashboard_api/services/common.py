@@ -252,12 +252,13 @@ def iter_cohorts(
     computed on just its rows.
 
     Dashboard feature: the global "Lifecycle groups" picker above the tab bar.
-    When ``lifecycle`` is given (dicts with label/start/end, end None =
-    open-ended, units = ``granularity`` periods since first bet), it redefines
-    the LIFECYCLE_COL dimension: its labels become the selection for that
-    column and each cohort filters rows by period range instead of the stored
-    ETL label. A group labeled "all" means no filter. Ranges may overlap —
-    each group is an independent filter, not a partition.
+    When ``lifecycle`` is given (dicts with label/start/end forming the
+    half-open range [start, end), end None = open-ended, units =
+    ``granularity`` periods since first bet), it redefines the LIFECYCLE_COL
+    dimension: its labels become the selection for that column and each cohort
+    filters rows by period range instead of the stored ETL label. A group
+    labeled "all" means no filter. Ranges may overlap — each group is an
+    independent filter, not a partition.
     """
     col1, col2 = effective_cohort_cols(cfg)
     lc = lifecycle_col(cfg) if lifecycle else None
@@ -277,7 +278,7 @@ def iter_cohorts(
             g = by_label[value]
             cond = pl.col(PERIODS_COL) >= int(g["start"])
             if g.get("end") is not None:
-                cond = cond & (pl.col(PERIODS_COL) <= int(g["end"]))
+                cond = cond & (pl.col(PERIODS_COL) < int(g["end"]))
             return df_.filter(cond)
         return apply_cohort(df_, col, value)
 

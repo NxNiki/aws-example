@@ -6,20 +6,21 @@ import type { Granularity } from "../api/types";
 // follows the active tab's granularity — days on daily data, calendar weeks on
 // weekly data, calendar months on monthly data (a week/month row aggregates
 // the whole period, so day units there would slice users by start weekday
-// rather than by age). Each row is a show toggle + editable name + start/end
-// preset dropdowns; "max" as the end means open-ended. Ranges may overlap.
+// rather than by age). Each row is a show toggle + editable name + a HALF-OPEN
+// range [start, end): start inclusive, end exclusive, so adjacent groups
+// sharing a boundary ([0,3), [3,7), [7,max)) tile with no gap and no
+// double-count. "max" as the end means open-ended. Ranges may overlap.
 export interface LifecycleGroupState {
   label: string;
   start: number;
-  end: number | null; // null = max (open-ended)
+  end: number | null; // exclusive; null = max (open-ended)
   show: boolean;
 }
 
-// Day offsets mirror the retention metrics (day0/1/3/5/7/10/15/30), plus 4 and
-// 8 so the default new(0-3)/beginner(4-7)/old(8-max) stay expressible. Weeks
-// and months use plain period indices (0 = first week/month).
+// Day boundaries mirror the retention metrics (day0/1/3/5/7/15/30). Weeks and
+// months use plain period indices (0 = first week/month).
 const UNIT_OPTIONS: Record<Granularity, number[]> = {
-  day: [0, 1, 2, 3, 4, 5, 7, 8, 10, 15, 30],
+  day: [0, 1, 3, 5, 7, 15, 30],
   week: [0, 1, 2, 3, 4],
   month: [0, 1, 2, 3, 4],
 };
@@ -72,7 +73,11 @@ export function LifecycleGroups(props: {
         <span className="font-medium">all</span>
       </label>
       {props.groups.map((g, i) => (
-        <div key={i} className="flex items-center gap-1 border-l pl-4">
+        <div
+          key={i}
+          className="flex items-center gap-1 border-l pl-4"
+          title="half-open range [start, end): start inclusive, end exclusive — groups sharing a boundary have no gap or overlap"
+        >
           <input type="checkbox" checked={g.show} onChange={(e) => props.onChange(i, { ...g, show: e.target.checked })} />
           <input
             className="w-20 rounded border px-1 py-0.5"
@@ -81,14 +86,16 @@ export function LifecycleGroups(props: {
             title="group name (chart legend label)"
           />
           <span className="text-gray-500">{props.unit}</span>
+          <span className="text-gray-400">[</span>
           <PeriodSelect
             value={g.start}
             options={options}
             allowMax={false}
             onChange={(v) => props.onChange(i, { ...g, start: v ?? 0 })}
           />
-          <span className="text-gray-400">→</span>
+          <span className="text-gray-400">,</span>
           <PeriodSelect value={g.end} options={options} allowMax onChange={(v) => props.onChange(i, { ...g, end: v })} />
+          <span className="text-gray-400">)</span>
         </div>
       ))}
     </div>

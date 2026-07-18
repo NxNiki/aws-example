@@ -161,17 +161,18 @@ def _lifecycle_fixture():
 
 
 def test_iter_cohorts_lifecycle_groups(monkeypatch):
-    """Custom lifecycle groups redefine user_group by day-since-first-bet range:
-    labels come from the request, ranges may overlap, day_to=None is open-ended,
-    'all' is no-filter, and users without a first bet fall only into 'all'."""
+    """Custom lifecycle groups redefine user_group by the HALF-OPEN period range
+    [start, end) since first bet: labels come from the request, ranges may
+    overlap, end=None is open-ended, 'all' is no-filter, and users without a
+    first bet fall only into 'all'."""
     from dashboard_api.services import common
 
     df, first = _lifecycle_fixture()
     monkeypatch.setattr(common, "load_first_bet_dates", lambda cfg: first)
     cfg = {"id": "g", "stats_by_date": {"user_group_cols": ["ai_group", "user_group"]}}
     lifecycle = [
-        {"label": "day0", "start": 0, "end": 0},
-        {"label": "day0-3", "start": 0, "end": 3},  # overlaps day0 on purpose
+        {"label": "day0", "start": 0, "end": 1},
+        {"label": "day0-3", "start": 0, "end": 4},  # overlaps day0 on purpose
         {"label": "rest", "start": 4, "end": None},
         {"label": "all", "start": 0, "end": None},
     ]
@@ -191,7 +192,8 @@ def test_iter_cohorts_lifecycle_week_month_use_period_index(monkeypatch):
     index since the user's first bet (a week/month row aggregates the whole
     period, so day units would slice by start weekday). Week 0 = the week of
     the first bet even when the row's week-start precedes a mid-week first
-    bet; users with no first bet (null) still match only 'all'."""
+    bet; users with no first bet (null) still match only 'all'. Ranges are
+    half-open: [0,1) = week 0 only, [1,2) = week 1 only."""
     import polars as pl
 
     from dashboard_api.services import common
@@ -210,8 +212,8 @@ def test_iter_cohorts_lifecycle_week_month_use_period_index(monkeypatch):
     monkeypatch.setattr(common, "load_first_bet_dates", lambda cfg: first)
     cfg = {"id": "g", "stats_by_date": {"user_group_cols": ["user_group"]}}
     lifecycle = [
-        {"label": "new", "start": 0, "end": 0},
-        {"label": "beginner", "start": 1, "end": 1},
+        {"label": "new", "start": 0, "end": 1},
+        {"label": "beginner", "start": 1, "end": 2},
         {"label": "all", "start": 0, "end": None},
     ]
     out = dict(common.iter_cohorts(cfg, df, {}, lifecycle=lifecycle, date_col="d", granularity="week"))
@@ -247,7 +249,7 @@ def test_iter_cohorts_without_lifecycle_uses_stored_labels(monkeypatch):
 
     # A config without a user_group dimension ignores lifecycle entirely.
     cfg2 = {"id": "g2", "stats_by_date": {"user_group_cols": ["ab_group"]}}
-    out2 = dict(common.iter_cohorts(cfg2, df, {}, lifecycle=[{"label": "day0", "start": 0, "end": 0}]))
+    out2 = dict(common.iter_cohorts(cfg2, df, {}, lifecycle=[{"label": "day0", "start": 0, "end": 1}]))
     assert set(out2) == {"all"} and out2["all"].height == 4
 
 
@@ -262,6 +264,8 @@ def test_lifecycle_group_schema_validation():
     assert LifecycleGroup(label="old", start=8).end is None  # open-ended
     with pytest.raises(ValidationError):
         LifecycleGroup(label="bad", start=5, end=2)  # inverted range
+    with pytest.raises(ValidationError):
+        LifecycleGroup(label="empty", start=5, end=5)  # end is exclusive → [5,5) is empty
     with pytest.raises(ValidationError):
         LifecycleGroup(label="neg", start=-1)
 

@@ -80,31 +80,32 @@ const defaultControls = (): TabControls => ({
 // behaves exactly as before the picker existed.
 export type LifecycleByUnit = Record<Granularity, LifecycleGroupState[]>;
 
+// Ranges are half-open [start, end) — see LifecycleGroups.tsx.
 const defaultLifecycle = (): LifecycleByUnit => ({
   day: [
     { label: "new", start: 0, end: 3, show: false },
-    { label: "beginner", start: 4, end: 7, show: false },
-    { label: "old", start: 8, end: null, show: false },
+    { label: "beginner", start: 3, end: 7, show: false },
+    { label: "old", start: 7, end: null, show: false },
   ],
   week: [
-    { label: "new", start: 0, end: 0, show: false },
-    { label: "beginner", start: 1, end: 1, show: false },
+    { label: "new", start: 0, end: 1, show: false },
+    { label: "beginner", start: 1, end: 2, show: false },
     { label: "old", start: 2, end: null, show: false },
   ],
   month: [
-    { label: "new", start: 0, end: 0, show: false },
-    { label: "beginner", start: 1, end: 1, show: false },
+    { label: "new", start: 0, end: 1, show: false },
+    { label: "beginner", start: 1, end: 2, show: false },
     { label: "old", start: 2, end: null, show: false },
   ],
 });
 
-// Range suffix appended to each group's label — "new(0-3)", "day0(0)",
-// "old(8+)" — so chart legends / table columns show the definition, not just
-// the name. The label is what the backend uses as the cohort key, so the tag
-// flows everywhere (series, summary columns, report figures) for free.
+// Range suffix appended to each group's label in half-open interval notation —
+// "new[0, 3)", "old[7, max)" — so chart legends / table columns show the
+// definition, not just the name. The label is what the backend uses as the
+// cohort key, so the tag flows everywhere (series, summary columns, report
+// figures) for free.
 function rangeTag(g: LifecycleGroupState): string {
-  if (g.end === null) return `${g.start}+`;
-  return g.start === g.end ? `${g.start}` : `${g.start}-${g.end}`;
+  return `[${g.start}, ${g.end ?? "max"})`;
 }
 
 // The lifecycle_groups request payload for a tab fetching at `granularity`, or
@@ -116,8 +117,8 @@ export function activeLifecycleGroups(
 ): LifecycleGroup[] | undefined {
   if (!s.config?.lifecycle_col) return undefined;
   const groups = (s.lifecycle[granularity] ?? [])
-    .filter((g) => g.show && g.label.trim() && (g.end === null || g.end >= g.start))
-    .map((g) => ({ label: `${g.label.trim()}(${rangeTag(g)})`, start: g.start, end: g.end }));
+    .filter((g) => g.show && g.label.trim() && (g.end === null || g.end > g.start))
+    .map((g) => ({ label: `${g.label.trim()}${rangeTag(g)}`, start: g.start, end: g.end }));
   if (groups.length === 0) return undefined;
   return s.lifecycleAll ? [{ label: "all", start: 0, end: null }, ...groups] : groups;
 }

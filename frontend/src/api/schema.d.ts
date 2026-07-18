@@ -894,8 +894,10 @@ export interface components {
         };
         /**
          * LifecycleGroup
-         * @description One user-defined lifecycle cohort: users whose activity falls start..end
-         *     periods (inclusive) after their first bet, where the period unit IS the
+         * @description One user-defined lifecycle cohort: users whose activity falls in the
+         *     HALF-OPEN period range [start, end) after their first bet — start
+         *     inclusive, end exclusive, so adjacent groups sharing a boundary (0→3,
+         *     3→7, 7→max) tile with no gap and no double-count. The period unit IS the
          *     request's granularity — days on daily data, calendar weeks on weekly data,
          *     calendar months on monthly data (week/month rows aggregate a whole period,
          *     so sub-period day ranges would slice by start weekday, not user age).
@@ -903,7 +905,7 @@ export interface components {
          *     Dashboard feature: the global "Lifecycle groups" picker above the tab bar.
          *     ``end=None`` means open-ended (start and later). The label "all" is a
          *     sentinel meaning no filter (the full population), mirroring group_values.
-         *     Ranges may overlap (e.g. compare day 0–3 against day 0–7).
+         *     Ranges may overlap (e.g. compare day 0→3 against day 0→7).
          */
         LifecycleGroup: {
             /** End */
