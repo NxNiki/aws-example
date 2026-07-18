@@ -98,6 +98,15 @@ const defaultLifecycle = (): LifecycleByUnit => ({
   ],
 });
 
+// Range suffix appended to each group's label — "new(0-3)", "day0(0)",
+// "old(8+)" — so chart legends / table columns show the definition, not just
+// the name. The label is what the backend uses as the cohort key, so the tag
+// flows everywhere (series, summary columns, report figures) for free.
+function rangeTag(g: LifecycleGroupState): string {
+  if (g.end === null) return `${g.start}+`;
+  return g.start === g.end ? `${g.start}` : `${g.start}-${g.end}`;
+}
+
 // The lifecycle_groups request payload for a tab fetching at `granularity`, or
 // undefined when the config has no lifecycle dimension / nothing is toggled on
 // (→ the backend falls back to plain "all", i.e. pre-picker behavior).
@@ -108,7 +117,7 @@ export function activeLifecycleGroups(
   if (!s.config?.lifecycle_col) return undefined;
   const groups = (s.lifecycle[granularity] ?? [])
     .filter((g) => g.show && g.label.trim() && (g.end === null || g.end >= g.start))
-    .map((g) => ({ label: g.label.trim(), start: g.start, end: g.end }));
+    .map((g) => ({ label: `${g.label.trim()}(${rangeTag(g)})`, start: g.start, end: g.end }));
   if (groups.length === 0) return undefined;
   return s.lifecycleAll ? [{ label: "all", start: 0, end: null }, ...groups] : groups;
 }
