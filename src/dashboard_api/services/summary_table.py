@@ -74,6 +74,7 @@ def load_summary_table(
     granularity: str,
     ranges: list[tuple[Optional[str], Optional[str]]],
     group_values: Optional[dict[str, list[str]]] = None,
+    lifecycle: Optional[list[dict[str, Any]]] = None,
     metric_options: Optional[dict[str, dict[str, Any]]] = None,
     pvalues: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -102,7 +103,9 @@ def load_summary_table(
     load_end = overall_end + timedelta(days=RETENTION_LOAD_EXTRA_DAYS) if aggregate_from_rows else overall_end
 
     df_raw = collect_window(cfg, granularity, lf, date_col, overall_start, load_end)
-    cohorts = list(iter_cohorts(cfg, df_raw, group_values))
+    cohorts = list(
+        iter_cohorts(cfg, df_raw, group_values, lifecycle=lifecycle, date_col=date_col, granularity=granularity)
+    )
     n_ranges = len(parsed)
     n_cols = len(cohorts) * n_ranges
 

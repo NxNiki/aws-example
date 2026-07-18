@@ -213,18 +213,6 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 AND b.spin_id > m.mathtable_last_spin_id
                 AND b.ab_group_id = '{AI_GROUP_ID}'
             GROUP BY m.{stats_agg_col}, m.user_id, m.mathtable
-        ),
-
-        user_first_bet AS (
-            SELECT
-                user_id,
-                MIN(CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', created_at))) AS DATE)) AS first_bet_date
-            FROM public.fct_bet_orders
-            WHERE game_id = '{GAME_ID}'
-              AND currency_type IN {ETL_CURRENCY_CODES}
-              AND status = 'COMPLETED'
-              AND op_code NOT IN {ETL_EXCLUDED_OP_CODES}
-            GROUP BY user_id
         )
 
         SELECT
@@ -232,18 +220,6 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             us.ai_group,
             us.user_id,
             us.user_mathtable_change,
-            CASE
-                WHEN DATEDIFF('day', fb.first_bet_date, us.{stats_agg_col}) <= 3 THEN 'new'
-                WHEN DATEDIFF('day', fb.first_bet_date, us.{stats_agg_col}) <= 7 THEN 'beginner'
-                ELSE 'old'
-            END AS user_group,
-
-            CASE
-                WHEN DATEDIFF('day', fb.first_bet_date, us.{stats_agg_col}) < 1 THEN 'day0_user'
-                WHEN DATEDIFF('day', fb.first_bet_date, us.{stats_agg_col}) < 7 THEN 'day1-6_user'
-                ELSE 'day7+_user'
-            END AS user_group2,
-
             -- DataMetrics input columns (user-level raw stats):
             us.user_num_bets,
             us.user_num_bets_bg,
@@ -285,7 +261,6 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             rb.user_avg_remaining_bet_amount
 
         FROM user_stats AS us
-        LEFT JOIN user_first_bet AS fb ON us.user_id = fb.user_id
         LEFT JOIN user_remaining_bet AS rb
             ON rb.user_id = us.user_id
             AND rb.{stats_agg_col} = us.{stats_agg_col}

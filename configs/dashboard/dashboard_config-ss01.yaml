@@ -17,7 +17,7 @@ stats_by_date:
 
   group_col: "ai_group"
   date_col: "activity_date"
-  user_group_cols: [ai_group, user_group, user_group2]
+  user_group_cols: [ai_group, user_group]
   aggregate_stats_from_user_rows: true
   # Parquet columns required before enrich: ENRICH_USER_ROW_INPUT_COLUMNS ∪ (columns below − enrich outputs)
   # — see dashboards/user_stats_aggregates.py.

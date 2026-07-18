@@ -447,6 +447,8 @@ export interface components {
             groups: components["schemas"]["MetricGroup"][];
             /** Id */
             id: string;
+            /** Lifecycle Col */
+            lifecycle_col?: string | null;
             /** Tabs */
             tabs: string[];
             /** Title */
@@ -634,6 +636,8 @@ export interface components {
             group_values?: {
                 [key: string]: string[];
             };
+            /** Lifecycle Groups */
+            lifecycle_groups?: components["schemas"]["LifecycleGroup"][] | null;
             /** Metrics */
             metrics: string[];
             /**
@@ -768,6 +772,8 @@ export interface components {
             group_values?: {
                 [key: string]: string[];
             };
+            /** Lifecycle Groups */
+            lifecycle_groups?: components["schemas"]["LifecycleGroup"][] | null;
             /** Metric */
             metric: string;
             /** Ranges */
@@ -885,6 +891,29 @@ export interface components {
             range_index: number;
             /** Range Label */
             range_label: string;
+        };
+        /**
+         * LifecycleGroup
+         * @description One user-defined lifecycle cohort: users whose activity falls in the
+         *     HALF-OPEN period range [start, end) after their first bet — start
+         *     inclusive, end exclusive, so adjacent groups sharing a boundary (0→3,
+         *     3→7, 7→max) tile with no gap and no double-count. The period unit IS the
+         *     request's granularity — days on daily data, calendar weeks on weekly data,
+         *     calendar months on monthly data (week/month rows aggregate a whole period,
+         *     so sub-period day ranges would slice by start weekday, not user age).
+         *
+         *     Dashboard feature: the global "Lifecycle groups" picker above the tab bar.
+         *     ``end=None`` means open-ended (start and later). The label "all" is a
+         *     sentinel meaning no filter (the full population), mirroring group_values.
+         *     Ranges may overlap (e.g. compare day 0→3 against day 0→7).
+         */
+        LifecycleGroup: {
+            /** End */
+            end?: number | null;
+            /** Label */
+            label: string;
+            /** Start */
+            start: number;
         };
         /** MetricGroup */
         MetricGroup: {
@@ -1115,6 +1144,8 @@ export interface components {
             group_values?: {
                 [key: string]: string[];
             };
+            /** Lifecycle Groups */
+            lifecycle_groups?: components["schemas"]["LifecycleGroup"][] | null;
             /** Metrics */
             metrics: string[];
         };
@@ -1285,6 +1316,8 @@ export interface components {
             group_values?: {
                 [key: string]: string[];
             };
+            /** Lifecycle Groups */
+            lifecycle_groups?: components["schemas"]["LifecycleGroup"][] | null;
             /** Metric Options */
             metric_options?: {
                 [key: string]: components["schemas"]["SummaryMetricOption"];

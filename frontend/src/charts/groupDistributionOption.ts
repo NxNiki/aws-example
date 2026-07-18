@@ -1,7 +1,7 @@
 import type { EChartsOption } from "echarts";
 import type { GroupStat } from "../api/types";
 import { infoGraphic } from "./clipFilterInfo";
-import { colorForIndex } from "./styles";
+import { colorForIndex, wrapCohort } from "./styles";
 
 // Stats-by-Group: one box (5-number summary) or bar (mean ± bootstrap CI) per
 // (cohort × date-range). Color encodes the cohort; ranges 2/3 are dimmed
@@ -26,8 +26,9 @@ function cohortColors(stats: GroupStat[]): Map<string, string> {
 }
 
 const opacityFor = (rangeIndex: number) => (rangeIndex === 0 ? 1 : 0.45);
-// Two-line category label: cohort on top, the exact date range beneath.
-const label = (s: GroupStat) => `${s.cohort}\n${s.range_label}`;
+// Multi-line category label: cohort on top (one line per group dimension when
+// two are selected, e.g. lifecycle | daily), the exact date range beneath.
+const label = (s: GroupStat) => `${wrapCohort(s.cohort)}\n${s.range_label}`;
 
 function tooltipText(s: GroupStat): string {
   const f = (v: number | null) => (v == null ? "–" : v.toFixed(3));

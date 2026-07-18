@@ -96,6 +96,86 @@ def effective_cohort_cols(cfg: dict[str, Any]) -> tuple[Optional[str], Optional[
     return col1, col2
 
 
+# The stored ETL cohort column (new/beginner/old) the lifecycle picker redefines.
+LIFECYCLE_COL = "user_group"
+# Helper column carrying each row's period offset (days / weeks / months,
+# matching the request granularity) from the user's first bet.
+PERIODS_COL = "_periods_since_first_bet"
+
+
+def lifecycle_col(cfg: dict[str, Any]) -> Optional[str]:
+    """The user-group column custom lifecycle groups redefine, or None when the
+    config has no lifecycle cohort dimension."""
+    return LIFECYCLE_COL if LIFECYCLE_COL in user_group_cols(cfg) else None
+
+
+# Per-config first-bet map. Derived, not stored: the daily parquet keeps the
+# game's full per-user-per-day history, so min(activity_date | user bet that
+# day) reproduces the ETL's Redshift-side first_bet_date (validated ≥99.97%
+# per game, 100% on ss02/ss03/ss06). Cached because it scans the full daily
+# history; the TTL picks up the daily ETL refresh.
+_FIRST_BET_TTL_S = 3600
+_first_bet_cache: dict[str, tuple[float, pl.DataFrame]] = {}
+_first_bet_lock = threading.Lock()
+
+
+def load_first_bet_dates(cfg: dict[str, Any]) -> pl.DataFrame:
+    """Per-user first bet date (columns: user_id, first_bet_date) derived from
+    the config's DAILY user rows, shared across granularities and requests."""
+    config_id = cfg.get("id")
+    if not config_id:
+        raise SeriesError("config dict is missing 'id'; cannot safely cache first-bet dates")
+    with _first_bet_lock:
+        hit = _first_bet_cache.get(config_id)
+        if hit and time.monotonic() - hit[0] < _FIRST_BET_TTL_S:
+            return hit[1]
+        lf, date_col = load_lazy(cfg, "day")
+        cols = set(lf.collect_schema().names())
+        if "user_id" not in cols:
+            raise SeriesError("Lifecycle groups need per-user daily rows ('user_id' column)")
+        # Rows can predate the first bet (active days with zero bets), so gate
+        # the min on the user actually betting when the column is available.
+        if "user_num_bets" in cols:
+            lf = lf.filter(pl.col("user_num_bets") > 0)
+        df = (
+            lf.select("user_id", pl.col(date_col).cast(pl.Datetime, strict=False).alias("first_bet_date"))
+            .group_by("user_id")
+            .agg(pl.col("first_bet_date").min())
+            .collect()
+        )
+        logger.info("first-bet cache: derived %s users=%d", config_id, df.height)
+        _first_bet_cache[config_id] = (time.monotonic(), df)
+        return df
+
+
+def attach_lifecycle_periods(cfg: dict[str, Any], df: pl.DataFrame, date_col: str, granularity: str) -> pl.DataFrame:
+    """Add PERIODS_COL = the row's offset from the user's first bet, in units of
+    the granularity (null for users never seen betting in the daily data).
+
+    day   → whole days between first bet and the row's date.
+    week  → calendar-week index: both dates truncate to their Monday week start
+            (matching the ETL's Redshift ``DATE_TRUNC('week', …)``), so 0 is the
+            week the user first bet, 1 the next week, … A weekly row aggregates
+            the whole week, so units finer than a week would slice users by
+            start weekday, not by age.
+    month → calendar-month index, same reasoning.
+
+    Negatives clamp to 0 (a rare pre-first-bet activity day — the ETL's
+    ``DATEDIFF <= 3`` CASE also labels those 'new'). Nulls stay null, so
+    never-bet users match only 'all'."""
+    joined = df.join(load_first_bet_dates(cfg), on="user_id", how="left")
+    d = pl.col(date_col).cast(pl.Datetime, strict=False)
+    fb = pl.col("first_bet_date")
+    if granularity == "week":
+        periods = (d.dt.truncate("1w") - fb.dt.truncate("1w")).dt.total_days() // 7
+    elif granularity == "month":
+        periods = (d.dt.year() - fb.dt.year()) * 12 + (d.dt.month().cast(pl.Int32) - fb.dt.month().cast(pl.Int32))
+    else:
+        periods = (d - fb).dt.total_days()
+    periods = pl.when(periods < 0).then(pl.lit(0)).otherwise(periods)
+    return joined.with_columns(periods.alias(PERIODS_COL)).drop("first_bet_date")
+
+
 def load_lazy(cfg: dict[str, Any], granularity: str) -> tuple[pl.LazyFrame, str]:
     """Lazily open the user-level parquet for a granularity; return (lf, date_col)."""
     sd = stats_by_date_cfg(cfg)
@@ -159,21 +239,55 @@ def apply_cohort(df: pl.DataFrame, col: Optional[str], value: str) -> pl.DataFra
 
 
 def iter_cohorts(
-    cfg: dict[str, Any], df: pl.DataFrame, group_values: dict[str, list[str]]
+    cfg: dict[str, Any],
+    df: pl.DataFrame,
+    group_values: dict[str, list[str]],
+    lifecycle: Optional[list[dict[str, Any]]] = None,
+    date_col: Optional[str] = None,
+    granularity: str = "day",
 ) -> Iterator[tuple[str, pl.DataFrame]]:
     """Yield (cohort_label, cohort_df) over the cross-product of selected
     user-group values — the same cohorts the legacy tabs overlay. Filtering
     happens before any DataMetrics aggregation, so each cohort's metrics are
-    computed on just its rows."""
+    computed on just its rows.
+
+    Dashboard feature: the global "Lifecycle groups" picker above the tab bar.
+    When ``lifecycle`` is given (dicts with label/start/end forming the
+    half-open range [start, end), end None = open-ended, units =
+    ``granularity`` periods since first bet), it redefines the LIFECYCLE_COL
+    dimension: its labels become the selection for that column and each cohort
+    filters rows by period range instead of the stored ETL label. A group
+    labeled "all" means no filter. Ranges may overlap — each group is an
+    independent filter, not a partition.
+    """
     col1, col2 = effective_cohort_cols(cfg)
-    v1s = cohort_values(group_values, col1)
-    v2s = cohort_values(group_values, col2) if col2 else ["all"]
+    lc = lifecycle_col(cfg) if lifecycle else None
+    by_label = {str(g["label"]): g for g in lifecycle or []}
+    if lc is not None and lc in (col1, col2) and date_col and "user_id" in df.columns:
+        df = attach_lifecycle_periods(cfg, df, date_col, granularity)
+    else:
+        lc = None
+
+    def values(col: Optional[str]) -> list[str]:
+        if col is not None and col == lc:
+            return list(by_label) or ["all"]
+        return cohort_values(group_values, col)
+
+    def apply(df_: pl.DataFrame, col: Optional[str], value: str) -> pl.DataFrame:
+        if col is not None and col == lc and value != "all":
+            g = by_label[value]
+            cond = pl.col(PERIODS_COL) >= int(g["start"])
+            if g.get("end") is not None:
+                cond = cond & (pl.col(PERIODS_COL) < int(g["end"]))
+            return df_.filter(cond)
+        return apply_cohort(df_, col, value)
+
     seen: set[str] = set()
-    for v1 in v1s:
-        for v2 in v2s:
+    for v1 in values(col1):
+        for v2 in values(col2) if col2 else ["all"]:
             label = cohort_label(v1, v2, has_col2=col2 is not None)
             if label in seen:
                 continue
             seen.add(label)
-            df_c = apply_cohort(apply_cohort(df, col1, v1), col2, v2)
-            yield label, df_c
+            df_c = apply(apply(df, col1, v1), col2, v2)
+            yield label, (df_c.drop(PERIODS_COL) if lc else df_c)

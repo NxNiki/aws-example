@@ -8,6 +8,7 @@ import { buildScatterOption } from "../../charts/scatterOption";
 import { clipFilterInfo } from "../../charts/clipFilterInfo";
 import { SummaryGrid } from "../summary-table/SummaryGrid";
 import { useReportStore } from "../../store/reportStore";
+import { useDashboardStore } from "../../store/dashboardStore";
 import type { FigureData } from "../../store/reportStore";
 import type { ReportFigure, ReportLanguage } from "../../api/types";
 
@@ -267,6 +268,7 @@ function SpecEditor() {
 
 export function ReportTab() {
   const r = useReportStore();
+  const hasLifecycle = useDashboardStore((s) => Boolean(s.config?.lifecycle_col));
   const specName = r.specName;
   const setSpecName = r.setSpecName;
 
@@ -278,7 +280,9 @@ export function ReportTab() {
   return (
     <div className="p-6 pt-0 w-full">
       {/* Pinned controls (below the sticky header + tab bar). */}
-      <div className="sticky top-[6.25rem] z-20 -mx-6 mb-6 flex flex-wrap items-end gap-4 border-b bg-gray-50 px-6 py-3">
+      <div
+        className={`sticky ${hasLifecycle ? "top-[9rem]" : "top-[6.25rem]"} z-20 -mx-6 mb-6 flex flex-wrap items-end gap-4 border-b bg-gray-50 px-6 py-3`}
+      >
         <div className="flex items-center gap-2">
           <select
             className="w-64 rounded border px-2 py-2"

@@ -67,6 +67,17 @@
             "title": "Id",
             "type": "string"
           },
+          "lifecycle_col": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lifecycle Col"
+          },
           "tabs": {
             "items": {
               "type": "string"
@@ -532,6 +543,20 @@
             "title": "Group Values",
             "type": "object"
           },
+          "lifecycle_groups": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/LifecycleGroup"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lifecycle Groups"
+          },
           "metrics": {
             "items": {
               "type": "string"
@@ -870,6 +895,20 @@
             },
             "title": "Group Values",
             "type": "object"
+          },
+          "lifecycle_groups": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/LifecycleGroup"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lifecycle Groups"
           },
           "metric": {
             "title": "Metric",
@@ -1229,6 +1268,39 @@
           "counts"
         ],
         "title": "HistogramSeries",
+        "type": "object"
+      },
+      "LifecycleGroup": {
+        "description": "One user-defined lifecycle cohort: users whose activity falls in the\nHALF-OPEN period range [start, end) after their first bet \u2014 start\ninclusive, end exclusive, so adjacent groups sharing a boundary (0\u21923,\n3\u21927, 7\u2192max) tile with no gap and no double-count. The period unit IS the\nrequest's granularity \u2014 days on daily data, calendar weeks on weekly data,\ncalendar months on monthly data (week/month rows aggregate a whole period,\nso sub-period day ranges would slice by start weekday, not user age).\n\nDashboard feature: the global \"Lifecycle groups\" picker above the tab bar.\n``end=None`` means open-ended (start and later). The label \"all\" is a\nsentinel meaning no filter (the full population), mirroring group_values.\nRanges may overlap (e.g. compare day 0\u21923 against day 0\u21927).",
+        "properties": {
+          "end": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End"
+          },
+          "label": {
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "start": {
+            "minimum": 0.0,
+            "title": "Start",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "label",
+          "start"
+        ],
+        "title": "LifecycleGroup",
         "type": "object"
       },
       "MetricGroup": {
@@ -1834,6 +1906,20 @@
             "title": "Group Values",
             "type": "object"
           },
+          "lifecycle_groups": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/LifecycleGroup"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lifecycle Groups"
+          },
           "metrics": {
             "items": {
               "type": "string"
@@ -2295,6 +2381,20 @@
             },
             "title": "Group Values",
             "type": "object"
+          },
+          "lifecycle_groups": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/LifecycleGroup"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lifecycle Groups"
           },
           "metric_options": {
             "additionalProperties": {

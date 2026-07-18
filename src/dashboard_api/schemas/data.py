@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 Granularity = Literal["day", "week", "month"]
 
@@ -42,9 +42,39 @@ class ConfigDetail(BaseModel):
     date_col: str
     group_col: str
     user_group_cols: list[str]
+    # The user-group column the global lifecycle-group picker redefines (the
+    # ETL's hard-coded new/beginner/old split). None → the config has no
+    # lifecycle cohorts and the picker is hidden.
+    lifecycle_col: Optional[str] = None
     granularities: list[Granularity]
     groups: list[MetricGroup]
     tabs: list[str]
+
+
+class LifecycleGroup(BaseModel):
+    """One user-defined lifecycle cohort: users whose activity falls in the
+    HALF-OPEN period range [start, end) after their first bet — start
+    inclusive, end exclusive, so adjacent groups sharing a boundary (0→3,
+    3→7, 7→max) tile with no gap and no double-count. The period unit IS the
+    request's granularity — days on daily data, calendar weeks on weekly data,
+    calendar months on monthly data (week/month rows aggregate a whole period,
+    so sub-period day ranges would slice by start weekday, not user age).
+
+    Dashboard feature: the global "Lifecycle groups" picker above the tab bar.
+    ``end=None`` means open-ended (start and later). The label "all" is a
+    sentinel meaning no filter (the full population), mirroring group_values.
+    Ranges may overlap (e.g. compare day 0→3 against day 0→7).
+    """
+
+    label: str = Field(min_length=1)
+    start: int = Field(ge=0)
+    end: Optional[int] = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _check_range(self) -> "LifecycleGroup":
+        if self.end is not None and self.end <= self.start:
+            raise ValueError(f"end ({self.end}) is exclusive and must be > start ({self.start})")
+        return self
 
 
 class SeriesRequest(BaseModel):
@@ -57,6 +87,10 @@ class SeriesRequest(BaseModel):
     # absent here (or an empty list) means "all" — no filter on that column.
     # The response emits one series per requested metric × cohort combination.
     group_values: dict[str, list[str]] = Field(default_factory=dict)
+    # When set, redefines the lifecycle user-group column (ConfigDetail.lifecycle_col)
+    # with these day-since-first-bet ranges; it then IS the selection for that
+    # column (group_values for it is ignored).
+    lifecycle_groups: Optional[list[LifecycleGroup]] = None
 
 
 class Series(BaseModel):
@@ -125,6 +159,7 @@ class GroupDistributionRequest(BaseModel):
     metric: str
     ranges: list[DateRange] = Field(min_length=1)
     group_values: dict[str, list[str]] = Field(default_factory=dict)
+    lifecycle_groups: Optional[list[LifecycleGroup]] = None
     clip: ClipOpts = Field(default_factory=ClipOpts)
     filter: FilterOpts = Field(default_factory=FilterOpts)
 
@@ -172,6 +207,7 @@ class SummaryTableRequest(BaseModel):
     # The columns are the cross-product of selected cohorts × these ranges.
     ranges: list[DateRange] = Field(min_length=1)
     group_values: dict[str, list[str]] = Field(default_factory=dict)
+    lifecycle_groups: Optional[list[LifecycleGroup]] = None
     # Per-metric (keyed by metric name) clip + log; a metric absent here is left
     # as-is. Sent for every metric the client may show.
     metric_options: dict[str, SummaryMetricOption] = Field(default_factory=dict)
@@ -232,6 +268,7 @@ class DeepdiveRequest(BaseModel):
     metrics: list[str] = Field(min_length=1)
     ranges: list[DateRange] = Field(min_length=1)
     group_values: dict[str, list[str]] = Field(default_factory=dict)
+    lifecycle_groups: Optional[list[LifecycleGroup]] = None
     clip: ClipOpts = Field(default_factory=ClipOpts)
     filter: FilterOpts = Field(default_factory=FilterOpts)
     nbins: int = 50  # histogram only

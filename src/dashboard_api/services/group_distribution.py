@@ -72,6 +72,7 @@ def load_group_distribution(
     metric: str,
     ranges: list[tuple[Optional[str], Optional[str]]],
     group_values: Optional[dict[str, list[str]]] = None,
+    lifecycle: Optional[list[dict[str, Any]]] = None,
     clip_enable: bool = False,
     clip_min: Optional[float] = None,
     clip_max: Optional[float] = None,
@@ -112,7 +113,9 @@ def load_group_distribution(
 
     stats: list[dict[str, Any]] = []
     produced = False
-    for label, df_c in iter_cohorts(cfg, df_raw, group_values):
+    for label, df_c in iter_cohorts(
+        cfg, df_raw, group_values, lifecycle=lifecycle, date_col=date_col, granularity=granularity
+    ):
         dm = DataMetrics(
             df_c,
             start_dt=overall_start,

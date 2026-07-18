@@ -30,3 +30,8 @@ export const LINE_DASH: DashType[] = [
 
 export const colorForIndex = (i: number): string => COLORS[i % COLORS.length];
 export const dashForIndex = (i: number): DashType => LINE_DASH[i % LINE_DASH.length];
+
+// Two-dimension cohort labels ("new[0, 3) | daily_x") get wide fast — break
+// each dimension onto its own line in legends / category axis labels. Series
+// identity keeps the full one-line name; this is display-only.
+export const wrapCohort = (label: string): string => label.split(" | ").join("\n");

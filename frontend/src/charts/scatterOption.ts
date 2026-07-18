@@ -1,7 +1,7 @@
 import type { EChartsOption } from "echarts";
 import type { ScatterSeries } from "../api/types";
 import { infoGraphic } from "./clipFilterInfo";
-import { colorForIndex } from "./styles";
+import { colorForIndex, wrapCohort } from "./styles";
 
 // Deep Dive scatter: plot metric[xi] vs metric[yi] from the server's
 // outlier-filtered, down-sampled points, overlaying each (cohort × range)
@@ -24,7 +24,9 @@ export function buildScatterOption(
     // (compact) skip it — the caller shows one tag above the grid instead.
     graphic: compact ? undefined : infoGraphic(opts.info ?? "", "left"),
     tooltip: { trigger: "item" },
-    legend: opts.showLegend ? { type: "scroll", top: 8, right: 8, textStyle: { fontSize: 13 } } : undefined,
+    legend: opts.showLegend
+      ? { type: "scroll", top: 8, right: 8, textStyle: { fontSize: 13 }, formatter: wrapCohort }
+      : undefined,
     // Square GRID (plot rectangle) via explicit equal width/height — not derived
     // from margins — so the data area is exactly square. Sizes assume the fixed
     // square canvas DeepDive passes (260 compact / 600 full); left/top leave room

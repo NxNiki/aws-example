@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Lifecycle-group picker (dashboard-wide).** New bar above the tab selector:
+  up to three user-defined cohorts as half-open ranges `[start, end)` of
+  periods since the user's first bet, with an "all" overlay. Units follow the
+  active tab's granularity (days / calendar weeks / calendar months, one
+  definition per unit); defined once per game and shared by every tab, report
+  figure, and saved view. Cohort labels carry the range
+  (`new[0, 3)`, `old[7, max)`).
+
+### Changed
+
+- **Lifecycle cohorts are derived at query time.** `dashboard_api` computes
+  each user's first bet date from the daily user rows (cached per config) and
+  filters cohorts by period range on demand
+  (`lifecycle_groups` on the data endpoints), instead of reading a stored
+  label. Custom ranges therefore apply retroactively to all history.
+- Loading a saved view now drops cohort selections for columns the config no
+  longer defines, so stale snapshots can't silently filter the data; re-saving
+  the view persists the cleaned state.
+
+### Removed
+
+- **Stored `user_group` / `user_group2` columns.** Dropped from the game-stats
+  ETLs (ss01/ss02/ss03/ss06/fish_hunter) and removed in place from the
+  existing dashboard parquet on S3 (originals backed up under
+  `s3://bituslabs-team-ai/etl-results/backup/user_group_drop_20260717/`).
+  The fixed new/beginner/old split is superseded by the lifecycle-group
+  picker's default ranges.
+
 ## [0.5.0] - 2026-07-14
 
 Major release. The legacy Dash dashboard is replaced by a FastAPI `dashboard_api`

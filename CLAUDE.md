@@ -81,6 +81,11 @@ behavior that would surprise a reader. Don't restate what well-named code
 already conveys. Don't reference the current task, PR, or callers — those
 belong in commit messages and rot fast.
 
+Never narrate change history in code: no "formerly", "moved to", "no longer",
+"removed", "replaced by" comments, and no tombstone comments where deleted
+code used to be. Describe only the code that exists now; migration notes
+belong in commit messages and `CHANGELOG.md`.
+
 **Narrow exception — user-facing feature surfaces.** Functions that
 implement a user-facing feature *do* get a purpose docstring, because they
 sit on a vocabulary boundary: a user asks about "clip data", the AI agent
