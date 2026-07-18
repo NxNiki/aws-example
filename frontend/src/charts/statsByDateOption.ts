@@ -1,6 +1,6 @@
 import type { EChartsOption, LineSeriesOption } from "echarts";
 import type { Granularity, Series } from "../api/types";
-import { colorForIndex, dashForIndex } from "./styles";
+import { colorForIndex, dashForIndex, wrapCohort } from "./styles";
 import { hybridInverse, hybridValue } from "./scale";
 
 export interface BuildOpts {
@@ -197,7 +197,7 @@ export function buildStatsByDateOption(series: Series[], opts: BuildOpts): EChar
 
   return {
     tooltip: { trigger: "axis", formatter: tooltipFormatter },
-    legend: { type: "scroll", bottom: 0, data: legendNames, textStyle: { fontSize: 13 } },
+    legend: { type: "scroll", bottom: 0, data: legendNames, textStyle: { fontSize: 13 }, formatter: wrapCohort },
     grid: { left: 80, right: 80, top: 44, bottom: 56 },
     xAxis: { type: "time", axisLabel: { fontSize: 14 } },
     yAxis: [mkYAxis(leftMetrics, "left"), mkYAxis(rightMetrics, "right")],

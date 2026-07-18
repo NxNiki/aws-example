@@ -134,7 +134,12 @@ export function SummaryGrid(props: {
               const isRef = col.key === referenceKey;
               return (
                 <th key={col.key} className={"border-b border-r px-3 py-2 text-left align-top " + (isRef ? "bg-blue-50" : "")}>
-                  <div className="font-semibold text-gray-700 whitespace-nowrap">{col.cohort}</div>
+                  {/* One line per group dimension (lifecycle | daily, …) to keep columns narrow. */}
+                  {col.cohort.split(" | ").map((dim) => (
+                    <div key={dim} className="font-semibold text-gray-700 whitespace-nowrap">
+                      {dim}
+                    </div>
+                  ))}
                   <div className="text-gray-500 text-sm whitespace-nowrap tabular-nums" title={col.range_label}>
                     {compactRange(col.range_label)}
                   </div>

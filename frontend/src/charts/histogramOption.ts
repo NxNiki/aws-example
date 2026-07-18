@@ -2,7 +2,7 @@ import * as echarts from "echarts";
 import type { EChartsOption } from "echarts";
 import type { HistogramSeries } from "../api/types";
 import { infoGraphic } from "./clipFilterInfo";
-import { colorForIndex } from "./styles";
+import { colorForIndex, wrapCohort } from "./styles";
 
 // Deep Dive histogram: real bars (one per server-computed bin) that tile by bin
 // width, overlaid across (cohort × range) with transparency. Each bar is drawn
@@ -19,7 +19,7 @@ export function buildHistogramOption(
   return {
     graphic: infoGraphic(opts.info ?? ""),
     tooltip: { trigger: "item" },
-    legend: { type: "scroll", bottom: 0, textStyle: { fontSize: 13 } },
+    legend: { type: "scroll", bottom: 0, textStyle: { fontSize: 13 }, formatter: wrapCohort },
     grid: { left: 76, right: 24, top: 24, bottom: 48 },
     xAxis: {
       type: "value",
