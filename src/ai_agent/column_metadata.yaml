@@ -25,32 +25,15 @@
 groups:
   user_group:
     description: >
-      User lifecycle segment based on how many days since the user's first bet
-      in the game (first_bet_date from fct_bet_orders).
-    values:
-      new:
-        definition: "DATEDIFF('day', first_bet_date, activity_date) <= 3"
-        description: "Users whose first bet in this game was within the last 3 calendar days."
-      beginner:
-        definition: "DATEDIFF('day', first_bet_date, activity_date) BETWEEN 4 AND 7"
-        description: "Users whose first bet was 4–7 calendar days ago."
-      old:
-        definition: "DATEDIFF('day', first_bet_date, activity_date) > 7"
-        description: "Users whose first bet was more than 7 calendar days ago."
-
-  user_group2:
-    description: >
-      Alternative lifecycle segment with finer day-0 granularity.
-    values:
-      day0_user:
-        definition: "DATEDIFF('day', first_bet_date, activity_date) < 1"
-        description: "Brand-new users on the same calendar day as their very first bet."
-      day1-6_user:
-        definition: "DATEDIFF('day', first_bet_date, activity_date) BETWEEN 1 AND 6"
-        description: "Users 1–6 days after first bet."
-      day7+_user:
-        definition: "DATEDIFF('day', first_bet_date, activity_date) >= 7"
-        description: "Users 7 or more days after first bet."
+      User lifecycle cohort by periods since the user's first bet. NOT a stored
+      column anymore: cohorts are user-defined in the dashboard's "Lifecycle
+      groups" picker (above the tab bar) as half-open ranges [start, end) of
+      days/weeks/months since first bet, and dashboard_api derives them at
+      query time from user_id + activity dates (first bet = the user's earliest
+      betting day in the daily data). Default groups mirror the old fixed
+      split: new [0, 3), beginner [3, 7), old [7, max). Legacy stored values
+      (new / beginner / old, and user_group2's day0_user / day1-6_user /
+      day7+_user) were removed from the parquet.
 
   ai_group:
     description: >
@@ -123,11 +106,10 @@ columns:
 
   user_group:
     category: dimension
-    description: "User lifecycle segment (new / beginner / old). See 'groups.user_group'."
-
-  user_group2:
-    category: dimension
-    description: "Alternative lifecycle segment (day0_user / day1-6_user / day7+_user). See 'groups.user_group2'."
+    description: >
+      User lifecycle cohort, derived at query time from the dashboard's
+      "Lifecycle groups" picker (day/week/month ranges since first bet).
+      See 'groups.user_group'. Not a physical parquet column.
 
   # === User-Level Raw Metrics (one row per user per day) ===
   user_num_bets:

@@ -369,16 +369,6 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
             -- downstream user counts & retention (day0_num_users, num_active_users, …) need
             -- the full active-user set; a `HAVING MAX(b.killed) > 0` here undercounted them.
             -- Segment to killers downstream via the user_killed_fish flag when needed.
-        ),
-
-        user_first_bet AS (
-            SELECT
-                user_id,
-                MIN(CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', created_at))) AS DATE)) AS first_bet_date
-            FROM public.bullet
-            WHERE currency_type IN {ETL_CURRENCY_CODES}
-              AND op_code NOT IN {ETL_EXCLUDED_OP_CODES}
-            GROUP BY user_id
         )
 
         -- 5. FINAL JOIN & FORMATTING
@@ -386,12 +376,6 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
             t1.user_id,
             t1.daily_group,
             t1.{stats_agg_col} AS activity_date,
-            CASE
-                WHEN DATEDIFF('day', fb.first_bet_date, t1.{stats_agg_col}) <= 3 THEN 'new'
-                WHEN DATEDIFF('day', fb.first_bet_date, t1.{stats_agg_col}) <= 7 THEN 'beginner'
-                ELSE 'old'
-            END AS user_group,
-
             -- Core user-level counts (user_ prefix = one row per user per period):
             t1.user_num_rooms,
             t1.user_num_bets,
@@ -475,7 +459,6 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
             t5.user_avg_kill_streak_high,
             t5.user_avg_kill_streak_ultra
         FROM stats_by_user_date t1
-        LEFT JOIN user_first_bet AS fb ON t1.user_id = fb.user_id
         LEFT JOIN user_session_stats_agg t4
             ON t1.user_id = t4.user_id
             AND t1.{stats_agg_col} = t4.{stats_agg_col}
