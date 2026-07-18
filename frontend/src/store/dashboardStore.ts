@@ -902,12 +902,29 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   // Restore a snapshot: load the config (for group/granularity metadata), merge
   // saved selections over fresh defaults (so renamed/added groups still work),
   // then let the tabs refetch. v1 snapshots are migrated by snapshotControls.
+  // Cohort selections for columns the config doesn't define (or the lifecycle
+  // column, which the global picker owns) are stripped rather than replayed as
+  // invisible filters, so a stale view can't silently skew the data.
+  // Re-saving the view under the same name persists the cleaned state.
   applyView: async (snap, opts) => {
     if (!snap?.configId) return false;
     set({ loading: true, error: null });
     try {
       const config = await api.getConfig(snap.configId);
-      const controls = snapshotControls(snap);
+      const validCols = new Set(config.user_group_cols.filter((c) => c !== config.lifecycle_col));
+      const sanitize = <T extends { cohortSelection: Record<string, string[]> }>(t: T): T => ({
+        ...t,
+        cohortSelection: Object.fromEntries(
+          Object.entries(t.cohortSelection ?? {}).filter(([col]) => validCols.has(col)),
+        ),
+      });
+      const raw = snapshotControls(snap);
+      const controls: TabControls = {
+        date: sanitize(raw.date),
+        group: sanitize(raw.group),
+        viz: sanitize(raw.viz),
+        summaryTable: sanitize(raw.summaryTable),
+      };
       set({
         configId: snap.configId,
         config,
