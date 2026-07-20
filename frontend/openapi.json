@@ -1809,6 +1809,28 @@
             "title": "Metric",
             "type": "string"
           },
+          "range_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range Index"
+          },
+          "range_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range Label"
+          },
           "upper": {
             "items": {
               "anyOf": [
@@ -1927,6 +1949,20 @@
             "minItems": 1,
             "title": "Metrics",
             "type": "array"
+          },
+          "ranges": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/DateRange"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ranges"
           }
         },
         "required": [

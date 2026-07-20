@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Date-groups picker (dashboard-wide).** Granularity and up to three date
+  windows moved from per-tab controls to a global bar above the tab selector
+  (and above Lifecycle groups): defined once per game, read by every tab.
+  Stats-by-Date plots the shown windows concatenated horizontally on each line
+  chart (small gap between windows, one legend entry per cohort × metric,
+  weekend stripes per window); the comparison tabs use them side by side as
+  before. `/api/data/series` accepts an optional `ranges` list and tags each
+  series with `range_index`/`range_label`; loading a saved view migrates old
+  per-tab date settings into the global picker.
+
 - **Lifecycle-group picker (dashboard-wide).** New bar above the tab selector:
   up to three user-defined cohorts as half-open ranges `[start, end)` of
   periods since the user's first bet, with an "all" overlay. Units follow the

@@ -1,37 +1,27 @@
 import { useEffect, useRef } from "react";
 import { activeLifecycleGroups, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
-import { Controls } from "./Controls";
+import { CohortSelect } from "../../components/CohortSelect";
 import { Panel } from "./Panel";
 
 // Stats-by-Date tab: per-game metric time-series across three dual-axis panels,
-// with cohort filtering, hybrid-log scale, and weekend stripes. Mirrors the
-// legacy Dash "Stats by Date" tab; data comes from /api/data/series. Controls
-// (granularity / date window / cohorts) are THIS tab's own (store.controls.date).
+// with cohort filtering, hybrid-log scale, and weekend stripes. The date
+// windows and granularity come from the global "Date groups" bar (App.tsx);
+// when several windows are shown they render concatenated horizontally on each
+// chart. Data comes from /api/data/series; this tab's own controls are just
+// the cohort pickers (store.controls.date).
 export function StatsByDate() {
   const s = useDashboardStore();
   const c = s.controls.date;
+  const dg = s.dateGroups;
 
-  // Config loading + the game-config picker live in App (dashboard-wide).
-  // Granularity change → cohort values can differ, so ensure them then refetch.
-  const granReady = useRef(false);
-  useEffect(() => {
-    if (!granReady.current) {
-      granReady.current = true;
-      return;
-    }
-    if (!s.configId) return;
-    void s.ensureGroupValues(c.granularity).then(() => s.loadAllSeries());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [c.granularity]);
-
-  // Metric / cohort / date-window changes → refetch series (log & threshold are
-  // pure display transforms and intentionally excluded).
+  // Metric / cohort / date-group / lifecycle changes → refetch series (log &
+  // threshold are pure display transforms and intentionally excluded).
   const fetchKey = JSON.stringify({
-    df: c.dateFrom,
-    dt: c.dateTo,
+    gran: dg.granularity,
+    ranges: dg.ranges.map((r) => [r.start, r.end, r.show]),
     cohorts: c.cohortSelection,
-    lifecycle: activeLifecycleGroups(s, c.granularity),
+    lifecycle: activeLifecycleGroups(s, dg.granularity),
     metrics: Object.entries(s.panels).map(([id, p]) => [id, p.left, p.right]),
   });
   const debouncedKey = useDebouncedValue(fetchKey);
@@ -41,7 +31,10 @@ export function StatsByDate() {
       fetchReady.current = true;
       return;
     }
-    if (s.configId) void s.loadAllSeries();
+    if (s.configId) {
+      void s.ensureGroupValues(dg.granularity);
+      void s.loadAllSeries();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedKey]);
 
@@ -49,19 +42,13 @@ export function StatsByDate() {
 
   return (
     <div className="p-6 pt-0 w-full">
-      {/* Pinned below the sticky header + tab bar while the charts scroll underneath. */}
+      {/* Pinned below the sticky header + global bars while the charts scroll underneath. */}
       <div
-        className={`sticky ${s.config?.lifecycle_col ? "top-[9rem]" : "top-[6.25rem]"} z-20 -mx-6 mb-6 border-b bg-gray-50 px-6 py-3`}
+        className={`sticky ${s.config?.lifecycle_col ? "top-[11.75rem]" : "top-[9rem]"} z-20 -mx-6 mb-6 flex flex-wrap gap-6 items-start border-b bg-gray-50 px-6 py-3`}
       >
-        <Controls
-          granularity={c.granularity}
-          granularities={s.config?.granularities ?? ["day"]}
-          onSetGranularity={(g) => s.patchControls("date", { granularity: g })}
-          dateFrom={c.dateFrom}
-          dateTo={c.dateTo}
-          onSetDateRange={(from, to) => s.patchControls("date", { dateFrom: from, dateTo: to })}
-          groupValues={visibleGroupValues(s.config, s.groupValuesByGran[c.granularity] ?? {})}
-          cohortSelection={c.cohortSelection}
+        <CohortSelect
+          groupValues={visibleGroupValues(s.config, s.groupValuesByGran[dg.granularity] ?? {})}
+          selection={c.cohortSelection}
           onSetCohort={(col, values) => s.setTabCohort("date", col, values)}
         />
       </div>
@@ -76,7 +63,7 @@ export function StatsByDate() {
             key={g.id}
             group={g}
             panel={panel}
-            granularity={c.granularity}
+            granularity={dg.granularity}
             onSetMetrics={(side, metrics) => s.setPanelMetrics(g.id, side, metrics)}
             onSetLog={(log, threshold) => s.setPanelLog(g.id, log, threshold)}
           />

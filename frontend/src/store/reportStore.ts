@@ -211,8 +211,9 @@ export const useReportStore = create<ReportState>((set, get) => ({
           config: src.config,
           granularity: src.granularity,
           metrics,
-          date_from: src.date_from,
-          date_to: src.date_to,
+          date_from: src.date_from ?? null,
+          date_to: src.date_to ?? null,
+          ranges: src.ranges,
           group_values: src.cohort_selection,
           lifecycle_groups: src.lifecycle_groups ?? null,
         });

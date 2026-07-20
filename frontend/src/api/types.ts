@@ -47,8 +47,11 @@ export interface DateFigureSource {
   kind: "stats-by-date";
   config: string;
   granularity: Granularity;
-  date_from: string | null;
-  date_to: string | null;
+  // Older recipes stored a single window; new ones carry the global Date-groups
+  // ranges (concatenated horizontally when several are present).
+  date_from?: string | null;
+  date_to?: string | null;
+  ranges?: DateRange[];
   cohort_selection: Record<string, string[]>;
   lifecycle_groups?: LifecycleGroup[] | null;
   panel_id: string;

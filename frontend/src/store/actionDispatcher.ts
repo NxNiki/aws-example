@@ -109,10 +109,11 @@ export function dispatchAction(raw: Record<string, unknown>): boolean {
       }
 
       case "set_date_range": {
+        // Sets the global Date-groups R1 window (shared by every tab).
         const from = String(raw.date_from ?? "");
         const to = String(raw.date_to ?? "");
         if (!ISO_DATE.test(from) || !ISO_DATE.test(to)) throw new Error(`invalid date range ${from} → ${to}`);
-        s.patchControls("date", { dateFrom: from, dateTo: to });
+        s.setDateRange(0, { start: from, end: to, show: true });
         void s.loadAllSeries();
         s.notify("info", `Agent: date range set to ${from} → ${to}`);
         return true;
@@ -121,7 +122,7 @@ export function dispatchAction(raw: Record<string, unknown>): boolean {
       case "set_granularity": {
         const gran = String(raw.granularity ?? "") as (typeof GRANULARITIES)[number];
         if (!GRANULARITIES.includes(gran)) throw new Error(`unknown granularity "${gran}"`);
-        s.patchControls("date", { granularity: gran });
+        s.setDateGranularity(gran);
         void s.ensureGroupValues(gran);
         void s.loadAllSeries();
         s.notify("info", `Agent: granularity set to ${gran}`);

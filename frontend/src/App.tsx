@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useDashboardStore } from "./store/dashboardStore";
+import { DateGroups } from "./components/DateGroups";
 import { LifecycleGroups } from "./components/LifecycleGroups";
 import { Notifications } from "./components/Notifications";
 import { ChatPanel } from "./features/agent/ChatPanel";
@@ -33,21 +34,12 @@ export default function App() {
   const lifecycleAll = useDashboardStore((s) => s.lifecycleAll);
   const setLifecycleGroup = useDashboardStore((s) => s.setLifecycleGroup);
   const setLifecycleAll = useDashboardStore((s) => s.setLifecycleAll);
-  // The picker edits the unit matching the active tab's granularity (each tab
-  // fetches with its own unit's definition; the Report tab shows day's).
-  const lifecycleUnit = useDashboardStore((s) => {
-    const tabKey =
-      s.activeTab === "stats-by-date"
-        ? ("date" as const)
-        : s.activeTab === "stats-by-group"
-          ? ("group" as const)
-          : s.activeTab === "summary-table"
-            ? ("summaryTable" as const)
-            : s.activeTab === "stats-deepdive"
-              ? ("viz" as const)
-              : null;
-    return tabKey ? s.controls[tabKey].granularity : "day";
-  });
+  const dateGroups = useDashboardStore((s) => s.dateGroups);
+  const setDateGranularity = useDashboardStore((s) => s.setDateGranularity);
+  const setDateRange = useDashboardStore((s) => s.setDateRange);
+  const granularities = useDashboardStore((s) => s.config?.granularities ?? ["day" as const]);
+  // The lifecycle picker edits the unit matching the global granularity.
+  const lifecycleUnit = dateGroups.granularity;
   const [viewName, setViewName] = useState("");
 
   useEffect(() => {
@@ -59,9 +51,10 @@ export default function App() {
     // Right padding reserves room for the docked chat panel (user-resizable);
     // ECharts re-sizes via its ResizeObserver when the panel opens/resizes.
     <div className="min-h-full bg-gray-50 text-gray-900" style={{ paddingRight: chatOpen ? chatWidth : 0 }}>
-      {/* Sticky stack: header (top-0, h-14) → [lifecycle bar (top-14, h-11), when
-          the config has one] → tab bar (top-14 or top-[6.25rem]) → per-tab
-          controls (top-[6.25rem] or top-[9rem]). Keep the heights in sync. */}
+      {/* Sticky stack: header (top-0, h-14) → date-groups bar (top-14, h-11) →
+          [lifecycle bar (top-[6.25rem], h-11), when the config has one] →
+          tab bar (top-[9rem] or top-[6.25rem]) → per-tab controls
+          (top-[11.75rem] or top-[9rem]). Keep the heights in sync. */}
       <header className="sticky top-0 z-40 flex h-14 items-center justify-between border-b bg-white px-4">
         <div className="flex min-w-0 items-center gap-3">
           {/* Full title on wide windows; compact glyph below lg. */}
@@ -139,11 +132,23 @@ export default function App() {
         </div>
       </header>
 
+      {/* Global "Date groups" bar: granularity + up to 3 date windows, defined
+          once per game and read by every tab. */}
+      <div className="sticky top-14 z-30 flex h-11 items-center overflow-x-auto border-b bg-white px-4">
+        <DateGroups
+          granularity={dateGroups.granularity}
+          granularities={granularities}
+          ranges={dateGroups.ranges}
+          onSetGranularity={setDateGranularity}
+          onSetRange={setDateRange}
+        />
+      </div>
+
       {/* Global lifecycle-group picker: one definition per game, shared by every
           tab (so switching tabs never asks the user to redefine the day ranges).
           Only shown when the config has a lifecycle cohort dimension. */}
       {hasLifecycle && (
-        <div className="sticky top-14 z-30 flex h-11 items-center overflow-x-auto border-b bg-white px-4">
+        <div className="sticky top-[6.25rem] z-30 flex h-11 items-center overflow-x-auto border-b bg-white px-4">
           <LifecycleGroups
             unit={lifecycleUnit}
             groups={lifecycle[lifecycleUnit]}
@@ -155,7 +160,7 @@ export default function App() {
       )}
 
       <nav
-        className={`sticky ${hasLifecycle ? "top-[6.25rem]" : "top-14"} z-30 flex h-11 gap-1 border-b bg-white px-4`}
+        className={`sticky ${hasLifecycle ? "top-[9rem]" : "top-[6.25rem]"} z-30 flex h-11 gap-1 border-b bg-white px-4`}
       >
         {TABS.map((t) => (
           <button

@@ -4,12 +4,11 @@ import { buildGroupDistributionOption, groupChartWidth } from "../../charts/grou
 import { clipFilterInfo } from "../../charts/clipFilterInfo";
 import { CohortSelect } from "../../components/CohortSelect";
 import { ClipControls } from "../../components/ClipControls";
-import { DateRanges } from "../../components/DateRanges";
 import { FilterControls } from "../../components/FilterControls";
 import { activeLifecycleGroups, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { AddToReportButton } from "../report/AddToReport";
-import type { ClipOpts, FilterOpts, Granularity, MetricGroup } from "../../api/types";
+import type { ClipOpts, FilterOpts, MetricGroup } from "../../api/types";
 import type { GroupPanelState } from "../../store/dashboardStore";
 
 // Stats-by-Group tab: per metric group, compare one metric's distribution across
@@ -26,6 +25,7 @@ function GroupPanel(props: {
   const { group, panel } = props;
   const configId = useDashboardStore((s) => s.configId);
   const groupControls = useDashboardStore((s) => s.controls.group);
+  const dateGroups = useDashboardStore((s) => s.dateGroups);
   const option = useMemo(
     () =>
       buildGroupDistributionOption(panel.stats, panel.mode, panel.metric ?? "", clipFilterInfo(panel.clip, panel.filter)),
@@ -66,12 +66,12 @@ function GroupPanel(props: {
               source: {
                 kind: "stats-by-group",
                 config: configId ?? "",
-                granularity: groupControls.granularity,
-                ranges: groupControls.ranges
+                granularity: dateGroups.granularity,
+                ranges: dateGroups.ranges
                   .filter((r) => r.show && r.start && r.end)
                   .map((r) => ({ start: r.start, end: r.end })),
                 cohort_selection: groupControls.cohortSelection,
-                lifecycle_groups: activeLifecycleGroups(useDashboardStore.getState(), groupControls.granularity) ?? null,
+                lifecycle_groups: activeLifecycleGroups(useDashboardStore.getState(), dateGroups.granularity) ?? null,
                 panel_id: group.id,
                 metric: panel.metric ?? "",
                 mode: panel.mode,
@@ -92,23 +92,24 @@ function GroupPanel(props: {
 
 export function StatsByGroup() {
   const s = useDashboardStore();
-  const c = s.controls.group; // this tab's own granularity / ranges / cohorts
+  const c = s.controls.group; // this tab's own cohorts; dates/granularity are global
+  const dg = s.dateGroups;
   const groups = s.config?.groups ?? [];
 
-  // Refetch on config / granularity / range / cohort / metric / clip / filter
-  // changes (box-vs-bar is a pure display switch and intentionally excluded).
+  // Refetch on config / date-group / cohort / metric / clip / filter changes
+  // (box-vs-bar is a pure display switch and intentionally excluded).
   const fetchKey = JSON.stringify({
     cfg: s.configId,
-    gran: c.granularity,
-    ranges: c.ranges.map((r) => [r.start, r.end, r.show]),
+    gran: dg.granularity,
+    ranges: dg.ranges.map((r) => [r.start, r.end, r.show]),
     cohorts: c.cohortSelection,
-    lifecycle: activeLifecycleGroups(s, c.granularity),
+    lifecycle: activeLifecycleGroups(s, dg.granularity),
     panels: Object.entries(s.group).map(([id, p]) => [id, p.metric, p.clip, p.filter]),
   });
   const debouncedKey = useDebouncedValue(fetchKey);
   useEffect(() => {
     if (s.configId) {
-      void s.ensureGroupValues(c.granularity);
+      void s.ensureGroupValues(dg.granularity);
       void s.loadGroupDistribution();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -116,27 +117,12 @@ export function StatsByGroup() {
 
   return (
     <div className="p-6 pt-0 w-full">
-      {/* Pinned below the sticky header + tab bar (see App.tsx height comment). */}
+      {/* Pinned below the sticky header + global bars (see App.tsx height comment). */}
       <div
-        className={`sticky ${s.config?.lifecycle_col ? "top-[9rem]" : "top-[6.25rem]"} z-20 -mx-6 mb-6 flex flex-wrap gap-6 items-start border-b bg-gray-50 px-6 py-3`}
+        className={`sticky ${s.config?.lifecycle_col ? "top-[11.75rem]" : "top-[9rem]"} z-20 -mx-6 mb-6 flex flex-wrap gap-6 items-start border-b bg-gray-50 px-6 py-3`}
       >
-        <label className="flex flex-col text-base">
-          <span className="text-gray-600 mb-1">Granularity</span>
-          <select
-            className="border rounded px-3 py-2"
-            value={c.granularity}
-            onChange={(e) => s.patchControls("group", { granularity: e.target.value as Granularity })}
-          >
-            {(s.config?.granularities ?? ["day"]).map((g) => (
-              <option key={g} value={g}>
-                {g}
-              </option>
-            ))}
-          </select>
-        </label>
-        <DateRanges ranges={c.ranges} onChange={(i, r) => s.setTabRange("group", i, r)} />
         <CohortSelect
-          groupValues={visibleGroupValues(s.config, s.groupValuesByGran[c.granularity] ?? {})}
+          groupValues={visibleGroupValues(s.config, s.groupValuesByGran[dg.granularity] ?? {})}
           selection={c.cohortSelection}
           onSetCohort={(col, values) => s.setTabCohort("group", col, values)}
         />

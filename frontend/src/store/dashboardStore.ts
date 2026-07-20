@@ -27,29 +27,25 @@ import type {
   SummaryStat,
 } from "../api/types";
 
-// ── Per-tab shared controls ────────────────────────────────────────────────
-// Each tab owns its granularity, date window(s), and cohort selection — they
-// are NOT shared across tabs (changing the Deep Dive range must not move the
-// Stats-by-Group comparison).
+// ── Global date groups + per-tab cohort controls ──────────────────────────
+// Granularity and the (up to three) date windows are dashboard-wide — the
+// "Date groups" bar above the tab selector — so every tab reads the same
+// windows. Cohort selection stays per tab.
 
-export interface DateTabControls {
-  granularity: Granularity;
-  dateFrom: string | null;
-  dateTo: string | null;
-  cohortSelection: Record<string, string[]>;
-}
-
-export interface RangeTabControls {
+export interface DateGroupsState {
   granularity: Granularity;
   ranges: RangeState[]; // up to 3 comparable windows
+}
+
+export interface TabCohortControls {
   cohortSelection: Record<string, string[]>;
 }
 
 export interface TabControls {
-  date: DateTabControls;
-  group: RangeTabControls;
-  viz: RangeTabControls;
-  summaryTable: RangeTabControls;
+  date: TabCohortControls;
+  group: TabCohortControls;
+  viz: TabCohortControls;
+  summaryTable: TabCohortControls;
 }
 export type TabKey = keyof TabControls;
 
@@ -63,11 +59,13 @@ const defaultRanges = (): RangeState[] => [
   { start: null, end: null, show: false },
 ];
 
+const defaultDateGroups = (): DateGroupsState => ({ granularity: "day", ranges: defaultRanges() });
+
 const defaultControls = (): TabControls => ({
-  date: { granularity: "day", dateFrom: null, dateTo: null, cohortSelection: {} },
-  group: { granularity: "day", ranges: defaultRanges(), cohortSelection: {} },
-  viz: { granularity: "day", ranges: defaultRanges(), cohortSelection: {} },
-  summaryTable: { granularity: "day", ranges: defaultRanges(), cohortSelection: {} },
+  date: { cohortSelection: {} },
+  group: { cohortSelection: {} },
+  viz: { cohortSelection: {} },
+  summaryTable: { cohortSelection: {} },
 });
 
 // ── Global lifecycle groups ────────────────────────────────────────────────
@@ -257,12 +255,18 @@ const emptyDeepdivePanel = (): DeepdivePanelState => ({
 
 // A serializable snapshot of the dashboard's UI selections (NOT fetched data /
 // figures) — the React-era "save/load config". Persisted opaquely to S3.
-// v2 stores per-tab `controls`; v1 snapshots (global granularity/dates/cohorts)
-// are migrated on load by `snapshotControls`.
+// v3 stores global `dateGroups` + cohorts-only `controls`; v2 (per-tab
+// granularity/dates) and v1 (one global set) are migrated by
+// `snapshotDateGroups`/`snapshotControls`.
 export interface ViewSnapshot {
   version: number;
   configId: string | null;
-  controls?: TabControls;
+  dateGroups?: DateGroupsState;
+  controls?: TabControls & {
+    // v2 legacy per-tab fields (still read for migration):
+    date?: { granularity?: Granularity; dateFrom?: string | null; dateTo?: string | null };
+    group?: { granularity?: Granularity; ranges?: RangeState[] };
+  };
   // v1 legacy fields (still read for migration):
   granularity?: Granularity;
   dateFrom?: string | null;
@@ -282,25 +286,30 @@ export interface ViewSnapshot {
 }
 
 function snapshotControls(snap: ViewSnapshot): TabControls {
-  const dc = defaultControls();
-  if (snap.controls) {
-    return {
-      date: { ...dc.date, ...(snap.controls.date ?? {}) },
-      group: { ...dc.group, ...(snap.controls.group ?? {}) },
-      viz: { ...dc.viz, ...(snap.controls.viz ?? {}) },
-      summaryTable: { ...dc.summaryTable, ...(snap.controls.summaryTable ?? {}) },
-    };
+  const pick = (t?: { cohortSelection?: Record<string, string[]> }): TabCohortControls => ({
+    cohortSelection: t?.cohortSelection ?? snap.cohortSelection ?? {},
+  });
+  const c = (snap.controls ?? {}) as Partial<Record<TabKey, { cohortSelection?: Record<string, string[]> }>>;
+  return { date: pick(c.date), group: pick(c.group), viz: pick(c.viz), summaryTable: pick(c.summaryTable) };
+}
+
+function snapshotDateGroups(snap: ViewSnapshot): DateGroupsState {
+  if (snap.dateGroups) {
+    return { ...defaultDateGroups(), ...snap.dateGroups };
   }
-  // v1: one global set of controls — apply it to every tab.
-  const granularity = snap.granularity ?? "day";
-  const cohortSelection = snap.cohortSelection ?? {};
-  const ranges = snap.ranges ?? defaultRanges();
-  return {
-    date: { granularity, dateFrom: snap.dateFrom ?? null, dateTo: snap.dateTo ?? null, cohortSelection },
-    group: { granularity, ranges, cohortSelection },
-    viz: { granularity, ranges, cohortSelection },
-    summaryTable: { granularity, ranges, cohortSelection },
-  };
+  // v2: per-tab controls — take the Stats-by-Date tab's granularity; prefer the
+  // comparison tabs' ranges, else build R1 from the date tab's window.
+  const v2date = snap.controls?.date;
+  const v2ranges = snap.controls?.group?.ranges ?? snap.ranges;
+  const granularity = v2date?.granularity ?? snap.granularity ?? "day";
+  if (v2ranges?.some((r) => r.start && r.end)) {
+    return { granularity, ranges: v2ranges.slice(0, 3) };
+  }
+  const from = v2date?.dateFrom ?? snap.dateFrom ?? null;
+  const to = v2date?.dateTo ?? snap.dateTo ?? null;
+  const ranges = defaultRanges();
+  ranges[0] = { start: from, end: to, show: true };
+  return { granularity, ranges };
 }
 
 // Last-30-days window (inclusive) ending at the data's max date.
@@ -321,8 +330,13 @@ interface DashboardState {
   setActiveTab: (tab: DashboardTab) => void;
 
   controls: TabControls;
+  // Global "Date groups": granularity + up to 3 date windows, defined once per
+  // game (bar above the tab selector) and read by every tab's fetches.
+  dateGroups: DateGroupsState;
+  setDateGranularity: (g: Granularity) => void;
+  setDateRange: (index: number, range: RangeState) => void;
   // Available cohort values per granularity (the data can differ by
-  // granularity, and tabs can sit on different granularities).
+  // granularity; keyed in case the user flips granularities back and forth).
   groupValuesByGran: Partial<Record<Granularity, Record<string, string[]>>>;
 
   // Global lifecycle groups (period ranges since first bet, one definition per
@@ -348,9 +362,7 @@ interface DashboardState {
 
   loadConfigs: () => Promise<void>;
   selectConfig: (id: string) => Promise<void>;
-  patchControls: <K extends TabKey>(tab: K, patch: Partial<TabControls[K]>) => void;
   setTabCohort: (tab: TabKey, col: string, values: string[]) => void;
-  setTabRange: (tab: "group" | "viz" | "summaryTable", index: number, range: RangeState) => void;
   ensureGroupValues: (gran: Granularity) => Promise<void>;
 
   // Stats-by-Date
@@ -514,6 +526,12 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   activeTab: "stats-by-date",
   setActiveTab: (tab) => set({ activeTab: tab }),
   controls: defaultControls(),
+  dateGroups: defaultDateGroups(),
+  setDateGranularity: (g) => set((s) => ({ dateGroups: { ...s.dateGroups, granularity: g } })),
+  setDateRange: (index, range) =>
+    set((s) => ({
+      dateGroups: { ...s.dateGroups, ranges: s.dateGroups.ranges.map((r, i) => (i === index ? range : r)) },
+    })),
   groupValuesByGran: {},
   lifecycle: defaultLifecycle(),
   lifecycleAll: false,
@@ -578,9 +596,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         group: defaultGroupPanels(config),
         summaryTable: { ...emptySummaryTable(), metrics: defaultSummaryMetrics(config) },
       });
-      const c = get().controls;
-      const grans = [...new Set([c.date.granularity, c.group.granularity, c.viz.granularity, c.summaryTable.granularity])];
-      await Promise.all(grans.map((g) => get().ensureGroupValues(g)));
+      await get().ensureGroupValues(get().dateGroups.granularity);
       await get().loadDeepdiveMetrics();
       await get().loadDateBounds();
       await get().loadAllSeries();
@@ -591,22 +607,11 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     }
   },
 
-  patchControls: (tab, patch) =>
-    set((s) => ({ controls: { ...s.controls, [tab]: { ...s.controls[tab], ...patch } } })),
-
   setTabCohort: (tab, col, values) =>
     set((s) => ({
       controls: {
         ...s.controls,
         [tab]: { ...s.controls[tab], cohortSelection: { ...s.controls[tab].cohortSelection, [col]: values } },
-      },
-    })),
-
-  setTabRange: (tab, index, range) =>
-    set((s) => ({
-      controls: {
-        ...s.controls,
-        [tab]: { ...s.controls[tab], ranges: s.controls[tab].ranges.map((r, i) => (i === index ? range : r)) },
       },
     })),
 
@@ -639,19 +644,16 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     }),
 
   loadDateBounds: async () => {
-    const { configId, controls } = get();
+    const { configId, dateGroups } = get();
     if (!configId) return;
     try {
-      const { max } = await api.dateBounds(configId, controls.date.granularity);
+      const { max } = await api.dateBounds(configId, dateGroups.granularity);
       if (max) {
         const { from, to } = lastThirtyDays(max);
-        const seed = (ranges: RangeState[]) => ranges.map((r, i) => (i === 0 ? { ...r, start: from, end: to } : r));
         set((s) => ({
-          controls: {
-            date: { ...s.controls.date, dateFrom: from, dateTo: to },
-            group: { ...s.controls.group, ranges: seed(s.controls.group.ranges) },
-            viz: { ...s.controls.viz, ranges: seed(s.controls.viz.ranges) },
-            summaryTable: { ...s.controls.summaryTable, ranges: seed(s.controls.summaryTable.ranges) },
+          dateGroups: {
+            ...s.dateGroups,
+            ranges: s.dateGroups.ranges.map((r, i) => (i === 0 ? { ...r, start: from, end: to } : r)),
           },
         }));
       }
@@ -667,11 +669,14 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   // (instant re-add). A context change (config/granularity/dates/cohorts) reloads
   // the whole panel. Each panel has its own cancellation key.
   loadAllSeries: async () => {
-    const { configId, controls, panels } = get();
+    const { configId, controls, dateGroups, panels } = get();
     if (!configId) return;
-    const { granularity, dateFrom, dateTo, cohortSelection } = controls.date;
+    const { granularity } = dateGroups;
+    const { cohortSelection } = controls.date;
+    const reqRanges = activeRanges(dateGroups.ranges);
+    if (reqRanges.length === 0) return;
     const lifecycleGroups = activeLifecycleGroups(get(), granularity);
-    const ctxSig = JSON.stringify({ configId, granularity, dateFrom, dateTo, cohortSelection, lifecycleGroups });
+    const ctxSig = JSON.stringify({ configId, granularity, reqRanges, cohortSelection, lifecycleGroups });
     await Promise.all(
       Object.entries(panels).map(([panelId, panel]) => {
         const key = `series:${panelId}`;
@@ -702,8 +707,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
                 config: configId,
                 granularity,
                 metrics: toFetch,
-                date_from: dateFrom,
-                date_to: dateTo,
+                ranges: reqRanges,
                 group_values: cohortSelection,
                 lifecycle_groups: lifecycleGroups,
               },
@@ -740,10 +744,11 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     set((s) => (s.group[panelId] ? { group: { ...s.group, [panelId]: { ...s.group[panelId], filter } } } : {})),
 
   loadGroupDistribution: async () => {
-    const { configId, controls, group } = get();
+    const { configId, controls, dateGroups, group } = get();
     if (!configId) return;
-    const { granularity, ranges, cohortSelection } = controls.group;
-    const reqRanges = activeRanges(ranges);
+    const { granularity } = dateGroups;
+    const { cohortSelection } = controls.group;
+    const reqRanges = activeRanges(dateGroups.ranges);
     if (reqRanges.length === 0) return;
     const lifecycleGroups = activeLifecycleGroups(get(), granularity);
     await Promise.all(
@@ -808,10 +813,11 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   // Only config / granularity / ranges / cohorts / p-values toggle force a
   // refetch; stat-selection and the reference column are display-only.
   loadSummaryTable: async () => {
-    const { configId, controls, summaryTable } = get();
+    const { configId, controls, dateGroups, summaryTable } = get();
     if (!configId) return;
-    const { granularity, ranges, cohortSelection } = controls.summaryTable;
-    const reqRanges = activeRanges(ranges);
+    const { granularity } = dateGroups;
+    const { cohortSelection } = controls.summaryTable;
+    const reqRanges = activeRanges(dateGroups.ranges);
     if (reqRanges.length === 0) return;
     const lifecycleGroups = activeLifecycleGroups(get(), granularity);
     const key = "summary-table";
@@ -863,10 +869,10 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   },
 
   loadDeepdiveMetrics: async () => {
-    const { configId, controls } = get();
+    const { configId, dateGroups } = get();
     if (!configId) return;
     try {
-      const { derived, user } = await api.deepdiveMetrics(configId, controls.viz.granularity);
+      const { derived, user } = await api.deepdiveMetrics(configId, dateGroups.granularity);
       set({ deepdiveMetrics: { derived, user } });
     } catch (e) {
       set({ error: String(e) });
@@ -881,8 +887,9 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   captureView: () => {
     const s = get();
     return {
-      version: 2,
+      version: 3,
       configId: s.configId,
+      dateGroups: s.dateGroups,
       controls: s.controls,
       lifecycle: s.lifecycle,
       lifecycleAll: s.lifecycleAll,
@@ -929,6 +936,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         configId: snap.configId,
         config,
         controls,
+        dateGroups: snapshotDateGroups(snap),
         // Early snapshots stored a plain array (day-unit only); merge over defaults.
         lifecycle: Array.isArray(snap.lifecycle)
           ? { ...defaultLifecycle(), day: snap.lifecycle }
@@ -957,15 +965,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
           user: { ...emptyDeepdivePanel(), ...(snap.deepdive?.user ?? {}) },
         },
       });
-      const grans = [
-        ...new Set([
-          controls.date.granularity,
-          controls.group.granularity,
-          controls.viz.granularity,
-          controls.summaryTable.granularity,
-        ]),
-      ];
-      await Promise.all(grans.map((g) => get().ensureGroupValues(g)));
+      await get().ensureGroupValues(get().dateGroups.granularity);
       await get().loadDeepdiveMetrics();
       await get().loadAllSeries();
       // Reload the report spec this view was saved with (unless a spec load is
@@ -1026,10 +1026,11 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   dismissNotification: (id) => set((s) => ({ notifications: s.notifications.filter((n) => n.id !== id) })),
 
   loadDeepdive: async () => {
-    const { configId, controls, deepdive } = get();
+    const { configId, controls, dateGroups, deepdive } = get();
     if (!configId) return;
-    const { granularity, ranges, cohortSelection } = controls.viz;
-    const reqRanges = activeRanges(ranges);
+    const { granularity } = dateGroups;
+    const { cohortSelection } = controls.viz;
+    const reqRanges = activeRanges(dateGroups.ranges);
     if (reqRanges.length === 0) return;
     const lifecycleGroups = activeLifecycleGroups(get(), granularity);
     const panels: DeepdivePanel[] = ["derived", "user"];
@@ -1149,7 +1150,10 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       configId: s.configId,
       activeTab: s.activeTab,
       granularities: s.config?.granularities ?? [],
-      dateWindow: { from: s.controls.date.dateFrom, to: s.controls.date.dateTo, granularity: s.controls.date.granularity },
+      dateWindow: {
+        ranges: activeRanges(s.dateGroups.ranges),
+        granularity: s.dateGroups.granularity,
+      },
       report: {
         specs: rep.specs,
         title: rep.spec.title,

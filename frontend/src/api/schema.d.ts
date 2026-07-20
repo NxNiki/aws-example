@@ -1119,6 +1119,10 @@ export interface components {
             lower: (number | null)[];
             /** Metric */
             metric: string;
+            /** Range Index */
+            range_index?: number | null;
+            /** Range Label */
+            range_label?: string | null;
             /** Upper */
             upper: (number | null)[];
             /** X */
@@ -1148,6 +1152,8 @@ export interface components {
             lifecycle_groups?: components["schemas"]["LifecycleGroup"][] | null;
             /** Metrics */
             metrics: string[];
+            /** Ranges */
+            ranges?: components["schemas"]["DateRange"][] | null;
         };
         /** SeriesResponse */
         SeriesResponse: {

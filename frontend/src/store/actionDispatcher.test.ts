@@ -63,11 +63,10 @@ describe("dispatchAction", () => {
     expect(panel.right).toEqual(["rtp"]);
   });
 
-  it("set_date_range patches the date tab's window", () => {
+  it("set_date_range sets the global Date-groups R1 window", () => {
     expect(dispatchAction({ type: "set_date_range", date_from: "2026-05-01", date_to: "2026-06-01" })).toBe(true);
-    const c = useDashboardStore.getState().controls.date;
-    expect(c.dateFrom).toBe("2026-05-01");
-    expect(c.dateTo).toBe("2026-06-01");
+    const r1 = useDashboardStore.getState().dateGroups.ranges[0];
+    expect(r1).toEqual({ start: "2026-05-01", end: "2026-06-01", show: true });
   });
 
   it("agent report actions: period + figure add/patch/remove, queued in order", async () => {
