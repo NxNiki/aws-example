@@ -83,6 +83,11 @@ class SeriesRequest(BaseModel):
     metrics: list[str] = Field(min_length=1)
     date_from: Optional[str] = None  # ISO date (YYYY-MM-DD), inclusive
     date_to: Optional[str] = None  # ISO date (YYYY-MM-DD), inclusive
+    # Up to three comparable date windows (the global "Date groups" picker).
+    # When set, supersedes date_from/date_to: one series is emitted per
+    # metric × cohort × range, tagged with range_index/range_label, and the
+    # frontend concatenates the ranges horizontally on the chart.
+    ranges: Optional[list["DateRange"]] = None
     # Cohort selection: per user_group column, the values to keep. A column
     # absent here (or an empty list) means "all" — no filter on that column.
     # The response emits one series per requested metric × cohort combination.
@@ -102,6 +107,10 @@ class Series(BaseModel):
     y: list[Optional[float]]
     lower: list[Optional[float]]  # CI lower bound (== y when kind != "user")
     upper: list[Optional[float]]  # CI upper bound (== y when kind != "user")
+    # Which of the request's ranges produced this series (None for the
+    # single-window date_from/date_to form).
+    range_index: Optional[int] = None
+    range_label: Optional[str] = None
 
 
 class SeriesResponse(BaseModel):

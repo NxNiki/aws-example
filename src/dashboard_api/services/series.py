@@ -45,39 +45,20 @@ def _metric_kind(metric: str) -> str:
     return "raw"
 
 
-def load_series(
+def _window_series(
     cfg: dict[str, Any],
     granularity: str,
     metrics: list[str],
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    group_values: Optional[dict[str, list[str]]] = None,
-    lifecycle: Optional[list[dict[str, Any]]] = None,
-) -> tuple[str, list[dict[str, Any]], list[str]]:
-    """Return (date_col, series, missing).
-
-    ``series`` is one dict per (metric, cohort) with x/y/lower/upper + metadata;
-    ``missing`` lists requested metrics that produced no data in any cohort.
-    """
-    group_values = group_values or {}
+    lf: pl.LazyFrame,
+    date_col: str,
+    start_dt: datetime,
+    end_dt: datetime,
+    group_values: dict[str, list[str]],
+    lifecycle: Optional[list[dict[str, Any]]],
+    produced: set[str],
+) -> list[dict[str, Any]]:
+    """One window's series dicts (per metric × cohort); adds to ``produced``."""
     sd = stats_by_date_cfg(cfg)
-    lf, date_col = load_lazy(cfg, granularity)
-
-    available = set(lf.collect_schema().names())
-    if date_col not in available:
-        raise SeriesError(f"Date column '{date_col}' not found in source data")
-
-    lf = lf.with_columns(pl.col(date_col).cast(pl.Datetime, strict=False))
-
-    start_dt = datetime.fromisoformat(date_from) if date_from else None
-    end_dt = datetime.fromisoformat(date_to) if date_to else None
-    if start_dt is None or end_dt is None:
-        bounds = lf.select(pl.col(date_col).min().alias("lo"), pl.col(date_col).max().alias("hi")).collect()
-        start_dt = start_dt or bounds["lo"][0]
-        end_dt = end_dt or bounds["hi"][0]
-    if start_dt is None or end_dt is None:
-        return date_col, [], list(metrics)
-
     # Retention metrics need follow-up days beyond the window; extend the load
     # (not the displayed range) when user-row aggregation is enabled.
     aggregate_from_rows = bool(sd.get("aggregate_stats_from_user_rows", False))
@@ -87,11 +68,9 @@ def load_series(
     # the same window and must not each collect their own copy (OOM).
     df_raw = collect_window(cfg, granularity, lf, date_col, start_dt, load_end)
     if df_raw.is_empty():
-        return date_col, [], list(metrics)
+        return []
 
     series: list[dict[str, Any]] = []
-    produced: set[str] = set()
-
     for label, df_c in iter_cohorts(
         cfg, df_raw, group_values, lifecycle=lifecycle, date_col=date_col, granularity=granularity
     ):
@@ -120,9 +99,64 @@ def load_series(
                     "upper": clean_floats(hi),
                 }
             )
+    return series
 
-    missing = [m for m in metrics if m not in produced]
-    return date_col, series, missing
+
+def load_series(
+    cfg: dict[str, Any],
+    granularity: str,
+    metrics: list[str],
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    group_values: Optional[dict[str, list[str]]] = None,
+    lifecycle: Optional[list[dict[str, Any]]] = None,
+    ranges: Optional[list[tuple[Optional[str], Optional[str]]]] = None,
+) -> tuple[str, list[dict[str, Any]], list[str]]:
+    """Return (date_col, series, missing).
+
+    ``series`` is one dict per (metric, cohort) with x/y/lower/upper + metadata;
+    ``missing`` lists requested metrics that produced no data in any cohort.
+    With ``ranges`` (the global Date-groups picker) one series is emitted per
+    metric × cohort × range, tagged with range_index/range_label; each range
+    collects its own window so far-apart ranges don't load the span between.
+    """
+    group_values = group_values or {}
+    lf, date_col = load_lazy(cfg, granularity)
+
+    available = set(lf.collect_schema().names())
+    if date_col not in available:
+        raise SeriesError(f"Date column '{date_col}' not found in source data")
+
+    lf = lf.with_columns(pl.col(date_col).cast(pl.Datetime, strict=False))
+    produced: set[str] = set()
+
+    if ranges is not None:
+        series: list[dict[str, Any]] = []
+        for i, (start, end) in enumerate(ranges):
+            if not (start and end):
+                continue
+            start_dt, end_dt = datetime.fromisoformat(start), datetime.fromisoformat(end)
+            for s in _window_series(
+                cfg, granularity, metrics, lf, date_col, start_dt, end_dt, group_values, lifecycle, produced
+            ):
+                s["range_index"] = i
+                s["range_label"] = f"{start} → {end}"
+                series.append(s)
+        return date_col, series, [m for m in metrics if m not in produced]
+
+    win_start: Optional[datetime] = datetime.fromisoformat(date_from) if date_from else None
+    win_end: Optional[datetime] = datetime.fromisoformat(date_to) if date_to else None
+    if win_start is None or win_end is None:
+        bounds = lf.select(pl.col(date_col).min().alias("lo"), pl.col(date_col).max().alias("hi")).collect()
+        win_start = win_start or bounds["lo"][0]
+        win_end = win_end or bounds["hi"][0]
+    if win_start is None or win_end is None:
+        return date_col, [], list(metrics)
+
+    series = _window_series(
+        cfg, granularity, metrics, lf, date_col, win_start, win_end, group_values, lifecycle, produced
+    )
+    return date_col, series, [m for m in metrics if m not in produced]
 
 
 def load_date_bounds(cfg: dict[str, Any], granularity: str) -> tuple[Optional[str], Optional[str]]:

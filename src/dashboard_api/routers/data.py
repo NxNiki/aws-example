@@ -94,6 +94,7 @@ def post_series(req: SeriesRequest) -> SeriesResponse:
             req.date_to,
             req.group_values,
             lifecycle=_lifecycle(req.lifecycle_groups),
+            ranges=[(r.start, r.end) for r in req.ranges] if req.ranges is not None else None,
         )
     except SeriesError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

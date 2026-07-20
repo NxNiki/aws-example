@@ -20,6 +20,7 @@ export function Panel(props: {
   const { group, panel, granularity } = props;
   const configId = useDashboardStore((s) => s.configId);
   const dateControls = useDashboardStore((s) => s.controls.date);
+  const dateGroups = useDashboardStore((s) => s.dateGroups);
 
   const option = useMemo(
     () =>
@@ -66,11 +67,12 @@ export function Panel(props: {
                 source: {
                   kind: "stats-by-date",
                   config: configId ?? "",
-                  granularity: dateControls.granularity,
-                  date_from: dateControls.dateFrom,
-                  date_to: dateControls.dateTo,
+                  granularity: dateGroups.granularity,
+                  ranges: dateGroups.ranges
+                    .filter((r) => r.show && r.start && r.end)
+                    .map((r) => ({ start: r.start, end: r.end })),
                   cohort_selection: dateControls.cohortSelection,
-                  lifecycle_groups: activeLifecycleGroups(useDashboardStore.getState(), dateControls.granularity) ?? null,
+                  lifecycle_groups: activeLifecycleGroups(useDashboardStore.getState(), dateGroups.granularity) ?? null,
                   panel_id: group.id,
                   left: panel.left,
                   right: panel.right,

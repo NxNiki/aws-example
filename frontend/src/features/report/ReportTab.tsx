@@ -281,7 +281,7 @@ export function ReportTab() {
     <div className="p-6 pt-0 w-full">
       {/* Pinned controls (below the sticky header + tab bar). */}
       <div
-        className={`sticky ${hasLifecycle ? "top-[9rem]" : "top-[6.25rem]"} z-20 -mx-6 mb-6 flex flex-wrap items-end gap-4 border-b bg-gray-50 px-6 py-3`}
+        className={`sticky ${hasLifecycle ? "top-[11.75rem]" : "top-[9rem]"} z-20 -mx-6 mb-6 flex flex-wrap items-end gap-4 border-b bg-gray-50 px-6 py-3`}
       >
         <div className="flex items-center gap-2">
           <select

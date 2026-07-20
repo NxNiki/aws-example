@@ -6,13 +6,12 @@ import { buildScatterOption } from "../../charts/scatterOption";
 import { clipFilterInfo } from "../../charts/clipFilterInfo";
 import { CohortSelect } from "../../components/CohortSelect";
 import { ClipControls } from "../../components/ClipControls";
-import { DateRanges } from "../../components/DateRanges";
 import { FilterControls } from "../../components/FilterControls";
 import { MetricCheckList } from "../../components/MetricCheckList";
 import { activeLifecycleGroups, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
 import { AddToReportButton } from "../report/AddToReport";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
-import type { DeepdivePanel as PanelId, Granularity, HistogramSeries } from "../../api/types";
+import type { DeepdivePanel as PanelId, HistogramSeries } from "../../api/types";
 import type { DeepdivePanelState } from "../../store/dashboardStore";
 
 // Deep Dive tab: histogram, correlation heatmap, and scatter views over selected
@@ -32,6 +31,7 @@ function DeepdivePanelView(props: {
   const { panel } = props;
   const configId = useDashboardStore((s) => s.configId);
   const vizControls = useDashboardStore((s) => s.controls.viz);
+  const dateGroups = useDashboardStore((s) => s.dateGroups);
   const info = clipFilterInfo(panel.clip, panel.filter);
 
   const histsByMetric: Record<string, HistogramSeries[]> = {};
@@ -192,12 +192,12 @@ function DeepdivePanelView(props: {
               source: {
                 kind: "stats-deepdive",
                 config: configId ?? "",
-                granularity: vizControls.granularity,
-                ranges: vizControls.ranges
+                granularity: dateGroups.granularity,
+                ranges: dateGroups.ranges
                   .filter((r) => r.show && r.start && r.end)
                   .map((r) => ({ start: r.start, end: r.end })),
                 cohort_selection: vizControls.cohortSelection,
-                lifecycle_groups: activeLifecycleGroups(useDashboardStore.getState(), vizControls.granularity) ?? null,
+                lifecycle_groups: activeLifecycleGroups(useDashboardStore.getState(), dateGroups.granularity) ?? null,
                 panel: props.panelId,
                 mode: panel.mode,
                 metrics: panel.metrics,
@@ -263,16 +263,17 @@ function DeepdivePanelView(props: {
 
 export function DeepDive() {
   const s = useDashboardStore();
-  const c = s.controls.viz; // this tab's own granularity / ranges / cohorts
+  const c = s.controls.viz; // this tab's own cohorts; dates/granularity are global
+  const dg = s.dateGroups;
 
-  // Refetch on config / granularity / range / cohort / per-panel
+  // Refetch on config / date-group / cohort / per-panel
   // mode/metrics/nbins/normalize/clip/filter/outliers changes (log axes are display-only).
   const fetchKey = JSON.stringify({
     cfg: s.configId,
-    gran: c.granularity,
-    ranges: c.ranges.map((r) => [r.start, r.end, r.show]),
+    gran: dg.granularity,
+    ranges: dg.ranges.map((r) => [r.start, r.end, r.show]),
     cohorts: c.cohortSelection,
-    lifecycle: activeLifecycleGroups(s, c.granularity),
+    lifecycle: activeLifecycleGroups(s, dg.granularity),
     panels: (["derived", "user"] as PanelId[]).map((id) => {
       const p = s.deepdive[id];
       return [id, p.mode, p.metrics, p.nbins, p.normalize, p.clip, p.filter, p.outliersStd];
@@ -281,7 +282,7 @@ export function DeepDive() {
   const debouncedKey = useDebouncedValue(fetchKey);
   useEffect(() => {
     if (s.configId) {
-      void s.ensureGroupValues(c.granularity);
+      void s.ensureGroupValues(dg.granularity);
       void s.loadDeepdive();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -289,27 +290,12 @@ export function DeepDive() {
 
   return (
     <div className="p-6 pt-0 w-full">
-      {/* Pinned below the sticky header + tab bar (see App.tsx height comment). */}
+      {/* Pinned below the sticky header + global bars (see App.tsx height comment). */}
       <div
-        className={`sticky ${s.config?.lifecycle_col ? "top-[9rem]" : "top-[6.25rem]"} z-20 -mx-6 mb-6 flex flex-wrap gap-6 items-start border-b bg-gray-50 px-6 py-3`}
+        className={`sticky ${s.config?.lifecycle_col ? "top-[11.75rem]" : "top-[9rem]"} z-20 -mx-6 mb-6 flex flex-wrap gap-6 items-start border-b bg-gray-50 px-6 py-3`}
       >
-        <label className="flex flex-col text-base">
-          <span className="text-gray-600 mb-1">Granularity</span>
-          <select
-            className="border rounded px-3 py-2"
-            value={c.granularity}
-            onChange={(e) => s.patchControls("viz", { granularity: e.target.value as Granularity })}
-          >
-            {(s.config?.granularities ?? ["day"]).map((g) => (
-              <option key={g} value={g}>
-                {g}
-              </option>
-            ))}
-          </select>
-        </label>
-        <DateRanges ranges={c.ranges} onChange={(i, r) => s.setTabRange("viz", i, r)} />
         <CohortSelect
-          groupValues={visibleGroupValues(s.config, s.groupValuesByGran[c.granularity] ?? {})}
+          groupValues={visibleGroupValues(s.config, s.groupValuesByGran[dg.granularity] ?? {})}
           selection={c.cohortSelection}
           onSetCohort={(col, values) => s.setTabCohort("viz", col, values)}
         />

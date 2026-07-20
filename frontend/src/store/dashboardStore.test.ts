@@ -45,12 +45,12 @@ const freshRanges = (): RangeState[] => [
   { start: null, end: null, show: false },
 ];
 
-// Per-tab controls (each tab owns granularity / window(s) / cohorts).
+// Cohorts are per tab; granularity + date windows are the global Date groups.
 const freshControls = () => ({
-  date: { granularity: "day" as const, dateFrom: null, dateTo: null, cohortSelection: {} },
-  group: { granularity: "day" as const, ranges: freshRanges(), cohortSelection: {} },
-  viz: { granularity: "day" as const, ranges: freshRanges(), cohortSelection: {} },
-  summaryTable: { granularity: "day" as const, ranges: freshRanges(), cohortSelection: {} },
+  date: { cohortSelection: {} },
+  group: { cohortSelection: {} },
+  viz: { cohortSelection: {} },
+  summaryTable: { cohortSelection: {} },
 });
 
 const initialState = () => ({
@@ -58,6 +58,7 @@ const initialState = () => ({
   configId: null,
   config: null,
   controls: freshControls(),
+  dateGroups: { granularity: "day" as const, ranges: freshRanges() },
   groupValuesByGran: {},
   panels: {},
   loading: false,
@@ -87,12 +88,10 @@ describe("dashboardStore", () => {
     expect(s.panels.group1.left).toEqual(["num_active_users"]);
     // cohort values are cached per granularity now.
     expect(s.groupValuesByGran.day).toEqual({ user_group: ["new", "old"] });
-    // Default window (per-tab): last 30 days ending at the data's max date,
-    // seeded into the date tab and range 1 of the group/viz tabs.
-    expect(s.controls.date.dateTo).toBe("2025-01-30");
-    expect(s.controls.date.dateFrom).toBe("2025-01-01");
-    expect(s.controls.group.ranges[0].start).toBe("2025-01-01");
-    expect(s.controls.viz.ranges[0].end).toBe("2025-01-30");
+    // Default window: last 30 days ending at the data's max date, seeded into
+    // the global Date-groups R1.
+    expect(s.dateGroups.ranges[0].start).toBe("2025-01-01");
+    expect(s.dateGroups.ranges[0].end).toBe("2025-01-30");
     expect(mockApi.series).toHaveBeenCalledTimes(2); // one fetch per panel
     expect(s.error).toBeNull();
   });
@@ -114,24 +113,24 @@ describe("dashboardStore", () => {
     expect(useDashboardStore.getState().panels.group1.left).toEqual(["a"]);
   });
 
-  it("per-tab controls are independent: changing the Deep Dive range leaves Stats-by-Group alone", () => {
-    useDashboardStore.getState().setTabRange("viz", 0, { start: "2025-02-01", end: "2025-02-10", show: true });
+  it("date groups are global while cohort selections stay per-tab", () => {
+    useDashboardStore.getState().setDateRange(1, { start: "2025-02-01", end: "2025-02-10", show: true });
     useDashboardStore.getState().setTabCohort("viz", "user_group", ["new"]);
     const s = useDashboardStore.getState();
-    expect(s.controls.viz.ranges[0].start).toBe("2025-02-01");
+    expect(s.dateGroups.ranges[1]).toEqual({ start: "2025-02-01", end: "2025-02-10", show: true });
     expect(s.controls.viz.cohortSelection).toEqual({ user_group: ["new"] });
-    expect(s.controls.group.ranges[0].start).toBeNull();
     expect(s.controls.group.cohortSelection).toEqual({});
     expect(s.controls.date.cohortSelection).toEqual({});
   });
 
-  it("loadAllSeries requests each panel's combined metric set with the DATE tab's controls", async () => {
+  it("loadAllSeries sends the active Date-groups windows with the DATE tab's cohorts", async () => {
+    const ranges = freshRanges();
+    ranges[0] = { start: "2025-01-05", end: "2025-01-12", show: true };
+    ranges[2] = { start: "2025-01-20", end: "2025-01-25", show: true };
     useDashboardStore.setState({
       configId: "ss01",
-      controls: {
-        ...freshControls(),
-        date: { granularity: "day", dateFrom: null, dateTo: null, cohortSelection: { user_group: ["new"] } },
-      },
+      controls: { ...freshControls(), date: { cohortSelection: { user_group: ["new"] } } },
+      dateGroups: { granularity: "day", ranges },
       panels: { group1: { left: ["num_active_users"], right: ["rtp"], log: false, threshold: 10, series: [] } },
     });
     await useDashboardStore.getState().loadAllSeries();
@@ -140,9 +139,12 @@ describe("dashboardStore", () => {
         config: "ss01",
         granularity: "day",
         metrics: ["num_active_users", "rtp"],
-        date_from: null,
-        date_to: null,
+        ranges: [
+          { start: "2025-01-05", end: "2025-01-12" },
+          { start: "2025-01-20", end: "2025-01-25" },
+        ],
         group_values: { user_group: ["new"] },
+        lifecycle_groups: undefined,
       },
       expect.anything(), // AbortSignal threaded for cancellation
     );

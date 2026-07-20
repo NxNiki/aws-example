@@ -253,6 +253,56 @@ def test_iter_cohorts_without_lifecycle_uses_stored_labels(monkeypatch):
     assert set(out2) == {"all"} and out2["all"].height == 4
 
 
+def test_series_request_accepts_ranges():
+    """The global Date-groups picker sends up to three windows to /series; old
+    clients (and saved report recipes) still use date_from/date_to."""
+    from dashboard_api.schemas.data import Series, SeriesRequest
+
+    req = SeriesRequest(config="c", metrics=["m"])
+    assert req.ranges is None  # absent → single-window behavior
+    req2 = SeriesRequest(
+        config="c",
+        metrics=["m"],
+        ranges=[{"start": "2026-01-01", "end": "2026-01-31"}, {"start": "2026-06-01", "end": "2026-06-30"}],
+    )
+    assert req2.ranges is not None and len(req2.ranges) == 2
+    s = Series(metric="m", cohort="all", kind="raw", additive=False, x=[], y=[], lower=[], upper=[])
+    assert s.range_index is None and s.range_label is None  # optional for old responses
+
+
+def test_load_series_ranges_tag_series(monkeypatch):
+    """With ranges, load_series emits one tagged series per metric × cohort ×
+    non-empty range, each computed on just that range's window."""
+    import polars as pl
+
+    from dashboard_api.services import common, series as series_mod
+
+    df = pl.DataFrame(
+        {
+            "d": ["2026-01-01", "2026-01-02", "2026-06-01"],
+            "user_id": ["u1", "u2", "u1"],
+            "user_rtp": [0.5, 1.5, 2.0],
+        }
+    ).with_columns(pl.col("d").str.to_datetime())
+    monkeypatch.setattr(series_mod, "load_lazy", lambda cfg, g: (df.lazy(), "d"))
+    common._window_cache.clear()
+
+    cfg = {"id": "rangetest", "stats_by_date": {}}
+    _, out, missing = series_mod.load_series(
+        cfg,
+        "day",
+        ["user_rtp"],
+        ranges=[("2026-01-01", "2026-01-02"), (None, None), ("2026-06-01", "2026-06-30")],
+    )
+    common._window_cache.clear()
+    assert missing == []
+    assert [(s["range_index"], s["x"]) for s in out] == [
+        (0, ["2026-01-01", "2026-01-02"]),
+        (2, ["2026-06-01"]),
+    ]
+    assert out[0]["range_label"] == "2026-01-01 → 2026-01-02"
+
+
 def test_lifecycle_group_schema_validation():
     import pytest
     from pydantic import ValidationError
