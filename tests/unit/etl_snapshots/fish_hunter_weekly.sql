@@ -312,16 +312,6 @@ stats_by_user_date AS (
     -- downstream user counts & retention (day0_num_users, num_active_users, …) need
     -- the full active-user set; a `HAVING MAX(b.killed) > 0` here undercounted them.
     -- Segment to killers downstream via the user_killed_fish flag when needed.
-),
-
-user_first_bet AS (
-    SELECT
-        user_id,
-        MIN(CAST(DATE_TRUNC('day', DATEADD(hour, -0, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', created_at))) AS DATE)) AS first_bet_date
-    FROM public.bullet
-    WHERE currency_type IN ('CNY')
-      AND op_code NOT IN ('B26', 'TST', 'TSB', 'TSO')
-    GROUP BY user_id
 )
 
 -- 5. FINAL JOIN & FORMATTING
@@ -329,12 +319,6 @@ SELECT
     t1.user_id,
     t1.daily_group,
     t1.activity_week AS activity_date,
-    CASE
-        WHEN DATEDIFF('day', fb.first_bet_date, t1.activity_week) <= 3 THEN 'new'
-        WHEN DATEDIFF('day', fb.first_bet_date, t1.activity_week) <= 7 THEN 'beginner'
-        ELSE 'old'
-    END AS user_group,
-
     -- Core user-level counts (user_ prefix = one row per user per period):
     t1.user_num_rooms,
     t1.user_num_bets,
@@ -418,7 +402,6 @@ SELECT
     t5.user_avg_kill_streak_high,
     t5.user_avg_kill_streak_ultra
 FROM stats_by_user_date t1
-LEFT JOIN user_first_bet AS fb ON t1.user_id = fb.user_id
 LEFT JOIN user_session_stats_agg t4
     ON t1.user_id = t4.user_id
     AND t1.activity_week = t4.activity_week
