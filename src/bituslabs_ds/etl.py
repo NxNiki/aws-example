@@ -677,7 +677,18 @@ class ETLScheduler:
                 if not path_str.endswith("/"):
                     path_str = path_str + "/"
                 if partition_level == "none":
-                    df = wr.s3.read_parquet(path=path_str, dataset=True)
+                    try:
+                        df = wr.s3.read_parquet(path=path_str, dataset=True)
+                    except (pa.ArrowInvalid, pa.ArrowTypeError) as merge_err:
+                        # Files written by different stacks can disagree on Arrow
+                        # types (e.g. string vs large_string) and the dataset-level
+                        # read refuses to merge them. Skipping compaction here would
+                        # silently accumulate duplicate lookback rows on every run,
+                        # so fall back to per-file reads — pandas concat unifies the
+                        # types — and let the rewrite below normalize the dataset.
+                        logger.warning(f"[{job_name}] Dataset read failed ({merge_err}); retrying file-by-file.")
+                        files = wr.s3.list_objects(path_str, suffix=".parquet")
+                        df = pd.concat([wr.s3.read_parquet(path=f) for f in files], ignore_index=True)
                 else:
 
                     def _pf(part: dict[str, str]) -> bool:
