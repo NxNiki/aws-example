@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   figure, and saved view. Cohort labels carry the range
   (`new[0, 3)`, `old[7, max)`).
 
+- **ETL data-integrity alerts.** Compaction failures and a new post-run
+  invariant check (on-disk keys must be unique within the incremental scope)
+  now send a Slack alert and are recorded on `ETLScheduler.alerts`, instead of
+  being visible only in the job log — a silently skipped compaction previously
+  let duplicate lookback rows accumulate unnoticed.
+
 ### Changed
 
 - **Lifecycle cohorts are derived at query time.** `dashboard_api` computes
