@@ -40,6 +40,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Silent ETL compaction failure duplicated recent rows on every game.** The
+  2026-07-17 in-place parquet rewrite produced Arrow `large_string` columns
+  while the ETL writes `string`; `_compact_partitions`' dataset read refused
+  to merge the two types and the error was only logged, so each incremental
+  run appended its lookback re-pull as duplicate keys (daily rows for
+  2026-07-15→07-18 doubled; weekly/monthly windows back to early July / May —
+  SS03 total_bet read 2× its true value on the duplicated dates; distinct
+  user counts, ratios, and per-user means were unaffected). Compaction now
+  falls back to per-file reads on Arrow type mismatches, and all 18 S3
+  prefixes were de-duplicated and type-normalized in place (~515k rows
+  removed; originals under
+  `s3://bituslabs-team-ai/etl-results/backup/dup_type_repair_20260720/`).
 - **"all" cohort double-counted bets on the ss games.** The ss01/ss02/ss03/ss06
   ETLs UNION every bet into a combined AB-test label AND a per-mathtable
   re-partition of the same bets (ss01 adds a third full `HG` copy); the
