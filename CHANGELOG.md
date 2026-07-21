@@ -38,6 +38,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer defines, so stale snapshots can't silently filter the data; re-saving
   the view persists the cleaned state.
 
+### Fixed
+
+- **"all" cohort double-counted bets on the ss games.** The ss01/ss02/ss03/ss06
+  ETLs UNION every bet into a combined AB-test label AND a per-mathtable
+  re-partition of the same bets (ss01 adds a third full `HG` copy); the
+  dashboard's "all" summed every row, inflating totals ~1.4–3× and polluting
+  per-user averages/distributions (SS03 total_bet showed 147.8M for
+  2026-06-01→07-20 where the true figure is 103.9M). Configs now declare the
+  disjoint labels (`group_col_partition`) and "all" aggregates only those;
+  individually selected groups are unchanged.
+
 ### Removed
 
 - **Stored `user_group` / `user_group2` columns.** Dropped from the game-stats

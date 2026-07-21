@@ -16,6 +16,9 @@ stats_by_date:
     ]
 
   group_col: "ai_group"
+  # Disjoint AB-test labels: the "all" cohort aggregates ONLY these (the other
+  # ai_group values re-partition the same bets and would double-count).
+  group_col_partition: [AI, Default]
   date_col: "activity_date"
   user_group_cols: [ai_group, user_group]
   aggregate_stats_from_user_rows: true
