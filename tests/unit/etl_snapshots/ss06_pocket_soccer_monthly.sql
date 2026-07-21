@@ -167,18 +167,6 @@ user_remaining_bet AS (
         AND b.spin_id > m.mathtable_last_spin_id
         AND b.ab_group_id = 'jojpin-9mokha-rexQug'
     GROUP BY m.activity_month, m.user_id, m.mathtable
-),
-
-user_first_bet AS (
-    SELECT
-        user_id,
-        MIN(CAST(DATE_TRUNC('day', DATEADD(hour, -0, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', created_at))) AS DATE)) AS first_bet_date
-    FROM public.fct_bet_orders
-    WHERE game_id = 'SS06'
-      AND currency_type IN ('CNY')
-      AND status = 'COMPLETED'
-      AND op_code NOT IN ('B26', 'TST', 'TSB', 'TSO')
-    GROUP BY user_id
 )
 
 SELECT
@@ -186,12 +174,6 @@ SELECT
     us.ai_group,
     us.user_id,
     us.user_mathtable_change,
-    CASE
-        WHEN DATEDIFF('day', fb.first_bet_date, us.activity_month) <= 3 THEN 'new'
-        WHEN DATEDIFF('day', fb.first_bet_date, us.activity_month) <= 7 THEN 'beginner'
-        ELSE 'old'
-    END AS user_group,
-
     -- DataMetrics input columns (user-level raw stats):
     us.user_num_bets,
     us.user_num_bets_bg,
@@ -233,7 +215,6 @@ SELECT
     rb.user_avg_remaining_bet_amount
 
 FROM user_stats AS us
-LEFT JOIN user_first_bet AS fb ON us.user_id = fb.user_id
 LEFT JOIN user_remaining_bet AS rb
     ON rb.user_id = us.user_id
     AND rb.activity_month = us.activity_month

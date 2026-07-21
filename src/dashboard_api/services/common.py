@@ -109,6 +109,19 @@ def lifecycle_col(cfg: dict[str, Any]) -> Optional[str]:
     return LIFECYCLE_COL if LIFECYCLE_COL in user_group_cols(cfg) else None
 
 
+def group_col_partition(cfg: dict[str, Any]) -> tuple[Optional[str], list[str]]:
+    """(group_col, disjoint labels) for configs whose group column is NOT a
+    partition — the ss-game ETLs UNION ALL every bet into a combined AB-test
+    label AND a per-mathtable re-partition of the same bets, so the "all"
+    cohort must aggregate only the combined labels (``group_col_partition`` in
+    the config) or every total roughly doubles. ([], no filtering) when the
+    config doesn't set it."""
+    sd = stats_by_date_cfg(cfg)
+    values = [str(v) for v in (sd.get("group_col_partition") or [])]
+    col = str(sd.get("group_col") or "") or None
+    return (col, values) if col and values else (None, [])
+
+
 # Per-config first-bet map. Derived, not stored: the daily parquet keeps the
 # game's full per-user-per-day history, so min(activity_date | user bet that
 # day) reproduces the ETL's Redshift-side first_bet_date (validated ≥99.97%
@@ -263,6 +276,7 @@ def iter_cohorts(
     col1, col2 = effective_cohort_cols(cfg)
     lc = lifecycle_col(cfg) if lifecycle else None
     by_label = {str(g["label"]): g for g in lifecycle or []}
+    part_col, partition = group_col_partition(cfg)
     if lc is not None and lc in (col1, col2) and date_col and "user_id" in df.columns:
         df = attach_lifecycle_periods(cfg, df, date_col, granularity)
     else:
@@ -280,6 +294,11 @@ def iter_cohorts(
             if g.get("end") is not None:
                 cond = cond & (pl.col(PERIODS_COL) < int(g["end"]))
             return df_.filter(cond)
+        if value == "all" and col is not None and col == part_col and col in df_.columns:
+            # "all" on a non-partition group column keeps only the disjoint
+            # labels; the other values re-partition the same bets and would
+            # double-count (see group_col_partition).
+            return df_.filter(pl.col(col).is_in(partition))
         return apply_cohort(df_, col, value)
 
     seen: set[str] = set()

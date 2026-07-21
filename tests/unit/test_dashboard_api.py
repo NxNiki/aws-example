@@ -253,6 +253,58 @@ def test_iter_cohorts_without_lifecycle_uses_stored_labels(monkeypatch):
     assert set(out2) == {"all"} and out2["all"].height == 4
 
 
+def test_iter_cohorts_all_respects_group_col_partition(monkeypatch):
+    """The ss-game ETLs UNION ALL every bet into a combined AB-test label AND a
+    per-mathtable re-partition of the same bets, so 'all' on ai_group must
+    aggregate only the configured disjoint labels — summing every row counted
+    bets twice (the total_bet inflation bug). Named groups stay untouched."""
+    import polars as pl
+
+    from dashboard_api.services import common
+
+    # u1's bets appear twice: once combined ('AI'/'Default'), once per-mathtable.
+    df = pl.DataFrame(
+        {
+            "d": ["2026-06-01"] * 4,
+            "user_id": ["u1", "u2", "u1", "u2"],
+            "ai_group": ["AI", "Default", "mt_a", "Default_mt_a"],
+            "user_total_bet": [100.0, 50.0, 100.0, 50.0],
+        }
+    ).with_columns(pl.col("d").str.to_datetime())
+    cfg = {
+        "id": "g",
+        "stats_by_date": {
+            "group_col": "ai_group",
+            "group_col_partition": ["AI", "Default"],
+            "user_group_cols": ["ai_group", "user_group"],
+        },
+    }
+    out = dict(common.iter_cohorts(cfg, df, {}))
+    assert out["all"]["user_total_bet"].sum() == 150.0  # not 300 — no double count
+    assert set(out["all"]["ai_group"]) == {"AI", "Default"}
+
+    # Named groups (combined or re-partition) are unchanged.
+    named = dict(common.iter_cohorts(cfg, df, {"ai_group": ["AI", "mt_a"]}))
+    assert named["AI"]["user_total_bet"].sum() == 100.0
+    assert named["mt_a"]["user_total_bet"].sum() == 100.0
+
+    # Composes with lifecycle groups on the second cohort column.
+    first = pl.DataFrame({"user_id": ["u1", "u2"], "first_bet_date": ["2026-06-01", "2026-05-01"]}).with_columns(
+        pl.col("first_bet_date").str.to_datetime()
+    )
+    monkeypatch.setattr(common, "load_first_bet_dates", lambda cfg: first)
+    lc = dict(
+        common.iter_cohorts(
+            cfg, df, {}, lifecycle=[{"label": "new", "start": 0, "end": 3}], date_col="d", granularity="day"
+        )
+    )
+    assert lc["new"]["user_total_bet"].sum() == 100.0  # u1 only, combined row only
+
+    # Configs without a partition keep the old no-filter 'all'.
+    cfg2 = {"id": "g2", "stats_by_date": {"group_col": "ai_group", "user_group_cols": ["ai_group"]}}
+    assert dict(common.iter_cohorts(cfg2, df, {}))["all"].height == 4
+
+
 def test_series_request_accepts_ranges():
     """The global Date-groups picker sends up to three windows to /series; old
     clients (and saved report recipes) still use date_from/date_to."""
