@@ -482,6 +482,31 @@ class ETLScheduler:
         self.lookback_days = lookback_days
         self.default_start_date = default_start_date
         self.overwrite = overwrite
+        # Data-integrity problems raised during this scheduler's runs (also
+        # pushed to Slack); callers can inspect after run_incremental_job.
+        self.alerts: List[str] = []
+
+    def _alert(self, job_name: str, message: str) -> None:
+        """Escalate a data-integrity problem: ERROR log, record on self.alerts,
+        and best-effort Slack (SLACK_USER_TOKEN/SLACK_BOT_TOKEN + SLACK_CHANNEL_ID).
+
+        Compaction/dedup failures MUST NOT stay log-only: a skipped compaction
+        leaves each run's lookback re-pull as duplicate rows that downstream
+        consumers (the dashboard) silently sum twice."""
+        full = f"[{job_name}] {message}"
+        logger.error(full)
+        self.alerts.append(full)
+        token = os.environ.get("SLACK_USER_TOKEN") or os.environ.get("SLACK_BOT_TOKEN")
+        channel = os.environ.get("SLACK_CHANNEL_ID")
+        if not token or not channel:
+            logger.warning("Slack alert skipped (SLACK_USER_TOKEN/SLACK_BOT_TOKEN or SLACK_CHANNEL_ID not set).")
+            return
+        try:
+            from slack_sdk import WebClient
+
+            WebClient(token=token).chat_postMessage(channel=channel, text=f":rotating_light: ETL alert {full}")
+        except Exception as e:
+            logger.warning(f"Slack alert failed: {e}")
 
     @property
     def is_s3(self) -> bool:
@@ -769,7 +794,61 @@ class ETLScheduler:
 
             logger.info(f"[{job_name}] Scoped compaction complete (partitions consolidated and de-duplicated).")
         except Exception as e:
-            logger.error(f"[{job_name}] Compaction failed: {e}")
+            self._alert(
+                job_name,
+                f"Compaction FAILED — each run's lookback re-pull will accumulate as duplicate rows "
+                f"(downstream sums read ~2x) until this is fixed: {e}",
+            )
+
+    def _verify_unique_keys(
+        self,
+        job_name: str,
+        key_cols: List[str],
+        partition_level: PartitionLevel,
+        incremental_start: date,
+    ) -> None:
+        """Post-run invariant: the on-disk dataset must be unique on key_cols
+        within the compaction scope. A violation means de-duplication silently
+        failed (whatever the cause), so it alerts rather than just logging."""
+        try:
+            job_path = self._job_path(job_name)
+            if self._is_s3:
+                path_str = output_path_as_str(job_path)
+                if not path_str.endswith("/"):
+                    path_str = path_str + "/"
+                if partition_level == "none":
+                    try:
+                        keys = wr.s3.read_parquet(path=path_str, dataset=True, columns=key_cols)
+                    except (pa.ArrowInvalid, pa.ArrowTypeError):
+                        files = wr.s3.list_objects(path_str, suffix=".parquet")
+                        keys = pd.concat(
+                            [wr.s3.read_parquet(path=f, columns=key_cols) for f in files], ignore_index=True
+                        )
+                else:
+
+                    def _pf(part: dict[str, str]) -> bool:
+                        return _partition_intersects_incremental_start(partition_level, part, incremental_start)
+
+                    keys = wr.s3.read_parquet(path=path_str, dataset=True, partition_filter=_pf, columns=key_cols)
+            else:
+                path = job_path if isinstance(job_path, Path) else Path(job_path)
+                if not path.exists() or not any(path.iterdir()):
+                    return
+                dataset = ds.dataset(output_path_as_str(path), format="parquet")
+                keys = dataset.to_table(columns=key_cols).to_pandas()
+        except Exception as e:
+            self._alert(job_name, f"Data integrity check could not read the dataset: {e}")
+            return
+
+        dups = int(keys.duplicated(subset=key_cols).sum())
+        if dups:
+            self._alert(
+                job_name,
+                f"Data integrity check FAILED: {dups} duplicate {key_cols} keys on disk — "
+                f"downstream consumers are summing these rows more than once.",
+            )
+        else:
+            logger.info(f"[{job_name}] Data integrity check passed ({len(keys):,} rows, keys unique).")
 
     def run_incremental_job(
         self,
@@ -931,6 +1010,16 @@ class ETLScheduler:
             start_date_str=start_date_str,
             default_start_date=self.default_start_date,
         )
+
+        # Same scope compaction runs on: incremental runs only (a full load /
+        # overwrite writes each key exactly once by construction).
+        if not self.overwrite and start_date_str != self.default_start_date:
+            self._verify_unique_keys(
+                job_name=job_name,
+                key_cols=key_cols,
+                partition_level=partition_level,
+                incremental_start=pd.to_datetime(start_date_str).date(),
+            )
 
 
 if __name__ == "__main__":
