@@ -42,12 +42,14 @@ def _load_job_module(relative_path: str) -> ModuleType:
 
 
 _FISH_HUNTER = _load_job_module("jobs/fish_hunter/etl_game_stats_daily_by_user.py")
+_SS01A = _load_job_module("jobs/ss01a_golden_goal/etl_game_stats_daily_by_user_group.py")
 _SS03 = _load_job_module("jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py")
 _SS06 = _load_job_module("jobs/ss06_pocket_soccer/etl_game_stats_daily_by_user_group.py")
 
 # (job module, snapshot stem) — one snapshot file per (stem, granularity).
 _JOBS = [
     (_FISH_HUNTER, "fish_hunter"),
+    (_SS01A, "ss01a_golden_goal"),
     (_SS03, "ss03_mahjiang_streak"),
     (_SS06, "ss06_pocket_soccer"),
 ]

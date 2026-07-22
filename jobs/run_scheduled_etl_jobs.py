@@ -82,6 +82,11 @@ def main() -> int:
             [],
         ),
         (
+            "ss01a_golden_goal ETL",
+            JOBS_DIR / "ss01a_golden_goal" / "etl_game_stats_daily_by_user_group.py",
+            [],
+        ),
+        (
             "ss02_deepdive ETL",
             JOBS_DIR / "ss02_deepdive" / "etl_game_stats_daily_by_user_group.py",
             [],
