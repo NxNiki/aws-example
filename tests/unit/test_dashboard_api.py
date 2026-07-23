@@ -345,6 +345,23 @@ def test_iter_cohorts_grain_collapses_user_rows(monkeypatch):
     assert abs(u1["user_rtp"][0] - 420.0 / 400.0) < 1e-9  # recomputed from sums
     assert abs(u1["user_avg_bet_amount"][0] - 10.0) < 1e-9
 
+    # SQL semantics: an all-null sum stays null (a user with no BASE bets keeps
+    # user_total_bet_bg null — excluded from per-user means — not 0).
+    df_null = pl.DataFrame(
+        {
+            "d": ["2026-06-01", "2026-06-01"],
+            "user_id": ["u1", "u1"],
+            "ab_group": ["AI", "AI"],
+            "mathtable": ["mt_a", "mt_b"],
+            "user_num_bets": [10, 30],
+            "user_total_bet": [100.0, 300.0],
+            "user_total_bet_bg": [None, None],
+        }
+    ).with_columns(pl.col("d").str.to_datetime())
+    collapsed = common.collapse_user_rows(df_null.drop(["ab_group", "mathtable"]), "d")
+    assert collapsed["user_total_bet_bg"][0] is None
+    assert collapsed["user_total_bet"][0] == 400.0
+
     # Pinning every grain column keeps the stored rows untouched.
     pinned = dict(common.iter_cohorts(cfg, df, {"ab_group": ["AI"], "mathtable": ["mt_a"]}, date_col="d"))
     assert set(pinned) == {"AI | mt_a"}

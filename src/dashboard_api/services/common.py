@@ -321,7 +321,12 @@ def collapse_user_rows(df: pl.DataFrame, date_col: str) -> pl.DataFrame:
     ratio_names = {name for name, _, _ in _USER_ROW_RATIOS}
     passthrough = [c for c in df.columns if c not in keys and c not in sums and c not in ratio_names]
 
-    out = df.group_by(keys).agg([pl.col(c).sum() for c in sums] + [pl.col(c).first() for c in passthrough])
+    # SQL semantics for the sums: all-null stays null (a user with no BASE
+    # bets keeps user_total_bet_bg = null, excluded from per-user means, not 0).
+    out = df.group_by(keys).agg(
+        [pl.when(pl.col(c).is_not_null().any()).then(pl.col(c).sum()).otherwise(None).alias(c) for c in sums]
+        + [pl.col(c).first() for c in passthrough]
+    )
     ratios = [
         pl.when(pl.col(den) > 0).then(pl.col(num) / pl.col(den)).otherwise(None).alias(name)
         for name, num, den in _USER_ROW_RATIOS
