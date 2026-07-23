@@ -49,7 +49,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             t.user_id,
             t.spin_id,
             t.created_at,
-            t.math_table_id AS mathtable,
+            COALESCE(NULLIF(t.math_table_id, ''), '(none)') AS mathtable,
             t.bet_amount,
             t.actual_payout AS payout,
             t.bet_type,
