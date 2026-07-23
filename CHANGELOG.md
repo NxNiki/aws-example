@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   figure, and saved view. Cohort labels carry the range
   (`new[0, 3)`, `old[7, max)`).
 
+- **SS01A (Golden Goal) game-stats pipeline.** New ETL
+  (`jobs/ss01a_golden_goal/`) producing daily/weekly/monthly per-user stats
+  with AI/Default groups and per-mathtable variants (no AB arms, no `HG`
+  copy), wired into the nightly scheduler, plus the matching
+  `dashboard_config-ss01a.yaml` (lifecycle picker enabled,
+  `group_col_partition: [AI, Default]`).
 - **ETL data-integrity alerts.** Compaction failures and a new post-run
   invariant check (on-disk keys must be unique within the incremental scope)
   now send a Slack alert and are recorded on `ETLScheduler.alerts`, instead of
