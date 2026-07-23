@@ -8,6 +8,7 @@ services stay thin and behave identically (matching the legacy Dash tabs).
 
 from __future__ import annotations
 
+import itertools
 import logging
 import math
 import threading
@@ -88,12 +89,27 @@ def user_group_cols(cfg: dict[str, Any]) -> list[str]:
     return [str(c) for c in cols]
 
 
-def effective_cohort_cols(cfg: dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
-    """Return (col1, col2); col2 only when configured and distinct from col1."""
-    cols = user_group_cols(cfg)
-    col1 = cols[0] if cols else None
-    col2 = cols[1] if len(cols) > 1 and cols[1] != col1 else None
-    return col1, col2
+def effective_cohort_cols(cfg: dict[str, Any]) -> list[str]:
+    """All configured user-group columns, de-duplicated, order preserved."""
+    seen: set[str] = set()
+    cols: list[str] = []
+    for c in user_group_cols(cfg):
+        if c not in seen:
+            seen.add(c)
+            cols.append(c)
+    return cols
+
+
+def user_row_grain(cfg: dict[str, Any]) -> list[str]:
+    """Columns (beyond date × user) that define the stored user-row grain.
+
+    Configs whose parquet is one row per (period, user, ab_group, mathtable)
+    set ``user_row_grain: [ab_group, mathtable]``: each bet lives in exactly
+    one row, so group-level sums are correct at any selection, but per-user
+    stats must first collapse the grain back to one row per user whenever a
+    grain column is unselected (see ``collapse_user_rows``)."""
+    sd = stats_by_date_cfg(cfg)
+    return [str(c) for c in (sd.get("user_row_grain") or [])]
 
 
 # The stored ETL cohort column (new/beginner/old) the lifecycle picker redefines.
@@ -232,16 +248,88 @@ def cohort_values(group_values: dict[str, list[str]], col: Optional[str]) -> lis
     return vals or ["all"]
 
 
-def cohort_label(v1: str, v2: str, has_col2: bool) -> str:
-    if not has_col2:
-        return "all" if v1 == "all" else v1
-    if v1 == "all" and v2 == "all":
-        return "all"
-    if v1 == "all":
-        return v2
-    if v2 == "all":
-        return v1
-    return f"{v1} | {v2}"
+def cohort_label(values: list[str]) -> str:
+    """Display label for one cohort combination: the non-'all' dimension values
+    joined with ' | ' ('all' when every dimension is unselected)."""
+    parts = [v for v in values if v != "all"]
+    return " | ".join(parts) if parts else "all"
+
+
+# Additive user-row components: SUM when collapsing grain rows to one row per
+# user. Formulas mirror the ETL's user_stats SELECT.
+_USER_ROW_SUMS = [
+    "user_num_bets",
+    "user_num_bets_bg",
+    "user_num_bets_fg",
+    "user_total_bet",
+    "user_total_bet_bg",
+    "user_total_bet_fg",
+    "user_total_payout",
+    "user_total_payout_bg",
+    "user_total_payout_fg",
+    "user_num_bets_with_payout",
+    "user_num_bets_bg_with_payout",
+    "user_num_bets_fg_with_payout",
+    "user_mathtable_change",
+    "user_accu_pos_delta_bet",
+    "user_accu_neg_delta_bet",
+    "user_accu_delta_bet",
+    "user_pos_delta_bet_num",
+    "user_neg_delta_bet_num",
+    "user_num_delta_bet",
+    "user_num_delta_t_bg",
+    "user_total_profit",
+]
+
+# Ratio columns recomputed from the summed components: (name, numerator,
+# denominator), null when the denominator is 0.
+_USER_ROW_RATIOS = [
+    ("user_avg_bet_amount", "user_total_bet", "user_num_bets"),
+    ("user_rtp", "user_total_payout", "user_total_bet"),
+    ("user_rtp_bg", "user_total_payout_bg", "user_total_bet"),
+    ("user_rtp_fg", "user_total_payout_fg", "user_total_bet_fg"),
+    ("user_hit_rate", "user_num_bets_with_payout", "user_num_bets"),
+    ("user_hit_rate_bg", "user_num_bets_bg_with_payout", "user_num_bets_bg"),
+    ("user_hit_rate_fg", "user_num_bets_fg_with_payout", "user_num_bets_fg"),
+    ("user_fg_ratio", "user_num_bets_fg", "user_num_bets"),
+    ("user_accu_pos_delta_bet_avg", "user_accu_pos_delta_bet", "user_pos_delta_bet_num"),
+    ("user_accu_neg_delta_bet_avg", "user_accu_neg_delta_bet", "user_neg_delta_bet_num"),
+    ("user_accu_delta_bet_avg", "user_accu_delta_bet", "user_num_delta_bet"),
+    ("user_avg_delta_t_seconds_bg", "_delta_t_bg_sum", "user_num_delta_t_bg"),
+]
+
+
+def collapse_user_rows(df: pl.DataFrame, date_col: str) -> pl.DataFrame:
+    """Re-aggregate grain rows (one per user × grain combination) to one row
+    per (period, user): additive components are summed and the derived ratios
+    recomputed from the sums — the same math the ETL uses — so per-user
+    means/CIs/histograms see each user exactly once. Columns outside the
+    mapping keep their first value; grain columns should be dropped upstream.
+    """
+    if df.is_empty() or "user_id" not in df.columns:
+        return df
+    cols = set(df.columns)
+    pre = []
+    if "user_avg_delta_t_seconds_bg" in cols and "user_num_delta_t_bg" in cols:
+        pre.append((pl.col("user_avg_delta_t_seconds_bg") * pl.col("user_num_delta_t_bg")).alias("_delta_t_bg_sum"))
+    if pre:
+        df = df.with_columns(pre)
+        cols = set(df.columns)
+
+    keys = [date_col, "user_id"]
+    sums = [c for c in _USER_ROW_SUMS + ["_delta_t_bg_sum"] if c in cols]
+    ratio_names = {name for name, _, _ in _USER_ROW_RATIOS}
+    passthrough = [c for c in df.columns if c not in keys and c not in sums and c not in ratio_names]
+
+    out = df.group_by(keys).agg([pl.col(c).sum() for c in sums] + [pl.col(c).first() for c in passthrough])
+    ratios = [
+        pl.when(pl.col(den) > 0).then(pl.col(num) / pl.col(den)).otherwise(None).alias(name)
+        for name, num, den in _USER_ROW_RATIOS
+        if num in out.columns and den in out.columns
+    ]
+    if ratios:
+        out = out.with_columns(ratios)
+    return out.drop([c for c in ("_delta_t_bg_sum",) if c in out.columns])
 
 
 def apply_cohort(df: pl.DataFrame, col: Optional[str], value: str) -> pl.DataFrame:
@@ -273,40 +361,56 @@ def iter_cohorts(
     labeled "all" means no filter. Ranges may overlap — each group is an
     independent filter, not a partition.
     """
-    col1, col2 = effective_cohort_cols(cfg)
+    cols = effective_cohort_cols(cfg)
     lc = lifecycle_col(cfg) if lifecycle else None
     by_label = {str(g["label"]): g for g in lifecycle or []}
     part_col, partition = group_col_partition(cfg)
-    if lc is not None and lc in (col1, col2) and date_col and "user_id" in df.columns:
+    grain = user_row_grain(cfg)
+    if lc is not None and lc in cols and date_col and "user_id" in df.columns:
         df = attach_lifecycle_periods(cfg, df, date_col, granularity)
     else:
         lc = None
 
-    def values(col: Optional[str]) -> list[str]:
-        if col is not None and col == lc:
+    def values(col: str) -> list[str]:
+        if col == lc:
             return list(by_label) or ["all"]
         return cohort_values(group_values, col)
 
-    def apply(df_: pl.DataFrame, col: Optional[str], value: str) -> pl.DataFrame:
-        if col is not None and col == lc and value != "all":
+    def apply(df_: pl.DataFrame, col: str, value: str) -> pl.DataFrame:
+        if col == lc and value != "all":
             g = by_label[value]
             cond = pl.col(PERIODS_COL) >= int(g["start"])
             if g.get("end") is not None:
                 cond = cond & (pl.col(PERIODS_COL) < int(g["end"]))
             return df_.filter(cond)
-        if value == "all" and col is not None and col == part_col and col in df_.columns:
+        if value == "all" and col == part_col and col in df_.columns:
             # "all" on a non-partition group column keeps only the disjoint
             # labels; the other values re-partition the same bets and would
             # double-count (see group_col_partition).
             return df_.filter(pl.col(col).is_in(partition))
         return apply_cohort(df_, col, value)
 
+    if not cols:
+        yield "all", df
+        return
+
+    helper_cols = [PERIODS_COL] if lc else []
     seen: set[str] = set()
-    for v1 in values(col1):
-        for v2 in values(col2) if col2 else ["all"]:
-            label = cohort_label(v1, v2, has_col2=col2 is not None)
-            if label in seen:
-                continue
-            seen.add(label)
-            df_c = apply(apply(df, col1, v1), col2, v2)
-            yield label, (df_c.drop(PERIODS_COL) if lc else df_c)
+    for combo in itertools.product(*(values(c) for c in cols)):
+        label = cohort_label(list(combo))
+        if label in seen:
+            continue
+        seen.add(label)
+        df_c = df
+        for col, value in zip(cols, combo):
+            df_c = apply(df_c, col, value)
+        if helper_cols:
+            df_c = df_c.drop([c for c in helper_cols if c in df_c.columns])
+        # Grain rows (one per user × grain combination) collapse back to one
+        # row per user whenever a grain dimension is unselected, so per-user
+        # stats see each user once; with every grain column pinned the rows
+        # are already per-user.
+        selected = dict(zip(cols, combo))
+        if grain and date_col and any(selected.get(g, "all") == "all" for g in grain):
+            df_c = collapse_user_rows(df_c.drop([g for g in grain if g in df_c.columns]), date_col)
+        yield label, df_c
