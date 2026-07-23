@@ -28,6 +28,7 @@ const CONFIG = {
   date_col: "activity_date",
   group_col: "",
   user_group_cols: [] as string[],
+  range_group_defaults: [],
   granularities: ["day" as const],
   groups: [{ id: "group1", label: "DAU and Retention", metrics: ["num_active_users", "rtp"] }],
   tabs: ["stats-by-date"],

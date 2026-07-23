@@ -216,6 +216,7 @@ export const useReportStore = create<ReportState>((set, get) => ({
           ranges: src.ranges,
           group_values: src.cohort_selection,
           lifecycle_groups: src.lifecycle_groups ?? null,
+          range_groups: src.range_groups ?? null,
         });
         setData({ series: resp.series });
       } else if (src.kind === "stats-by-group") {
@@ -226,6 +227,7 @@ export const useReportStore = create<ReportState>((set, get) => ({
           ranges: src.ranges,
           group_values: src.cohort_selection,
           lifecycle_groups: src.lifecycle_groups ?? null,
+          range_groups: src.range_groups ?? null,
           clip: src.clip,
           filter: src.filter,
         });
@@ -237,6 +239,7 @@ export const useReportStore = create<ReportState>((set, get) => ({
           ranges: src.ranges,
           group_values: src.cohort_selection,
           lifecycle_groups: src.lifecycle_groups ?? null,
+          range_groups: src.range_groups ?? null,
           metric_options: src.metric_options,
           pvalues: src.pvalues,
         });
@@ -251,6 +254,7 @@ export const useReportStore = create<ReportState>((set, get) => ({
           ranges: src.ranges,
           group_values: src.cohort_selection,
           lifecycle_groups: src.lifecycle_groups ?? null,
+          range_groups: src.range_groups ?? null,
           clip: src.clip,
           filter: src.filter,
           nbins: src.nbins,

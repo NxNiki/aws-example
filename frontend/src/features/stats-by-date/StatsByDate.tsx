@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
-import { activeLifecycleGroups, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
+import { activeLifecycleGroups, activeRangeGroups, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { CohortSelect } from "../../components/CohortSelect";
+import { RangeGroupSelect } from "../../components/RangeGroupSelect";
 import { Panel } from "./Panel";
 
 // Stats-by-Date tab: per-game metric time-series across three dual-axis panels,
@@ -22,6 +23,7 @@ export function StatsByDate() {
     ranges: dg.ranges.map((r) => [r.start, r.end, r.show]),
     cohorts: c.cohortSelection,
     lifecycle: activeLifecycleGroups(s, dg.granularity),
+    rangeGroups: activeRangeGroups(s, c.rangeSelection),
     metrics: Object.entries(s.panels).map(([id, p]) => [id, p.left, p.right]),
   });
   const debouncedKey = useDebouncedValue(fetchKey);
@@ -51,6 +53,15 @@ export function StatsByDate() {
           selection={c.cohortSelection}
           onSetCohort={(col, values) => s.setTabCohort("date", col, values)}
         />
+        {s.config?.range_group_col && (
+          <RangeGroupSelect
+            name={s.config.range_group_name ?? s.config.range_group_col}
+            groups={s.rangeGroups}
+            selection={c.rangeSelection}
+            onSetSelection={(labels) => s.setTabRangeSelection("date", labels)}
+            onSetGroup={s.setRangeGroup}
+          />
+        )}
       </div>
 
       {s.error && <div className="mb-4 rounded bg-red-50 text-red-700 text-base px-3 py-2">{s.error}</div>}

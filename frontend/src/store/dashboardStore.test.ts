@@ -31,6 +31,7 @@ const CONFIG = {
   date_col: "activity_date",
   group_col: "",
   user_group_cols: ["user_group"],
+  range_group_defaults: [],
   granularities: ["day"],
   groups: [
     { id: "group1", label: "DAU", metrics: ["num_active_users", "rtp"] },
@@ -47,10 +48,10 @@ const freshRanges = (): RangeState[] => [
 
 // Cohorts are per tab; granularity + date windows are the global Date groups.
 const freshControls = () => ({
-  date: { cohortSelection: {} },
-  group: { cohortSelection: {} },
-  viz: { cohortSelection: {} },
-  summaryTable: { cohortSelection: {} },
+  date: { cohortSelection: {}, rangeSelection: [] },
+  group: { cohortSelection: {}, rangeSelection: [] },
+  viz: { cohortSelection: {}, rangeSelection: [] },
+  summaryTable: { cohortSelection: {}, rangeSelection: [] },
 });
 
 const initialState = () => ({
@@ -129,7 +130,7 @@ describe("dashboardStore", () => {
     ranges[2] = { start: "2025-01-20", end: "2025-01-25", show: true };
     useDashboardStore.setState({
       configId: "ss01",
-      controls: { ...freshControls(), date: { cohortSelection: { user_group: ["new"] } } },
+      controls: { ...freshControls(), date: { cohortSelection: { user_group: ["new"] }, rangeSelection: [] } },
       dateGroups: { granularity: "day", ranges },
       panels: { group1: { left: ["num_active_users"], right: ["rtp"], log: false, threshold: 10, series: [] } },
     });
