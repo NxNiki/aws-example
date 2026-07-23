@@ -1,4 +1,31 @@
-WITH bets AS (
+WITH bet_events AS (
+    -- FourScatter rows are free-game buy-ins: attribute them to the
+    -- mathtable of the FOLLOWING spin (full-stream LEAD on purpose —
+    -- this is mathtable attribution, not a sequence metric).
+    SELECT
+        t.user_id,
+        t.spin_id,
+        t.created_at,
+        CASE
+            WHEN t.math_table_id = 'FourScatter'
+            THEN LEAD(t.math_table_id) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at)
+            ELSE t.math_table_id
+        END AS math_table_id,
+        t.bet_amount,
+        t.actual_payout,
+        t.bet_type,
+        t.partition_ab
+    FROM
+        public.fct_bet_orders AS t
+    WHERE
+        t.game_id = 'SS02'
+        AND CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at) >= '2025-01-01'
+        AND t.currency_type IN ('CNY')
+        AND t.status = 'COMPLETED'
+        AND t.op_code NOT IN ('B26', 'TST', 'TSB', 'TSO')
+),
+
+bets AS (
 SELECT
     t.user_id,
     t.spin_id,
@@ -13,18 +40,10 @@ SELECT
     CAST(DATE_TRUNC('month', DATEADD(hour, -0, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_month,
     CASE
         WHEN t.partition_ab[0] = 'jojpin-9mokha-rexQug' THEN 'AI'
-        WHEN t.partition_ab[0] = '4f1a46ca-7baa-4452-9a40-ef21d9b33b57' THEN 'AB_TEST_A'
-        WHEN t.partition_ab[0] = '4a04df21-c749-4808-8e55-3a0b74c084d2' THEN 'AB_TEST_B'
         ELSE 'Default'
     END AS ab_group
 FROM
-    public.fct_bet_orders AS t
-WHERE
-    t.game_id = 'SS03'
-    AND CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at) >= '2025-01-01'
-    AND t.currency_type IN ('CNY')
-    AND t.status = 'COMPLETED'
-    AND t.op_code NOT IN ('B26', 'TST', 'TSB', 'TSO')
+    bet_events AS t
 ),
 
 user_bets AS (
