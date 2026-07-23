@@ -49,6 +49,10 @@ def _lifecycle(groups: Optional[list[LifecycleGroup]]) -> Optional[list[dict]]:
     return [g.model_dump() for g in groups] if groups else None
 
 
+def _ranges_dims(groups) -> Optional[list[dict]]:
+    return [g.model_dump() for g in groups] if groups else None
+
+
 @router.get("/configs", response_model=ConfigList)
 def list_configs() -> ConfigList:
     """API endpoint: GET /api/data/configs — powers the game/config picker in the SPA top bar.
@@ -94,6 +98,7 @@ def post_series(req: SeriesRequest) -> SeriesResponse:
             req.date_to,
             req.group_values,
             lifecycle=_lifecycle(req.lifecycle_groups),
+            range_groups=_ranges_dims(req.range_groups),
             ranges=[(r.start, r.end) for r in req.ranges] if req.ranges is not None else None,
         )
     except SeriesError as exc:
@@ -171,6 +176,7 @@ def post_group_distribution(req: GroupDistributionRequest) -> GroupDistributionR
             [(r.start, r.end) for r in req.ranges],
             req.group_values,
             _lifecycle(req.lifecycle_groups),
+            _ranges_dims(req.range_groups),
             req.clip.enable,
             req.clip.min,
             req.clip.max,
@@ -214,6 +220,7 @@ def post_summary_table(req: SummaryTableRequest) -> SummaryTableResponse:
             [(r.start, r.end) for r in req.ranges],
             req.group_values,
             _lifecycle(req.lifecycle_groups),
+            _ranges_dims(req.range_groups),
             {
                 m: {"log": o.log, "clip_enable": o.clip.enable, "clip_min": o.clip.min, "clip_max": o.clip.max}
                 for m, o in req.metric_options.items()
@@ -265,6 +272,7 @@ def post_deepdive(req: DeepdiveRequest) -> DeepdiveResponse:
             [(r.start, r.end) for r in req.ranges],
             req.group_values,
             _lifecycle(req.lifecycle_groups),
+            _ranges_dims(req.range_groups),
             req.clip.enable,
             req.clip.min,
             req.clip.max,

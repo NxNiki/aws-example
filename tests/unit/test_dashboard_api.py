@@ -387,6 +387,49 @@ def test_iter_cohorts_grain_collapses_user_rows(monkeypatch):
     assert lc["AI | new"].height == 1 and lc["AI | new"]["user_num_bets"][0] == 40  # u1 collapsed
 
 
+def test_iter_cohorts_range_groups_bucket_by_value(monkeypatch):
+    """The range-group dimension (e.g. fish_value) buckets rows by INCLUSIVE
+    [min, max] ranges from the request; a pinned range still collapses the
+    grain (one range spans many stored values), and 'all' is no filter."""
+    import polars as pl
+
+    from dashboard_api.services import common
+
+    df = pl.DataFrame(
+        {
+            "d": ["2026-06-01"] * 3,
+            "user_id": ["u1", "u1", "u2"],
+            "daily_group": ["DEFAULT_FALLBACK"] * 3,
+            "fish_value": [10, 130, 500],
+            "user_num_bets": [5, 20, 7],
+            "user_total_bet": [50.0, 200.0, 70.0],
+            "user_max_profit": [10.0, 90.0, 30.0],
+        }
+    ).with_columns(pl.col("d").str.to_datetime())
+    cfg = {
+        "id": "fh",
+        "stats_by_date": {
+            "user_group_cols": ["daily_group", "fish_value"],
+            "user_row_grain": ["fish_value"],
+            "range_group": {"column": "fish_value", "name": "Fish level"},
+        },
+    }
+    groups = [
+        {"label": "low", "min": 0, "max": 10},
+        {"label": "low-med", "min": 0, "max": 130},  # overlap allowed
+        {"label": "ultra", "min": 201, "max": None},
+        {"label": "all", "min": 0, "max": None},
+    ]
+    out = dict(common.iter_cohorts(cfg, df, {}, date_col="d", range_groups=groups))
+    assert set(out) == {"low", "low-med", "ultra", "all"}
+    assert out["low"]["user_total_bet"].to_list() == [50.0]  # inclusive max: fish_value 10 kept
+    lowmed = out["low-med"].sort("user_id")
+    assert lowmed.height == 1 and lowmed["user_num_bets"][0] == 25  # u1's two rows collapsed
+    assert lowmed["user_max_profit"][0] == 90.0  # MAX combinator
+    assert out["ultra"]["user_id"].to_list() == ["u2"]
+    assert out["all"].sort("user_id")["user_num_bets"].to_list() == [25, 7]
+
+
 def test_series_request_accepts_ranges():
     """The global Date-groups picker sends up to three windows to /series; old
     clients (and saved report recipes) still use date_from/date_to."""

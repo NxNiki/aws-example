@@ -449,6 +449,15 @@ export interface components {
             id: string;
             /** Lifecycle Col */
             lifecycle_col?: string | null;
+            /** Range Group Col */
+            range_group_col?: string | null;
+            /**
+             * Range Group Defaults
+             * @default []
+             */
+            range_group_defaults: components["schemas"]["RangeGroup"][];
+            /** Range Group Name */
+            range_group_name?: string | null;
             /** Tabs */
             tabs: string[];
             /** Title */
@@ -662,6 +671,8 @@ export interface components {
              * @enum {string}
              */
             panel: "derived" | "user";
+            /** Range Groups */
+            range_groups?: components["schemas"]["RangeGroup"][] | null;
             /** Ranges */
             ranges: components["schemas"]["DateRange"][];
         };
@@ -776,6 +787,8 @@ export interface components {
             lifecycle_groups?: components["schemas"]["LifecycleGroup"][] | null;
             /** Metric */
             metric: string;
+            /** Range Groups */
+            range_groups?: components["schemas"]["RangeGroup"][] | null;
             /** Ranges */
             ranges: components["schemas"]["DateRange"][];
         };
@@ -923,6 +936,23 @@ export interface components {
             label: string;
             /** Metrics */
             metrics: string[];
+        };
+        /**
+         * RangeGroup
+         * @description One user-defined value-range cohort over the config's range column
+         *     (``range_group_col``, e.g. fish_value): rows with min <= value <= max —
+         *     both ends INCLUSIVE, ``max=None`` open-ended.
+         *
+         *     Dashboard feature: the "Fish level" style picker next to Lifecycle groups.
+         *     The label "all" is the no-filter sentinel; ranges may overlap.
+         */
+        RangeGroup: {
+            /** Label */
+            label: string;
+            /** Max */
+            max?: number | null;
+            /** Min */
+            min: number;
         };
         /** ReferencesRequest */
         ReferencesRequest: {
@@ -1152,6 +1182,8 @@ export interface components {
             lifecycle_groups?: components["schemas"]["LifecycleGroup"][] | null;
             /** Metrics */
             metrics: string[];
+            /** Range Groups */
+            range_groups?: components["schemas"]["RangeGroup"][] | null;
             /** Ranges */
             ranges?: components["schemas"]["DateRange"][] | null;
         };
@@ -1333,6 +1365,8 @@ export interface components {
              * @default false
              */
             pvalues: boolean;
+            /** Range Groups */
+            range_groups?: components["schemas"]["RangeGroup"][] | null;
             /** Ranges */
             ranges: components["schemas"]["DateRange"][];
         };

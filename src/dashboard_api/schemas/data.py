@@ -46,9 +46,34 @@ class ConfigDetail(BaseModel):
     # ETL's hard-coded new/beginner/old split). None → the config has no
     # lifecycle cohorts and the picker is hidden.
     lifecycle_col: Optional[str] = None
+    # Numeric column the "range group" picker buckets (e.g. fish_value), plus
+    # its display name and default groups; None → no such picker.
+    range_group_col: Optional[str] = None
+    range_group_name: Optional[str] = None
+    range_group_defaults: list["RangeGroup"] = []
     granularities: list[Granularity]
     groups: list[MetricGroup]
     tabs: list[str]
+
+
+class RangeGroup(BaseModel):
+    """One user-defined value-range cohort over the config's range column
+    (``range_group_col``, e.g. fish_value): rows with min <= value <= max —
+    both ends INCLUSIVE, ``max=None`` open-ended.
+
+    Dashboard feature: the "Fish level" style picker next to Lifecycle groups.
+    The label "all" is the no-filter sentinel; ranges may overlap.
+    """
+
+    label: str = Field(min_length=1)
+    min: float = Field(ge=0)
+    max: Optional[float] = None
+
+    @model_validator(mode="after")
+    def _check_range(self) -> "RangeGroup":
+        if self.max is not None and self.max < self.min:
+            raise ValueError(f"max ({self.max}) must be >= min ({self.min})")
+        return self
 
 
 class LifecycleGroup(BaseModel):
@@ -96,6 +121,9 @@ class SeriesRequest(BaseModel):
     # with these day-since-first-bet ranges; it then IS the selection for that
     # column (group_values for it is ignored).
     lifecycle_groups: Optional[list[LifecycleGroup]] = None
+    # Value-range cohorts over range_group_col (see RangeGroup); like
+    # lifecycle_groups, when set it IS the selection for that dimension.
+    range_groups: Optional[list[RangeGroup]] = None
 
 
 class Series(BaseModel):
@@ -169,6 +197,7 @@ class GroupDistributionRequest(BaseModel):
     ranges: list[DateRange] = Field(min_length=1)
     group_values: dict[str, list[str]] = Field(default_factory=dict)
     lifecycle_groups: Optional[list[LifecycleGroup]] = None
+    range_groups: Optional[list[RangeGroup]] = None
     clip: ClipOpts = Field(default_factory=ClipOpts)
     filter: FilterOpts = Field(default_factory=FilterOpts)
 
@@ -217,6 +246,7 @@ class SummaryTableRequest(BaseModel):
     ranges: list[DateRange] = Field(min_length=1)
     group_values: dict[str, list[str]] = Field(default_factory=dict)
     lifecycle_groups: Optional[list[LifecycleGroup]] = None
+    range_groups: Optional[list[RangeGroup]] = None
     # Per-metric (keyed by metric name) clip + log; a metric absent here is left
     # as-is. Sent for every metric the client may show.
     metric_options: dict[str, SummaryMetricOption] = Field(default_factory=dict)
@@ -278,6 +308,7 @@ class DeepdiveRequest(BaseModel):
     ranges: list[DateRange] = Field(min_length=1)
     group_values: dict[str, list[str]] = Field(default_factory=dict)
     lifecycle_groups: Optional[list[LifecycleGroup]] = None
+    range_groups: Optional[list[RangeGroup]] = None
     clip: ClipOpts = Field(default_factory=ClipOpts)
     filter: FilterOpts = Field(default_factory=FilterOpts)
     nbins: int = 50  # histogram only

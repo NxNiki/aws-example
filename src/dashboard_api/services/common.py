@@ -121,6 +121,18 @@ LIFECYCLE_COL = "user_group"
 PERIODS_COL = PERIODS_SINCE_FIRST_BET_COL
 
 
+def range_group_cfg(cfg: dict[str, Any]) -> tuple[Optional[str], str, list[dict[str, Any]]]:
+    """(column, display name, default groups) of the config's value-range
+    dimension (``stats_by_date.range_group``, e.g. fish_value buckets), or
+    (None, "", []) when not configured. The column must also be listed in
+    user_group_cols (picker order) and user_row_grain (collapse)."""
+    rg = stats_by_date_cfg(cfg).get("range_group") or {}
+    col = str(rg.get("column") or "") or None
+    name = str(rg.get("name") or (col or ""))
+    defaults = [dict(d) for d in (rg.get("defaults") or [])]
+    return col, name, defaults
+
+
 def lifecycle_col(cfg: dict[str, Any]) -> Optional[str]:
     """The user-group column custom lifecycle groups redefine, or None when the
     config has no lifecycle cohort dimension."""
@@ -280,7 +292,25 @@ _USER_ROW_SUMS = [
     "user_neg_delta_bet_num",
     "user_num_delta_bet",
     "user_num_delta_t_bg",
+    "user_num_delta_t",
+    "user_num_killed_bullets",
     "user_total_profit",
+]
+
+# Columns combined with MAX when collapsing (peak values / boolean flags).
+_USER_ROW_MAXES = [
+    "user_max_profit",
+    "user_killed_fish",
+]
+
+# Mean columns recombined as weighted means: (column, weight column). The
+# weight is the exact denominator the ETL used for the AVG.
+_USER_ROW_WEIGHTED_MEANS = [
+    ("user_avg_delta_t_seconds_bg", "user_num_delta_t_bg"),
+    ("user_avg_delta_t_seconds", "user_num_delta_t"),
+    ("user_avg_fish_value", "user_num_bets"),
+    ("user_avg_killed_fish_value", "user_num_killed_bullets"),
+    ("user_bullet_kill_avg_profit", "user_num_killed_bullets"),
 ]
 
 # Ratio columns recomputed from the summed components: (name, numerator,
@@ -297,7 +327,8 @@ _USER_ROW_RATIOS = [
     ("user_accu_pos_delta_bet_avg", "user_accu_pos_delta_bet", "user_pos_delta_bet_num"),
     ("user_accu_neg_delta_bet_avg", "user_accu_neg_delta_bet", "user_neg_delta_bet_num"),
     ("user_accu_delta_bet_avg", "user_accu_delta_bet", "user_num_delta_bet"),
-    ("user_avg_delta_t_seconds_bg", "_delta_t_bg_sum", "user_num_delta_t_bg"),
+    ("user_bullet_avg_profit", "user_total_profit", "user_num_bets"),
+    ("user_bullet_kill_ratio", "user_num_killed_bullets", "user_num_bets"),
 ]
 
 
@@ -311,32 +342,35 @@ def collapse_user_rows(df: pl.DataFrame, date_col: str) -> pl.DataFrame:
     if df.is_empty() or "user_id" not in df.columns:
         return df
     cols = set(df.columns)
-    pre = []
-    if "user_avg_delta_t_seconds_bg" in cols and "user_num_delta_t_bg" in cols:
-        pre.append((pl.col("user_avg_delta_t_seconds_bg") * pl.col("user_num_delta_t_bg")).alias("_delta_t_bg_sum"))
-    if pre:
-        df = df.with_columns(pre)
+
+    # Weighted means: pre-multiply mean × weight so the sums recombine exactly.
+    wmeans = [(m, w) for m, w in _USER_ROW_WEIGHTED_MEANS if m in cols and w in cols]
+    if wmeans:
+        df = df.with_columns([(pl.col(m) * pl.col(w)).alias(f"_wm_{m}") for m, w in wmeans])
         cols = set(df.columns)
 
     keys = [date_col, "user_id"]
-    sums = [c for c in _USER_ROW_SUMS + ["_delta_t_bg_sum"] if c in cols]
+    sums = [c for c in _USER_ROW_SUMS if c in cols] + [f"_wm_{m}" for m, _ in wmeans]
+    maxes = [c for c in _USER_ROW_MAXES if c in cols]
     ratio_names = {name for name, _, _ in _USER_ROW_RATIOS}
-    passthrough = [c for c in df.columns if c not in keys and c not in sums and c not in ratio_names]
+    combined = set(keys) | set(sums) | set(maxes) | ratio_names
+    passthrough = [c for c in df.columns if c not in combined]
 
     # SQL semantics for the sums: all-null stays null (a user with no BASE
     # bets keeps user_total_bet_bg = null, excluded from per-user means, not 0).
     out = df.group_by(keys).agg(
         [pl.when(pl.col(c).is_not_null().any()).then(pl.col(c).sum()).otherwise(None).alias(c) for c in sums]
+        + [pl.col(c).max() for c in maxes]
         + [pl.col(c).first() for c in passthrough]
     )
-    ratios = [
+    derived = [
         pl.when(pl.col(den) > 0).then(pl.col(num) / pl.col(den)).otherwise(None).alias(name)
         for name, num, den in _USER_ROW_RATIOS
         if num in out.columns and den in out.columns
-    ]
-    if ratios:
-        out = out.with_columns(ratios)
-    return out.drop([c for c in ("_delta_t_bg_sum",) if c in out.columns])
+    ] + [pl.when(pl.col(w) > 0).then(pl.col(f"_wm_{m}") / pl.col(w)).otherwise(None).alias(m) for m, w in wmeans]
+    if derived:
+        out = out.with_columns(derived)
+    return out.drop([f"_wm_{m}" for m, _ in wmeans])
 
 
 def apply_cohort(df: pl.DataFrame, col: Optional[str], value: str) -> pl.DataFrame:
@@ -353,6 +387,7 @@ def iter_cohorts(
     lifecycle: Optional[list[dict[str, Any]]] = None,
     date_col: Optional[str] = None,
     granularity: str = "day",
+    range_groups: Optional[list[dict[str, Any]]] = None,
 ) -> Iterator[tuple[str, pl.DataFrame]]:
     """Yield (cohort_label, cohort_df) over the cross-product of selected
     user-group values — the same cohorts the legacy tabs overlay. Filtering
@@ -373,6 +408,8 @@ def iter_cohorts(
     by_label = {str(g["label"]): g for g in lifecycle or []}
     part_col, partition = group_col_partition(cfg)
     grain = user_row_grain(cfg)
+    rcol, _, _ = range_group_cfg(cfg)
+    range_by_label = {str(g["label"]): g for g in range_groups or []} if rcol else {}
     # Attach the derived period offsets whenever the config has a lifecycle
     # dimension (DataMetrics needs them for num_new_users even when no
     # lifecycle groups are selected); lc only gates the lifecycle FILTERS.
@@ -386,6 +423,8 @@ def iter_cohorts(
     def values(col: str) -> list[str]:
         if col == lc:
             return list(by_label) or ["all"]
+        if col == rcol and range_by_label:
+            return list(range_by_label)
         return cohort_values(group_values, col)
 
     def apply(df_: pl.DataFrame, col: str, value: str) -> pl.DataFrame:
@@ -394,6 +433,12 @@ def iter_cohorts(
             cond = pl.col(PERIODS_COL) >= int(g["start"])
             if g.get("end") is not None:
                 cond = cond & (pl.col(PERIODS_COL) < int(g["end"]))
+            return df_.filter(cond)
+        if col == rcol and value in range_by_label and value != "all":
+            g = range_by_label[value]
+            cond = pl.col(col) >= float(g["min"])
+            if g.get("max") is not None:
+                cond = cond & (pl.col(col) <= float(g["max"]))
             return df_.filter(cond)
         if value == "all" and col == part_col and col in df_.columns:
             # "all" on a non-partition group column keeps only the disjoint
@@ -419,7 +464,9 @@ def iter_cohorts(
         # row per user whenever a grain dimension is unselected, so per-user
         # stats see each user once; with every grain column pinned the rows
         # are already per-user.
+        # The range column never pins to a single stored value (a range spans
+        # multiple grain rows per user), so it always requires the collapse.
         selected = dict(zip(cols, combo))
-        if grain and date_col and any(selected.get(g, "all") == "all" for g in grain):
+        if grain and date_col and any(selected.get(g, "all") == "all" or g == rcol for g in grain):
             df_c = collapse_user_rows(df_c.drop([g for g in grain if g in df_c.columns]), date_col)
         yield label, df_c

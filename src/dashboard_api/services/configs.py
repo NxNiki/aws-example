@@ -24,7 +24,7 @@ from typing import Any, Callable, Optional
 from bituslabs_ds.dashboard_utils import load_config
 from bituslabs_ds.s3_utils import is_s3_path, list_s3_files, parse_s3_path, read_yaml_from_s3, uri_basename
 from dashboard_api.schemas.data import ConfigDetail, ConfigSummary, MetricGroup
-from dashboard_api.services.common import lifecycle_col
+from dashboard_api.services.common import lifecycle_col, range_group_cfg
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +150,9 @@ def build_config_detail(config_id: str, cfg: dict[str, Any]) -> ConfigDetail:
         group_col=str(stats_by_date.get("group_col", "")),
         user_group_cols=[str(c) for c in (stats_by_date.get("user_group_cols") or [])],
         lifecycle_col=lifecycle_col(cfg),
+        range_group_col=range_group_cfg(cfg)[0],
+        range_group_name=range_group_cfg(cfg)[1] or None,
+        range_group_defaults=range_group_cfg(cfg)[2],  # type: ignore[arg-type]
         granularities=granularities,  # type: ignore[arg-type]
         groups=groups,
         tabs=tabs,
