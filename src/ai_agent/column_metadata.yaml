@@ -35,19 +35,28 @@ groups:
       (new / beginner / old, and user_group2's day0_user / day1-6_user /
       day7+_user) were removed from the parquet.
 
-  ai_group:
+  ab_group:
     description: >
-      AB-test partition from the bet_orders table (partition_ab[0]).
-      'AI' = users assigned to the AI strategy; 'Default' = control group.
-      Sub-groups like 'Default_<mathtable>' or individual math-table IDs
-      are also generated for deeper analysis.
+      AB-test partition from the bet_orders table (partition_ab[0]), assigned
+      per bet. One cohort picker in the dashboard; combine freely with the
+      mathtable picker (the stored grain is one row per user x ab_group x
+      mathtable, so any combination sums without double-counting).
     values:
       AI:
-        description: "Users in the AI-controlled AB group (partition_ab matches the AI group ID)."
+        description: "Bets in the AI-controlled AB group (partition_ab matches the AI group ID)."
+      AB_TEST_A:
+        description: "Bets in AB test arm A (ss03/ss06 only)."
+      AB_TEST_B:
+        description: "Bets in AB test arm B (ss03/ss06 only)."
       Default:
-        description: "Users NOT in the AI group (control / default strategy)."
-      HG:
-        description: "Horizontal-group aggregate of ALL users regardless of AB partition."
+        description: "Bets in none of the known AB groups (control / default strategy)."
+
+  mathtable:
+    description: >
+      The bet's math table id — the second cohort picker. '(none)' groups bets
+      with an empty math_table_id. Selecting a mathtable with ab_group
+      unselected (or vice versa) is supported; the API re-aggregates per-user
+      stats across the unselected dimension.
 
   daily_group:
     description: >
@@ -96,9 +105,13 @@ columns:
     category: dimension
     description: "Calendar date of the activity, truncated to day in Shanghai timezone (UTC+8)."
 
-  ai_group:
+  ab_group:
     category: dimension
-    description: "AB-test group assignment. See 'groups.ai_group' for value definitions."
+    description: "AB-test group assignment (per bet). See 'groups.ab_group' for value definitions."
+
+  mathtable:
+    category: dimension
+    description: "Math table id of the bet ('(none)' when empty). See 'groups.mathtable'."
 
   user_id:
     category: dimension

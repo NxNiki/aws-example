@@ -184,7 +184,8 @@ def test_iter_cohorts_lifecycle_groups(monkeypatch):
     assert out["A | day0-3"].height == 2  # both u1 rows: overlapping ranges both keep them
     assert set(out["A | rest"]["user_id"]) == {"u2"}
     assert out["A"].height == 4  # "all" = no filter — includes u3, who never bet
-    assert all(common.PERIODS_COL not in c.columns for c in out.values())  # helper col not leaked
+    # The derived period column rides along for DataMetrics (num_new_users).
+    assert all(common.PERIODS_COL in c.columns for c in out.values())
 
 
 def test_iter_cohorts_lifecycle_week_month_use_period_index(monkeypatch):
@@ -335,6 +336,10 @@ def test_iter_cohorts_grain_collapses_user_rows(monkeypatch):
             "user_row_grain": ["ab_group", "mathtable"],
         },
     }
+    first = pl.DataFrame({"user_id": ["u1", "u2"], "first_bet_date": ["2026-06-01", "2026-05-01"]}).with_columns(
+        pl.col("first_bet_date").str.to_datetime()
+    )
+    monkeypatch.setattr(common, "load_first_bet_dates", lambda cfg: first)
 
     out = dict(common.iter_cohorts(cfg, df, {}, date_col="d"))
     assert set(out) == {"all"}
@@ -368,10 +373,6 @@ def test_iter_cohorts_grain_collapses_user_rows(monkeypatch):
     assert pinned["AI | mt_a"].height == 1 and pinned["AI | mt_a"]["user_rtp"][0] == 0.9
 
     # Three active dimensions cross with lifecycle groups.
-    first = pl.DataFrame({"user_id": ["u1", "u2"], "first_bet_date": ["2026-06-01", "2026-05-01"]}).with_columns(
-        pl.col("first_bet_date").str.to_datetime()
-    )
-    monkeypatch.setattr(common, "load_first_bet_dates", lambda cfg: first)
     lc = dict(
         common.iter_cohorts(
             cfg,

@@ -19,6 +19,7 @@ from typing import Any, Iterator, Optional, cast
 
 import polars as pl
 
+from bituslabs_ds.metrics.user_stats_aggregates import PERIODS_SINCE_FIRST_BET_COL
 from bituslabs_ds.s3_utils import read_files
 
 logger = logging.getLogger(__name__)
@@ -115,8 +116,9 @@ def user_row_grain(cfg: dict[str, Any]) -> list[str]:
 # The stored ETL cohort column (new/beginner/old) the lifecycle picker redefines.
 LIFECYCLE_COL = "user_group"
 # Helper column carrying each row's period offset (days / weeks / months,
-# matching the request granularity) from the user's first bet.
-PERIODS_COL = "_periods_since_first_bet"
+# matching the request granularity) from the user's first bet. Canonical name
+# lives with DataMetrics, which reads it for num_new_users.
+PERIODS_COL = PERIODS_SINCE_FIRST_BET_COL
 
 
 def lifecycle_col(cfg: dict[str, Any]) -> Optional[str]:
@@ -371,9 +373,14 @@ def iter_cohorts(
     by_label = {str(g["label"]): g for g in lifecycle or []}
     part_col, partition = group_col_partition(cfg)
     grain = user_row_grain(cfg)
-    if lc is not None and lc in cols and date_col and "user_id" in df.columns:
+    # Attach the derived period offsets whenever the config has a lifecycle
+    # dimension (DataMetrics needs them for num_new_users even when no
+    # lifecycle groups are selected); lc only gates the lifecycle FILTERS.
+    if lifecycle_col(cfg) is not None and date_col and "user_id" in df.columns:
         df = attach_lifecycle_periods(cfg, df, date_col, granularity)
     else:
+        lc = None
+    if lc is not None and lc not in cols:
         lc = None
 
     def values(col: str) -> list[str]:
@@ -399,7 +406,6 @@ def iter_cohorts(
         yield "all", df
         return
 
-    helper_cols = [PERIODS_COL] if lc else []
     seen: set[str] = set()
     for combo in itertools.product(*(values(c) for c in cols)):
         label = cohort_label(list(combo))
@@ -409,8 +415,6 @@ def iter_cohorts(
         df_c = df
         for col, value in zip(cols, combo):
             df_c = apply(df_c, col, value)
-        if helper_cols:
-            df_c = df_c.drop([c for c in helper_cols if c in df_c.columns])
         # Grain rows (one per user × grain combination) collapse back to one
         # row per user whenever a grain dimension is unselected, so per-user
         # stats see each user once; with every grain column pinned the rows
