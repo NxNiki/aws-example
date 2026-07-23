@@ -51,6 +51,11 @@ def _run_python_script(script_path: Path, script_args: list[str]) -> bool:
     return False
 
 
+# Daily-report PID-check job (first entry in the list below): paused — flip to
+# True to run it again on the schedule.
+RUN_PID_CHECK = False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run scheduled ETL/report jobs.")
     parser.add_argument(
@@ -113,8 +118,8 @@ def main() -> int:
         ),
     ]
 
-    if args.skip_daily_report:
-        print("[INFO] --skip-daily_report enabled, skipping first scheduled job.")
+    if not RUN_PID_CHECK or args.skip_daily_report:
+        print("[INFO] Skipping the operation daily report (PID check) job.")
         jobs = jobs[1:]
 
     failures: list[str] = []
