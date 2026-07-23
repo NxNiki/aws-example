@@ -44,7 +44,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
     effective_start = effective_start_date(stats_agg_col, start_date)
     query = dedent(
         f"""
-        WITH user_bets AS (
+        WITH bets AS (
         SELECT
             t.user_id,
             t.spin_id,
@@ -60,16 +60,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             CASE
                 WHEN t.partition_ab[0] = '{AI_GROUP_ID}' THEN 'AI'
                 ELSE 'Default'
-            END AS ab_group,
-            LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) AS prev_created_at,
-            EXTRACT(EPOCH FROM (t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at))) AS delta_t_seconds,
-            LAG(t.bet_type) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) AS prev_bet_type,
-            LAG(t.bet_amount) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) AS prev_bet_amount,
-            CASE
-                WHEN LAG(t.math_table_id) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) IS NULL THEN 0
-                WHEN LAG(t.math_table_id) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) <> t.math_table_id THEN 1
-                ELSE 0
-            END AS mathtable_change
+            END AS ab_group
         FROM
             public.fct_bet_orders AS t
         WHERE
@@ -78,6 +69,27 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             AND t.currency_type IN {ETL_CURRENCY_CODES}
             AND t.status = 'COMPLETED'
             AND t.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
+        ),
+
+        user_bets AS (
+            -- Sequence metrics (delta_t / delta_bet / mathtable_change / FG
+            -- trigger) are DAY-partitioned: each activity_date is
+            -- self-contained, so incremental pulls, full reloads, and ad-hoc
+            -- SQL over any date range agree exactly, and weekly/monthly
+            -- sequence metrics equal the sum of their days. The first bet of a
+            -- day has no predecessor by definition (a session crossing the day
+            -- boundary contributes no delta to the new day).
+            SELECT
+                t.*,
+                EXTRACT(EPOCH FROM (t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id, t.activity_date ORDER BY t.spin_id, t.created_at))) AS delta_t_seconds,
+                LAG(t.bet_type) OVER (PARTITION BY t.user_id, t.activity_date ORDER BY t.spin_id, t.created_at) AS prev_bet_type,
+                LAG(t.bet_amount) OVER (PARTITION BY t.user_id, t.activity_date ORDER BY t.spin_id, t.created_at) AS prev_bet_amount,
+                CASE
+                    WHEN LAG(t.mathtable) OVER (PARTITION BY t.user_id, t.activity_date ORDER BY t.spin_id, t.created_at) IS NULL THEN 0
+                    WHEN LAG(t.mathtable) OVER (PARTITION BY t.user_id, t.activity_date ORDER BY t.spin_id, t.created_at) <> t.mathtable THEN 1
+                    ELSE 0
+                END AS mathtable_change
+            FROM bets AS t
         ),
 
         user_stats AS (
