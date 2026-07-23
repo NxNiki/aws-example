@@ -2,7 +2,7 @@
 Run scheduled ETL/report jobs in a fixed sequence.
 
 Intended usage:
-  poetry run python jobs/run_scheduled_etl_jobs.py [--skip-daily_report] [--lookback-days N]
+  poetry run python jobs/run_scheduled_etl_jobs.py
 
 Always runs the ETLs incrementally. To force a full reload of a game's data,
 run that job directly with its own --overwrite flag (long full reloads over the
@@ -53,29 +53,10 @@ def _run_python_script(script_path: Path, script_args: list[str]) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run scheduled ETL/report jobs.")
-    parser.add_argument(
-        "--skip-daily_report",
-        action="store_true",
-        help="Skip the first job in the scheduled jobs list (operation daily report).",
-    )
-    parser.add_argument(
-        "--lookback-days",
-        type=int,
-        default=3,
-        help="Lookback days passed to operation_daily_report (default: 3).",
-    )
-    args = parser.parse_args()
+    parser.parse_args()
 
     # Set args per script directly in this list.
     jobs: list[tuple[str, Path, list[str]]] = [
-        (
-            # --skip-ss01 disables the SS01 stats daily-report table and the
-            # HG/PA ETLs that only feed it; the job still runs the PID
-            # difference check (sent to Slack).
-            "operation daily report (PID check only)",
-            JOBS_DIR / "operation_daily_report" / "run_daily_report.py",
-            ["--lookback-days", str(args.lookback_days), "--send-slack", "--skip-ss01"],
-        ),
         (
             "ss01_wucaishen ETL",
             JOBS_DIR / "ss01_wucaishen" / "etl_game_stats_daily_by_user_group.py",
@@ -112,10 +93,6 @@ def main() -> int:
             [],
         ),
     ]
-
-    if args.skip_daily_report:
-        print("[INFO] --skip-daily_report enabled, skipping first scheduled job.")
-        jobs = jobs[1:]
 
     failures: list[str] = []
 
