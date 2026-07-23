@@ -3,24 +3,33 @@ title: "Fish Hunter Analytics"
 stats_by_date: 
   files: 
     day: [
-      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/daily_stats",
-      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/daily_stats_pa",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter_v2/daily_stats",
     ]
 
     week: [
-      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/weekly_stats",
-      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/weekly_stats_pa",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter_v2/weekly_stats",
     ]
 
     month: [
-      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/monthly_stats",
-      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/monthly_stats_pa",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter_v2/monthly_stats",
 
     ]
 
   group_col: "daily_group"
   date_col: "activity_date"
-  user_group_cols: [user_group, daily_group]
+  user_group_cols: [daily_group, fish_value, user_group]
+  # Stored grain is one row per (period, user, daily_group, fish_value); the
+  # fish-level picker buckets fish_value by user-defined INCLUSIVE [min, max]
+  # ranges, and the API collapses rows back to one per user when unselected.
+  user_row_grain: [fish_value]
+  range_group:
+    column: fish_value
+    name: "Fish level"
+    defaults:
+      - {label: low, min: 0, max: 10}
+      - {label: medium, min: 11, max: 130}
+      - {label: high, min: 131, max: 200}
+      - {label: ultra, min: 201, max: null}
 
   group1_label: "DAU and Retention"
   group1_columns: [
@@ -83,22 +92,12 @@ stats_by_date:
   group3_label: "Fish Value and Bullets"
   group3_columns: [
     "user_avg_fish_value",
-    "user_avg_fish_value_20_200",
     "user_avg_killed_fish_value",
-    "user_avg_killed_fish_value_20_200",
     "user_num_bets",
     "user_num_killed_bullets",
     "user_bullet_kill_ratio",
     "user_num_rooms",
     "user_profit_coef_var",
-    "user_killed_fish_low_ratio",
-    "user_killed_fish_medium_ratio",
-    "user_killed_fish_high_ratio",
-    "user_killed_fish_ultra_ratio",
-    "user_hits_fish_low_ratio",
-    "user_hits_fish_medium_ratio",
-    "user_hits_fish_high_ratio",
-    "user_hits_fish_ultra_ratio",
     "user_max_kill_streak",
     "user_max_kill_streak_low",
     "user_max_kill_streak_medium",
