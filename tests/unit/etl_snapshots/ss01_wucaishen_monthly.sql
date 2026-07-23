@@ -13,14 +13,12 @@ SELECT
     CAST(DATE_TRUNC('month', DATEADD(hour, -0, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_month,
     CASE
         WHEN t.partition_ab[0] = 'jojpin-9mokha-rexQug' THEN 'AI'
-        WHEN t.partition_ab[0] = '4f1a46ca-7baa-4452-9a40-ef21d9b33b57' THEN 'AB_TEST_A'
-        WHEN t.partition_ab[0] = '4a04df21-c749-4808-8e55-3a0b74c084d2' THEN 'AB_TEST_B'
         ELSE 'Default'
     END AS ab_group
 FROM
     public.fct_bet_orders AS t
 WHERE
-    t.game_id = 'SS03'
+    t.game_id = 'SS01'
     AND CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at) >= '2025-01-01'
     AND t.currency_type IN ('CNY')
     AND t.status = 'COMPLETED'

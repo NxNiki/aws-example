@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Two-column group grain: `ab_group` × `mathtable`.** The slot-game ETLs
+  (ss01/ss01a/ss02/ss03/ss06) now store one row per (period, user, ab_group,
+  mathtable) instead of UNION-ing every bet into overlapping `ai_group`
+  labels: datasets shrink 34–46%, the `group_col_partition` workaround is
+  obsolete, and AB-arm × mathtable combinations become directly selectable.
+  The dashboard exposes the two columns as independent cohort pickers
+  (crossable with lifecycle groups) and re-aggregates per-user stats when a
+  dimension is unselected. Sequence metrics (delta_t / delta_bet /
+  mathtable_change / FG trigger) are now DAY-partitioned — uniform and
+  load-order-independent (previously a mix of full-stream and window-truncated
+  semantics); `num_new_users` is derived from the first-bet map (it had
+  silently gone missing with the stored `user_group` column) and now means
+  "first-ever bet in the period". The flawed `user_avg_remaining_bet_amount`
+  metric is removed. Full metric reference: `docs/dashboard_etl.md`.
 - **Date-groups picker (dashboard-wide).** Granularity and up to three date
   windows moved from per-tab controls to a global bar above the tab selector
   (and above Lifecycle groups): defined once per game, read by every tab.

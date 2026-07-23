@@ -184,7 +184,8 @@ def test_iter_cohorts_lifecycle_groups(monkeypatch):
     assert out["A | day0-3"].height == 2  # both u1 rows: overlapping ranges both keep them
     assert set(out["A | rest"]["user_id"]) == {"u2"}
     assert out["A"].height == 4  # "all" = no filter — includes u3, who never bet
-    assert all(common.PERIODS_COL not in c.columns for c in out.values())  # helper col not leaked
+    # The derived period column rides along for DataMetrics (num_new_users).
+    assert all(common.PERIODS_COL in c.columns for c in out.values())
 
 
 def test_iter_cohorts_lifecycle_week_month_use_period_index(monkeypatch):
@@ -303,6 +304,87 @@ def test_iter_cohorts_all_respects_group_col_partition(monkeypatch):
     # Configs without a partition keep the old no-filter 'all'.
     cfg2 = {"id": "g2", "stats_by_date": {"group_col": "ai_group", "user_group_cols": ["ai_group"]}}
     assert dict(common.iter_cohorts(cfg2, df, {}))["all"].height == 4
+
+
+def test_iter_cohorts_grain_collapses_user_rows(monkeypatch):
+    """Two-column grain (ab_group × mathtable): each bet lives in exactly one
+    row, so group sums are always right, but per-user stats must collapse the
+    grain to one row per user whenever a grain dimension is unselected —
+    summing additive components and recomputing ratios from the sums."""
+    import polars as pl
+
+    from dashboard_api.services import common
+
+    # u1 played two mathtables on 06-01 (2 grain rows); u2 one mathtable.
+    df = pl.DataFrame(
+        {
+            "d": ["2026-06-01"] * 3,
+            "user_id": ["u1", "u1", "u2"],
+            "ab_group": ["AI", "AI", "Default"],
+            "mathtable": ["mt_a", "mt_b", "mt_a"],
+            "user_num_bets": [10, 30, 5],
+            "user_total_bet": [100.0, 300.0, 50.0],
+            "user_total_payout": [90.0, 330.0, 40.0],
+            "user_rtp": [0.9, 1.1, 0.8],
+            "user_avg_bet_amount": [10.0, 10.0, 10.0],
+        }
+    ).with_columns(pl.col("d").str.to_datetime())
+    cfg = {
+        "id": "g",
+        "stats_by_date": {
+            "user_group_cols": ["ab_group", "mathtable", "user_group"],
+            "user_row_grain": ["ab_group", "mathtable"],
+        },
+    }
+    first = pl.DataFrame({"user_id": ["u1", "u2"], "first_bet_date": ["2026-06-01", "2026-05-01"]}).with_columns(
+        pl.col("first_bet_date").str.to_datetime()
+    )
+    monkeypatch.setattr(common, "load_first_bet_dates", lambda cfg: first)
+
+    out = dict(common.iter_cohorts(cfg, df, {}, date_col="d"))
+    assert set(out) == {"all"}
+    allc = out["all"].sort("user_id")
+    assert allc.height == 2  # one row per user, not per (user, mathtable)
+    u1 = allc.filter(pl.col("user_id") == "u1")
+    assert u1["user_num_bets"][0] == 40 and u1["user_total_bet"][0] == 400.0
+    assert abs(u1["user_rtp"][0] - 420.0 / 400.0) < 1e-9  # recomputed from sums
+    assert abs(u1["user_avg_bet_amount"][0] - 10.0) < 1e-9
+
+    # SQL semantics: an all-null sum stays null (a user with no BASE bets keeps
+    # user_total_bet_bg null — excluded from per-user means — not 0).
+    df_null = pl.DataFrame(
+        {
+            "d": ["2026-06-01", "2026-06-01"],
+            "user_id": ["u1", "u1"],
+            "ab_group": ["AI", "AI"],
+            "mathtable": ["mt_a", "mt_b"],
+            "user_num_bets": [10, 30],
+            "user_total_bet": [100.0, 300.0],
+            "user_total_bet_bg": [None, None],
+        }
+    ).with_columns(pl.col("d").str.to_datetime())
+    collapsed = common.collapse_user_rows(df_null.drop(["ab_group", "mathtable"]), "d")
+    assert collapsed["user_total_bet_bg"][0] is None
+    assert collapsed["user_total_bet"][0] == 400.0
+
+    # Pinning every grain column keeps the stored rows untouched.
+    pinned = dict(common.iter_cohorts(cfg, df, {"ab_group": ["AI"], "mathtable": ["mt_a"]}, date_col="d"))
+    assert set(pinned) == {"AI | mt_a"}
+    assert pinned["AI | mt_a"].height == 1 and pinned["AI | mt_a"]["user_rtp"][0] == 0.9
+
+    # Three active dimensions cross with lifecycle groups.
+    lc = dict(
+        common.iter_cohorts(
+            cfg,
+            df,
+            {"ab_group": ["AI"]},
+            lifecycle=[{"label": "new", "start": 0, "end": 3}],
+            date_col="d",
+            granularity="day",
+        )
+    )
+    assert set(lc) == {"AI | new"}
+    assert lc["AI | new"].height == 1 and lc["AI | new"]["user_num_bets"][0] == 40  # u1 collapsed
 
 
 def test_series_request_accepts_ranges():

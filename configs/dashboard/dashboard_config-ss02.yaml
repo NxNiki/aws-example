@@ -3,24 +3,22 @@ title: "SS02 Analytics"
 stats_by_date:
   files:
     day: [
-      "s3://bituslabs-team-ai/etl-results/jobs/output_ss02_deepdive/daily_stats",
-      "s3://bituslabs-team-ai/etl-results/jobs/output_ss02_deepdive/daily_stats_pa",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss02_deepdive_v2/daily_stats",
     ]
     week: [
-      "s3://bituslabs-team-ai/etl-results/jobs/output_ss02_deepdive/weekly_stats",
-      "s3://bituslabs-team-ai/etl-results/jobs/output_ss02_deepdive/weekly_stats_pa",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss02_deepdive_v2/weekly_stats",
     ]
     month: [
-      "s3://bituslabs-team-ai/etl-results/jobs/output_ss02_deepdive/monthly_stats",
-      "s3://bituslabs-team-ai/etl-results/jobs/output_ss02_deepdive/monthly_stats_pa",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss02_deepdive_v2/monthly_stats",
     ]
 
-  group_col: "ai_group"
-  # Disjoint AB-test labels: the "all" cohort aggregates ONLY these (the other
-  # ai_group values re-partition the same bets and would double-count).
-  group_col_partition: [AI, Default]
+  group_col: "ab_group"
   date_col: "activity_date"
-  user_group_cols: [ai_group, user_group]
+  user_group_cols: [ab_group, mathtable, user_group]
+  # Stored grain is one row per (period, user, ab_group, mathtable): every bet
+  # in exactly one row. When a grain dimension is unselected the API collapses
+  # rows back to one per user before computing per-user stats.
+  user_row_grain: [ab_group, mathtable]
   aggregate_stats_from_user_rows: true
   # Parquet columns required before enrich: ENRICH_USER_ROW_INPUT_COLUMNS ∪ (columns below − enrich outputs)
   # — see dashboards/user_stats_aggregates.py.
@@ -28,7 +26,6 @@ stats_by_date:
   group1_label: "DAU and Retention"
   group1_columns: [
     "num_active_users",
-    "num_new_users",
     "day0_num_users",
     "day1_num_users",
     "day3_num_users",
@@ -71,7 +68,6 @@ stats_by_date:
     "user_fg_ratio",
     "user_avg_delta_t_seconds_bg",
     "user_mathtable_change",
-    "user_avg_remaining_bet_amount",
     "user_accu_pos_delta_bet",
     "user_accu_neg_delta_bet",
     "user_accu_pos_delta_bet_avg",

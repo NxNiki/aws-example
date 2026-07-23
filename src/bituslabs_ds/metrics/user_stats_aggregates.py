@@ -74,6 +74,11 @@ logger = logging.getLogger(__name__)
 RETENTION_DAY_OFFSETS: Tuple[int, ...] = (1, 2, 3, 5, 7, 10, 15, 30)
 RETENTION_LOAD_EXTRA_DAYS: int = max(RETENTION_DAY_OFFSETS)
 
+# Derived helper column dashboard_api attaches to user rows: whole periods
+# (days/weeks/months, matching the request granularity) between the user's
+# first-ever bet and the row's period. 0 == the user's first period.
+PERIODS_SINCE_FIRST_BET_COL = "_periods_since_first_bet"
+
 # ---------------------------------------------------------------------------
 # Module-level pure utilities
 # ---------------------------------------------------------------------------
@@ -605,16 +610,23 @@ class DataMetrics:
 
     @cached_property
     def _num_new_users(self) -> Optional[pl.DataFrame]:
+        """Distinct users whose FIRST-EVER bet falls in the period.
+
+        Dashboard metric: "num_new_users" (DAU and Retention group). Reads the
+        derived period offset that dashboard_api attaches from its first-bet
+        map (PERIODS_SINCE_FIRST_BET_COL == 0); falls back to the stored
+        user_group == 'new' label on legacy datasets that still carry it.
+        """
         ur = self._user_rows
         if ur.is_empty():
             return None
-        if "user_group" not in ur.columns:
+        if PERIODS_SINCE_FIRST_BET_COL in ur.columns:
+            ur = ur.filter(pl.col(PERIODS_SINCE_FIRST_BET_COL) == 0)
+        elif "user_group" in ur.columns:
+            ur = ur.filter(pl.col("user_group") == "new")
+        else:
             return None
-        return (
-            ur.filter(pl.col("user_group") == "new")
-            .group_by(self._key_cols)
-            .agg(pl.col("user_id").n_unique().alias("num_new_users"))
-        )
+        return ur.group_by(self._key_cols).agg(pl.col("user_id").n_unique().alias("num_new_users"))
 
     @cached_property
     def _total_num_bets(self) -> Optional[pl.DataFrame]:

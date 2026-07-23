@@ -1,10 +1,25 @@
+"""Per-user game stats for SS01 (wucaishen), by period, ab_group and mathtable.
+
+ETL job: writes output_ss01_wucaishen_v2/{daily,weekly,monthly}_stats
+(the ``user_*`` metrics consumed by the SS01 dashboard / DataMetrics).
+``stats_agg_col`` selects the period grain: activity_date / _week / _month.
+
+Rows are one per (period, user, ab_group, mathtable) — every bet lives in
+exactly one row, so sums are correct under ANY selection and no label ever
+re-partitions the same bets. The dashboard exposes ab_group and mathtable as
+two separate cohort dimensions; when a dimension is unselected, the API
+collapses the grain back to one row per user (``user_row_grain`` in the
+config + ``collapse_user_rows``), summing the additive components and
+recomputing ratios. ``user_num_delta_bet`` / ``user_num_delta_t_bg`` are the
+exact denominators that make the AVG-type columns recombinable.
+"""
+
 import argparse
 import os
 from textwrap import dedent
 
-import pandas as pd
-
 from bituslabs_ds.config import (
+    AI_GROUP_ID,
     DATE_START_HOUR,
     DEFAULT_BASTION_IP,
     DEFAULT_ETL_OUTPUT,
@@ -23,41 +38,18 @@ from bituslabs_ds.config import (
 from bituslabs_ds.etl import AggCol, DataLoader, ETLScheduler, RedshiftBackend, effective_start_date
 
 GAME_ID = "SS01"
-AI_GROUP_ID = "jojpin-9mokha-rexQug"
-
-# Shared column list for user_bets_group UNION (reused across group variants)
-_USER_BETS_GROUP_COLS = """
-                t.created_at,
-                t.activity_date,
-                t.activity_week,
-                t.activity_month,
-                t.user_id,
-                t.bet_amount,
-                t.payout,
-                t.bet_type,
-                t.profit,
-                t.delta_t_seconds,
-                t.user_bet_count,
-                t.mathtable_change,
-                t.prev_bet_type,
-                t.prev_bet_amount,
-                CASE WHEN t.bet_type = 'FREE' AND t.prev_bet_type = 'BASE' THEN t.prev_bet_amount END AS fg_session_trigger_bet,
-                """
-
-# TODO:
-# add max/min user daily profit
 
 
 def generate_query(stats_agg_col: AggCol, start_date: str):
     effective_start = effective_start_date(stats_agg_col, start_date)
     query = dedent(
         f"""
-        WITH user_bets AS (
+        WITH bets AS (
         SELECT
             t.user_id,
             t.spin_id,
             t.created_at,
-            t.math_table_id AS mathtable,
+            COALESCE(NULLIF(t.math_table_id, ''), '(none)') AS mathtable,
             t.bet_amount,
             t.actual_payout AS payout,
             t.bet_type,
@@ -65,17 +57,10 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at))) AS DATE) AS activity_date,
             CAST(DATE_TRUNC('week', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at))) AS DATE) AS activity_week,
             CAST(DATE_TRUNC('month', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at))) AS DATE) AS activity_month,
-            t.partition_ab[0] AS ab_group_id,
-            LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) AS prev_created_at,
-            EXTRACT(EPOCH FROM (t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at))) AS delta_t_seconds,
-            LAG(t.bet_type) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) AS prev_bet_type,
-            LAG(t.bet_amount) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) AS prev_bet_amount,
-            COUNT(t.user_id) OVER (PARTITION BY t.user_id) AS user_bet_count,
             CASE
-                WHEN LAG(t.math_table_id) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) IS NULL THEN 0
-                WHEN LAG(t.math_table_id) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at) <> t.math_table_id THEN 1
-                ELSE 0
-            END AS mathtable_change
+                WHEN t.partition_ab[0] = '{AI_GROUP_ID}' THEN 'AI'
+                ELSE 'Default'
+            END AS ab_group
         FROM
             public.fct_bet_orders AS t
         WHERE
@@ -86,50 +71,32 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             AND t.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
         ),
 
-        user_bets_group AS (
+        user_bets AS (
+            -- Sequence metrics (delta_t / delta_bet / mathtable_change / FG
+            -- trigger) are DAY-partitioned: each activity_date is
+            -- self-contained, so incremental pulls, full reloads, and ad-hoc
+            -- SQL over any date range agree exactly, and weekly/monthly
+            -- sequence metrics equal the sum of their days. The first bet of a
+            -- day has no predecessor by definition (a session crossing the day
+            -- boundary contributes no delta to the new day).
             SELECT
-                {_USER_BETS_GROUP_COLS}
+                t.*,
+                EXTRACT(EPOCH FROM (t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id, t.activity_date ORDER BY t.spin_id, t.created_at))) AS delta_t_seconds,
+                LAG(t.bet_type) OVER (PARTITION BY t.user_id, t.activity_date ORDER BY t.spin_id, t.created_at) AS prev_bet_type,
+                LAG(t.bet_amount) OVER (PARTITION BY t.user_id, t.activity_date ORDER BY t.spin_id, t.created_at) AS prev_bet_amount,
                 CASE
-                    WHEN t.ab_group_id = '{AI_GROUP_ID}' THEN 'AI'
-                    ELSE 'Default'
-                END AS ai_group
-            FROM
-                user_bets AS t
-
-            UNION ALL
-
-            SELECT
-                {_USER_BETS_GROUP_COLS}
-                CASE
-                    WHEN t.ab_group_id != '{AI_GROUP_ID}' THEN CONCAT('Default_', t.mathtable)
-                END AS ai_group
-            FROM
-                user_bets AS t
-            WHERE t.ab_group_id != '{AI_GROUP_ID}'
-
-            UNION ALL
-
-            SELECT
-                {_USER_BETS_GROUP_COLS}
-                t.mathtable AS ai_group
-            FROM
-                user_bets AS t
-            WHERE
-                t.ab_group_id = '{AI_GROUP_ID}'
-
-            UNION ALL
-
-            SELECT
-                {_USER_BETS_GROUP_COLS}
-                CAST('HG' AS VARCHAR(10)) AS ai_group
-            FROM
-                user_bets AS t
+                    WHEN LAG(t.mathtable) OVER (PARTITION BY t.user_id, t.activity_date ORDER BY t.spin_id, t.created_at) IS NULL THEN 0
+                    WHEN LAG(t.mathtable) OVER (PARTITION BY t.user_id, t.activity_date ORDER BY t.spin_id, t.created_at) <> t.mathtable THEN 1
+                    ELSE 0
+                END AS mathtable_change
+            FROM bets AS t
         ),
 
         user_stats AS (
             SELECT
                 t.{stats_agg_col},
-                t.ai_group,
+                t.ab_group,
+                t.mathtable,
                 t.user_id,
 
                 -- total number of bets:
@@ -147,14 +114,18 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 SUM(CASE WHEN t.bet_type = 'BASE' THEN t.payout END) AS user_total_payout_bg,
                 SUM(CASE WHEN t.bet_type = 'FREE' THEN t.payout END) AS user_total_payout_fg,
 
-                SUM(t.fg_session_trigger_bet) AS user_total_bet_fg,
+                SUM(CASE WHEN t.bet_type = 'FREE' AND t.prev_bet_type = 'BASE' THEN t.prev_bet_amount END) AS user_total_bet_fg,
 
                 COUNT(CASE WHEN t.payout > 0 THEN 1 END) AS user_num_bets_with_payout,
                 COUNT(CASE WHEN t.bet_type = 'BASE' AND t.payout > 0 THEN 1 END) AS user_num_bets_bg_with_payout,
                 COUNT(CASE WHEN t.bet_type = 'FREE' AND t.payout > 0 THEN 1 END) AS user_num_bets_fg_with_payout,
 
+                -- delta-t between consecutive BASE bets: AVG plus its exact
+                -- denominator so the average recombines across grain rows.
                 AVG(CASE WHEN t.bet_type = 'BASE' AND t.prev_bet_type = 'BASE' AND t.delta_t_seconds <= {ETL_DELTA_T_MAX_SECONDS} THEN GREATEST(t.delta_t_seconds, {ETL_DELTA_T_MIN_SECONDS}) END)
                     AS user_avg_delta_t_seconds_bg,
+                COUNT(CASE WHEN t.bet_type = 'BASE' AND t.prev_bet_type = 'BASE' AND t.delta_t_seconds <= {ETL_DELTA_T_MAX_SECONDS} THEN 1 END)
+                    AS user_num_delta_t_bg,
 
                 SUM(t.mathtable_change) AS user_mathtable_change,
 
@@ -166,46 +137,17 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 SUM(t.bet_amount - t.prev_bet_amount) AS user_accu_delta_bet,
                 AVG(t.bet_amount - t.prev_bet_amount) AS user_accu_delta_bet_avg,
                 COUNT(CASE WHEN (t.bet_amount - t.prev_bet_amount) > 0 THEN 1 END) AS user_pos_delta_bet_num,
-                COUNT(CASE WHEN (t.bet_amount - t.prev_bet_amount) < 0 THEN 1 END) AS user_neg_delta_bet_num
+                COUNT(CASE WHEN (t.bet_amount - t.prev_bet_amount) < 0 THEN 1 END) AS user_neg_delta_bet_num,
+                COUNT(t.prev_bet_amount) AS user_num_delta_bet
 
-            FROM user_bets_group AS t
-            GROUP BY t.{stats_agg_col}, t.ai_group, t.user_id
-        ),
-
-        user_mathtable_last_spin_ai AS (
-            -- Last spin per (period, AI user, mathtable). Restricted to AI bets so the
-            -- downstream metric only applies to AI per-mathtable ai_groups.
-            SELECT
-                t.{stats_agg_col},
-                t.user_id,
-                t.mathtable,
-                MAX(t.spin_id) AS mathtable_last_spin_id
             FROM user_bets AS t
-            WHERE t.ab_group_id = '{AI_GROUP_ID}'
-            GROUP BY t.{stats_agg_col}, t.user_id, t.mathtable
-        ),
-
-        user_remaining_bet AS (
-            -- Avg bet on bets the AI user made AFTER their last bet on the math table,
-            -- keyed by ai_group (= mathtable for the AI per-mathtable variant). All
-            -- other ai_groups are absent here, so the LEFT JOIN below yields NULL.
-            SELECT
-                m.{stats_agg_col},
-                m.user_id,
-                m.mathtable AS ai_group,
-                AVG(b.bet_amount) AS user_avg_remaining_bet_amount
-            FROM user_mathtable_last_spin_ai AS m
-            LEFT JOIN user_bets AS b
-                ON b.user_id = m.user_id
-                AND b.{stats_agg_col} = m.{stats_agg_col}
-                AND b.spin_id > m.mathtable_last_spin_id
-                AND b.ab_group_id = '{AI_GROUP_ID}'
-            GROUP BY m.{stats_agg_col}, m.user_id, m.mathtable
+            GROUP BY t.{stats_agg_col}, t.ab_group, t.mathtable, t.user_id
         )
 
         SELECT
             us.{stats_agg_col} AS activity_date,
-            us.ai_group,
+            us.ab_group,
+            us.mathtable,
             us.user_id,
             us.user_mathtable_change,
             -- DataMetrics input columns (user-level raw stats):
@@ -226,6 +168,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
 
             -- User-level derived (not computed by DataMetrics):
             us.user_avg_delta_t_seconds_bg,
+            us.user_num_delta_t_bg,
             us.user_num_bets_fg * 1.0 / NULLIF(us.user_num_bets, 0) AS user_fg_ratio,
             (us.user_total_payout - us.user_total_bet) AS user_total_profit,
             us.user_total_payout_bg * 1.0 / NULLIF(us.user_total_bet, 0) AS user_rtp_bg,
@@ -243,18 +186,11 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
             us.user_accu_delta_bet_avg,
             us.user_pos_delta_bet_num,
             us.user_neg_delta_bet_num,
-
-            -- average bet amount on bets after the user's last bet on the ai_group's math table
-            -- (only populated for per-mathtable ai_groups; NULL for combined groups)
-            rb.user_avg_remaining_bet_amount
+            us.user_num_delta_bet
 
         FROM user_stats AS us
-        LEFT JOIN user_remaining_bet AS rb
-            ON rb.user_id = us.user_id
-            AND rb.{stats_agg_col} = us.{stats_agg_col}
-            AND rb.ai_group = us.ai_group
         WHERE us.{stats_agg_col} >= '{effective_start}'
-        ORDER BY us.{stats_agg_col} DESC, us.ai_group DESC, us.user_id DESC;
+        ORDER BY us.{stats_agg_col} DESC, us.ab_group DESC, us.mathtable DESC, us.user_id DESC;
 
         """
     )
@@ -266,7 +202,7 @@ if __name__ == "__main__":
 
     setup_logging(f"{LOCAL_ROOT}/jobs/log", log_filename=os.path.splitext(os.path.basename(__file__))[0] + ".log")
 
-    parser = argparse.ArgumentParser(description="ETL Game Stats Daily by User Group")
+    parser = argparse.ArgumentParser(description="ETL SS01 Game Stats by Period, AB Group and Mathtable")
     parser.add_argument(
         "--bastion-ip",
         type=str,
@@ -294,7 +230,7 @@ if __name__ == "__main__":
     # Initialize Scheduler with a default 3-day lookback
     scheduler = ETLScheduler(
         redshift_loader,
-        f"{DEFAULT_ETL_OUTPUT}/jobs/output_ss01_wucaishen_old",
+        f"{DEFAULT_ETL_OUTPUT}/jobs/output_ss01_wucaishen_v2",
         lookback_days=3,
         overwrite=args.overwrite,
     )
@@ -302,7 +238,7 @@ if __name__ == "__main__":
     scheduler.run_incremental_job(
         job_name="daily_stats",
         query_func=lambda start_date: generate_query("activity_date", start_date),
-        key_cols=["activity_date", "user_id", "ai_group"],
+        key_cols=["activity_date", "user_id", "ab_group", "mathtable"],
         date_col="activity_date",
         partition_level="none",
     )
@@ -311,17 +247,17 @@ if __name__ == "__main__":
     scheduler.run_incremental_job(
         job_name="weekly_stats",
         query_func=lambda start_date: generate_query("activity_week", start_date),
-        key_cols=["activity_date", "user_id", "ai_group"],
+        key_cols=["activity_date", "user_id", "ab_group", "mathtable"],
         date_col="activity_date",  # Always check max activity_date
         partition_level="none",
         lookback=7,
     )
 
-    # Overrides to 31 days because weekly data takes longer to settle
+    # Overrides to 31 days because monthly data takes longer to settle
     scheduler.run_incremental_job(
         job_name="monthly_stats",
         query_func=lambda start_date: generate_query("activity_month", start_date),
-        key_cols=["activity_date", "user_id", "ai_group"],
+        key_cols=["activity_date", "user_id", "ab_group", "mathtable"],
         date_col="activity_date",  # Always check max activity_date
         partition_level="none",
         lookback=31,

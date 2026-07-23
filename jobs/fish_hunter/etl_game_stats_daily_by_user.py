@@ -74,8 +74,11 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
                 END as fish_type,
                 b.killed,
                 b.profit,
-                LAG(b.event_timestamp) OVER (PARTITION BY b.user_id ORDER BY b.bullet_id, b.event_timestamp) AS prev_bet_time,
-                LAG(b.bet) OVER (PARTITION BY b.user_id ORDER BY b.bullet_id, b.event_timestamp) AS prev_bet_amount,
+                -- Sequence metrics are DAY-partitioned (each activity_date is
+                -- self-contained, so incremental pulls and full reloads agree);
+                -- bj_date_last_bet below stays cross-day on purpose.
+                LAG(b.event_timestamp) OVER (PARTITION BY b.user_id, CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', b.created_at))) AS DATE) ORDER BY b.bullet_id, b.event_timestamp) AS prev_bet_time,
+                LAG(b.bet) OVER (PARTITION BY b.user_id, CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', b.created_at))) AS DATE) ORDER BY b.bullet_id, b.event_timestamp) AS prev_bet_amount,
                 CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', b.created_at))) AS DATE) AS activity_date,
                 CAST(DATE_TRUNC('week', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', b.created_at))) AS DATE) AS activity_week,
                 CAST(DATE_TRUNC('month', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', b.created_at))) AS DATE) AS activity_month

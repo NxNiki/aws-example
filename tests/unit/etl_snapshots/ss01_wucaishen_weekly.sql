@@ -13,15 +13,13 @@ SELECT
     CAST(DATE_TRUNC('month', DATEADD(hour, -0, CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at))) AS DATE) AS activity_month,
     CASE
         WHEN t.partition_ab[0] = 'jojpin-9mokha-rexQug' THEN 'AI'
-        WHEN t.partition_ab[0] = '4f1a46ca-7baa-4452-9a40-ef21d9b33b57' THEN 'AB_TEST_A'
-        WHEN t.partition_ab[0] = '4a04df21-c749-4808-8e55-3a0b74c084d2' THEN 'AB_TEST_B'
         ELSE 'Default'
     END AS ab_group
 FROM
     public.fct_bet_orders AS t
 WHERE
-    t.game_id = 'SS03'
-    AND CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at) >= '2025-01-01'
+    t.game_id = 'SS01'
+    AND CONVERT_TIMEZONE('UTC', 'Asia/Shanghai', t.created_at) >= '2024-12-30'
     AND t.currency_type IN ('CNY')
     AND t.status = 'COMPLETED'
     AND t.op_code NOT IN ('B26', 'TST', 'TSB', 'TSO')
@@ -50,7 +48,7 @@ user_bets AS (
 
 user_stats AS (
     SELECT
-        t.activity_month,
+        t.activity_week,
         t.ab_group,
         t.mathtable,
         t.user_id,
@@ -97,11 +95,11 @@ user_stats AS (
         COUNT(t.prev_bet_amount) AS user_num_delta_bet
 
     FROM user_bets AS t
-    GROUP BY t.activity_month, t.ab_group, t.mathtable, t.user_id
+    GROUP BY t.activity_week, t.ab_group, t.mathtable, t.user_id
 )
 
 SELECT
-    us.activity_month AS activity_date,
+    us.activity_week AS activity_date,
     us.ab_group,
     us.mathtable,
     us.user_id,
@@ -145,5 +143,5 @@ SELECT
     us.user_num_delta_bet
 
 FROM user_stats AS us
-WHERE us.activity_month >= '2025-01-01'
-ORDER BY us.activity_month DESC, us.ab_group DESC, us.mathtable DESC, us.user_id DESC;
+WHERE us.activity_week >= '2024-12-30'
+ORDER BY us.activity_week DESC, us.ab_group DESC, us.mathtable DESC, us.user_id DESC;
