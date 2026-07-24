@@ -115,8 +115,8 @@ Computed per (period × cohort) from the user rows above.
 | `num_active_users` | distinct users with `user_num_bets ≥ ACTIVE_USER_MIN_BETS` |
 | `num_new_users` | distinct users whose **first-ever bet** falls in the period (derived period offset = 0; before 2026-07 this was the stored `user_group = 'new'` ≈ first bet ≤ 3 days ago) |
 | `day0_num_users` | distinct users on the anchor date (the retention cohort, no bet threshold) |
-| `day{N}_num_users` | members of the day-0 cohort who appear again N days later (N ∈ 1,2,3,5,7,10,15,30; presence in **any** group counts) |
-| `retention_rate_day{N}` | `dayN_num_users / day0_num_users` |
+| `day{N}_num_users` | members of the day-0 cohort who appear again N days later (N ∈ 1,2,3,5,7,10,15,30; presence in **any** group counts). NULL when the follow-up date is beyond the latest loaded date — the value is unknowable yet, and a 0/undercount would read as a retention collapse for recent cohorts |
+| `retention_rate_day{N}` | `dayN_num_users / day0_num_users` (NULL propagates from the numerator) |
 | `num_active_user_0_rtp` / `active_user_0_rtp_ratio` | users with zero total payout in the period, and their share |
 | `active_user_rtp_less_0_{X}_ratio` | share of users with `user_rtp < 0.X` |
 | `active_user_no_fg_ratio` | share of users with no free-game bets |
