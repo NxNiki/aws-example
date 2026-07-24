@@ -29,7 +29,7 @@ stats_by_date:
       - {label: low, min: 2, max: 10}
       - {label: medium, min: 15, max: 130}
       - {label: high, min: 150, max: 200}
-      - {label: ultra, min: 500, max: null}
+      - {label: ultra, min: 500, max: 1000}
 
   group1_label: "DAU and Retention"
   group1_columns: [

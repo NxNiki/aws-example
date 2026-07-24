@@ -2,38 +2,31 @@
 // each tab's cohort row next to the other pickers. The checkbox SELECTION is
 // per tab (like any cohort column), but the group DEFINITIONS — name and
 // INCLUSIVE [min, max] — are global, so a range means the same thing on every
-// tab. Bounds are picked from the values that exist in the data; max also
-// offers an open-ended "max". "all" is the no-filter population; ranges may
-// overlap.
+// tab. Bounds are picked from the values that exist in the data. "all" is the
+// no-filter population; ranges may overlap.
 export interface RangeGroupDef {
   label: string;
   min: number;
   max: number | null; // inclusive; null = open-ended
 }
 
-function BoundSelect(props: {
-  values: number[];
-  value: number | null;
-  allowMax: boolean; // include the open-ended "max" option (null)
-  onChange: (v: number | null) => void;
-}) {
+function BoundSelect(props: { values: number[]; value: number; onChange: (v: number) => void }) {
   // A bound from an older saved view may no longer exist in the data; keep it
   // selectable so the definition stays visible instead of silently changing.
-  const options = props.value !== null && !props.values.includes(props.value)
-    ? [...props.values, props.value].sort((a, b) => a - b)
-    : props.values;
+  const options = props.values.includes(props.value)
+    ? props.values
+    : [...props.values, props.value].sort((a, b) => a - b);
   return (
     <select
       className="rounded border px-1 py-0.5 text-sm"
-      value={props.value === null ? "max" : String(props.value)}
-      onChange={(e) => props.onChange(e.target.value === "max" ? null : Number(e.target.value))}
+      value={String(props.value)}
+      onChange={(e) => props.onChange(Number(e.target.value))}
     >
       {options.map((v) => (
         <option key={v} value={v}>
           {v}
         </option>
       ))}
-      {props.allowMax && <option value="max">max</option>}
     </select>
   );
 }
@@ -72,14 +65,13 @@ export function RangeGroupSelect(props: {
                 title="group name (chart legend label)"
               />
               <span className="text-gray-400">[</span>
+              <BoundSelect values={props.values} value={g.min} onChange={(v) => props.onSetGroup(i, { ...g, min: v })} />
+              <span className="text-gray-400">,</span>
               <BoundSelect
                 values={props.values}
-                value={g.min}
-                allowMax={false}
-                onChange={(v) => props.onSetGroup(i, { ...g, min: v ?? g.min })}
+                value={g.max ?? props.values[props.values.length - 1] ?? g.min}
+                onChange={(v) => props.onSetGroup(i, { ...g, max: v })}
               />
-              <span className="text-gray-400">,</span>
-              <BoundSelect values={props.values} value={g.max} allowMax onChange={(v) => props.onSetGroup(i, { ...g, max: v })} />
               <span className="text-gray-400">]</span>
             </div>
           ))}
