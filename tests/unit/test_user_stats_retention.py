@@ -56,7 +56,8 @@ def test_renamed_group_across_days_via_presence_df():
 
     Reproduces the production bug — a group present on D0 but renamed/replaced on
     D1 (DYNAMIC_RTP_V2 → _V3). Without the full population the return test reads
-    only the filtered slice (no D1 rows) → 0 retention; presence_df=full fixes it.
+    only the filtered slice, whose data ends at D0, so the follow-up is beyond
+    the visible data → NULL (not the true value); presence_df=full fixes it.
     """
     d0, d1 = datetime(2026, 6, 1), datetime(2026, 6, 2)
     full = pl.DataFrame(
@@ -69,7 +70,7 @@ def test_renamed_group_across_days_via_presence_df():
     df_v2 = full.filter(pl.col("daily_group") == "DYNAMIC_RTP_V2")  # what iter_cohorts hands DataMetrics
 
     buggy = DataMetrics(df_v2, start_dt=d0, end_dt=d0, key_cols=["activity_date"])["retention_rate_day1"]
-    assert buggy["retention_rate_day1"][0] == pytest.approx(0.0)  # the symptom
+    assert buggy["retention_rate_day1"][0] is None  # the symptom: slice can't see D1
 
     fixed = DataMetrics(df_v2, start_dt=d0, end_dt=d0, key_cols=["activity_date"], presence_df=full)[
         "retention_rate_day1"
@@ -153,3 +154,41 @@ def test_day10_day15_day30_unavailable_for_week_granularity():
     assert dm["retention_rate_day10"] is None  # guarded, no IndexError
     assert dm["retention_rate_day15"] is None
     assert dm["retention_rate_day30"] is None
+
+
+def test_horizon_beyond_data_is_null_not_zero():
+    """Follow-up dates past the latest loaded date -> NULL, not 0.
+
+    Data ends on D0+1: day-1 retention is computable (a real 0/… value), but
+    day-3 cannot be known yet — an incomplete pipeline or a recent cohort must
+    not read as a retention collapse.
+    """
+    d0, d1 = datetime(2026, 7, 20), datetime(2026, 7, 21)
+    df = pl.DataFrame(
+        {
+            "user_id": ["u1", "u2", "u1"],
+            "activity_date": [d0, d0, d1],
+            "ai_group": ["A", "A", "A"],
+        }
+    )
+    dm = _dm(df, d0)
+
+    day1 = dm["retention_rate_day1"].filter(pl.col("activity_date") == d0)["retention_rate_day1"][0]
+    assert day1 == pytest.approx(0.5)  # u1 returned, u2 didn't — data covers D+1
+
+    assert dm["day3_num_users"].filter(pl.col("activity_date") == d0)["day3_num_users"][0] is None
+    assert dm["retention_rate_day3"].filter(pl.col("activity_date") == d0)["retention_rate_day3"][0] is None
+
+
+def test_horizon_on_max_date_still_counts():
+    """A follow-up landing exactly on the latest loaded date computes normally."""
+    d0, d3 = datetime(2026, 7, 20), datetime(2026, 7, 23)
+    df = pl.DataFrame(
+        {
+            "user_id": ["u1", "u2", "u2"],
+            "activity_date": [d0, d0, d3],
+            "ai_group": ["A", "A", "A"],
+        }
+    )
+    res = _dm(df, d0)["retention_rate_day3"]
+    assert res.filter(pl.col("activity_date") == d0)["retention_rate_day3"][0] == pytest.approx(0.5)

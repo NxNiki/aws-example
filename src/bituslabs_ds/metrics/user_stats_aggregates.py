@@ -576,10 +576,21 @@ class DataMetrics:
                 result.append((combo, row[date_col], len(ids), set(ids)))
         return result
 
+    @cached_property
+    def _presence_max_date(self) -> Optional[date]:
+        """Latest date with any data in the full population — how far retention
+        follow-ups can see."""
+        presence = self._presence_by_date
+        return max(presence) if presence else None
+
     def _count_at_horizon(self, horizon_idx: int) -> Optional[pl.DataFrame]:
         """
         For each cohort, count how many of its users are active at the ``horizon_idx``-th
         follow-up date in ANY group (any-group retention — see ``_presence_by_date``).
+        A follow-up date beyond the latest loaded date yields NULL, not 0: the data
+        simply doesn't reach that far yet (recent cohorts), and a 0/undercount would
+        read as a real retention collapse on the dashboard. NULLs propagate into
+        ``dayN_num_users`` and ``retention_rate_dayN``.
         Returns a DataFrame with ``_key_cols + ["_n"]`` or ``None`` when no cohorts exist.
         Not cached itself — but uses cached ``_cohorts`` and ``_presence_by_date``.
         """
@@ -590,12 +601,15 @@ class DataMetrics:
         if horizon_idx >= len(_horizon_dates(cohorts[0][1], self.granularity)):
             return None
         presence = self._presence_by_date
+        max_seen = self._presence_max_date
         rows = []
         for combo, d0, _n0, cohort in cohorts:
-            h = _horizon_dates(d0, self.granularity)[horizon_idx]
-            n = len(cohort & presence.get(_norm_date(h), set()))
-            rows.append({**combo, "_n": n})
-        return pl.DataFrame(rows)
+            h = _norm_date(_horizon_dates(d0, self.granularity)[horizon_idx])
+            if max_seen is None or h > max_seen:
+                rows.append({**combo, "_n": None})
+            else:
+                rows.append({**combo, "_n": len(cohort & presence.get(h, set()))})
+        return pl.DataFrame(rows, schema_overrides={"_n": pl.Int64})
 
     # ------------------------------------------------------------------
     # Direct group-by aggregation metrics
