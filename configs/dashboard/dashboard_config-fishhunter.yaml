@@ -33,7 +33,6 @@ stats_by_date:
 
   group1_label: "DAU and Retention"
   group1_columns: [
-    # DataMetrics-computed (derived from user-level rows in dashboard):
     "num_active_users",
     "day0_num_users",
     "day1_num_users",
@@ -50,21 +49,36 @@ stats_by_date:
     "retention_rate_day10",
     "retention_rate_day15",
     "retention_rate_day30",
-    # Parquet column (per-user flag, averaged to get fraction who killed fish):
-    "user_killed_fish",
   ]
 
-  group2_label: "Bet and RTP"
+  # Per-user aggregates (mean across users, bootstrap CI on the dashboard).
+  group2_label: "User Level Metrics"
   group2_columns: [
+    "user_num_bets",
+    "user_num_killed_bullets",
+    "user_bullet_kill_ratio",
+    "user_killed_fish",
+    "user_num_rooms",
     "user_total_bet",
     "user_avg_bet_amount",
     "user_total_payout",
-    "user_rtp",
-    "rtp",
     "user_total_profit",
     "user_max_profit",
+    "user_rtp",
+    "user_profit_coef_var",
     "user_bullet_avg_profit",
     "user_bullet_kill_avg_profit",
+    "user_avg_fish_value",
+    "user_avg_killed_fish_value",
+    "user_avg_delta_t_seconds",
+    "user_accu_pos_delta_bet",
+    "user_accu_neg_delta_bet",
+    "user_accu_pos_delta_bet_avg",
+    "user_accu_neg_delta_bet_avg",
+    "user_accu_delta_bet",
+    "user_accu_delta_bet_avg",
+    "user_pos_delta_bet_num",
+    "user_neg_delta_bet_num",
     "user_num_streak_sessions",
     "user_avg_streak_length",
     "user_max_streak_length",
@@ -79,25 +93,6 @@ stats_by_date:
     "user_bets_to_kill_fish_medium",
     "user_bets_to_kill_fish_high",
     "user_bets_to_kill_fish_ultra",
-    "user_accu_pos_delta_bet",
-    "user_accu_neg_delta_bet",
-    "user_accu_pos_delta_bet_avg",
-    "user_accu_neg_delta_bet_avg",
-    "user_accu_delta_bet",
-    "user_accu_delta_bet_avg",
-    "user_pos_delta_bet_num",
-    "user_neg_delta_bet_num",
-  ]
-
-  group3_label: "Fish Value and Bullets"
-  group3_columns: [
-    "user_avg_fish_value",
-    "user_avg_killed_fish_value",
-    "user_num_bets",
-    "user_num_killed_bullets",
-    "user_bullet_kill_ratio",
-    "user_num_rooms",
-    "user_profit_coef_var",
     "user_max_kill_streak",
     "user_max_kill_streak_low",
     "user_max_kill_streak_medium",
@@ -108,6 +103,25 @@ stats_by_date:
     "user_avg_kill_streak_medium",
     "user_avg_kill_streak_high",
     "user_avg_kill_streak_ultra",
+  ]
+
+  # Pooled over all users in the (period, group) — one value per cohort.
+  group3_label: "Group Level Metrics"
+  group3_columns: [
+    "total_num_bets",
+    "total_bet",
+    "total_payout",
+    "total_profit",
+    "rtp",
+    "user_rtp_median",
+    "user_rtp_ultilization_ratio",
+    "num_active_user_0_rtp",
+    "active_user_0_rtp_ratio",
+    "active_user_rtp_less_0_1_ratio",
+    "active_user_rtp_less_0_2_ratio",
+    "active_user_rtp_less_0_3_ratio",
+    "active_user_rtp_less_0_4_ratio",
+    "active_user_rtp_less_0_5_ratio",
   ]
 
 stats_by_bet:
