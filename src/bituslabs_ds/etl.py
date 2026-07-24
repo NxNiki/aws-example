@@ -239,6 +239,11 @@ class RedshiftBackend(DatabaseBackend):
                 print(f"Error connecting to Bastion host: {e}")
                 raise
 
+            # Long queries send nothing for minutes; without keepalives an idle
+            # NAT/firewall drops the connection and the client blocks forever on
+            # a dead socket instead of erroring.
+            self.ssh.get_transport().set_keepalive(30)
+
             # 2. Start Tunnel
             self.tunnel_thread = threading.Thread(
                 target=_forward_tunnel,
