@@ -141,6 +141,20 @@ export function visibleGroupValues(
   return rest;
 }
 
+// Distinct values of the range column present in the data (numeric, sorted) —
+// the options for the range-group [min, max] pickers.
+export function rangeGroupValues(
+  s: Pick<DashboardState, "config" | "groupValuesByGran">,
+  granularity: Granularity,
+): number[] {
+  const col = s.config?.range_group_col;
+  if (!col) return [];
+  return (s.groupValuesByGran[granularity]?.[col] ?? [])
+    .map(Number)
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
+}
+
 // The range_groups request payload for one tab: its checked labels resolved
 // against the global definitions, labels tagged with the inclusive range
 // ("low[0, 10]"); undefined when the config has no range column or nothing

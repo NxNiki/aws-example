@@ -2,16 +2,46 @@
 // each tab's cohort row next to the other pickers. The checkbox SELECTION is
 // per tab (like any cohort column), but the group DEFINITIONS — name and
 // INCLUSIVE [min, max] — are global, so a range means the same thing on every
-// tab. "all" is the no-filter population; ranges may overlap.
+// tab. Bounds are picked from the values that exist in the data; max also
+// offers an open-ended "max". "all" is the no-filter population; ranges may
+// overlap.
 export interface RangeGroupDef {
   label: string;
   min: number;
   max: number | null; // inclusive; null = open-ended
 }
 
+function BoundSelect(props: {
+  values: number[];
+  value: number | null;
+  allowMax: boolean; // include the open-ended "max" option (null)
+  onChange: (v: number | null) => void;
+}) {
+  // A bound from an older saved view may no longer exist in the data; keep it
+  // selectable so the definition stays visible instead of silently changing.
+  const options = props.value !== null && !props.values.includes(props.value)
+    ? [...props.values, props.value].sort((a, b) => a - b)
+    : props.values;
+  return (
+    <select
+      className="rounded border px-1 py-0.5 text-sm"
+      value={props.value === null ? "max" : String(props.value)}
+      onChange={(e) => props.onChange(e.target.value === "max" ? null : Number(e.target.value))}
+    >
+      {options.map((v) => (
+        <option key={v} value={v}>
+          {v}
+        </option>
+      ))}
+      {props.allowMax && <option value="max">max</option>}
+    </select>
+  );
+}
+
 export function RangeGroupSelect(props: {
   name: string; // display name from the config, e.g. "Fish level"
   groups: RangeGroupDef[];
+  values: number[]; // distinct values of the range column present in the data
   selection: string[]; // per-tab: checked group labels (may include "all")
   onSetSelection: (labels: string[]) => void;
   onSetGroup: (index: number, group: RangeGroupDef) => void; // global defs
@@ -20,7 +50,6 @@ export function RangeGroupSelect(props: {
     const next = checked ? [...new Set([...props.selection, label])] : props.selection.filter((v) => v !== label);
     props.onSetSelection(next);
   };
-  const num = (v: string): number | null => (v === "" ? null : Number(v));
 
   return (
     <div className="flex flex-col text-base">
@@ -43,22 +72,14 @@ export function RangeGroupSelect(props: {
                 title="group name (chart legend label)"
               />
               <span className="text-gray-400">[</span>
-              <input
-                type="number"
-                className="w-16 rounded border px-1 py-0.5 text-sm"
+              <BoundSelect
+                values={props.values}
                 value={g.min}
-                min={0}
-                onChange={(e) => props.onSetGroup(i, { ...g, min: Number(e.target.value) })}
+                allowMax={false}
+                onChange={(v) => props.onSetGroup(i, { ...g, min: v ?? g.min })}
               />
               <span className="text-gray-400">,</span>
-              <input
-                type="number"
-                className="w-16 rounded border px-1 py-0.5 text-sm"
-                value={g.max ?? ""}
-                placeholder="max"
-                min={0}
-                onChange={(e) => props.onSetGroup(i, { ...g, max: num(e.target.value) })}
-              />
+              <BoundSelect values={props.values} value={g.max} allowMax onChange={(v) => props.onSetGroup(i, { ...g, max: v })} />
               <span className="text-gray-400">]</span>
             </div>
           ))}

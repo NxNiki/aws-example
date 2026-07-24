@@ -6,7 +6,7 @@ import { CohortSelect } from "../../components/CohortSelect";
 import { RangeGroupSelect } from "../../components/RangeGroupSelect";
 import { ClipControls } from "../../components/ClipControls";
 import { FilterControls } from "../../components/FilterControls";
-import { activeLifecycleGroups, activeRangeGroups, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
+import { activeLifecycleGroups, activeRangeGroups, rangeGroupValues, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { AddToReportButton } from "../report/AddToReport";
 import type { ClipOpts, FilterOpts, MetricGroup } from "../../api/types";
@@ -133,6 +133,7 @@ export function StatsByGroup() {
           <RangeGroupSelect
             name={s.config.range_group_name ?? s.config.range_group_col}
             groups={s.rangeGroups}
+            values={rangeGroupValues(s, dg.granularity)}
             selection={c.rangeSelection}
             onSetSelection={(labels) => s.setTabRangeSelection("group", labels)}
             onSetGroup={s.setRangeGroup}

@@ -9,7 +9,7 @@ import { RangeGroupSelect } from "../../components/RangeGroupSelect";
 import { ClipControls } from "../../components/ClipControls";
 import { FilterControls } from "../../components/FilterControls";
 import { MetricCheckList } from "../../components/MetricCheckList";
-import { activeLifecycleGroups, activeRangeGroups, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
+import { activeLifecycleGroups, activeRangeGroups, rangeGroupValues, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
 import { AddToReportButton } from "../report/AddToReport";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import type { DeepdivePanel as PanelId, HistogramSeries } from "../../api/types";
@@ -306,6 +306,7 @@ export function DeepDive() {
           <RangeGroupSelect
             name={s.config.range_group_name ?? s.config.range_group_col}
             groups={s.rangeGroups}
+            values={rangeGroupValues(s, dg.granularity)}
             selection={c.rangeSelection}
             onSetSelection={(labels) => s.setTabRangeSelection("viz", labels)}
             onSetGroup={s.setRangeGroup}

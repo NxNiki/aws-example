@@ -26,10 +26,10 @@ stats_by_date:
     column: fish_value
     name: "Fish level"
     defaults:
-      - {label: low, min: 0, max: 10}
-      - {label: medium, min: 11, max: 130}
-      - {label: high, min: 131, max: 200}
-      - {label: ultra, min: 201, max: null}
+      - {label: low, min: 2, max: 10}
+      - {label: medium, min: 15, max: 130}
+      - {label: high, min: 150, max: 200}
+      - {label: ultra, min: 500, max: null}
 
   group1_label: "DAU and Retention"
   group1_columns: [

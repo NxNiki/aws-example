@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { CohortSelect } from "../../components/CohortSelect";
 import { RangeGroupSelect } from "../../components/RangeGroupSelect";
-import { activeLifecycleGroups, activeRangeGroups, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
+import { activeLifecycleGroups, activeRangeGroups, rangeGroupValues, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { AddToReportButton } from "../report/AddToReport";
 import { MetricSelector } from "./MetricSelector";
@@ -76,6 +76,7 @@ export function SummaryTable() {
           <RangeGroupSelect
             name={s.config.range_group_name ?? s.config.range_group_col}
             groups={s.rangeGroups}
+            values={rangeGroupValues(s, dg.granularity)}
             selection={c.rangeSelection}
             onSetSelection={(labels) => s.setTabRangeSelection("summaryTable", labels)}
             onSetGroup={s.setRangeGroup}
