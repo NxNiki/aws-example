@@ -55,6 +55,7 @@ def _window_series(
     end_dt: datetime,
     group_values: dict[str, list[str]],
     lifecycle: Optional[list[dict[str, Any]]],
+    range_groups: Optional[list[dict[str, Any]]],
     produced: set[str],
 ) -> list[dict[str, Any]]:
     """One window's series dicts (per metric × cohort); adds to ``produced``."""
@@ -72,7 +73,13 @@ def _window_series(
 
     series: list[dict[str, Any]] = []
     for label, df_c in iter_cohorts(
-        cfg, df_raw, group_values, lifecycle=lifecycle, date_col=date_col, granularity=granularity
+        cfg,
+        df_raw,
+        group_values,
+        lifecycle=lifecycle,
+        date_col=date_col,
+        granularity=granularity,
+        range_groups=range_groups,
     ):
         df_c_date = df_c.filter((pl.col(date_col) >= start_dt) & (pl.col(date_col) <= end_dt))
         if df_c_date.is_empty():
@@ -110,6 +117,7 @@ def load_series(
     date_to: Optional[str] = None,
     group_values: Optional[dict[str, list[str]]] = None,
     lifecycle: Optional[list[dict[str, Any]]] = None,
+    range_groups: Optional[list[dict[str, Any]]] = None,
     ranges: Optional[list[tuple[Optional[str], Optional[str]]]] = None,
 ) -> tuple[str, list[dict[str, Any]], list[str]]:
     """Return (date_col, series, missing).
@@ -137,7 +145,17 @@ def load_series(
                 continue
             start_dt, end_dt = datetime.fromisoformat(start), datetime.fromisoformat(end)
             for s in _window_series(
-                cfg, granularity, metrics, lf, date_col, start_dt, end_dt, group_values, lifecycle, produced
+                cfg,
+                granularity,
+                metrics,
+                lf,
+                date_col,
+                start_dt,
+                end_dt,
+                group_values,
+                lifecycle,
+                range_groups,
+                produced,
             ):
                 s["range_index"] = i
                 s["range_label"] = f"{start} → {end}"
@@ -154,7 +172,7 @@ def load_series(
         return date_col, [], list(metrics)
 
     series = _window_series(
-        cfg, granularity, metrics, lf, date_col, win_start, win_end, group_values, lifecycle, produced
+        cfg, granularity, metrics, lf, date_col, win_start, win_end, group_values, lifecycle, range_groups, produced
     )
     return date_col, series, [m for m in metrics if m not in produced]
 

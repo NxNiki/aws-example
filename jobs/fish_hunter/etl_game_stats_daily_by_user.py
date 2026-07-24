@@ -1,6 +1,7 @@
 import argparse
 import os
 from textwrap import dedent
+from typing import Optional
 
 from bituslabs_ds.config import (
     DATE_START_HOUR,
@@ -27,12 +28,15 @@ STREAK_SESSION_THRESH = 600
 STREAK_KILL_THRESH = 3  # nearly 10% of all killing intervals.
 
 
-def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
+def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START, end_date: Optional[str] = None):
     """Generate the fish_hunter daily/weekly/monthly per-user game-stats SQL.
 
     ETL job: produces the ``daily_group`` dimension plus the ``user_*`` metrics
-    in ``output_fish_hunter/{daily,weekly,monthly}_stats`` (dashboard fish_hunter
+    in ``output_fish_hunter_v2/{daily,weekly,monthly}_stats`` (dashboard fish_hunter
     tab). ``start_date`` filters both raw data and output for incremental lookback.
+    ``end_date`` (exclusive, must be aligned to a period start) bounds the window
+    so a long backfill can run as several small queries instead of one
+    cluster-pinning scan.
 
     One row per (user, period, daily_group) for EVERY betting user -- not only
     fish-killers. Kill-specific metrics (kill ratios, killed-fish values, kill
@@ -52,6 +56,18 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
         4. DEFAULT_FALLBACK -- any other / NULL strategy_name.
     """
     effective_start = effective_start_date(stats_agg_col, start_date)
+    end_raw_filter = (
+        f"""
+                AND b.created_at < CONVERT_TIMEZONE('{TIMEZONE_SHANGHAI}', 'UTC', CAST('{end_date}' AS TIMESTAMP))"""
+        if end_date
+        else ""
+    )
+    end_output_filter = (
+        f"""
+          AND t1.{stats_agg_col} < '{end_date}'"""
+        if end_date
+        else ""
+    )
 
     query = dedent(
         f"""
@@ -95,7 +111,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
                 -- Logic: We want events where (EventTime + UserDays) >= Start
                 -- So: EventTime >= Start - UserDays
                 AND b.created_at >= CONVERT_TIMEZONE('{TIMEZONE_SHANGHAI}', 'UTC',
-                       DATEADD(day, -{RETURN_USER_DAYS}, CAST('{effective_start}' AS TIMESTAMP)))
+                       DATEADD(day, -{RETURN_USER_DAYS}, CAST('{effective_start}' AS TIMESTAMP))){end_raw_filter}
 
         ),
 
@@ -315,43 +331,48 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
             GROUP BY u.daily_group, t.user_id, u.{stats_agg_col}
         ),
 
-        -- 4. USER-LEVEL STATS BY ASSIGNED DAILY GROUP
-        stats_by_user_date AS (
+        -- 4a. USER-DAY LEVEL COLUMNS that cannot be sliced by fish_value
+        -- (distinct rooms overlap across slices; the CV needs the full sample).
+        user_day_stats AS (
             SELECT
                 b.user_id,
                 u.daily_group,
                 b.{stats_agg_col},
-                COUNT(DISTINCT b.user_id || '-' || b.room_id) AS user_num_rooms,
+                COUNT(DISTINCT b.user_id || '-' || b.room_id)     AS user_num_rooms,
+                STDDEV(b.profit) / NULLIF(ABS(AVG(b.profit)), 0)  AS user_profit_coef_var
+            FROM base_data b
+            JOIN user_daily_group u ON b.user_id = u.user_id AND b.activity_date = u.activity_date
+            GROUP BY b.user_id, u.daily_group, b.{stats_agg_col}
+        ),
+
+        -- 4. USER-LEVEL STATS BY DAILY GROUP AND FISH VALUE. One row per
+        -- (period, user, daily_group, fish_value): each bullet in exactly one
+        -- row, so the dashboard's custom fish-level ranges ([min, max]
+        -- inclusive over fish_value) recombine every sliced metric exactly.
+        stats_by_user_date AS (
+            SELECT
+                b.user_id,
+                u.daily_group,
+                b.fish_value,
+                b.{stats_agg_col},
                 COUNT(b.user_id)                              AS user_num_bets,
 
-                -- Bullets info by fish type:
-                SUM(CASE WHEN b.fish_type = 'low'    THEN 1 END) AS user_num_hits_fish_low,
-                SUM(CASE WHEN b.fish_type = 'medium' THEN 1 END) AS user_num_hits_fish_medium,
-                SUM(CASE WHEN b.fish_type = 'high'   THEN 1 END) AS user_num_hits_fish_high,
-                SUM(CASE WHEN b.fish_type = 'ultra'  THEN 1 END) AS user_num_hits_fish_ultra,
-
-                -- Killed fish info by fish type:
-                SUM(b.killed)                                                          AS user_num_killed_bullets,
-                SUM(CASE WHEN b.fish_type = 'low'    THEN b.killed END)               AS user_num_killed_fish_low,
-                SUM(CASE WHEN b.fish_type = 'medium' THEN b.killed END)               AS user_num_killed_fish_medium,
-                SUM(CASE WHEN b.fish_type = 'high'   THEN b.killed END)               AS user_num_killed_fish_high,
-                SUM(CASE WHEN b.fish_type = 'ultra'  THEN b.killed END)               AS user_num_killed_fish_ultra,
+                SUM(b.killed)                                 AS user_num_killed_bullets,
 
                 SUM(b.bet)                                                             AS user_total_bet,
                 AVG(b.bet)                                                             AS user_avg_bet_amount,
                 AVG(CASE WHEN EXTRACT(EPOCH FROM (b.bet_time - b.prev_bet_time)) <= {ETL_DELTA_T_MAX_SECONDS} THEN GREATEST(EXTRACT(EPOCH FROM (b.bet_time - b.prev_bet_time)), {ETL_DELTA_T_MIN_SECONDS_FISH_HUNTER}) END)
                                                                                        AS user_avg_delta_t_seconds,
+                COUNT(CASE WHEN EXTRACT(EPOCH FROM (b.bet_time - b.prev_bet_time)) <= {ETL_DELTA_T_MAX_SECONDS} THEN 1 END)
+                                                                                       AS user_num_delta_t,
                 SUM(b.payout)                                                          AS user_total_payout,
                 SUM(b.profit)                                                          AS user_total_profit,
                 MAX(b.profit)                                                          AS user_max_profit,
                 ROUND(CAST(SUM(b.payout) AS FLOAT) / NULLIF(SUM(b.bet), 0), 3)        AS user_rtp,
-                STDDEV(b.profit) / NULLIF(ABS(AVG(b.profit)), 0)                      AS user_profit_coef_var,
                 MAX(CASE WHEN b.killed >= 1 THEN 1 ELSE 0 END)                        AS user_killed_fish,
 
                 AVG(b.fish_value)                                                      AS user_avg_fish_value,
-                AVG(CASE WHEN b.fish_value > 19 AND b.fish_value < 201 THEN b.fish_value END)                          AS user_avg_fish_value_20_200,
                 AVG(CASE WHEN b.killed = 1 THEN b.fish_value END)                     AS user_avg_killed_fish_value,
-                AVG(CASE WHEN b.fish_value > 19 AND b.fish_value < 201 AND b.killed = 1 THEN b.fish_value END)         AS user_avg_killed_fish_value_20_200,
                 AVG(b.profit)                                                          AS user_bullet_avg_profit,
                 AVG(CASE WHEN b.killed = 1 THEN b.profit END)                         AS user_bullet_kill_avg_profit,
 
@@ -363,10 +384,11 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
                 SUM(b.bet - b.prev_bet_amount) AS user_accu_delta_bet,
                 AVG(b.bet - b.prev_bet_amount) AS user_accu_delta_bet_avg,
                 COUNT(CASE WHEN (b.bet - b.prev_bet_amount) > 0 THEN 1 END) AS user_pos_delta_bet_num,
-                COUNT(CASE WHEN (b.bet - b.prev_bet_amount) < 0 THEN 1 END) AS user_neg_delta_bet_num
+                COUNT(CASE WHEN (b.bet - b.prev_bet_amount) < 0 THEN 1 END) AS user_neg_delta_bet_num,
+                COUNT(b.prev_bet_amount) AS user_num_delta_bet
             FROM base_data b
             JOIN user_daily_group u ON b.user_id = u.user_id AND b.activity_date = u.activity_date
-            GROUP BY b.user_id, u.daily_group, b.{stats_agg_col}
+            GROUP BY b.user_id, u.daily_group, b.fish_value, b.{stats_agg_col}
             -- Include ALL betting users, not only fish-killers. Kill-specific metrics
             -- already degrade to NULL/0 for non-killers (CASE WHEN killed / NULLIF), while
             -- downstream user counts & retention (day0_num_users, num_active_users, …) need
@@ -374,53 +396,36 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
             -- Segment to killers downstream via the user_killed_fish flag when needed.
         )
 
-        -- 5. FINAL JOIN & FORMATTING
+        -- 5. FINAL JOIN & FORMATTING. Row grain: (period, user, daily_group,
+        -- fish_value). The session/streak columns (t4/t5) and the user-day
+        -- columns (t6) are computed per user-day and repeat identically on
+        -- each of the user's fish_value rows; the dashboard keeps their first
+        -- value when collapsing.
         SELECT
             t1.user_id,
             t1.daily_group,
+            t1.fish_value,
             t1.{stats_agg_col} AS activity_date,
-            -- Core user-level counts (user_ prefix = one row per user per period):
-            t1.user_num_rooms,
+            t6.user_num_rooms,
             t1.user_num_bets,
             t1.user_num_killed_bullets,
             t1.user_killed_fish,
-
-            -- Bullet/hit counts by fish type:
-            t1.user_num_hits_fish_low,
-            t1.user_num_hits_fish_medium,
-            t1.user_num_hits_fish_high,
-            t1.user_num_hits_fish_ultra,
-            t1.user_num_hits_fish_low    * 1.0 / NULLIF(t1.user_num_bets, 0) AS user_hits_fish_low_ratio,
-            t1.user_num_hits_fish_medium * 1.0 / NULLIF(t1.user_num_bets, 0) AS user_hits_fish_medium_ratio,
-            t1.user_num_hits_fish_high   * 1.0 / NULLIF(t1.user_num_bets, 0) AS user_hits_fish_high_ratio,
-            t1.user_num_hits_fish_ultra  * 1.0 / NULLIF(t1.user_num_bets, 0) AS user_hits_fish_ultra_ratio,
-
-            -- Kill counts by fish type:
-            t1.user_num_killed_fish_low,
-            t1.user_num_killed_fish_medium,
-            t1.user_num_killed_fish_high,
-            t1.user_num_killed_fish_ultra,
-            t1.user_num_killed_fish_low    * 1.0 / NULLIF(t1.user_num_killed_bullets, 0) AS user_killed_fish_low_ratio,
-            t1.user_num_killed_fish_medium * 1.0 / NULLIF(t1.user_num_killed_bullets, 0) AS user_killed_fish_medium_ratio,
-            t1.user_num_killed_fish_high   * 1.0 / NULLIF(t1.user_num_killed_bullets, 0) AS user_killed_fish_high_ratio,
-            t1.user_num_killed_fish_ultra  * 1.0 / NULLIF(t1.user_num_killed_bullets, 0) AS user_killed_fish_ultra_ratio,
 
             -- Bet / payout / profit:
             t1.user_total_bet,
             t1.user_avg_bet_amount,
             t1.user_avg_delta_t_seconds,
+            t1.user_num_delta_t,
             t1.user_total_payout,
             t1.user_total_profit,
             t1.user_max_profit,
             t1.user_rtp,
-            t1.user_profit_coef_var,
+            t6.user_profit_coef_var,
             ROUND(CAST(t1.user_num_killed_bullets AS FLOAT) / NULLIF(t1.user_num_bets, 0), 3) AS user_bullet_kill_ratio,
 
             -- Fish value:
             t1.user_avg_fish_value,
-            t1.user_avg_fish_value_20_200,
             t1.user_avg_killed_fish_value,
-            t1.user_avg_killed_fish_value_20_200,
             t1.user_bullet_avg_profit,
             t1.user_bullet_kill_avg_profit,
 
@@ -433,6 +438,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
             t1.user_accu_delta_bet_avg,
             t1.user_pos_delta_bet_num,
             t1.user_neg_delta_bet_num,
+            t1.user_num_delta_bet,
 
             -- Session stats:
             t4.user_num_streak_sessions,
@@ -470,7 +476,11 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
             ON t1.user_id = t5.user_id
             AND t1.{stats_agg_col} = t5.{stats_agg_col}
             AND t1.daily_group = t5.daily_group
-        WHERE t1.{stats_agg_col} >= '{effective_start}'
+        LEFT JOIN user_day_stats t6
+            ON t1.user_id = t6.user_id
+            AND t1.{stats_agg_col} = t6.{stats_agg_col}
+            AND t1.daily_group = t6.daily_group
+        WHERE t1.{stats_agg_col} >= '{effective_start}'{end_output_filter}
         ORDER BY t1.{stats_agg_col}, t1.daily_group
         ;
 
@@ -513,7 +523,7 @@ if __name__ == "__main__":
     # Initialize Scheduler with a default 3-day lookback
     scheduler = ETLScheduler(
         redshift_loader,
-        f"{DEFAULT_ETL_OUTPUT}/jobs/output_fish_hunter",
+        f"{DEFAULT_ETL_OUTPUT}/jobs/output_fish_hunter_v2",
         lookback_days=3,
         overwrite=args.overwrite,
         default_start_date=DEFAULT_DATE_START,
@@ -521,31 +531,34 @@ if __name__ == "__main__":
 
     scheduler.run_incremental_job(
         job_name="daily_stats",
-        query_func=lambda start_date: generate_query("activity_date", start_date),
-        key_cols=["activity_date", "user_id", "daily_group"],
+        query_func=lambda start_date, end_date=None: generate_query("activity_date", start_date, end_date),
+        key_cols=["activity_date", "user_id", "daily_group", "fish_value"],
         date_col="activity_date",
         partition_level="none",
         lookback=3,
+        backfill_chunk_days=30,
     )
 
     # Overrides to 7 days because weekly data takes longer to settle
     scheduler.run_incremental_job(
         job_name="weekly_stats",
-        query_func=lambda start_date: generate_query("activity_week", start_date),
-        key_cols=["activity_date", "user_id", "daily_group"],
+        query_func=lambda start_date, end_date=None: generate_query("activity_week", start_date, end_date),
+        key_cols=["activity_date", "user_id", "daily_group", "fish_value"],
         date_col="activity_date",  # Always check max activity_date
         partition_level="none",
         lookback=7,
+        backfill_chunk_days=28,
     )
 
     # Overrides to 31 days because weekly data takes longer to settle
     scheduler.run_incremental_job(
         job_name="monthly_stats",
-        query_func=lambda start_date: generate_query("activity_month", start_date),
-        key_cols=["activity_date", "user_id", "daily_group"],
+        query_func=lambda start_date, end_date=None: generate_query("activity_month", start_date, end_date),
+        key_cols=["activity_date", "user_id", "daily_group", "fish_value"],
         date_col="activity_date",  # Always check max activity_date
         partition_level="none",
         lookback=31,
+        backfill_chunk_days=62,
     )
 
     redshift_loader.close()

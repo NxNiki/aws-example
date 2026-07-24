@@ -21,6 +21,8 @@ export type GroupValues = Schemas["GroupValues"];
 export type DateBounds = Schemas["DateBounds"];
 // One custom lifecycle cohort (day range since first bet); label "all" = no filter.
 export type LifecycleGroup = Schemas["LifecycleGroup"];
+// One value-range cohort (inclusive [min, max] over range_group_col).
+export type RangeGroup = Schemas["RangeGroup"];
 
 export type DateRange = Schemas["DateRange"];
 export type ClipOpts = Schemas["ClipOpts"];
@@ -54,6 +56,7 @@ export interface DateFigureSource {
   ranges?: DateRange[];
   cohort_selection: Record<string, string[]>;
   lifecycle_groups?: LifecycleGroup[] | null;
+  range_groups?: RangeGroup[] | null;
   panel_id: string;
   left: string[];
   right: string[];
@@ -68,6 +71,7 @@ export interface GroupFigureSource {
   ranges: DateRange[];
   cohort_selection: Record<string, string[]>;
   lifecycle_groups?: LifecycleGroup[] | null;
+  range_groups?: RangeGroup[] | null;
   panel_id: string;
   metric: string;
   mode: "box" | "bar";
@@ -82,6 +86,7 @@ export interface DeepdiveFigureSource {
   ranges: DateRange[];
   cohort_selection: Record<string, string[]>;
   lifecycle_groups?: LifecycleGroup[] | null;
+  range_groups?: RangeGroup[] | null;
   panel: "derived" | "user";
   mode: "histogram" | "heatmap" | "scatter";
   metrics: string[];
@@ -102,6 +107,7 @@ export interface SummaryTableFigureSource {
   ranges: DateRange[];
   cohort_selection: Record<string, string[]>;
   lifecycle_groups?: LifecycleGroup[] | null;
+  range_groups?: RangeGroup[] | null;
   metrics: Record<string, string[]>; // per metric-group (group id → selected metrics)
   stats: SummaryStat[];
   reference_key: string | null;
@@ -159,6 +165,7 @@ export interface SummaryTableRequest {
   ranges: DateRange[];
   group_values: Record<string, string[]>;
   lifecycle_groups?: LifecycleGroup[] | null;
+  range_groups?: RangeGroup[] | null;
   metric_options: Record<string, SummaryMetricOption>; // keyed by metric name
   pvalues: boolean;
 }

@@ -29,16 +29,30 @@ the same bets.
   attributes `FourScatter` free-game buy-ins to the following spin's
   mathtable).
 
-**fish_hunter** keeps its own grain: one row per
-`(activity_date, user_id, daily_group)`, where `daily_group` assigns each
-whole user-day to one strategy tier (RISK_CONTROLLED > BOOST_POOL >
-DYNAMIC_RTP* > DEFAULT_FALLBACK).
+**fish_hunter** (`output_fish_hunter_v2`) has its own grain: one row per
+`(activity_date, user_id, daily_group, fish_value)`. `daily_group` assigns
+each whole user-day to one strategy tier (RISK_CONTROLLED > BOOST_POOL >
+DYNAMIC_RTP* > DEFAULT_FALLBACK); `fish_value` is the bullet's target fish
+value, so the dashboard can bucket by user-defined "fish level" ranges.
+Metrics that only exist at the user-day level (`user_num_rooms`,
+`user_profit_coef_var`, streaks, session stats) are computed once per
+user-day and repeated on each of the user's fish_value rows — the collapse
+takes their first value, never sums them.
 
 ## How the dashboard aggregates
 
 - `ab_group` and `mathtable` are two independent cohort pickers; lifecycle
   groups (periods since first bet, derived at query time from the daily data)
   are a third dimension. Cohorts are the cross product of the selections.
+- **Range groups** (fish_hunter's "Fish level"): user-defined buckets over a
+  numeric grain column (`stats_by_date.range_group` in the game's config),
+  with INCLUSIVE `[min, max]` bounds (unlike lifecycle's half-open ranges;
+  `max` empty = open-ended). Definitions (name + bounds) are global to the
+  game; which buckets are shown is chosen per tab, next to the other cohort
+  pickers. Buckets may overlap — each is filtered independently, then the
+  matching rows are collapsed per user, so an overlapping value counts in
+  every bucket that contains it (by design; the buckets are lenses, not a
+  partition).
 - When a grain dimension is unselected ("all"), the API collapses rows back
   to **one row per user** before computing per-user stats
   (`dashboard_api.services.common.collapse_user_rows`): additive components

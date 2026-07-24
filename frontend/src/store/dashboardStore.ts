@@ -7,6 +7,7 @@ import { dispatchAction } from "./actionDispatcher";
 import { useReportStore } from "./reportStore";
 import type { RangeState } from "../components/DateRanges";
 import type { LifecycleGroupState } from "../components/LifecycleGroups";
+import type { RangeGroupDef } from "../components/RangeGroupSelect";
 import type {
   ClipOpts,
   ConfigDetail,
@@ -19,6 +20,7 @@ import type {
   GroupStat,
   HistogramSeries,
   LifecycleGroup,
+  RangeGroup,
   ScatterSeries,
   Series,
   SummaryColumn,
@@ -39,6 +41,10 @@ export interface DateGroupsState {
 
 export interface TabCohortControls {
   cohortSelection: Record<string, string[]>;
+  // Per-tab checked labels of the value-range picker (e.g. Fish level); the
+  // group DEFINITIONS are global (store.rangeGroups) so ranges mean the same
+  // thing on every tab.
+  rangeSelection: string[];
 }
 
 export interface TabControls {
@@ -62,10 +68,10 @@ const defaultRanges = (): RangeState[] => [
 const defaultDateGroups = (): DateGroupsState => ({ granularity: "day", ranges: defaultRanges() });
 
 const defaultControls = (): TabControls => ({
-  date: { cohortSelection: {} },
-  group: { cohortSelection: {} },
-  viz: { cohortSelection: {} },
-  summaryTable: { cohortSelection: {} },
+  date: { cohortSelection: {}, rangeSelection: [] },
+  group: { cohortSelection: {}, rangeSelection: [] },
+  viz: { cohortSelection: {}, rangeSelection: [] },
+  summaryTable: { cohortSelection: {}, rangeSelection: [] },
 });
 
 // ── Global lifecycle groups ────────────────────────────────────────────────
@@ -121,17 +127,55 @@ export function activeLifecycleGroups(
   return s.lifecycleAll ? [{ label: "all", start: 0, end: null }, ...groups] : groups;
 }
 
-// Cohort columns for the per-tab pickers: the lifecycle column is owned by the
-// global picker, so it's hidden from CohortSelect when the config has one.
+// Cohort columns for the per-tab pickers: the lifecycle column is owned by
+// the global picker and the range column by RangeGroupSelect, so both are
+// hidden from CohortSelect.
 export function visibleGroupValues(
   config: ConfigDetail | null,
   values: Record<string, string[]>,
 ): Record<string, string[]> {
-  const col = config?.lifecycle_col;
-  if (!col || !(col in values)) return values;
   const rest = { ...values };
-  delete rest[col];
+  for (const col of [config?.lifecycle_col, config?.range_group_col]) {
+    if (col && col in rest) delete rest[col];
+  }
   return rest;
+}
+
+// Distinct values of the range column present in the data (numeric, sorted) —
+// the options for the range-group [min, max] pickers.
+export function rangeGroupValues(
+  s: Pick<DashboardState, "config" | "groupValuesByGran">,
+  granularity: Granularity,
+): number[] {
+  const col = s.config?.range_group_col;
+  if (!col) return [];
+  return (s.groupValuesByGran[granularity]?.[col] ?? [])
+    .map(Number)
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
+}
+
+// The range_groups request payload for one tab: its checked labels resolved
+// against the global definitions, labels tagged with the inclusive range
+// ("low[0, 10]"); undefined when the config has no range column or nothing
+// is checked (backend treats that as plain "all").
+export function activeRangeGroups(
+  s: Pick<DashboardState, "config" | "rangeGroups">,
+  selection: string[],
+): RangeGroup[] | undefined {
+  if (!s.config?.range_group_col || selection.length === 0) return undefined;
+  const groups: RangeGroup[] = [];
+  for (const label of selection) {
+    if (label === "all") {
+      groups.push({ label: "all", min: 0, max: null });
+      continue;
+    }
+    const def = s.rangeGroups.find((g) => g.label === label);
+    if (def && def.label.trim() && (def.max === null || def.max >= def.min)) {
+      groups.push({ label: `${def.label.trim()}[${def.min}, ${def.max ?? "max"}]`, min: def.min, max: def.max });
+    }
+  }
+  return groups.length ? groups : undefined;
 }
 
 // ── Per-panel state ────────────────────────────────────────────────────────
@@ -281,13 +325,15 @@ export interface ViewSnapshot {
   // early-format plain array is read as the day-unit definition).
   lifecycle?: LifecycleByUnit | LifecycleGroupState[];
   lifecycleAll?: boolean;
+  rangeGroups?: RangeGroupDef[];
   // Active report-spec name when the view was saved; loading the view reloads it.
   reportSpec?: string | null;
 }
 
 function snapshotControls(snap: ViewSnapshot): TabControls {
-  const pick = (t?: { cohortSelection?: Record<string, string[]> }): TabCohortControls => ({
+  const pick = (t?: { cohortSelection?: Record<string, string[]>; rangeSelection?: string[] }): TabCohortControls => ({
     cohortSelection: t?.cohortSelection ?? snap.cohortSelection ?? {},
+    rangeSelection: t?.rangeSelection ?? [],
   });
   const c = (snap.controls ?? {}) as Partial<Record<TabKey, { cohortSelection?: Record<string, string[]> }>>;
   return { date: pick(c.date), group: pick(c.group), viz: pick(c.viz), summaryTable: pick(c.summaryTable) };
@@ -346,6 +392,12 @@ interface DashboardState {
   lifecycleAll: boolean;
   setLifecycleGroup: (unit: Granularity, index: number, group: LifecycleGroupState) => void;
   setLifecycleAll: (all: boolean) => void;
+
+  // Global value-range group definitions (config.range_group_defaults seeds
+  // them); selection is per tab in controls[tab].rangeSelection.
+  rangeGroups: RangeGroupDef[];
+  setRangeGroup: (index: number, group: RangeGroupDef) => void;
+  setTabRangeSelection: (tab: TabKey, labels: string[]) => void;
 
   panels: Record<string, PanelState>; // Stats-by-Date
   group: Record<string, GroupPanelState>; // Stats-by-Group
@@ -540,6 +592,11 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       lifecycle: { ...s.lifecycle, [unit]: s.lifecycle[unit].map((g, i) => (i === index ? group : g)) },
     })),
   setLifecycleAll: (all) => set({ lifecycleAll: all }),
+  rangeGroups: [],
+  setRangeGroup: (index, group) =>
+    set((s) => ({ rangeGroups: s.rangeGroups.map((g, i) => (i === index ? group : g)) })),
+  setTabRangeSelection: (tab, labels) =>
+    set((s) => ({ controls: { ...s.controls, [tab]: { ...s.controls[tab], rangeSelection: labels } } })),
   panels: {},
   group: {},
   summaryTable: emptySummaryTable(),
@@ -592,6 +649,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       const config = await api.getConfig(id);
       set({
         config,
+        rangeGroups: (config.range_group_defaults ?? []).map((g) => ({ label: g.label, min: g.min, max: g.max ?? null })),
         panels: defaultPanels(config),
         group: defaultGroupPanels(config),
         summaryTable: { ...emptySummaryTable(), metrics: defaultSummaryMetrics(config) },
@@ -676,7 +734,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     const reqRanges = activeRanges(dateGroups.ranges);
     if (reqRanges.length === 0) return;
     const lifecycleGroups = activeLifecycleGroups(get(), granularity);
-    const ctxSig = JSON.stringify({ configId, granularity, reqRanges, cohortSelection, lifecycleGroups });
+    const rangeGroups = activeRangeGroups(get(), controls.date.rangeSelection);
+    const ctxSig = JSON.stringify({ configId, granularity, reqRanges, cohortSelection, lifecycleGroups, rangeGroups });
     await Promise.all(
       Object.entries(panels).map(([panelId, panel]) => {
         const key = `series:${panelId}`;
@@ -710,6 +769,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
                 ranges: reqRanges,
                 group_values: cohortSelection,
                 lifecycle_groups: lifecycleGroups,
+                range_groups: rangeGroups,
               },
               signal,
             );
@@ -751,6 +811,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     const reqRanges = activeRanges(dateGroups.ranges);
     if (reqRanges.length === 0) return;
     const lifecycleGroups = activeLifecycleGroups(get(), granularity);
+    const rangeGroups = activeRangeGroups(get(), controls.group.rangeSelection);
     await Promise.all(
       Object.entries(group).map(([panelId, p]) => {
         const key = `group:${panelId}`;
@@ -760,6 +821,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
           reqRanges,
           cohortSelection,
           lifecycleGroups,
+          rangeGroups,
           metric: p.metric,
           clip: p.clip,
           filter: p.filter,
@@ -779,6 +841,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
                 ranges: reqRanges,
                 group_values: cohortSelection,
                 lifecycle_groups: lifecycleGroups,
+                range_groups: rangeGroups,
                 clip: p.clip,
                 filter: p.filter,
               },
@@ -820,6 +883,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     const reqRanges = activeRanges(dateGroups.ranges);
     if (reqRanges.length === 0) return;
     const lifecycleGroups = activeLifecycleGroups(get(), granularity);
+    const rangeGroups = activeRangeGroups(get(), controls.summaryTable.rangeSelection);
     const key = "summary-table";
     const sig = JSON.stringify({
       configId,
@@ -827,6 +891,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       reqRanges,
       cohortSelection,
       lifecycleGroups,
+      rangeGroups,
       metricOptions: summaryTable.metricOptions,
       pvalues: summaryTable.showPValues,
     });
@@ -843,6 +908,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
             ranges: reqRanges,
             group_values: cohortSelection,
             lifecycle_groups: lifecycleGroups,
+            range_groups: rangeGroups,
             metric_options: summaryTable.metricOptions,
             pvalues: summaryTable.showPValues,
           },
@@ -893,6 +959,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       controls: s.controls,
       lifecycle: s.lifecycle,
       lifecycleAll: s.lifecycleAll,
+      rangeGroups: s.rangeGroups,
       panels: Object.fromEntries(Object.entries(s.panels).map(([k, v]) => [k, { ...v, series: [] }])),
       group: Object.fromEntries(Object.entries(s.group).map(([k, v]) => [k, { ...v, stats: [], missing: false }])),
       // Keep the display options (stats / p-values / reference); drop fetched data.
@@ -942,6 +1009,9 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
           ? { ...defaultLifecycle(), day: snap.lifecycle }
           : { ...defaultLifecycle(), ...(snap.lifecycle ?? {}) },
         lifecycleAll: snap.lifecycleAll ?? false,
+        rangeGroups:
+          snap.rangeGroups ??
+          (config.range_group_defaults ?? []).map((g) => ({ label: g.label, min: g.min, max: g.max ?? null })),
         groupValuesByGran: {},
         panels: { ...defaultPanels(config), ...(snap.panels ?? {}) },
         // Merge each saved panel over a default one so snapshots from before a
@@ -1033,6 +1103,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     const reqRanges = activeRanges(dateGroups.ranges);
     if (reqRanges.length === 0) return;
     const lifecycleGroups = activeLifecycleGroups(get(), granularity);
+    const rangeGroups = activeRangeGroups(get(), controls.viz.rangeSelection);
     const panels: DeepdivePanel[] = ["derived", "user"];
     await Promise.all(
       panels.map((panel) => {
@@ -1044,6 +1115,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
           reqRanges,
           cohortSelection,
           lifecycleGroups,
+          rangeGroups,
           mode: p.mode,
           metrics: p.metrics,
           nbins: p.nbins,
@@ -1082,6 +1154,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
                 ranges: reqRanges,
                 group_values: cohortSelection,
                 lifecycle_groups: lifecycleGroups,
+                range_groups: rangeGroups,
                 clip: p.clip,
                 filter: p.filter,
                 nbins: p.nbins,

@@ -3,9 +3,10 @@ import { EChart } from "../../charts/EChart";
 import { buildGroupDistributionOption, groupChartWidth } from "../../charts/groupDistributionOption";
 import { clipFilterInfo } from "../../charts/clipFilterInfo";
 import { CohortSelect } from "../../components/CohortSelect";
+import { RangeGroupSelect } from "../../components/RangeGroupSelect";
 import { ClipControls } from "../../components/ClipControls";
 import { FilterControls } from "../../components/FilterControls";
-import { activeLifecycleGroups, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
+import { activeLifecycleGroups, activeRangeGroups, rangeGroupValues, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { AddToReportButton } from "../report/AddToReport";
 import type { ClipOpts, FilterOpts, MetricGroup } from "../../api/types";
@@ -72,6 +73,7 @@ function GroupPanel(props: {
                   .map((r) => ({ start: r.start, end: r.end })),
                 cohort_selection: groupControls.cohortSelection,
                 lifecycle_groups: activeLifecycleGroups(useDashboardStore.getState(), dateGroups.granularity) ?? null,
+                range_groups: activeRangeGroups(useDashboardStore.getState(), groupControls.rangeSelection) ?? null,
                 panel_id: group.id,
                 metric: panel.metric ?? "",
                 mode: panel.mode,
@@ -104,6 +106,7 @@ export function StatsByGroup() {
     ranges: dg.ranges.map((r) => [r.start, r.end, r.show]),
     cohorts: c.cohortSelection,
     lifecycle: activeLifecycleGroups(s, dg.granularity),
+    rangeGroups: activeRangeGroups(s, c.rangeSelection),
     panels: Object.entries(s.group).map(([id, p]) => [id, p.metric, p.clip, p.filter]),
   });
   const debouncedKey = useDebouncedValue(fetchKey);
@@ -126,6 +129,16 @@ export function StatsByGroup() {
           selection={c.cohortSelection}
           onSetCohort={(col, values) => s.setTabCohort("group", col, values)}
         />
+        {s.config?.range_group_col && (
+          <RangeGroupSelect
+            name={s.config.range_group_name ?? s.config.range_group_col}
+            groups={s.rangeGroups}
+            values={rangeGroupValues(s, dg.granularity)}
+            selection={c.rangeSelection}
+            onSetSelection={(labels) => s.setTabRangeSelection("group", labels)}
+            onSetGroup={s.setRangeGroup}
+          />
+        )}
       </div>
 
       {s.error && <div className="mb-4 rounded bg-red-50 text-red-700 text-base px-3 py-2">{s.error}</div>}

@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Fish-level range groups (fish_hunter).** The fish_hunter ETL now stores
+  one row per (period, user, daily_group, **fish_value**) in
+  `output_fish_hunter_v2`, replacing the fixed per-fish-type wide columns
+  (`user_num_hits_fish_low/…` and their `_20_200` variants) with
+  dashboard-side bucketing: a "Fish level" picker with user-editable names
+  and INCLUSIVE `[min, max]` bounds (defaults low [0, 10], medium [11, 130],
+  high [131, 200], ultra [201, max]). Definitions are global per game;
+  selection is per tab, next to the cohort pickers. Buckets may overlap and
+  are collapsed per user at query time (weighted means recombined by their
+  exact bet/kill counts). Also adds `user_num_delta_t` / `user_num_delta_bet`
+  recombination weights and drops the pre-bucketed hit/kill ratio columns.
 - **Two-column group grain: `ab_group` × `mathtable`.** The slot-game ETLs
   (ss01/ss01a/ss02/ss03/ss06) now store one row per (period, user, ab_group,
   mathtable) instead of UNION-ing every bet into overlapping `ai_group`

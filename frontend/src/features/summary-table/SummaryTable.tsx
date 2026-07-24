@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { CohortSelect } from "../../components/CohortSelect";
-import { activeLifecycleGroups, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
+import { RangeGroupSelect } from "../../components/RangeGroupSelect";
+import { activeLifecycleGroups, activeRangeGroups, rangeGroupValues, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { AddToReportButton } from "../report/AddToReport";
 import { MetricSelector } from "./MetricSelector";
@@ -41,6 +42,7 @@ export function SummaryTable() {
     ranges: dg.ranges.map((r) => [r.start, r.end, r.show]),
     cohorts: c.cohortSelection,
     lifecycle: activeLifecycleGroups(s, dg.granularity),
+    rangeGroups: activeRangeGroups(s, c.rangeSelection),
     metricOptions: t.metricOptions,
     pvalues: t.showPValues,
   });
@@ -70,6 +72,16 @@ export function SummaryTable() {
           selection={c.cohortSelection}
           onSetCohort={(col, values) => s.setTabCohort("summaryTable", col, values)}
         />
+        {s.config?.range_group_col && (
+          <RangeGroupSelect
+            name={s.config.range_group_name ?? s.config.range_group_col}
+            groups={s.rangeGroups}
+            values={rangeGroupValues(s, dg.granularity)}
+            selection={c.rangeSelection}
+            onSetSelection={(labels) => s.setTabRangeSelection("summaryTable", labels)}
+            onSetGroup={s.setRangeGroup}
+          />
+        )}
         <div className="flex flex-col gap-2 text-base">
           <span className="text-gray-600">Show stats</span>
           <div className="flex flex-wrap gap-x-3 gap-y-1 max-w-xs">
@@ -104,6 +116,7 @@ export function SummaryTable() {
                 ranges: dg.ranges.filter((r) => r.show && r.start && r.end).map((r) => ({ start: r.start, end: r.end })),
                 cohort_selection: c.cohortSelection,
                 lifecycle_groups: activeLifecycleGroups(s, dg.granularity) ?? null,
+                range_groups: activeRangeGroups(s, c.rangeSelection) ?? null,
                 metrics: t.metrics,
                 stats: t.stats,
                 reference_key: t.referenceKey,

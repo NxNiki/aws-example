@@ -239,6 +239,11 @@ class RedshiftBackend(DatabaseBackend):
                 print(f"Error connecting to Bastion host: {e}")
                 raise
 
+            # Long queries send nothing for minutes; without keepalives an idle
+            # NAT/firewall drops the connection and the client blocks forever on
+            # a dead socket instead of erroring.
+            self.ssh.get_transport().set_keepalive(30)
+
             # 2. Start Tunnel
             self.tunnel_thread = threading.Thread(
                 target=_forward_tunnel,
@@ -850,14 +855,43 @@ class ETLScheduler:
         else:
             logger.info(f"[{job_name}] Data integrity check passed ({len(keys):,} rows, keys unique).")
 
+    def _chunk_windows(self, start_date_str: str, chunk_days: int, days_to_lookback: int) -> List[tuple]:
+        """Split [start, now) into ~chunk_days fetch windows whose boundaries are
+        aligned to the aggregation period (month starts when lookback >= 30,
+        Mondays when >= 7), so every window holds only complete periods and a
+        chunked backfill returns exactly the rows one full query would. The last
+        window's end is None (open-ended, catches up to now)."""
+
+        def align(d: date) -> date:
+            if days_to_lookback >= 30:
+                return d.replace(day=1)
+            if days_to_lookback >= 7:
+                return d - timedelta(days=d.weekday())
+            return d
+
+        cur = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+        today = datetime.now().date()
+        windows: List[tuple] = []
+        while True:
+            nxt = align(cur + timedelta(days=chunk_days))
+            if nxt <= cur:
+                nxt = cur + timedelta(days=chunk_days)
+            if nxt >= today:
+                windows.append((cur.strftime("%Y-%m-%d"), None))
+                return windows
+            windows.append((cur.strftime("%Y-%m-%d"), nxt.strftime("%Y-%m-%d")))
+            cur = nxt
+
     def run_incremental_job(
         self,
         job_name: str,
-        query_func: Callable[[str], str],
+        query_func: Callable[..., str],
         key_cols: List[str],
         date_col: str = "activity_date",
         lookback: Optional[int] = None,
         partition_level: PartitionLevel = "month",
+        backfill_chunk_days: Optional[int] = None,
+        chunk_pause_seconds: float = 60.0,
     ) -> None:
         """
         Executes an incremental ETL job. We assume if lookback days >= 30, the query get stats by month. So will truncate
@@ -867,9 +901,19 @@ class ETLScheduler:
         Args:
             job_name: The directory name for the specific ETL output.
             query_func: A function that takes a start_date string and returns a SQL query.
+                When backfill_chunk_days is set it must also accept an end_date
+                (exclusive) as a second argument.
             date_col: The column used to determine the watermark (max date).
             lookback: Override for the default class lookback_days.
             partition_cols: Columns to use for Parquet partitioning on disk.
+            backfill_chunk_days: When set, a catch-up longer than this many days is
+                fetched as several period-aligned windows instead of one query.
+                One full-history query pins the cluster CPU for its whole runtime
+                (window sorts over all rows); bounded windows keep each query
+                short, and each chunk lands on S3 so a failure resumes from the
+                watermark instead of refetching everything.
+            chunk_pause_seconds: Pause between chunked fetches so the cluster
+                gets breathing room between bursts.
         """
         job_path = self._job_path(job_name)
         days_to_lookback = lookback if lookback is not None else self.lookback_days
@@ -899,46 +943,97 @@ class ETLScheduler:
             else:
                 logger.info(f"[{job_name}] No existing data found. Starting full load from {start_date_str}")
 
-        # 2. Fetch Data via the provided Loader
-        try:
-            sql = query_func(start_date_str)
-            df = self.loader.query_to_df(query=sql)
-        except Exception as e:
-            logger.error(f"[{job_name}] Failed to fetch data from database: {e}")
-            return
-
-        if df is None or df.empty:
-            logger.info(f"[{job_name}] No new records to process.")
-            return
+        # 2. Fetch Data via the provided Loader, in one open-ended window
+        # normally, or several period-aligned windows when chunking is on.
+        if backfill_chunk_days:
+            windows = self._chunk_windows(start_date_str, backfill_chunk_days, days_to_lookback)
+        else:
+            windows = [(start_date_str, None)]
+        if len(windows) > 1:
+            logger.info(f"[{job_name}] Fetching in {len(windows)} windows of ~{backfill_chunk_days}d.")
 
         partition_cols = self._get_partition_cols(partition_level)
         write_mode: Literal["append", "overwrite"] = "overwrite" if self.overwrite else "append"
 
-        # 2b. Schema change detection (append mode): if any existing file is missing
-        # one of the current query's columns, do a full reload and overwrite.
-        if write_mode == "append":
-            required_columns = set(df.columns)
-            has_incomplete = self._dataset_has_incomplete_columns(job_path, required_columns)
-            if has_incomplete:
-                logger.info(
-                    f"[{job_name}] Schema change detected (e.g. new columns in query). "
-                    "Doing full reload to keep dataset consistent."
-                )
-                start_date_str = self.default_start_date
-                try:
-                    sql = query_func(start_date_str)
-                    df = self.loader.query_to_df(query=sql)
-                except Exception as e:
-                    logger.error(f"[{job_name}] Full reload fetch failed: {e}")
-                    return
-                if df is None or df.empty:
-                    logger.warning(f"[{job_name}] Full reload returned no data.")
-                    return
-                write_mode = "overwrite"
-            else:
+        schema_checked = write_mode != "append"
+        wrote_any = False
+        i = 0
+        while i < len(windows):
+            w_start, w_end = windows[i]
+            try:
+                sql = query_func(w_start, w_end) if w_end else query_func(w_start)
+                df = self.loader.query_to_df(query=sql)
+            except Exception as e:
+                logger.error(f"[{job_name}] Failed to fetch data from database: {e}")
+                return
+            i += 1
+
+            if df is None or df.empty:
+                logger.info(f"[{job_name}] No records in window {w_start} .. {w_end or 'now'}.")
+                continue
+
+            # 2b. Schema change detection (append mode, first fetched data): if any
+            # existing file is missing one of the current query's columns, restart
+            # as a full reload and overwrite.
+            if not schema_checked:
+                schema_checked = True
+                required_columns = set(df.columns)
+                if self._dataset_has_incomplete_columns(job_path, required_columns):
+                    logger.info(
+                        f"[{job_name}] Schema change detected (e.g. new columns in query). "
+                        "Doing full reload to keep dataset consistent."
+                    )
+                    start_date_str = self.default_start_date
+                    if backfill_chunk_days:
+                        windows = self._chunk_windows(start_date_str, backfill_chunk_days, days_to_lookback)
+                    else:
+                        windows = [(start_date_str, None)]
+                    write_mode = "overwrite"
+                    i = 0
+                    continue
                 logger.info(
                     f"[{job_name}] Schema check passed (existing data has all {len(required_columns)} columns)."
                 )
+
+            self._write_window(job_name, df, date_col, partition_cols, "append" if wrote_any else write_mode)
+            wrote_any = True
+
+            if i < len(windows) and chunk_pause_seconds > 0:
+                logger.info(f"[{job_name}] Window {i}/{len(windows)} written; pausing {chunk_pause_seconds:.0f}s.")
+                time.sleep(chunk_pause_seconds)
+
+        if not wrote_any:
+            logger.info(f"[{job_name}] No new records to process.")
+            return
+
+        self._compact_partitions(
+            job_name=job_name,
+            key_cols=key_cols,
+            partition_level=partition_level,
+            overwrite=self.overwrite,
+            start_date_str=start_date_str,
+            default_start_date=self.default_start_date,
+        )
+
+        # Same scope compaction runs on: incremental runs only (a full load /
+        # overwrite writes each key exactly once by construction).
+        if not self.overwrite and start_date_str != self.default_start_date:
+            self._verify_unique_keys(
+                job_name=job_name,
+                key_cols=key_cols,
+                partition_level=partition_level,
+                incremental_start=pd.to_datetime(start_date_str).date(),
+            )
+
+    def _write_window(
+        self,
+        job_name: str,
+        df: pd.DataFrame,
+        date_col: str,
+        partition_cols: List[str],
+        write_mode: Literal["append", "overwrite"],
+    ) -> None:
+        job_path = self._job_path(job_name)
 
         # 3. Data Preparation & Partitioning
         # Ensure date_col is datetime objects for extraction
@@ -1001,25 +1096,6 @@ class ETLScheduler:
                 logger.info(f"[{job_name}] Successfully updated partitions. New max date: {df[date_col].max().date()}")
             except Exception as e:
                 logger.error(f"[{job_name}] Failed to save parquet data: {e}")
-
-        self._compact_partitions(
-            job_name=job_name,
-            key_cols=key_cols,
-            partition_level=partition_level,
-            overwrite=self.overwrite,
-            start_date_str=start_date_str,
-            default_start_date=self.default_start_date,
-        )
-
-        # Same scope compaction runs on: incremental runs only (a full load /
-        # overwrite writes each key exactly once by construction).
-        if not self.overwrite and start_date_str != self.default_start_date:
-            self._verify_unique_keys(
-                job_name=job_name,
-                key_cols=key_cols,
-                partition_level=partition_level,
-                incremental_start=pd.to_datetime(start_date_str).date(),
-            )
 
 
 if __name__ == "__main__":

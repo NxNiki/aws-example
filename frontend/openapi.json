@@ -78,6 +78,36 @@
             ],
             "title": "Lifecycle Col"
           },
+          "range_group_col": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range Group Col"
+          },
+          "range_group_defaults": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/RangeGroup"
+            },
+            "title": "Range Group Defaults",
+            "type": "array"
+          },
+          "range_group_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range Group Name"
+          },
           "tabs": {
             "items": {
               "type": "string"
@@ -603,6 +633,20 @@
             "title": "Panel",
             "type": "string"
           },
+          "range_groups": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RangeGroup"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range Groups"
+          },
           "ranges": {
             "items": {
               "$ref": "#/components/schemas/DateRange"
@@ -913,6 +957,20 @@
           "metric": {
             "title": "Metric",
             "type": "string"
+          },
+          "range_groups": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RangeGroup"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range Groups"
           },
           "ranges": {
             "items": {
@@ -1327,6 +1385,38 @@
           "metrics"
         ],
         "title": "MetricGroup",
+        "type": "object"
+      },
+      "RangeGroup": {
+        "description": "One user-defined value-range cohort over the config's range column\n(``range_group_col``, e.g. fish_value): rows with min <= value <= max \u2014\nboth ends INCLUSIVE, ``max=None`` open-ended.\n\nDashboard feature: the \"Fish level\" style picker next to Lifecycle groups.\nThe label \"all\" is the no-filter sentinel; ranges may overlap.",
+        "properties": {
+          "label": {
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "max": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max"
+          },
+          "min": {
+            "minimum": 0.0,
+            "title": "Min",
+            "type": "number"
+          }
+        },
+        "required": [
+          "label",
+          "min"
+        ],
+        "title": "RangeGroup",
         "type": "object"
       },
       "ReferencesRequest": {
@@ -1950,6 +2040,20 @@
             "title": "Metrics",
             "type": "array"
           },
+          "range_groups": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RangeGroup"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range Groups"
+          },
           "ranges": {
             "anyOf": [
               {
@@ -2443,6 +2547,20 @@
             "default": false,
             "title": "Pvalues",
             "type": "boolean"
+          },
+          "range_groups": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RangeGroup"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range Groups"
           },
           "ranges": {
             "items": {

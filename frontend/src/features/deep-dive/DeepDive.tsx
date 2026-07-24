@@ -5,10 +5,11 @@ import { buildHistogramOption } from "../../charts/histogramOption";
 import { buildScatterOption } from "../../charts/scatterOption";
 import { clipFilterInfo } from "../../charts/clipFilterInfo";
 import { CohortSelect } from "../../components/CohortSelect";
+import { RangeGroupSelect } from "../../components/RangeGroupSelect";
 import { ClipControls } from "../../components/ClipControls";
 import { FilterControls } from "../../components/FilterControls";
 import { MetricCheckList } from "../../components/MetricCheckList";
-import { activeLifecycleGroups, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
+import { activeLifecycleGroups, activeRangeGroups, rangeGroupValues, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
 import { AddToReportButton } from "../report/AddToReport";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import type { DeepdivePanel as PanelId, HistogramSeries } from "../../api/types";
@@ -198,6 +199,7 @@ function DeepdivePanelView(props: {
                   .map((r) => ({ start: r.start, end: r.end })),
                 cohort_selection: vizControls.cohortSelection,
                 lifecycle_groups: activeLifecycleGroups(useDashboardStore.getState(), dateGroups.granularity) ?? null,
+                range_groups: activeRangeGroups(useDashboardStore.getState(), vizControls.rangeSelection) ?? null,
                 panel: props.panelId,
                 mode: panel.mode,
                 metrics: panel.metrics,
@@ -274,6 +276,7 @@ export function DeepDive() {
     ranges: dg.ranges.map((r) => [r.start, r.end, r.show]),
     cohorts: c.cohortSelection,
     lifecycle: activeLifecycleGroups(s, dg.granularity),
+    rangeGroups: activeRangeGroups(s, c.rangeSelection),
     panels: (["derived", "user"] as PanelId[]).map((id) => {
       const p = s.deepdive[id];
       return [id, p.mode, p.metrics, p.nbins, p.normalize, p.clip, p.filter, p.outliersStd];
@@ -299,6 +302,16 @@ export function DeepDive() {
           selection={c.cohortSelection}
           onSetCohort={(col, values) => s.setTabCohort("viz", col, values)}
         />
+        {s.config?.range_group_col && (
+          <RangeGroupSelect
+            name={s.config.range_group_name ?? s.config.range_group_col}
+            groups={s.rangeGroups}
+            values={rangeGroupValues(s, dg.granularity)}
+            selection={c.rangeSelection}
+            onSetSelection={(labels) => s.setTabRangeSelection("viz", labels)}
+            onSetGroup={s.setRangeGroup}
+          />
+        )}
       </div>
 
       {s.error && <div className="mb-4 rounded bg-red-50 text-red-700 text-base px-3 py-2">{s.error}</div>}
