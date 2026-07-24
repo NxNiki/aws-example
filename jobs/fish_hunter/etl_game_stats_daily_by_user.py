@@ -1,6 +1,7 @@
 import argparse
 import os
 from textwrap import dedent
+from typing import Optional
 
 from bituslabs_ds.config import (
     DATE_START_HOUR,
@@ -27,12 +28,15 @@ STREAK_SESSION_THRESH = 600
 STREAK_KILL_THRESH = 3  # nearly 10% of all killing intervals.
 
 
-def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
+def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START, end_date: Optional[str] = None):
     """Generate the fish_hunter daily/weekly/monthly per-user game-stats SQL.
 
     ETL job: produces the ``daily_group`` dimension plus the ``user_*`` metrics
     in ``output_fish_hunter_v2/{daily,weekly,monthly}_stats`` (dashboard fish_hunter
     tab). ``start_date`` filters both raw data and output for incremental lookback.
+    ``end_date`` (exclusive, must be aligned to a period start) bounds the window
+    so a long backfill can run as several small queries instead of one
+    cluster-pinning scan.
 
     One row per (user, period, daily_group) for EVERY betting user -- not only
     fish-killers. Kill-specific metrics (kill ratios, killed-fish values, kill
@@ -52,6 +56,18 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
         4. DEFAULT_FALLBACK -- any other / NULL strategy_name.
     """
     effective_start = effective_start_date(stats_agg_col, start_date)
+    end_raw_filter = (
+        f"""
+                AND b.created_at < CONVERT_TIMEZONE('{TIMEZONE_SHANGHAI}', 'UTC', CAST('{end_date}' AS TIMESTAMP))"""
+        if end_date
+        else ""
+    )
+    end_output_filter = (
+        f"""
+          AND t1.{stats_agg_col} < '{end_date}'"""
+        if end_date
+        else ""
+    )
 
     query = dedent(
         f"""
@@ -95,7 +111,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
                 -- Logic: We want events where (EventTime + UserDays) >= Start
                 -- So: EventTime >= Start - UserDays
                 AND b.created_at >= CONVERT_TIMEZONE('{TIMEZONE_SHANGHAI}', 'UTC',
-                       DATEADD(day, -{RETURN_USER_DAYS}, CAST('{effective_start}' AS TIMESTAMP)))
+                       DATEADD(day, -{RETURN_USER_DAYS}, CAST('{effective_start}' AS TIMESTAMP))){end_raw_filter}
 
         ),
 
@@ -464,7 +480,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START):
             ON t1.user_id = t6.user_id
             AND t1.{stats_agg_col} = t6.{stats_agg_col}
             AND t1.daily_group = t6.daily_group
-        WHERE t1.{stats_agg_col} >= '{effective_start}'
+        WHERE t1.{stats_agg_col} >= '{effective_start}'{end_output_filter}
         ORDER BY t1.{stats_agg_col}, t1.daily_group
         ;
 
@@ -515,31 +531,34 @@ if __name__ == "__main__":
 
     scheduler.run_incremental_job(
         job_name="daily_stats",
-        query_func=lambda start_date: generate_query("activity_date", start_date),
+        query_func=lambda start_date, end_date=None: generate_query("activity_date", start_date, end_date),
         key_cols=["activity_date", "user_id", "daily_group", "fish_value"],
         date_col="activity_date",
         partition_level="none",
         lookback=3,
+        backfill_chunk_days=30,
     )
 
     # Overrides to 7 days because weekly data takes longer to settle
     scheduler.run_incremental_job(
         job_name="weekly_stats",
-        query_func=lambda start_date: generate_query("activity_week", start_date),
+        query_func=lambda start_date, end_date=None: generate_query("activity_week", start_date, end_date),
         key_cols=["activity_date", "user_id", "daily_group", "fish_value"],
         date_col="activity_date",  # Always check max activity_date
         partition_level="none",
         lookback=7,
+        backfill_chunk_days=28,
     )
 
     # Overrides to 31 days because weekly data takes longer to settle
     scheduler.run_incremental_job(
         job_name="monthly_stats",
-        query_func=lambda start_date: generate_query("activity_month", start_date),
+        query_func=lambda start_date, end_date=None: generate_query("activity_month", start_date, end_date),
         key_cols=["activity_date", "user_id", "daily_group", "fish_value"],
         date_col="activity_date",  # Always check max activity_date
         partition_level="none",
         lookback=31,
+        backfill_chunk_days=62,
     )
 
     redshift_loader.close()

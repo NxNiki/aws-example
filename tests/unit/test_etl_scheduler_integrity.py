@@ -53,3 +53,23 @@ def test_verify_unique_keys_alerts_when_dataset_unreadable(scheduler, monkeypatc
     (job_dir / "corrupt.parquet").write_bytes(b"not parquet")
     scheduler._verify_unique_keys("broken_job", ["user_id"], "none", date(2026, 7, 15))
     assert called and "could not read" in called[0]
+
+
+def test_chunk_windows_period_aligned_and_contiguous(scheduler):
+    from datetime import datetime, timedelta
+
+    for chunk_days, lookback in [(30, 3), (28, 7), (62, 31)]:
+        windows = scheduler._chunk_windows("2026-01-05", chunk_days, lookback)
+        assert windows[-1][1] is None
+        for (s1, e1), (s2, _) in zip(windows, windows[1:]):
+            assert e1 == s2  # contiguous, no gap or overlap
+        for _, end in windows[:-1]:
+            d = datetime.strptime(end, "%Y-%m-%d").date()
+            if lookback >= 30:
+                assert d.day == 1
+            elif lookback >= 7:
+                assert d.weekday() == 0
+
+    # A short catch-up stays a single open-ended window (plain incremental).
+    start = (datetime.now().date() - timedelta(days=3)).strftime("%Y-%m-%d")
+    assert scheduler._chunk_windows(start, 30, 3) == [(start, None)]
