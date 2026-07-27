@@ -605,43 +605,11 @@ columns:
 
   user_seconds_to_kill_fish:
     category: fish_hunter
-    description: "Average seconds between consecutive kills (all tiers)."
-
-  user_seconds_to_kill_fish_low:
-    category: fish_hunter
-    description: "Average seconds to kill a low-tier fish (value <= 10)."
-
-  user_seconds_to_kill_fish_medium:
-    category: fish_hunter
-    description: "Average seconds to kill a medium-tier fish (value 11–130)."
-
-  user_seconds_to_kill_fish_high:
-    category: fish_hunter
-    description: "Average seconds to kill a high-tier fish (value 131–200)."
-
-  user_seconds_to_kill_fish_ultra:
-    category: fish_hunter
-    description: "Average seconds to kill an ultra-tier fish (value > 200)."
+    description: "Average seconds between consecutive kills."
 
   user_bets_to_kill_fish:
     category: fish_hunter
-    description: "Average number of bullets fired between kills (all tiers)."
-
-  user_bets_to_kill_fish_low:
-    category: fish_hunter
-    description: "Average bullets to kill a low-tier fish."
-
-  user_bets_to_kill_fish_medium:
-    category: fish_hunter
-    description: "Average bullets to kill a medium-tier fish."
-
-  user_bets_to_kill_fish_high:
-    category: fish_hunter
-    description: "Average bullets to kill a high-tier fish."
-
-  user_bets_to_kill_fish_ultra:
-    category: fish_hunter
-    description: "Average bullets to kill an ultra-tier fish."
+    description: "Average number of bullets fired between kills."
 
   user_avg_fish_value:
     category: fish_hunter
@@ -709,43 +677,11 @@ columns:
 
   user_max_kill_streak:
     category: fish_hunter
-    description: "Longest consecutive kill streak (all fish tiers)."
-
-  user_max_kill_streak_low:
-    category: fish_hunter
-    description: "Longest kill streak on low-tier fish."
-
-  user_max_kill_streak_medium:
-    category: fish_hunter
-    description: "Longest kill streak on medium-tier fish."
-
-  user_max_kill_streak_high:
-    category: fish_hunter
-    description: "Longest kill streak on high-tier fish."
-
-  user_max_kill_streak_ultra:
-    category: fish_hunter
-    description: "Longest kill streak on ultra-tier fish."
+    description: "Longest consecutive kill streak."
 
   user_avg_kill_streak:
     category: fish_hunter
-    description: "Average kill streak length (all tiers)."
-
-  user_avg_kill_streak_low:
-    category: fish_hunter
-    description: "Average kill streak length on low-tier fish."
-
-  user_avg_kill_streak_medium:
-    category: fish_hunter
-    description: "Average kill streak length on medium-tier fish."
-
-  user_avg_kill_streak_high:
-    category: fish_hunter
-    description: "Average kill streak length on high-tier fish."
-
-  user_avg_kill_streak_ultra:
-    category: fish_hunter
-    description: "Average kill streak length on ultra-tier fish."
+    description: "Average kill streak length."
 
 # ---------------------------------------------------------------------------
 # ETL source files (metadata_builder scans these for computation logic)
