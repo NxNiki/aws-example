@@ -51,6 +51,8 @@ class ConfigDetail(BaseModel):
     range_group_col: Optional[str] = None
     range_group_name: Optional[str] = None
     range_group_defaults: list["RangeGroup"] = []
+    # Config-declared bound ladder for the picker; empty → derive from data.
+    range_group_values: list[float] = []
     granularities: list[Granularity]
     groups: list[MetricGroup]
     tabs: list[str]

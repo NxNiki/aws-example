@@ -133,6 +133,16 @@ def range_group_cfg(cfg: dict[str, Any]) -> tuple[Optional[str], str, list[dict[
     return col, name, defaults
 
 
+def range_group_values(cfg: dict[str, Any]) -> list[float]:
+    """Config-declared selectable bounds for the range column (the game's
+    stake/value ladder, ``stats_by_date.range_group.values``). The ladder is a
+    stable product property, so declaring it beats deriving it from whatever
+    values happen to exist in the loaded window; when empty the frontend falls
+    back to the distinct data values from /group-values."""
+    rg = stats_by_date_cfg(cfg).get("range_group") or {}
+    return [float(v) for v in (rg.get("values") or [])]
+
+
 def lifecycle_col(cfg: dict[str, Any]) -> Optional[str]:
     """The user-group column custom lifecycle groups redefine, or None when the
     config has no lifecycle cohort dimension."""

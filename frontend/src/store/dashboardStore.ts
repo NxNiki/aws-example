@@ -141,14 +141,17 @@ export function visibleGroupValues(
   return rest;
 }
 
-// Distinct values of the range column present in the data (numeric, sorted) —
-// the options for the range-group [min, max] pickers.
+// Options for the range-group [min, max] pickers: the config-declared value
+// ladder when present (the game's stable stake menu), else the distinct
+// values of the range column present in the loaded data.
 export function rangeGroupValues(
   s: Pick<DashboardState, "config" | "groupValuesByGran">,
   granularity: Granularity,
 ): number[] {
   const col = s.config?.range_group_col;
   if (!col) return [];
+  const declared = (s.config?.range_group_values ?? []).filter(Number.isFinite);
+  if (declared.length) return [...declared].sort((a, b) => a - b);
   return (s.groupValuesByGran[granularity]?.[col] ?? [])
     .map(Number)
     .filter(Number.isFinite)

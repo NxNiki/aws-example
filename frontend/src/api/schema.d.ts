@@ -458,6 +458,11 @@ export interface components {
             range_group_defaults: components["schemas"]["RangeGroup"][];
             /** Range Group Name */
             range_group_name?: string | null;
+            /**
+             * Range Group Values
+             * @default []
+             */
+            range_group_values: number[];
             /** Tabs */
             tabs: string[];
             /** Title */

@@ -108,6 +108,14 @@
             ],
             "title": "Range Group Name"
           },
+          "range_group_values": {
+            "default": [],
+            "items": {
+              "type": "number"
+            },
+            "title": "Range Group Values",
+            "type": "array"
+          },
           "tabs": {
             "items": {
               "type": "string"
