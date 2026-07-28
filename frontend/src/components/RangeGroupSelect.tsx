@@ -49,8 +49,9 @@ export function RangeGroupSelect(props: {
       <span className="text-gray-600 mb-1">
         {props.name} <span className="text-gray-400 text-sm">(inclusive [min, max])</span>
       </span>
-      <div className="border rounded px-3 py-2">
-        <div className="flex flex-col gap-y-1">
+      {/* Fixed 4 rows like CohortSelect; extra groups flow into new columns. */}
+      <div className="border rounded px-3 py-2 overflow-x-auto">
+        <div className="grid grid-flow-col grid-rows-4 gap-x-6 gap-y-1 w-max">
           <label className="flex items-center gap-2 cursor-pointer whitespace-nowrap">
             <input type="checkbox" checked={props.selection.includes("all")} onChange={(e) => toggle("all", e.target.checked)} />
             <span className="font-medium">all</span>
