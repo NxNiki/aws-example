@@ -77,7 +77,7 @@ for game_id in games:
     )
     print(f"\n===== submitting {game_id} -> {output_root} =====")
     processor.run(
-        submit_app=f"{LOCAL_ROOT}/jobs/slot_machine/etl_game_stats_daily_by_user_group_cold_data.py",
+        submit_app=f"{LOCAL_ROOT}/jobs/etl/sagemaker/slot_machine/etl_game_stats_daily_by_user_group_cold_data.py",
         arguments=[
             "--game-id",
             game_id,

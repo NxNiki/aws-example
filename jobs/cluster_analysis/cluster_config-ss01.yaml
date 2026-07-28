@@ -1,6 +1,6 @@
 # SS01 Wucaishen Cluster Analysis Configuration
 # This file contains configuration specific to the SS01 clustering project.
-# Input files are produced by jobs/ss01_wucaishen/etl_feature_engineer.py and
+# Input files are produced by jobs/etl/redshift/ss01_wucaishen/etl_feature_engineer.py and
 # written by ETLScheduler to S3 under
 #   s3://bituslabs-team-ai/etl-results/jobs/output_ss01_feature_engineer/
 #     features_grouped/   (cluster_data below)

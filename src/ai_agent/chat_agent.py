@@ -283,7 +283,7 @@ def read_etl_source(file_path: str, column_name: str = "") -> str:
     SQL snippets are stored in the metadata cache.
 
     Args:
-        file_path: Path to the ETL file (e.g. "jobs/fish_hunter/etl_game_stats_daily_by_user.py").
+        file_path: Path to the ETL file (e.g. "jobs/etl/redshift/fish_hunter/etl_game_stats_daily_by_user.py").
                    Use get_dashboard_config_summary or lookup_column to discover which ETL files
                    are relevant for the current dashboard.
         column_name: Optional column name to highlight in the SQL output.

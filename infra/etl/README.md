@@ -36,7 +36,7 @@ ETL jobs can run **~30+ minutes** (Redshift queries, multiple runs). **Lambda is
    - Launch type: **Fargate**.
    - Task size: e.g. **1 vCPU, 2 GB** (increase if the job is heavy).
    - Container: image = your ECR URI, e.g. `338568447110.dkr.ecr.us-west-2.amazonaws.com/bituslabs-ds-etl:latest`.
-   - Command override (optional): e.g. `jobs/fish_hunter/etl_game_stats_daily_by_user.py,--bastion-ip,` (comma-separated; leave bastion-ip empty if not used).
+   - Command override (optional): e.g. `jobs/etl/redshift/fish_hunter/etl_game_stats_daily_by_user.py,--bastion-ip,` (comma-separated; leave bastion-ip empty if not used).
    - Log configuration: **awslogs** group e.g. `/ecs/etl-fish-hunter`, region = your region.
    - Environment (optional): `BASTION_IP` if you use it.
    - Create.
@@ -90,8 +90,8 @@ When you run a task (RunTask API or EventBridge), pass a different `command`:
 
 | Job | Command |
 |-----|---------|
-| fish_hunter daily | `["jobs/fish_hunter/etl_game_stats_daily_by_user.py", "--bastion-ip", "13.215.212.244"]` |
-| ss01 by user group | `["jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py", "--bastion-ip", "13.215.212.244"]` |
+| fish_hunter daily | `["jobs/etl/redshift/fish_hunter/etl_game_stats_daily_by_user.py", "--bastion-ip", "13.215.212.244"]` |
+| ss01 by user group | `["jobs/etl/redshift/ss01_wucaishen/etl_game_stats_daily_by_user_group.py", "--bastion-ip", "13.215.212.244"]` |
 | ss01 by group | `["jobs/operation_daily_report/etl_game_stats_daily_by_group.py", "--bastion-ip", "13.215.212.244"]` |
 | operation daily report (+ Slack) | `["jobs/operation_daily_report/run_daily_report.py", "--bastion-ip", "13.215.212.244", "--send-slack"]` |
 
@@ -100,7 +100,7 @@ When you run a task (RunTask API or EventBridge), pass a different `command`:
 **RunTask (CLI)**:
 ```bash
 aws ecs run-task --cluster etl-cluster --task-definition etl-fishhunter \
-  --overrides '{"containerOverrides":[{"name":"etl","command":["jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py","--bastion-ip","13.215.212.244"]}]}'
+  --overrides '{"containerOverrides":[{"name":"etl","command":["jobs/etl/redshift/ss01_wucaishen/etl_game_stats_daily_by_user_group.py","--bastion-ip","13.215.212.244"]}]}'
 ```
 
 ### Option B: Separate task definitions per job

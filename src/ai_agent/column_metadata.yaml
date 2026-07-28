@@ -696,9 +696,9 @@ columns:
 # ETL source files (metadata_builder scans these for computation logic)
 # ---------------------------------------------------------------------------
 etl_files:
-  - jobs/ss01_wucaishen/etl_game_stats_daily_by_user_group.py
-  - jobs/ss02_deepdive/etl_game_stats_daily_by_user_group.py
-  - jobs/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py
-  - jobs/fish_hunter/etl_game_stats_daily_by_user.py
+  - jobs/etl/redshift/ss01_wucaishen/etl_game_stats_daily_by_user_group.py
+  - jobs/etl/redshift/ss02_deepdive/etl_game_stats_daily_by_user_group.py
+  - jobs/etl/redshift/ss03_mahjiang_streak/etl_game_stats_daily_by_user_group.py
+  - jobs/etl/redshift/fish_hunter/etl_game_stats_daily_by_user.py
   - jobs/operation_daily_report/etl_game_stats_daily_by_group.py
   - jobs/operation_daily_report/etl_weekly_report_all_games.py

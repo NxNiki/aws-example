@@ -1,7 +1,7 @@
 """Runner that wires a GameFeatureConfig to Redshift + ETLScheduler.
 
 Use ``FeaturePipelineRunner(cfg).run_from_cli()`` from a per-game job script
-under ``jobs/ss0x/``. The runner handles argparse, DataLoader construction,
+under ``jobs/etl/redshift/ss0x/``. The runner handles argparse, DataLoader construction,
 and the two ``run_incremental_job`` calls (one for the enriched output, one
 for the grouped output).
 """
@@ -65,7 +65,7 @@ class FeaturePipelineRunner:
         self.cfg = cfg
 
     # ------------------------------------------------------------------
-    # CLI entry point used by jobs/ss0x/etl_feature_engineer.py
+    # CLI entry point used by jobs/etl/redshift/ss0x/etl_feature_engineer.py
     # ------------------------------------------------------------------
     def run_from_cli(self, argv: list[str] | None = None) -> None:
         args = self._parse_args(argv)

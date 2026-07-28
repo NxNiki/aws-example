@@ -44,7 +44,7 @@ processor = PySparkProcessor(
 )
 
 processor.run(
-    submit_app=f"{LOCAL_ROOT}/jobs/fish_hunter/etl_game_stats_daily_by_user_cold_data.py",
+    submit_app=f"{LOCAL_ROOT}/jobs/etl/sagemaker/fish_hunter/etl_game_stats_daily_by_user_cold_data.py",
     arguments=[
         "--input-root",
         INPUT_ROOT,
