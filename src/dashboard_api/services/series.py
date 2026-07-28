@@ -237,8 +237,18 @@ def load_group_values_in_range(cfg: dict[str, Any], granularity: str, start: str
     if not keep:
         return {c: [] for c in cols}
     lf = cast(pl.LazyFrame, read_files(keep, lazy_load=True, expand_s3_prefixes=False))
-    present = [c for c in cols if c in set(lf.collect_schema().names())]
+    schema_names = set(lf.collect_schema().names())
+    present = [c for c in cols if c in schema_names]
     if not present:
         return {}
+    # Row-level date filter: path pruning only narrows hive (period=) layouts;
+    # flat single-file datasets (e.g. fish_hunter daily_stats) need the rows
+    # themselves bounded or availability degenerates to the full vocabulary.
+    date_col = str(sd.get("date_col", "activity_date"))
+    if date_col in schema_names:
+        lf = lf.with_columns(pl.col(date_col).cast(pl.Datetime, strict=False)).filter(
+            (pl.col(date_col) >= datetime.combine(lo, datetime.min.time()))
+            & (pl.col(date_col) <= datetime.combine(hi, datetime.min.time()))
+        )
     df = lf.select(present).unique().collect()
     return {c: sorted(str(v) for v in df[c].drop_nulls().unique().to_list()) for c in present}
