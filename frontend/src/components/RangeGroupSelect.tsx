@@ -57,7 +57,7 @@ export function RangeGroupSelect(props: {
             <div key={i} className="flex items-center gap-1 whitespace-nowrap">
               <input type="checkbox" checked={props.selection.includes(g.label)} onChange={(e) => toggle(g.label, e.target.checked)} />
               <input
-                className="w-20 rounded border px-1 py-0.5 text-sm"
+                className="w-24 rounded border px-1 py-0.5 text-sm"
                 value={g.label}
                 onChange={(e) => props.onSetGroup(i, { ...g, label: e.target.value })}
                 title="group name (chart legend label)"
