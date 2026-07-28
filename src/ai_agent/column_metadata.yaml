@@ -258,6 +258,15 @@ columns:
       Number of times the math table (script_id) changed between
       consecutive bets for this user. Indicates strategy switches by the AI system.
 
+  bet_level:
+    category: user_metric
+    description: >
+      Bet-level grain dimension of the slot-machine per-user stats and the
+      "Bet level" range picker (bet_low/bet_medium/bet_high/bet_ultra ranges
+      over existing bet amounts). BASE spins carry their own bet_amount; FREE
+      spins inherit the day's prevailing BASE bet (the bet that triggered
+      them), so free-game metrics stay meaningful inside a bet-level range.
+
   user_avg_remaining_bet_amount:
     category: user_metric
     description: >

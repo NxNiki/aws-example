@@ -38,6 +38,17 @@ user_bets AS (
         EXTRACT(EPOCH FROM (t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id, t.activity_date ORDER BY t.spin_id, t.created_at))) AS delta_t_seconds,
         LAG(t.bet_type) OVER (PARTITION BY t.user_id, t.activity_date ORDER BY t.spin_id, t.created_at) AS prev_bet_type,
         LAG(t.bet_amount) OVER (PARTITION BY t.user_id, t.activity_date ORDER BY t.spin_id, t.created_at) AS prev_bet_amount,
+        -- Bet-level grain: BASE spins use their own bet_amount; FREE
+        -- spins inherit the day's prevailing BASE bet (their trigger),
+        -- so FG metrics stay meaningful inside a bet-level range. A
+        -- FREE spin with no prior BASE that day keeps its own amount.
+        COALESCE(
+            LAST_VALUE(CASE WHEN t.bet_type = 'BASE' THEN t.bet_amount END IGNORE NULLS) OVER (
+                PARTITION BY t.user_id, t.activity_date ORDER BY t.spin_id, t.created_at
+                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+            ),
+            t.bet_amount
+        ) AS bet_level,
         CASE
             WHEN LAG(t.mathtable) OVER (PARTITION BY t.user_id, t.activity_date ORDER BY t.spin_id, t.created_at) IS NULL THEN 0
             WHEN LAG(t.mathtable) OVER (PARTITION BY t.user_id, t.activity_date ORDER BY t.spin_id, t.created_at) <> t.mathtable THEN 1
@@ -51,6 +62,7 @@ user_stats AS (
         t.activity_month,
         t.ab_group,
         t.mathtable,
+        t.bet_level,
         t.user_id,
 
         -- total number of bets:
@@ -95,13 +107,14 @@ user_stats AS (
         COUNT(t.prev_bet_amount) AS user_num_delta_bet
 
     FROM user_bets AS t
-    GROUP BY t.activity_month, t.ab_group, t.mathtable, t.user_id
+    GROUP BY t.activity_month, t.ab_group, t.mathtable, t.bet_level, t.user_id
 )
 
 SELECT
     us.activity_month AS activity_date,
     us.ab_group,
     us.mathtable,
+    us.bet_level,
     us.user_id,
     us.user_mathtable_change,
     -- DataMetrics input columns (user-level raw stats):

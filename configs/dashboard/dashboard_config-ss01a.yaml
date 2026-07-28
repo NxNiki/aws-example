@@ -14,11 +14,22 @@ stats_by_date:
 
   group_col: "ab_group"
   date_col: "activity_date"
-  user_group_cols: [ab_group, mathtable, user_group]
-  # Stored grain is one row per (period, user, ab_group, mathtable): every bet
-  # in exactly one row. When a grain dimension is unselected the API collapses
-  # rows back to one per user before computing per-user stats.
-  user_row_grain: [ab_group, mathtable]
+  user_group_cols: [ab_group, mathtable, bet_level, user_group]
+  # Stored grain is one row per (period, user, ab_group, mathtable, bet_level):
+  # every bet in exactly one row. When a grain dimension is unselected the API
+  # collapses rows back to one per user before computing per-user stats.
+  user_row_grain: [ab_group, mathtable, bet_level]
+  # Bet-level picker: user-defined INCLUSIVE [min, max] ranges over bet_level
+  # (BASE spins carry their own bet_amount; FREE spins inherit the day's
+  # prevailing BASE bet, so FG metrics stay meaningful inside a range).
+  range_group:
+    column: bet_level
+    name: "Bet level"
+    defaults:
+      - {label: bet_low, min: 0, max: 1}
+      - {label: bet_medium, min: 2, max: 5}
+      - {label: bet_high, min: 8, max: 30}
+      - {label: bet_ultra, min: 50, max: null}
   aggregate_stats_from_user_rows: true
 
   group1_label: "DAU and Retention"
