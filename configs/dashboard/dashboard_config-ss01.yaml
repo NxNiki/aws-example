@@ -3,13 +3,13 @@ title: "SS01 (wucaishen) Analytics"
 stats_by_date: 
   files: 
     day: [
-      "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_wucaishen_v2/daily_stats",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_wucaishen_v2_cold_data/daily_stats",
     ]
     week: [
-      "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_wucaishen_v2/weekly_stats",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_wucaishen_v2_cold_data/weekly_stats",
     ]
     month: [
-      "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_wucaishen_v2/monthly_stats",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss01_wucaishen_v2_cold_data/monthly_stats",
     ]
 
   group_col: "ab_group"
@@ -25,6 +25,10 @@ stats_by_date:
   range_group:
     column: bet_level
     name: "Bet level"
+    # The platform stake ladder (bound options for the picker); declared here
+    # because it is a stable product property -- data-derived distinct values
+    # would vary by game and loaded window.
+    values: [0.1, 0.2, 0.5, 1, 2, 2.5, 5, 8, 10, 15, 20, 25, 30, 50, 70, 100, 200, 250, 500, 700, 1000, 1500, 2000, 2500, 5000, 10000, 20000, 50000, 200000]
     defaults:
       - {label: bet_low, min: 0, max: 1}
       - {label: bet_medium, min: 2, max: 5}
