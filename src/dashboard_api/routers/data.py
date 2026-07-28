@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -36,7 +38,7 @@ from dashboard_api.services.common import SeriesError
 from dashboard_api.services.configs import build_config_detail, list_config_summaries, load_raw_config
 from dashboard_api.services.deepdive import load_deepdive, load_deepdive_metrics
 from dashboard_api.services.group_distribution import load_group_distribution
-from dashboard_api.services.series import load_date_bounds, load_group_values, load_series
+from dashboard_api.services.series import load_date_bounds, load_group_values, load_group_values_in_range, load_series
 from dashboard_api.services.summary_table import load_summary_table
 from dashboard_api.settings import settings
 
@@ -116,10 +118,66 @@ def post_series(req: SeriesRequest) -> SeriesResponse:
     )
 
 
+# Full-vocabulary scans read every partition file, so cache them; the values
+# only change when the daily ETL lands. Expired entries are served stale while
+# a background thread refreshes, so no request ever waits on the full scan
+# except the very first per (config, granularity) after a cold start.
+# Availability (range-scoped) is cheap (period-pruned read) per request.
+_GROUP_VALUES_CACHE: dict[tuple[str, str], tuple[float, dict[str, list[str]]]] = {}
+_GROUP_VALUES_REFRESHING: set[tuple[str, str]] = set()
+_GROUP_VALUES_TTL_SECONDS = 3600.0
+
+
+def warm_group_values_cache() -> None:
+    """Fill the vocabulary cache for every config's day granularity (called
+    from a startup thread, off the request path)."""
+    for summary in list_config_summaries(settings.config_dir):
+        cfg = load_raw_config(settings.config_dir, summary.id)
+        if cfg is None:
+            continue
+        try:
+            _cached_group_values(summary.id, cfg, "day")
+            logger.info("group-values cache warmed for %s", summary.id)
+        except Exception:
+            logger.exception("group-values warmup failed for %s", summary.id)
+
+
+def _cached_group_values(config: str, cfg: dict, granularity: str) -> dict[str, list[str]]:
+    key = (config, granularity)
+    cached = _GROUP_VALUES_CACHE.get(key)
+    if cached is None:
+        values = load_group_values(cfg, granularity)
+        _GROUP_VALUES_CACHE[key] = (time.monotonic(), values)
+        return values
+    if time.monotonic() - cached[0] >= _GROUP_VALUES_TTL_SECONDS and key not in _GROUP_VALUES_REFRESHING:
+        _GROUP_VALUES_REFRESHING.add(key)
+
+        def _refresh() -> None:
+            try:
+                _GROUP_VALUES_CACHE[key] = (time.monotonic(), load_group_values(cfg, granularity))
+            except Exception:
+                logger.exception("group-values background refresh failed for %s", key)
+            finally:
+                _GROUP_VALUES_REFRESHING.discard(key)
+
+        threading.Thread(target=_refresh, name=f"group-values-{config}-{granularity}", daemon=True).start()
+    return cached[1]
+
+
 @router.get("/group-values", response_model=GroupValues)
-def get_group_values(config: str, granularity: Granularity = "day") -> GroupValues:
+def get_group_values(
+    config: str,
+    granularity: Granularity = "day",
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+) -> GroupValues:
     """API endpoint: GET /api/data/group-values — distinct cohort values per
     user-group column, for the Stats-by-Date cohort pickers.
+
+    ``values`` is the full (cached) vocabulary so labels never disappear when
+    the date range moves; with ``start``/``end`` the response also carries
+    ``available`` — the subset present in that range — which the pickers use
+    to gray out values with no data in view.
 
     Returns ``{}`` when the config defines no user_group columns. Reads the same
     user-level parquet as ``/series``.
@@ -128,14 +186,19 @@ def get_group_values(config: str, granularity: Granularity = "day") -> GroupValu
     if cfg is None:
         raise HTTPException(status_code=404, detail=f"Unknown config '{config}'")
     try:
-        values = load_group_values(cfg, granularity)
+        values = _cached_group_values(config, cfg, granularity)
+        available = None
+        if start and end:
+            available = load_group_values_in_range(cfg, granularity, start, end)
     except SeriesError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid date range: {exc}") from exc
     except Exception as exc:
         logger.exception("group-values read failed for config=%s", config)
         raise HTTPException(status_code=503, detail=f"Failed to read group values: {exc}") from exc
 
-    return GroupValues(config=config, granularity=granularity, values=values)
+    return GroupValues(config=config, granularity=granularity, values=values, available=available)
 
 
 @router.get("/date-bounds", response_model=DateBounds)

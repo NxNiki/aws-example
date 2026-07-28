@@ -156,6 +156,9 @@ class GroupValues(BaseModel):
     granularity: Granularity
     # Distinct selectable values per user_group column, for the cohort pickers.
     values: dict[str, list[str]]
+    # Subset of `values` present in the requested [start, end] date range; the
+    # pickers gray out the rest. None when no range was requested.
+    available: Optional[dict[str, list[str]]] = None
 
 
 class DateBounds(BaseModel):

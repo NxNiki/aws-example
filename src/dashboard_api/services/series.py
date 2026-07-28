@@ -15,8 +15,9 @@ cohort's metrics are computed on just its rows (matching the legacy tab).
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
-from typing import Any, Optional
+import re
+from datetime import date, datetime, timedelta
+from typing import Any, Optional, cast
 
 import polars as pl
 
@@ -34,7 +35,7 @@ from dashboard_api.services.common import (
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["SeriesError", "load_series", "load_date_bounds", "load_group_values"]
+__all__ = ["SeriesError", "load_series", "load_date_bounds", "load_group_values", "load_group_values_in_range"]
 
 
 def _metric_kind(metric: str) -> str:
@@ -198,6 +199,45 @@ def load_group_values(cfg: dict[str, Any], granularity: str) -> dict[str, list[s
     lf, _ = load_lazy(cfg, granularity)
     available = set(lf.collect_schema().names())
     present = [c for c in cols if c in available]
+    if not present:
+        return {}
+    df = lf.select(present).unique().collect()
+    return {c: sorted(str(v) for v in df[c].drop_nulls().unique().to_list()) for c in present}
+
+
+_PERIOD_RE = re.compile(r"period=(\d{4}-\d{2}-\d{2})")
+# Availability scans widen left by one period so week/month rows whose period
+# START precedes the range still count as present inside it.
+_PERIOD_MARGIN_DAYS = {"day": 0, "week": 7, "month": 31}
+
+
+def load_group_values_in_range(cfg: dict[str, Any], granularity: str, start: str, end: str) -> dict[str, list[str]]:
+    """Distinct cohort values PRESENT in [start, end] — the availability set
+    behind the pickers' grayed-out entries (full vocabulary comes from
+    ``load_group_values``). Reads only the ``period=`` files whose partition
+    date falls inside the (margin-widened) range, so it stays fast on datasets
+    with hundreds of daily partitions; paths without a ``period=`` segment
+    (flat layouts) are always read."""
+    from bituslabs_ds.s3_utils import expand_paths_to_files, read_files
+
+    cols = user_group_cols(cfg)
+    if not cols:
+        return {}
+    sd = stats_by_date_cfg(cfg)
+    files = (sd.get("files") or {}).get(granularity)
+    if not files:
+        raise SeriesError(f"No stats_by_date files configured for granularity '{granularity}'")
+    lo = date.fromisoformat(start) - timedelta(days=_PERIOD_MARGIN_DAYS.get(granularity, 31))
+    hi = date.fromisoformat(end)
+    keep = []
+    for p in expand_paths_to_files(list(files)):
+        m = _PERIOD_RE.search(p)
+        if not m or lo <= date.fromisoformat(m.group(1)) <= hi:
+            keep.append(p)
+    if not keep:
+        return {c: [] for c in cols}
+    lf = cast(pl.LazyFrame, read_files(keep, lazy_load=True, expand_s3_prefixes=False))
+    present = [c for c in cols if c in set(lf.collect_schema().names())]
     if not present:
         return {}
     df = lf.select(present).unique().collect()

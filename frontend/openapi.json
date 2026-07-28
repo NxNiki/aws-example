@@ -1247,6 +1247,23 @@
       },
       "GroupValues": {
         "properties": {
+          "available": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Available"
+          },
           "config": {
             "title": "Config",
             "type": "string"
@@ -2975,7 +2992,7 @@
     },
     "/api/data/group-values": {
       "get": {
-        "description": "API endpoint: GET /api/data/group-values \u2014 distinct cohort values per\nuser-group column, for the Stats-by-Date cohort pickers.\n\nReturns ``{}`` when the config defines no user_group columns. Reads the same\nuser-level parquet as ``/series``.",
+        "description": "API endpoint: GET /api/data/group-values \u2014 distinct cohort values per\nuser-group column, for the Stats-by-Date cohort pickers.\n\n``values`` is the full (cached) vocabulary so labels never disappear when\nthe date range moves; with ``start``/``end`` the response also carries\n``available`` \u2014 the subset present in that range \u2014 which the pickers use\nto gray out values with no data in view.\n\nReturns ``{}`` when the config defines no user_group columns. Reads the same\nuser-level parquet as ``/series``.",
         "operationId": "get_group_values_api_data_group_values_get",
         "parameters": [
           {
@@ -3000,6 +3017,38 @@
               ],
               "title": "Granularity",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Start"
+            }
+          },
+          {
+            "in": "query",
+            "name": "end",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "End"
             }
           }
         ],

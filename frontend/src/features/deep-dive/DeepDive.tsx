@@ -299,6 +299,7 @@ export function DeepDive() {
       >
         <CohortSelect
           groupValues={visibleGroupValues(s.config, s.groupValuesByGran[dg.granularity] ?? {})}
+          available={s.groupAvailableByGran[dg.granularity] ?? null}
           selection={c.cohortSelection}
           onSetCohort={(col, values) => s.setTabCohort("viz", col, values)}
         />

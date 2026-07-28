@@ -57,9 +57,14 @@ export const api = {
     return data;
   },
 
-  groupValues: async (config: string, granularity: Granularity): Promise<GroupValues> => {
+  groupValues: async (
+    config: string,
+    granularity: Granularity,
+    start?: string,
+    end?: string,
+  ): Promise<GroupValues> => {
     const { data, error } = await client.GET("/api/data/group-values", {
-      params: { query: { config, granularity } },
+      params: { query: { config, granularity, ...(start && end ? { start, end } : {}) } },
     });
     if (error || !data) fail("GET /api/data/group-values", error);
     return data;
