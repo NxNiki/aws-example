@@ -49,13 +49,10 @@ export function RangeGroupSelect(props: {
       <span className="text-gray-600 mb-1">
         {props.name} <span className="text-gray-400 text-sm">(inclusive [min, max])</span>
       </span>
-      {/* Fixed 4 rows like CohortSelect; extra groups flow into new columns. */}
+      {/* Fixed 4 rows like CohortSelect; extra entries flow into new columns.
+          "all" renders last so the four (wide) group rows fill the first column. */}
       <div className="border rounded px-3 py-2 overflow-x-auto">
         <div className="grid grid-flow-col grid-rows-4 gap-x-6 gap-y-1 w-max">
-          <label className="flex items-center gap-2 cursor-pointer whitespace-nowrap">
-            <input type="checkbox" checked={props.selection.includes("all")} onChange={(e) => toggle("all", e.target.checked)} />
-            <span className="font-medium">all</span>
-          </label>
           {props.groups.map((g, i) => (
             <div key={i} className="flex items-center gap-1 whitespace-nowrap">
               <input type="checkbox" checked={props.selection.includes(g.label)} onChange={(e) => toggle(g.label, e.target.checked)} />
@@ -76,6 +73,10 @@ export function RangeGroupSelect(props: {
               <span className="text-gray-400">]</span>
             </div>
           ))}
+          <label className="flex items-center gap-2 cursor-pointer whitespace-nowrap">
+            <input type="checkbox" checked={props.selection.includes("all")} onChange={(e) => toggle("all", e.target.checked)} />
+            <span className="font-medium">all</span>
+          </label>
         </div>
       </div>
     </div>
