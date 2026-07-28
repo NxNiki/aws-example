@@ -1,20 +1,32 @@
 """Submit etl_game_stats_daily_by_user_group_cold_data.py as SageMaker PySpark
 processing jobs, one per slot game.
 
-Runs from a local machine. Jobs execute under the DataScience notebook role
-(the only principal the slotmachine source bucket trusts) and run sequentially;
-pass game ids as CLI args to run a subset, e.g.:
+Runs from a local machine or a scheduler. Jobs execute under the DataScience
+notebook role (the only principal the slotmachine source bucket trusts) and
+run sequentially.
 
-    poetry run python etl_game_stats_daily_by_user_group_cold_data_submit.py SS02 SS03
+Without ``--start``/``--end`` this is the daily incremental run: it recomputes
+a rolling window (last LOOKBACK_DAYS Beijing days through tomorrow), and the
+job's dynamic period= overwrite replaces exactly the recomputed periods -- no
+compaction or key-dedup step needed. Weekly/monthly stay correct because the
+job truncates the window start to the period start and rescans full periods.
+
+    # daily incremental, all games
+    poetry run python etl_game_stats_daily_by_user_group_cold_data_submit.py
+    # explicit backfill window for a subset
+    poetry run python ..._submit.py SS02 SS03 --start 2025-01-01 --end 2026-07-29
 """
 
-import sys
+import argparse
+from datetime import datetime, timedelta, timezone
 
 import boto3
 from sagemaker.session import Session
 from sagemaker.spark.processing import PySparkProcessor
 
 from bituslabs_ds.config import LOCAL_ROOT, REGION, S3_BUCKET
+
+LOOKBACK_DAYS = 3
 
 # NOT the repo-wide SAGEMAKER_ROLE: the slotmachine bucket policy (owned by
 # another account) only trusts this role -- see feature_engineer_life_cycle_submit.py.
@@ -31,8 +43,6 @@ GAME_OUTPUT_ROOTS = {
     "SS06": f"s3://{S3_BUCKET}/etl-results/jobs/output_ss06_pocket_soccer_v2_cold_data",
 }
 
-OUTPUT_START = "2025-01-01"  # keep rows with activity date >= this
-OUTPUT_END = "2026-07-29"  # exclusive; align to Monday / 1st so weekly/monthly periods are complete
 AGG = "all"  # all | daily | weekly | monthly
 
 INSTANCE_TYPE = "ml.m5.4xlarge"  # 16 vCPU, 64 GB memory per node
@@ -41,10 +51,17 @@ INSTANCE_COUNT = 3
 # SageMaker default of 30 GB per node is far too small for long windows.
 VOLUME_SIZE_GB = 300
 
-games = sys.argv[1:] or list(GAME_OUTPUT_ROOTS)
-unknown = [g for g in games if g not in GAME_OUTPUT_ROOTS]
-if unknown:
-    raise SystemExit(f"unknown game ids: {unknown}; choose from {sorted(GAME_OUTPUT_ROOTS)}")
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("games", nargs="*", choices=sorted(GAME_OUTPUT_ROOTS), help="subset of games (default all)")
+parser.add_argument("--start", help="activity date >= this (default: rolling lookback window)")
+parser.add_argument("--end", help="activity date < this (default: tomorrow in Beijing time)")
+args = parser.parse_args()
+
+bj_today = (datetime.now(timezone.utc) + timedelta(hours=8)).date()
+output_start = args.start or str(bj_today - timedelta(days=LOOKBACK_DAYS))
+output_end = args.end or str(bj_today + timedelta(days=1))
+
+games = args.games or list(GAME_OUTPUT_ROOTS)
 
 for game_id in games:
     output_root = GAME_OUTPUT_ROOTS[game_id]
@@ -69,9 +86,9 @@ for game_id in games:
             "--output-root",
             output_root,
             "--output-start",
-            OUTPUT_START,
+            output_start,
             "--output-end",
-            OUTPUT_END,
+            output_end,
             "--agg",
             AGG,
         ],
