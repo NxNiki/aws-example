@@ -15,7 +15,7 @@ import threading
 import time
 from collections import OrderedDict
 from datetime import date, datetime
-from typing import Any, Iterator, Optional, cast
+from typing import Any, Iterable, Iterator, Optional, Sequence, cast
 
 import polars as pl
 
@@ -52,22 +52,37 @@ def _evict_over_budget() -> None:
 
 
 def collect_window(
-    cfg: dict[str, Any], granularity: str, lf: pl.LazyFrame, date_col: str, start_dt: Any, end_dt: Any
+    cfg: dict[str, Any],
+    granularity: str,
+    lf: pl.LazyFrame,
+    date_col: str,
+    start_dt: Any,
+    end_dt: Any,
+    columns: Optional[Sequence[str]] = None,
 ) -> pl.DataFrame:
-    """Collect ``lf`` filtered to [start_dt, end_dt], shared across requests."""
+    """Collect ``lf`` filtered to [start_dt, end_dt], shared across requests.
+
+    With ``columns`` the collect is projected to just those columns (parquet
+    projection pushdown — only their chunks are read from S3) and cached per
+    column set, so requests for different metrics don't evict each other's
+    (much smaller) frames.
+    """
     config_id = cfg.get("id")
     if not config_id:
         # A None id would collide across every config and serve the wrong
         # game's rows from cache (load_raw_config stamps it — see configs.py).
         raise SeriesError("config dict is missing 'id'; cannot safely cache its window")
-    key = (config_id, granularity, str(start_dt), str(end_dt))
+    key = (config_id, granularity, str(start_dt), str(end_dt), tuple(columns) if columns is not None else None)
     with _window_lock:
         hit = _window_cache.get(key)
         if hit and time.monotonic() - hit[0] < _WINDOW_CACHE_TTL_S:
             _window_cache.move_to_end(key)
             return hit[1]
         _window_cache.pop(key, None)
-        df = lf.filter((pl.col(date_col) >= start_dt) & (pl.col(date_col) <= end_dt)).collect()
+        lf_win = lf.filter((pl.col(date_col) >= start_dt) & (pl.col(date_col) <= end_dt))
+        if columns is not None:
+            lf_win = lf_win.select(list(columns))
+        df = lf_win.collect()
         logger.info("window cache: collected %s rows=%d est=%.0f MB", key, df.height, df.estimated_size() / 1e6)
         _window_cache[key] = (time.monotonic(), df)
         _evict_over_budget()
@@ -90,6 +105,71 @@ def user_group_cols(cfg: dict[str, Any]) -> list[str]:
         return []
     cols = raw if isinstance(raw, list) else [raw]
     return [str(c) for c in cols]
+
+
+def availability_cols(cfg: dict[str, Any]) -> list[str]:
+    """Cohort columns whose availability actually varies with the date range.
+
+    Dashboard feature: the pickers' grayed-out entries. Most cohort vocabularies
+    (user_group, bet_level, …) are static — only dimensions that rotate over
+    time (mathtable for the slot games, daily_group for fishhunter) need the
+    per-range availability scan. ``stats_by_date.availability_cols`` names
+    them; columns left out are simply absent from the ``available`` map and the
+    frontend enables their values unconditionally (CohortSelect treats a
+    missing entry as available). Default: every user_group column.
+    """
+    raw = stats_by_date_cfg(cfg).get("availability_cols")
+    if not raw:
+        return user_group_cols(cfg)
+    cols = raw if isinstance(raw, list) else [raw]
+    allowed = set(user_group_cols(cfg))
+    return [str(c) for c in cols if str(c) in allowed]
+
+
+def projection_columns(
+    cfg: dict[str, Any], metrics: Iterable[str], date_col: str, available: set[str]
+) -> Optional[list[str]]:
+    """Columns a series request actually needs, or None to load everything.
+
+    The user-row parquet carries every ``user_*`` metric column, but a panel
+    plots a handful — projecting the window collect to just the needed columns
+    (parquet pushdown reads only their chunks from S3) shrinks load time and
+    cache size regardless of the date span. Includes the cohort/grain/partition
+    dimensions, each requested metric's transitive ``user_*`` deps, and the
+    components collapse_user_rows recombines (a ratio without its numerator/
+    denominator would be silently dropped; a weighted mean without its weight
+    would pass through as first()). Falls back to None if any computed metric's
+    deps can't be introspected.
+    """
+    from bituslabs_ds.metrics.user_stats_aggregates import DataMetrics
+
+    cols: set[str] = {date_col, "user_id"}
+    cols.update(user_group_cols(cfg))
+    cols.update(user_row_grain(cfg))
+    lc = lifecycle_col(cfg)
+    if lc:
+        cols.add(lc)
+    part_col, _ = group_col_partition(cfg)
+    if part_col:
+        cols.add(part_col)
+    rcol, _, _ = range_group_cfg(cfg)
+    if rcol:
+        cols.add(rcol)
+    for m in metrics:
+        if m in DataMetrics.METRICS:
+            deps = DataMetrics.metric_user_col_deps(m)
+            if not deps:
+                return None
+            cols.update(deps)
+        else:
+            cols.add(str(m))
+    for name, num, den in _USER_ROW_RATIOS:
+        if name in cols:
+            cols.update((num, den))
+    for mean_col, weight_col in _USER_ROW_WEIGHTED_MEANS:
+        if mean_col in cols:
+            cols.add(weight_col)
+    return sorted(c for c in cols if c in available)
 
 
 def effective_cohort_cols(cfg: dict[str, Any]) -> list[str]:

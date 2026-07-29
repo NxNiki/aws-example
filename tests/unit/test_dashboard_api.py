@@ -592,3 +592,84 @@ def test_cached_group_values_serves_stale_and_refreshes(monkeypatch):
             break
         _time.sleep(0.05)
     assert current == {"user_group": ["new"]}
+
+
+def test_projection_columns_covers_metric_deps_and_collapse_components():
+    """The window projection must carry each metric's user_* deps plus the
+    numerator/denominator (and weights) collapse_user_rows recombines —
+    without them a pruned frame silently drops ratio columns."""
+    from dashboard_api.services.common import projection_columns
+
+    cfg = {
+        "id": "t",
+        "stats_by_date": {
+            "user_group_cols": ["ab_group", "mathtable"],
+            "user_row_grain": ["ab_group", "mathtable"],
+        },
+    }
+    available = {
+        "activity_date",
+        "user_id",
+        "ab_group",
+        "mathtable",
+        "user_rtp",
+        "user_total_payout",
+        "user_total_bet",
+        "user_num_bets",
+        "unrelated_metric_col",
+    }
+    cols = projection_columns(cfg, ["rtp"], "activity_date", available)
+    assert cols is not None
+    assert {"activity_date", "user_id", "ab_group", "mathtable"} <= set(cols)
+    assert {"user_total_payout", "user_total_bet"} <= set(cols)  # rtp's user_* deps
+    assert "unrelated_metric_col" not in cols
+
+    # A raw user_rtp request pulls the ratio's components so
+    # collapse_user_rows can recompute (not drop) it on grain configs.
+    ratio = projection_columns(cfg, ["user_rtp"], "activity_date", available)
+    assert ratio is not None and {"user_rtp", "user_total_payout", "user_total_bet"} <= set(ratio)
+
+    raw = projection_columns(cfg, ["unrelated_metric_col"], "activity_date", available)
+    assert raw is not None and "unrelated_metric_col" in raw
+
+
+def test_availability_cols_defaults_and_filters():
+    from dashboard_api.services.common import availability_cols
+
+    base = {"stats_by_date": {"user_group_cols": ["ab_group", "mathtable", "user_group"]}}
+    assert availability_cols(base) == ["ab_group", "mathtable", "user_group"]
+
+    scoped = {
+        "stats_by_date": {
+            "user_group_cols": ["ab_group", "mathtable", "user_group"],
+            "availability_cols": ["mathtable", "not_a_group_col"],
+        }
+    }
+    assert availability_cols(scoped) == ["mathtable"]
+
+
+def test_collect_window_caches_per_column_set(monkeypatch):
+    """Projected collects are cached per column tuple so different metric
+    selections don't serve each other's narrower frames."""
+    import polars as pl
+
+    from dashboard_api.services import common
+
+    monkeypatch.setattr(common, "_window_cache", type(common._window_cache)())
+    lf = pl.LazyFrame(
+        {
+            "activity_date": ["2026-01-01", "2026-01-02"],
+            "user_id": ["u1", "u2"],
+            "user_rtp": [0.9, 1.1],
+            "user_num_bets": [10, 20],
+        }
+    ).with_columns(pl.col("activity_date").str.to_datetime())
+    cfg = {"id": "t"}
+    from datetime import datetime
+
+    start, end = datetime(2026, 1, 1), datetime(2026, 1, 3)
+    narrow = common.collect_window(cfg, "day", lf, "activity_date", start, end, columns=["activity_date", "user_id"])
+    wide = common.collect_window(cfg, "day", lf, "activity_date", start, end)
+    assert set(narrow.columns) == {"activity_date", "user_id"}
+    assert set(wide.columns) == {"activity_date", "user_id", "user_rtp", "user_num_bets"}
+    assert len(common._window_cache) == 2
