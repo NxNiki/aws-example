@@ -16,7 +16,11 @@ log
 **/model_output/
 **/output/
 **/eda_output/
-**/output_*/
+# ignore output_* contents but keep .html reports (dirs must stay
+# un-ignored or the !*.html re-include cannot take effect)
+**/output_*/**
+!**/output_*/**/
+!**/output_*/**/*.html
 **/*_output/
 **/.ipynb_checkpoints/*
 **.png
