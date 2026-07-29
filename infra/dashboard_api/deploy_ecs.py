@@ -72,13 +72,13 @@ DASHBOARD_API_PORT = 8050
 # user-row frames are simply large. The window cache is additionally
 # size-budgeted (see _WINDOW_CACHE_MAX_BYTES). One worker — more workers
 # multiply it all.
-# CPU sized from concurrency: polars collects/aggregations are CPU-bound, and
-# 1 vCPU pinned at 100% whenever several users loaded data at once (see
-# CloudWatch CPUUtilization); 2 vCPU lets polars actually parallelize. 12 GB
-# needs >=2 vCPU anyway (8 GB is the 1-vCPU Fargate ceiling) and buys a bigger
-# window cache (_WINDOW_CACHE_MAX_BYTES) plus collect headroom.
-TASK_CPU = 2048
-TASK_MEMORY = 12288
+# 8 GB is the 1-vCPU Fargate ceiling. 1 vCPU pinned at 100% under concurrent
+# users when collects loaded every column; the column-projected window collect
+# (services/common.py projection_columns) shrinks that work 5-40x, so we try
+# the current size first. If CPUUtilization still pins during busy windows,
+# bump to 2048/12288 (12 GB needs >=2 vCPU) and raise _WINDOW_CACHE_MAX_BYTES.
+TASK_CPU = 1024
+TASK_MEMORY = 8192
 DESIRED_COUNT = 1  # scale-to-zero: see ensure_autoscaling (idle >1h -> 0, ALB 5xx wakes)
 
 # Scale-to-zero policy knobs. Idle = no Dashboard/UserRequestCount datapoint
