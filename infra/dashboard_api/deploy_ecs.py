@@ -72,12 +72,13 @@ DASHBOARD_API_PORT = 8050
 # user-row frames are simply large. The window cache is additionally
 # size-budgeted (see _WINDOW_CACHE_MAX_BYTES). One worker — more workers
 # multiply it all.
-# 8 GB is the 1-vCPU Fargate ceiling. 1 vCPU pinned at 100% under concurrent
-# users when collects loaded every column; the column-projected window collect
-# (services/common.py projection_columns) shrinks that work 5-40x, so we try
-# the current size first. If CPUUtilization still pins during busy windows,
-# bump to 2048/12288 (12 GB needs >=2 vCPU) and raise _WINDOW_CACHE_MAX_BYTES.
-TASK_CPU = 1024
+# 2 vCPU: after the software fixes (column projection, capped bootstrap,
+# response cache) memory sat under 50% but CPUUtilization still hit 100% in
+# every busy window — the remaining cost is per-request polars aggregation +
+# CI computation, which is CPU-bound. 2 vCPU doubles polars threads and stops
+# one user's render from starving another's. Memory stays 8 GB (valid 2-vCPU
+# Fargate combo); raise both together if the window cache budget ever grows.
+TASK_CPU = 2048
 TASK_MEMORY = 8192
 DESIRED_COUNT = 1  # scale-to-zero: see ensure_autoscaling (idle >1h -> 0, ALB 5xx wakes)
 
