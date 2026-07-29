@@ -18,6 +18,7 @@ stats_by_date:
   group_col: "daily_group"
   date_col: "activity_date"
   user_group_cols: [daily_group, fish_value, user_group]
+  availability_cols: [daily_group]
   # Stored grain is one row per (period, user, daily_group, fish_value); the
   # fish-level picker buckets fish_value by user-defined INCLUSIVE [min, max]
   # ranges, and the API collapses rows back to one per user when unselected.

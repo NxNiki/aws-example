@@ -15,6 +15,7 @@ stats_by_date:
   group_col: "ab_group"
   date_col: "activity_date"
   user_group_cols: [ab_group, mathtable, bet_level, user_group]
+  availability_cols: [mathtable]
   # Stored grain is one row per (period, user, ab_group, mathtable, bet_level):
   # every bet in exactly one row. When a grain dimension is unselected the API
   # collapses rows back to one per user before computing per-user stats.
