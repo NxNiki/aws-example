@@ -94,6 +94,8 @@ def post_series(req: SeriesRequest) -> SeriesResponse:
     try:
         # Identical concurrent/repeated requests (several users on the same
         # view) compute once and share the result.
+        # Empty series are not cached: they can be a read racing the ETL's
+        # partition rewrite, and pinning them would blank panels for the TTL.
         date_col, series, missing = cached_response(
             "series:" + req.model_dump_json(),
             lambda: load_series(
@@ -107,6 +109,7 @@ def post_series(req: SeriesRequest) -> SeriesResponse:
                 range_groups=_ranges_dims(req.range_groups),
                 ranges=[(r.start, r.end) for r in req.ranges] if req.ranges is not None else None,
             ),
+            should_cache=lambda v: bool(v[1]),
         )
     except SeriesError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -293,6 +296,7 @@ def post_group_distribution(req: GroupDistributionRequest) -> GroupDistributionR
                 req.filter.min,
                 req.filter.max,
             ),
+            should_cache=lambda v: bool(v[0]),
         )
     except SeriesError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

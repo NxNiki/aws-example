@@ -137,8 +137,14 @@ def collect_window(
             lf_win = lf_win.select(list(columns))
         df = lf_win.collect()
         logger.info("window cache: collected %s rows=%d est=%.0f MB", key, df.height, df.estimated_size() / 1e6)
-        _window_cache[key] = (time.monotonic(), df)
-        _evict_over_budget()
+        # Never cache an EMPTY frame: a read racing the ETL's dynamic
+        # partition overwrite (files deleted, then rewritten) can collect
+        # nothing for a window that has data — caching it would pin "no data"
+        # on every panel for the whole TTL. Genuinely-empty windows just
+        # re-collect, which is cheap.
+        if df.height > 0:
+            _window_cache[key] = (time.monotonic(), df)
+            _evict_over_budget()
         return df
 
 
@@ -158,12 +164,15 @@ _response_loading: dict[str, threading.Event] = {}
 _response_lock = threading.Lock()
 
 
-def cached_response(key: str, compute: Callable[[], Any]) -> Any:
+def cached_response(key: str, compute: Callable[[], Any], should_cache: Callable[[Any], bool] = lambda v: True) -> Any:
     """Return ``compute()`` cached under ``key`` with single-flight semantics.
 
     Identical concurrent requests run ``compute`` once and share the result;
     an exception in the loader propagates to it, and one waiter retries as the
     new loader. Callers must not mutate the returned value — it is shared.
+    ``should_cache`` lets callers keep suspicious results (e.g. empty series
+    computed while the ETL rewrites partitions) out of the cache: the value is
+    still returned, just recomputed on the next request.
     """
     while True:
         with _response_lock:
@@ -181,10 +190,11 @@ def cached_response(key: str, compute: Callable[[], Any]) -> Any:
         loading.wait()
     try:
         value = compute()
-        with _response_lock:
-            _response_cache[key] = (time.monotonic(), value)
-            while len(_response_cache) > _RESPONSE_CACHE_MAX_ENTRIES:
-                _response_cache.popitem(last=False)
+        if should_cache(value):
+            with _response_lock:
+                _response_cache[key] = (time.monotonic(), value)
+                while len(_response_cache) > _RESPONSE_CACHE_MAX_ENTRIES:
+                    _response_cache.popitem(last=False)
         return value
     finally:
         with _response_lock:

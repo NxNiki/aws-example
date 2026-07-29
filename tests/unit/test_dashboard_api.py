@@ -860,3 +860,32 @@ def test_iter_cohorts_explicit_empty_selection_yields_no_cohorts():
 
     assert dict(common.iter_cohorts(cfg, df, {"ai_group": []}, date_col="d")) == {}
     assert list(dict(common.iter_cohorts(cfg, df, {}, date_col="d"))) == ["all"]
+
+
+def test_empty_results_are_not_cached(monkeypatch):
+    """An empty collect can be a read racing the ETL's partition rewrite —
+    caching it would pin 'no data' on every panel for the TTL. Empty frames
+    and empty responses are returned but recomputed next request."""
+    from datetime import datetime
+
+    import polars as pl
+
+    from dashboard_api.services import common
+
+    monkeypatch.setattr(common, "_window_cache", type(common._window_cache)())
+    empty = pl.LazyFrame({"activity_date": [], "user_id": []}).with_columns(pl.col("activity_date").cast(pl.Datetime))
+    out = common.collect_window({"id": "t"}, "day", empty, "activity_date", datetime(2026, 1, 1), datetime(2026, 2, 1))
+    assert out.is_empty()
+    assert len(common._window_cache) == 0  # not cached
+
+    monkeypatch.setattr(common, "_response_cache", type(common._response_cache)())
+    monkeypatch.setattr(common, "_response_loading", {})
+    calls = []
+
+    def compute():
+        calls.append(1)
+        return ("date", [], ["metric"])  # empty series
+
+    for _ in range(2):
+        assert common.cached_response("k", compute, should_cache=lambda v: bool(v[1])) == ("date", [], ["metric"])
+    assert len(calls) == 2  # recomputed, not served from cache
