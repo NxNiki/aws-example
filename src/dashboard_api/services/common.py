@@ -51,6 +51,55 @@ def _evict_over_budget() -> None:
         logger.info("window cache: evicted %s (%.0f MB) over budget", key, df.estimated_size() / 1e6)
 
 
+def _as_window_dt(value: Any) -> Optional[datetime]:
+    """Normalize a cache-key bound (datetime, date, or its str form) to datetime."""
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return datetime.combine(value, datetime.min.time())
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def _slice_covering_entry(
+    config_id: Any, granularity: str, date_col: str, start_dt: Any, end_dt: Any, columns: Optional[Sequence[str]]
+) -> Optional[pl.DataFrame]:
+    """Serve [start_dt, end_dt] by slicing a fresh cached frame that covers it.
+
+    One user loading a long range makes every narrower request (same config /
+    granularity, columns available in the cached frame) an in-memory filter
+    instead of a new S3 collect. Runs under ``_window_lock``. The slice is not
+    re-cached — re-slicing a hit is cheap and caching it would duplicate rows
+    the covering entry already holds.
+    """
+    req_start, req_end = _as_window_dt(start_dt), _as_window_dt(end_dt)
+    if req_start is None or req_end is None:
+        return None
+    now = time.monotonic()
+    for key, (ts, df) in _window_cache.items():
+        if key[0] != config_id or key[1] != granularity or now - ts >= _WINDOW_CACHE_TTL_S:
+            continue
+        cov_start, cov_end = _as_window_dt(key[2]), _as_window_dt(key[3])
+        if cov_start is None or cov_end is None or cov_start > req_start or cov_end < req_end:
+            continue
+        if date_col not in df.columns:
+            continue
+        if columns is not None and not set(columns) <= set(df.columns):
+            continue
+        if columns is None and key[4] is not None:
+            # A projected frame can't serve a full-column request.
+            continue
+        out = df.filter((pl.col(date_col) >= req_start) & (pl.col(date_col) <= req_end))
+        if columns is not None:
+            out = out.select(list(columns))
+        _window_cache.move_to_end(key)  # covering entries that serve traffic stay warm
+        logger.info("window cache: served %s..%s from covering entry %s (rows=%d)", start_dt, end_dt, key, out.height)
+        return out
+    return None
+
+
 def collect_window(
     cfg: dict[str, Any],
     granularity: str,
@@ -65,7 +114,8 @@ def collect_window(
     With ``columns`` the collect is projected to just those columns (parquet
     projection pushdown — only their chunks are read from S3) and cached per
     column set, so requests for different metrics don't evict each other's
-    (much smaller) frames.
+    (much smaller) frames. A request whose window/columns are contained in a
+    fresh cached entry is served by slicing that entry in memory — no collect.
     """
     config_id = cfg.get("id")
     if not config_id:
@@ -79,6 +129,9 @@ def collect_window(
             _window_cache.move_to_end(key)
             return hit[1]
         _window_cache.pop(key, None)
+        sliced = _slice_covering_entry(config_id, granularity, date_col, start_dt, end_dt, columns)
+        if sliced is not None:
+            return sliced
         lf_win = lf.filter((pl.col(date_col) >= start_dt) & (pl.col(date_col) <= end_dt))
         if columns is not None:
             lf_win = lf_win.select(list(columns))
