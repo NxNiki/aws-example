@@ -528,3 +528,67 @@ def test_group_distribution_and_deepdive_requests_accept_filter():
         filter={"enable": True, "min": 1, "max": 99},
     )
     assert dd.filter.enable and dd.filter.min == 1 and dd.filter.max == 99
+
+
+def test_cached_group_values_single_flight(monkeypatch):
+    """Concurrent cold misses on one (config, granularity) key run exactly one
+    vocabulary scan; the other callers wait for it and share the result."""
+    import threading
+    import time as _time
+
+    from dashboard_api.routers import data as data_router
+
+    monkeypatch.setattr(data_router, "_GROUP_VALUES_CACHE", {})
+    monkeypatch.setattr(data_router, "_GROUP_VALUES_LOADING", {})
+    monkeypatch.setattr(data_router, "_GROUP_VALUES_REFRESHING", set())
+
+    calls = []
+    release = threading.Event()
+
+    def slow_load(cfg, granularity):
+        calls.append(granularity)
+        release.wait(timeout=5)
+        return {"user_group": ["a", "b"]}
+
+    monkeypatch.setattr(data_router, "load_group_values", slow_load)
+
+    results: list[dict] = []
+    threads = [
+        threading.Thread(target=lambda: results.append(data_router._cached_group_values("cfg", {}, "day")))
+        for _ in range(8)
+    ]
+    for t in threads:
+        t.start()
+    _time.sleep(0.2)  # let every thread reach the cache before the scan finishes
+    release.set()
+    for t in threads:
+        t.join(timeout=5)
+
+    assert len(calls) == 1
+    assert len(results) == 8 and all(r == {"user_group": ["a", "b"]} for r in results)
+
+
+def test_cached_group_values_serves_stale_and_refreshes(monkeypatch):
+    """An expired entry is served immediately (stale-while-revalidate) and one
+    background refresh replaces it."""
+    import time as _time
+
+    from dashboard_api.routers import data as data_router
+
+    key = ("cfg", "day")
+    stale = {"user_group": ["old"]}
+    monkeypatch.setattr(data_router, "_GROUP_VALUES_CACHE", {key: (_time.monotonic() - 4000.0, stale)})
+    monkeypatch.setattr(data_router, "_GROUP_VALUES_LOADING", {})
+    monkeypatch.setattr(data_router, "_GROUP_VALUES_REFRESHING", set())
+    monkeypatch.setattr(data_router, "load_group_values", lambda cfg, granularity: {"user_group": ["new"]})
+
+    assert data_router._cached_group_values("cfg", {}, "day") == stale  # served stale, no wait
+
+    deadline = _time.monotonic() + 5
+    while _time.monotonic() < deadline:
+        with data_router._group_values_lock:
+            current = data_router._GROUP_VALUES_CACHE[key][1]
+        if current == {"user_group": ["new"]}:
+            break
+        _time.sleep(0.05)
+    assert current == {"user_group": ["new"]}

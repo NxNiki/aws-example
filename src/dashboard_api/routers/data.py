@@ -123,9 +123,17 @@ def post_series(req: SeriesRequest) -> SeriesResponse:
 # a background thread refreshes, so no request ever waits on the full scan
 # except the very first per (config, granularity) after a cold start.
 # Availability (range-scoped) is cheap (period-pruned read) per request.
+#
+# All state below is guarded by _group_values_lock (request threadpool +
+# refresh/warmup threads share it). Cold misses are single-flighted per key
+# via _GROUP_VALUES_LOADING: the first caller scans, concurrent callers wait
+# on its event — never run N identical full scans. The lock is NOT held
+# during scans, so cached configs stay servable while another config loads.
 _GROUP_VALUES_CACHE: dict[tuple[str, str], tuple[float, dict[str, list[str]]]] = {}
 _GROUP_VALUES_REFRESHING: set[tuple[str, str]] = set()
+_GROUP_VALUES_LOADING: dict[tuple[str, str], threading.Event] = {}
 _GROUP_VALUES_TTL_SECONDS = 3600.0
+_group_values_lock = threading.Lock()
 
 
 def warm_group_values_cache() -> None:
@@ -144,24 +152,55 @@ def warm_group_values_cache() -> None:
 
 def _cached_group_values(config: str, cfg: dict, granularity: str) -> dict[str, list[str]]:
     key = (config, granularity)
-    cached = _GROUP_VALUES_CACHE.get(key)
-    if cached is None:
-        values = load_group_values(cfg, granularity)
-        _GROUP_VALUES_CACHE[key] = (time.monotonic(), values)
-        return values
-    if time.monotonic() - cached[0] >= _GROUP_VALUES_TTL_SECONDS and key not in _GROUP_VALUES_REFRESHING:
-        _GROUP_VALUES_REFRESHING.add(key)
+    while True:
+        with _group_values_lock:
+            cached = _GROUP_VALUES_CACHE.get(key)
+            if cached is not None:
+                break
+            loading = _GROUP_VALUES_LOADING.get(key)
+            if loading is None:
+                loading = threading.Event()
+                _GROUP_VALUES_LOADING[key] = loading
+                is_loader = True
+            else:
+                is_loader = False
+        if is_loader:
+            try:
+                values = load_group_values(cfg, granularity)
+                with _group_values_lock:
+                    _GROUP_VALUES_CACHE[key] = (time.monotonic(), values)
+                return values
+            finally:
+                with _group_values_lock:
+                    _GROUP_VALUES_LOADING.pop(key, None)
+                loading.set()
+        else:
+            # Re-check the cache after the loader finishes; if it failed, the
+            # next iteration elects this thread as the loader (retry).
+            loading.wait()
+
+    spawn_refresh = False
+    with _group_values_lock:
+        if time.monotonic() - cached[0] >= _GROUP_VALUES_TTL_SECONDS and key not in _GROUP_VALUES_REFRESHING:
+            _GROUP_VALUES_REFRESHING.add(key)
+            spawn_refresh = True
+        result = cached[1]
+
+    if spawn_refresh:
 
         def _refresh() -> None:
             try:
-                _GROUP_VALUES_CACHE[key] = (time.monotonic(), load_group_values(cfg, granularity))
+                values = load_group_values(cfg, granularity)
+                with _group_values_lock:
+                    _GROUP_VALUES_CACHE[key] = (time.monotonic(), values)
             except Exception:
                 logger.exception("group-values background refresh failed for %s", key)
             finally:
-                _GROUP_VALUES_REFRESHING.discard(key)
+                with _group_values_lock:
+                    _GROUP_VALUES_REFRESHING.discard(key)
 
         threading.Thread(target=_refresh, name=f"group-values-{config}-{granularity}", daemon=True).start()
-    return cached[1]
+    return result
 
 
 @router.get("/group-values", response_model=GroupValues)
