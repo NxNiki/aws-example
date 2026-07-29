@@ -33,9 +33,9 @@ logger = logging.getLogger(__name__)
 # months of per-user rows, and pinning a few of those by count is exactly how
 # the 4 GB task died. The newest frame always stays (it's what the in-flight
 # burst shares); a TTL picks up the daily ETL refresh without a restart.
-# Sized against the 12 GB task (TASK_MEMORY in infra/dashboard_api/deploy_ecs.py):
+# Sized against the 8 GB task (TASK_MEMORY in infra/dashboard_api/deploy_ecs.py):
 # budget + the largest in-flight collects must stay under it with margin.
-_WINDOW_CACHE_MAX_BYTES = 4_000_000_000
+_WINDOW_CACHE_MAX_BYTES = 2_500_000_000
 _WINDOW_CACHE_TTL_S = 900
 _window_cache: "OrderedDict[tuple[Any, ...], tuple[float, pl.DataFrame]]" = OrderedDict()
 _window_lock = threading.Lock()
