@@ -3,7 +3,8 @@
 Lightweight FastAPI service backing the React dashboard. Serves the data/report
 API the SPA and the agent share, and (in prod) the built SPA static assets.
 LLM-free by design — agent turns go to the `ai_agent` service. Plan:
-[`docs/frontend_redesign.md`](../../docs/frontend_redesign.md).
+[`docs/frontend_redesign.md`](../../docs/frontend_redesign.md). Dataflow &
+caching reference: [`docs/dashboard_dataflow.md`](../../docs/dashboard_dataflow.md).
 
 ## Endpoints (Phase 0)
 
