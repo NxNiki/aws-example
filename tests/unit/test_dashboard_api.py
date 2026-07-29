@@ -802,3 +802,45 @@ def test_bootstrap_ci_caps_resample_size_with_rescale():
 
     nan_lo, nan_hi = _bootstrap_ci(np.array([1.0]))
     assert math.isnan(nan_lo) and math.isnan(nan_hi)
+
+
+def test_cached_response_single_flight_and_ttl(monkeypatch):
+    """Identical concurrent requests compute once and share the result; a
+    loader error propagates without being cached."""
+    import threading
+
+    from dashboard_api.services import common
+
+    monkeypatch.setattr(common, "_response_cache", type(common._response_cache)())
+    monkeypatch.setattr(common, "_response_loading", {})
+
+    calls = []
+    release = threading.Event()
+
+    def compute():
+        calls.append(1)
+        release.wait(timeout=5)
+        return {"answer": 42}
+
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(common.cached_response("k", compute))) for _ in range(6)]
+    for t in threads:
+        t.start()
+    import time as _time
+
+    _time.sleep(0.2)
+    release.set()
+    for t in threads:
+        t.join(timeout=5)
+    assert len(calls) == 1 and len(results) == 6 and all(r == {"answer": 42} for r in results)
+    assert common.cached_response("k", compute) == {"answer": 42}  # hit, no recompute
+    assert len(calls) == 1
+
+    def boom():
+        raise RuntimeError("nope")
+
+    import pytest
+
+    with pytest.raises(RuntimeError):
+        common.cached_response("err", boom)
+    assert "err" not in common._response_cache  # errors are not cached

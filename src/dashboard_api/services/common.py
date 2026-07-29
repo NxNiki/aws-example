@@ -15,7 +15,7 @@ import threading
 import time
 from collections import OrderedDict
 from datetime import date, datetime
-from typing import Any, Iterable, Iterator, Optional, Sequence, cast
+from typing import Any, Callable, Iterable, Iterator, Optional, Sequence, cast
 
 import polars as pl
 
@@ -144,6 +144,52 @@ def collect_window(
 
 class SeriesError(Exception):
     """Raised when a request can't be served (bad granularity / missing date col)."""
+
+
+# Computed-response cache, single-flight. The window cache dedups I/O, but every
+# request still re-ran cohort filtering + DataMetrics + CI computation — with
+# several users on the same default views that recompute pinned the CPU. Keyed
+# by the endpoint's full request signature; TTL stays well under the window
+# cache's 900s so it never extends data staleness. Errors are never cached.
+_RESPONSE_CACHE_TTL_S = 300
+_RESPONSE_CACHE_MAX_ENTRIES = 512
+_response_cache: "OrderedDict[str, tuple[float, Any]]" = OrderedDict()
+_response_loading: dict[str, threading.Event] = {}
+_response_lock = threading.Lock()
+
+
+def cached_response(key: str, compute: Callable[[], Any]) -> Any:
+    """Return ``compute()`` cached under ``key`` with single-flight semantics.
+
+    Identical concurrent requests run ``compute`` once and share the result;
+    an exception in the loader propagates to it, and one waiter retries as the
+    new loader. Callers must not mutate the returned value — it is shared.
+    """
+    while True:
+        with _response_lock:
+            hit = _response_cache.get(key)
+            if hit and time.monotonic() - hit[0] < _RESPONSE_CACHE_TTL_S:
+                _response_cache.move_to_end(key)
+                return hit[1]
+            if hit:
+                _response_cache.pop(key, None)
+            loading = _response_loading.get(key)
+            if loading is None:
+                loading = threading.Event()
+                _response_loading[key] = loading
+                break
+        loading.wait()
+    try:
+        value = compute()
+        with _response_lock:
+            _response_cache[key] = (time.monotonic(), value)
+            while len(_response_cache) > _RESPONSE_CACHE_MAX_ENTRIES:
+                _response_cache.popitem(last=False)
+        return value
+    finally:
+        with _response_lock:
+            _response_loading.pop(key, None)
+        loading.set()
 
 
 def stats_by_date_cfg(cfg: dict[str, Any]) -> dict[str, Any]:

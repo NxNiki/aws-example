@@ -34,7 +34,7 @@ from dashboard_api.schemas.data import (
     SummaryTableRequest,
     SummaryTableResponse,
 )
-from dashboard_api.services.common import SeriesError
+from dashboard_api.services.common import SeriesError, cached_response
 from dashboard_api.services.configs import build_config_detail, list_config_summaries, load_raw_config
 from dashboard_api.services.deepdive import load_deepdive, load_deepdive_metrics
 from dashboard_api.services.group_distribution import load_group_distribution
@@ -92,16 +92,21 @@ def post_series(req: SeriesRequest) -> SeriesResponse:
     if cfg is None:
         raise HTTPException(status_code=404, detail=f"Unknown config '{req.config}'")
     try:
-        date_col, series, missing = load_series(
-            cfg,
-            req.granularity,
-            req.metrics,
-            req.date_from,
-            req.date_to,
-            req.group_values,
-            lifecycle=_lifecycle(req.lifecycle_groups),
-            range_groups=_ranges_dims(req.range_groups),
-            ranges=[(r.start, r.end) for r in req.ranges] if req.ranges is not None else None,
+        # Identical concurrent/repeated requests (several users on the same
+        # view) compute once and share the result.
+        date_col, series, missing = cached_response(
+            "series:" + req.model_dump_json(),
+            lambda: load_series(
+                cfg,
+                req.granularity,
+                req.metrics,
+                req.date_from,
+                req.date_to,
+                req.group_values,
+                lifecycle=_lifecycle(req.lifecycle_groups),
+                range_groups=_ranges_dims(req.range_groups),
+                ranges=[(r.start, r.end) for r in req.ranges] if req.ranges is not None else None,
+            ),
         )
     except SeriesError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -271,20 +276,23 @@ def post_group_distribution(req: GroupDistributionRequest) -> GroupDistributionR
     if cfg is None:
         raise HTTPException(status_code=404, detail=f"Unknown config '{req.config}'")
     try:
-        stats, missing = load_group_distribution(
-            cfg,
-            req.granularity,
-            req.metric,
-            [(r.start, r.end) for r in req.ranges],
-            req.group_values,
-            _lifecycle(req.lifecycle_groups),
-            _ranges_dims(req.range_groups),
-            req.clip.enable,
-            req.clip.min,
-            req.clip.max,
-            req.filter.enable,
-            req.filter.min,
-            req.filter.max,
+        stats, missing = cached_response(
+            "group-distribution:" + req.model_dump_json(),
+            lambda: load_group_distribution(
+                cfg,
+                req.granularity,
+                req.metric,
+                [(r.start, r.end) for r in req.ranges],
+                req.group_values,
+                _lifecycle(req.lifecycle_groups),
+                _ranges_dims(req.range_groups),
+                req.clip.enable,
+                req.clip.min,
+                req.clip.max,
+                req.filter.enable,
+                req.filter.min,
+                req.filter.max,
+            ),
         )
     except SeriesError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
