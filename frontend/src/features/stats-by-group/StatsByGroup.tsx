@@ -18,7 +18,7 @@ import type { GroupPanelState } from "../../store/dashboardStore";
 function GroupPanel(props: {
   group: MetricGroup;
   panel: GroupPanelState;
-  onMetric: (m: string) => void;
+  onMetric: (m: string | null) => void;
   onMode: (mode: "box" | "bar") => void;
   onClip: (c: ClipOpts) => void;
   onFilter: (f: FilterOpts) => void;
@@ -42,8 +42,9 @@ function GroupPanel(props: {
             <select
               className="border rounded px-2 py-1"
               value={panel.metric ?? ""}
-              onChange={(e) => props.onMetric(e.target.value)}
+              onChange={(e) => props.onMetric(e.target.value || null)}
             >
+              <option value="">{"<None>"}</option>
               {group.metrics.map((m) => (
                 <option key={m} value={m}>
                   {m}

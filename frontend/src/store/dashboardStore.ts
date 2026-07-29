@@ -276,10 +276,15 @@ const defaultGroupPanel = (): GroupPanelState => ({
 });
 
 function defaultGroupPanels(config: ConfigDetail): Record<string, GroupPanelState> {
+  // Same first-launch policy as Stats-by-Date: only the FIRST panel computes
+  // by default (num_active_users when the panel offers it), later panels
+  // start at <None> — each selected group metric costs a per-(cohort×range)
+  // CI computation server-side.
   const panels: Record<string, GroupPanelState> = {};
-  for (const g of config.groups) {
-    panels[g.id] = { ...defaultGroupPanel(), metric: g.metrics[0] ?? null };
-  }
+  config.groups.forEach((g, i) => {
+    const first = g.metrics.includes("num_active_users") ? "num_active_users" : (g.metrics[0] ?? null);
+    panels[g.id] = { ...defaultGroupPanel(), metric: i === 0 ? first : null };
+  });
   return panels;
 }
 
@@ -451,7 +456,7 @@ interface DashboardState {
   loadAllSeries: () => Promise<void>;
 
   // Stats-by-Group
-  setGroupMetric: (panelId: string, metric: string) => void;
+  setGroupMetric: (panelId: string, metric: string | null) => void;
   setGroupMode: (panelId: string, mode: "box" | "bar") => void;
   setGroupClip: (panelId: string, clip: ClipOpts) => void;
   setGroupFilter: (panelId: string, filter: FilterOpts) => void;
