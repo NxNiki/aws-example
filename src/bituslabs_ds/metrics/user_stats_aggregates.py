@@ -53,9 +53,11 @@ from __future__ import annotations
 
 import inspect
 import logging
+import math
 import re
 from datetime import date, datetime, timedelta
 from functools import cached_property
+from statistics import NormalDist
 from typing import ClassVar, Dict, FrozenSet, List, Optional, Set, Tuple, Union
 
 import numpy as np
@@ -92,27 +94,44 @@ def _norm_date(x: Union[date, datetime]) -> date:
     return x.date() if isinstance(x, datetime) else x
 
 
+# Above this sample size the bootstrap percentile CI of a MEAN is
+# CLT-indistinguishable from the analytic normal CI (they agree to ~3 decimals
+# even on heavily skewed per-user metrics), while resampling costs
+# n_boot × n draws — seconds per (cohort × range) cell of the Stats-by-Group
+# tab on ss03-sized cohorts. Switch to the O(n) analytic form there.
+_BOOTSTRAP_ANALYTIC_MIN_N = 10_000
+
+
 def _bootstrap_ci(
     arr: np.ndarray,
     n_boot: int = 500,
     alpha: float = 0.05,
 ) -> Tuple[float, float]:
-    """Return (lower, upper) bootstrap percentile CI for the mean of ``arr``.
+    """Return (lower, upper) CI for the mean of ``arr``.
 
-    Resamples in batches: a single-shot ``(n_boot, len(arr))`` matrix is
-    ~800 MB for a 200k-element per-user array, and several land concurrently
+    Bootstrap percentile CI below ``_BOOTSTRAP_ANALYTIC_MIN_N`` samples (where
+    skew can matter and resampling is cheap); analytic normal CI above it.
+
+    Bootstrap resamples in batches: a single-shot ``(n_boot, len(arr))`` matrix
+    is ~800 MB for a 200k-element per-user array, and several land concurrently
     when a dashboard tab bootstraps its panels in parallel — this OOM-killed
     the dashboard-api task in production. Batching caps the transient at
     ~80 MB with identical statistics.
     """
-    if len(arr) < 2:
+    n = len(arr)
+    if n < 2:
         return float("nan"), float("nan")
+    if n >= _BOOTSTRAP_ANALYTIC_MIN_N:
+        z = NormalDist().inv_cdf(1 - alpha / 2)
+        mean = float(np.mean(arr))
+        half = z * float(np.std(arr, ddof=1)) / math.sqrt(n)
+        return mean - half, mean + half
     rng = np.random.default_rng()
-    batch = max(1, min(n_boot, 10_000_000 // len(arr)))
+    batch = max(1, min(n_boot, 10_000_000 // n))
     boot_means = np.empty(n_boot)
     for i in range(0, n_boot, batch):
         k = min(batch, n_boot - i)
-        boot_means[i : i + k] = rng.choice(arr, size=(k, len(arr)), replace=True).mean(axis=1)
+        boot_means[i : i + k] = rng.choice(arr, size=(k, n), replace=True).mean(axis=1)
     return float(np.percentile(boot_means, 100 * alpha / 2)), float(np.percentile(boot_means, 100 * (1 - alpha / 2)))
 
 

@@ -765,3 +765,36 @@ def test_collect_window_covering_entry_respects_columns_and_config(monkeypatch):
     )
     assert other["user_id"].to_list() == ["u1"]
     assert len(common._window_cache) == 3
+
+
+def test_bootstrap_ci_analytic_for_large_samples():
+    """Large per-user samples get the O(n) analytic normal CI (CLT regime) —
+    the resampling loop on ss03-sized cohorts took seconds per Stats-by-Group
+    cell. Small samples keep the percentile bootstrap."""
+    import time
+
+    import numpy as np
+
+    from bituslabs_ds.metrics.user_stats_aggregates import _BOOTSTRAP_ANALYTIC_MIN_N, _bootstrap_ci
+
+    rng = np.random.default_rng(0)
+    arr = rng.exponential(2.0, 500_000)  # skewed, like bet amounts
+
+    t0 = time.perf_counter()
+    lo, hi = _bootstrap_ci(arr, n_boot=500)
+    elapsed = time.perf_counter() - t0
+    assert elapsed < 0.5  # resampling this would take seconds
+
+    mean = arr.mean()
+    half = 1.959964 * arr.std(ddof=1) / np.sqrt(len(arr))
+    assert abs(lo - (mean - half)) < 1e-6 and abs(hi - (mean + half)) < 1e-6
+
+    small = rng.exponential(2.0, 200)
+    slo, shi = _bootstrap_ci(small, n_boot=500)
+    assert slo < small.mean() < shi
+    assert len(small) < _BOOTSTRAP_ANALYTIC_MIN_N
+
+    import math
+
+    nan_lo, nan_hi = _bootstrap_ci(np.array([1.0]))
+    assert math.isnan(nan_lo) and math.isnan(nan_hi)
