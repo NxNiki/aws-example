@@ -889,3 +889,45 @@ def test_empty_results_are_not_cached(monkeypatch):
     for _ in range(2):
         assert common.cached_response("k", compute, should_cache=lambda v: bool(v[1])) == ("date", [], ["metric"])
     assert len(calls) == 2  # recomputed, not served from cache
+
+
+def test_load_lazy_hive_scan_and_period_pruning(tmp_path, monkeypatch):
+    """Sources with period= layouts load through ONE hive-aware scan (not one
+    scan + schema fetch per file — request latency scaled with history length
+    on long-lived games like ss01), and collect_window prunes partitions by
+    path before reading them. Flat layouts pass through untouched."""
+    from datetime import datetime
+
+    import polars as pl
+
+    from dashboard_api.services import common
+
+    hive_root = tmp_path / "daily_stats"
+    for day, uid_ in [("2026-07-01", "u1"), ("2026-07-02", "u2"), ("2026-07-03", "u3")]:
+        d = hive_root / f"period={day}"
+        d.mkdir(parents=True)
+        pl.DataFrame({"activity_date": [day], "user_id": [uid_], "user_num_bets": [1]}).with_columns(
+            pl.col("activity_date").str.to_datetime()
+        ).write_parquet(d / "part.parquet")
+
+    cfg = {"id": "hive", "stats_by_date": {"files": {"day": [str(hive_root)]}, "date_col": "activity_date"}}
+    lf, date_col = common.load_lazy(cfg, "day")
+    assert date_col == "activity_date"
+    assert "period" in lf.collect_schema().names()  # hive column materialized
+
+    monkeypatch.setattr(common, "_window_cache", type(common._window_cache)())
+    out = common.collect_window(cfg, "day", lf, date_col, datetime(2026, 7, 2), datetime(2026, 7, 3))
+    assert sorted(out["user_id"].to_list()) == ["u2", "u3"]  # pruned + filtered correctly
+
+    flat_root = tmp_path / "flat_stats"
+    flat_root.mkdir()
+    pl.DataFrame({"activity_date": ["2026-07-01"], "user_id": ["u9"]}).with_columns(
+        pl.col("activity_date").str.to_datetime()
+    ).write_parquet(flat_root / "all.parquet")
+    flat_cfg = {"id": "flat", "stats_by_date": {"files": {"day": [str(flat_root)]}, "date_col": "activity_date"}}
+    flat_lf, _ = common.load_lazy(flat_cfg, "day")
+    assert "period" not in flat_lf.collect_schema().names()
+    flat_out = common.collect_window(
+        flat_cfg, "day", flat_lf, "activity_date", datetime(2026, 7, 1), datetime(2026, 7, 2)
+    )
+    assert flat_out["user_id"].to_list() == ["u9"]

@@ -14,13 +14,14 @@ import math
 import threading
 import time
 from collections import OrderedDict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Optional, Sequence, cast
 
 import polars as pl
 
 from bituslabs_ds.metrics.user_stats_aggregates import PERIODS_SINCE_FIRST_BET_COL
-from bituslabs_ds.s3_utils import read_files
+from bituslabs_ds.s3_utils import expand_paths_to_files, is_s3_path
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,25 @@ def _slice_covering_entry(
     return None
 
 
+# Rows with date_col >= window start can live in a period that STARTS up to
+# one period-length earlier, so pruning widens one period to the left.
+_PERIOD_PRUNE_MARGIN_DAYS = {"day": 0, "week": 7, "month": 31}
+
+
+def _prune_periods(lf: pl.LazyFrame, granularity: str, start_dt: Any, end_dt: Any) -> pl.LazyFrame:
+    """Restrict the hive ``period`` partition column to the window so polars
+    skips the other partitions' files by PATH — no footers or pages read.
+    Purely an I/O optimization: the caller's date_col filter still bounds the
+    rows, and flat layouts (no period column) pass through untouched."""
+    if "period" not in lf.collect_schema().names():
+        return lf
+    start, end = _as_window_dt(start_dt), _as_window_dt(end_dt)
+    if start is None or end is None:
+        return lf
+    lo = start.date() - timedelta(days=_PERIOD_PRUNE_MARGIN_DAYS.get(granularity, 31))
+    return lf.filter(pl.col("period").cast(pl.Date, strict=False).is_between(lo, end.date()))
+
+
 def collect_window(
     cfg: dict[str, Any],
     granularity: str,
@@ -137,7 +157,9 @@ def collect_window(
         sliced = _slice_covering_entry(config_id, granularity, date_col, start_dt, end_dt, columns)
         if sliced is not None:
             return sliced
-        lf_win = lf.filter((pl.col(date_col) >= start_dt) & (pl.col(date_col) <= end_dt))
+        lf_win = _prune_periods(lf, granularity, start_dt, end_dt).filter(
+            (pl.col(date_col) >= start_dt) & (pl.col(date_col) <= end_dt)
+        )
         if columns is not None:
             lf_win = lf_win.select(list(columns))
         df = lf_win.collect()
@@ -427,6 +449,28 @@ def attach_lifecycle_periods(cfg: dict[str, Any], df: pl.DataFrame, date_col: st
     return joined.with_columns(periods.alias(PERIODS_COL)).drop("first_bet_date")
 
 
+def _scan_source(path: str) -> pl.LazyFrame:
+    """One lazy scan per configured source path.
+
+    A single ``scan_parquet`` over the expanded file list (hive-aware when the
+    layout has ``period=`` directories) reads ONE footer for the schema and
+    lets polars prune partitions by path. The previous per-file scan resolved
+    each file's schema eagerly — one blocking S3 round-trip per file, which
+    made request latency scale with a game's history length (ss01's ~250
+    daily periods) rather than its data size.
+    """
+    if is_s3_path(path):
+        files = expand_paths_to_files([path])
+    elif Path(path).is_dir():
+        files = sorted(str(p) for p in Path(path).rglob("*.parquet"))
+    else:
+        return pl.scan_parquet(path)
+    if not files:
+        return pl.DataFrame().lazy()
+    hive = any("period=" in f for f in files)
+    return pl.scan_parquet(files, hive_partitioning=hive)
+
+
 def load_lazy(cfg: dict[str, Any], granularity: str) -> tuple[pl.LazyFrame, str]:
     """Lazily open the user-level parquet for a granularity; return (lf, date_col)."""
     sd = stats_by_date_cfg(cfg)
@@ -434,7 +478,8 @@ def load_lazy(cfg: dict[str, Any], granularity: str) -> tuple[pl.LazyFrame, str]
     files = (sd.get("files") or {}).get(granularity)
     if not files:
         raise SeriesError(f"No stats_by_date files configured for granularity '{granularity}'")
-    lf = cast(pl.LazyFrame, read_files(files, lazy_load=True, expand_s3_prefixes=True))
+    scans = [_scan_source(str(p)) for p in (files if isinstance(files, list) else [files])]
+    lf = scans[0] if len(scans) == 1 else pl.concat(scans, how="diagonal_relaxed")
     return lf, date_col
 
 
