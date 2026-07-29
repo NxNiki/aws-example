@@ -9,12 +9,6 @@ WITH base_data AS (
         b.payout,
         b.bet,
         b.fish_value,
-        CASE
-            WHEN b.fish_value <= 10 THEN 'low'
-            WHEN b.fish_value <= 130 THEN 'medium'
-            WHEN b.fish_value <= 200 THEN 'high'
-            ELSE 'ultra'
-        END as fish_type,
         b.killed,
         b.profit,
         -- Sequence metrics are DAY-partitioned (each activity_date is
@@ -65,13 +59,12 @@ user_daily_group AS (
 
 -- GET KILL STREAK LENGTH:
 base_kills AS (
-    SELECT 
-        user_id, 
-        activity_date, 
-        fish_type, 
+    SELECT
+        user_id,
+        activity_date,
         bullet_id,
         bet_time
-    FROM base_data 
+    FROM base_data
     WHERE killed = 1
 ),
 
@@ -79,22 +72,14 @@ calculate_islands AS (
     SELECT
         user_id,
         activity_date,
-        fish_type,
         bullet_id,
         bet_time,
-        -- GLOBAL: ignores fish_type. Checks if ANY fish was killed recently.
-        CASE 
-            WHEN DATEDIFF(SECOND, LAG(bet_time) OVER(PARTITION BY user_id ORDER BY bullet_id, bet_time), bet_time) > 3 
-                OR LAG(bet_time) OVER(PARTITION BY user_id ORDER BY bullet_id, bet_time) IS NULL 
-            THEN 1 ELSE 0 
-        END AS is_new_global_streak,
-
-        -- TYPE-SPECIFIC: isolated by fish_type. Only checks previous kill of SAME type.
-        CASE 
-            WHEN DATEDIFF(SECOND, LAG(bet_time) OVER(PARTITION BY user_id, fish_type ORDER BY bullet_id, bet_time), bet_time) > 3 
-                OR LAG(bet_time) OVER(PARTITION BY user_id, fish_type ORDER BY bullet_id, bet_time) IS NULL 
-            THEN 1 ELSE 0 
-        END AS is_new_type_streak
+        -- Checks if ANY fish was killed recently.
+        CASE
+            WHEN DATEDIFF(SECOND, LAG(bet_time) OVER(PARTITION BY user_id ORDER BY bullet_id, bet_time), bet_time) > 3
+                OR LAG(bet_time) OVER(PARTITION BY user_id ORDER BY bullet_id, bet_time) IS NULL
+            THEN 1 ELSE 0
+        END AS is_new_global_streak
     FROM base_kills
 ),
 
@@ -102,39 +87,26 @@ streak_ids AS (
     SELECT
         user_id,
         activity_date,
-        fish_type,
         bet_time,
-        SUM(is_new_global_streak) OVER(PARTITION BY user_id ORDER BY bullet_id, bet_time ROWS UNBOUNDED PRECEDING) AS global_streak_id,
-        SUM(is_new_type_streak) OVER(PARTITION BY user_id, fish_type ORDER BY bullet_id, bet_time ROWS UNBOUNDED PRECEDING) AS type_streak_id
+        SUM(is_new_global_streak) OVER(PARTITION BY user_id ORDER BY bullet_id, bet_time ROWS UNBOUNDED PRECEDING) AS global_streak_id
     FROM calculate_islands
 ),
 
 streak_lengths AS (
-    SELECT 
-        user_id, 
+    SELECT
+        user_id,
         activity_date,
-        fish_type,
         -- Calculate the length of the specific streak instance this row belongs to
-        COUNT(*) OVER(PARTITION BY user_id, global_streak_id) AS global_streak_len,
-        COUNT(*) OVER(PARTITION BY user_id, fish_type, type_streak_id) AS type_streak_len
+        COUNT(*) OVER(PARTITION BY user_id, global_streak_id) AS global_streak_len
     FROM streak_ids
 ),
 
 max_kill_streak_length AS (
-    SELECT 
+    SELECT
         user_id,
         activity_date,
         MAX(global_streak_len) AS max_kill_streak,
-        MAX(CASE WHEN fish_type = 'low' THEN type_streak_len END) AS max_kill_streak_low,
-        MAX(CASE WHEN fish_type = 'medium' THEN type_streak_len END) AS max_kill_streak_medium,
-        MAX(CASE WHEN fish_type = 'high' THEN type_streak_len END) AS max_kill_streak_high,
-        MAX(CASE WHEN fish_type = 'ultra' THEN type_streak_len END) AS max_kill_streak_ultra,
-
-        AVG(global_streak_len) AS avg_kill_streak,
-        AVG(CASE WHEN fish_type = 'low' THEN type_streak_len END) AS avg_kill_streak_low,
-        AVG(CASE WHEN fish_type = 'medium' THEN type_streak_len END) AS avg_kill_streak_medium,
-        AVG(CASE WHEN fish_type = 'high' THEN type_streak_len END) AS avg_kill_streak_high,
-        AVG(CASE WHEN fish_type = 'ultra' THEN type_streak_len END) AS avg_kill_streak_ultra
+        AVG(global_streak_len) AS avg_kill_streak
     FROM streak_lengths
     GROUP BY user_id, activity_date
 ),
@@ -146,8 +118,7 @@ user_session_id AS (
         t.user_id,
         t.bet_time,
         t.killed,
-        t.fish_type,
-        SUM(CASE 
+        SUM(CASE
                 WHEN DATEDIFF(SECOND, t.prev_bet_time, t.bet_time) < 600 THEN 0 
                 ELSE 1 
             END) OVER (
@@ -170,16 +141,8 @@ user_session_length AS (
         t.session_id,
 
         DATEDIFF(SECOND, MIN(t.bet_time), MIN(CASE WHEN t.killed = 1 THEN t.bet_time END)) AS seconds_to_kill_fish,
-        DATEDIFF(SECOND, MIN(t.bet_time), MIN(CASE WHEN t.killed = 1 AND t.fish_type = 'low' THEN t.bet_time END)) AS seconds_to_kill_fish_low,
-        DATEDIFF(SECOND, MIN(t.bet_time), MIN(CASE WHEN t.killed = 1 AND t.fish_type = 'medium' THEN t.bet_time END)) AS seconds_to_kill_fish_medium,
-        DATEDIFF(SECOND, MIN(t.bet_time), MIN(CASE WHEN t.killed = 1 AND t.fish_type = 'high' THEN t.bet_time END)) AS seconds_to_kill_fish_high,
-        DATEDIFF(SECOND, MIN(t.bet_time), MIN(CASE WHEN t.killed = 1 AND t.fish_type = 'ultra' THEN t.bet_time END)) AS seconds_to_kill_fish_ultra,
 
         MIN(CASE WHEN t.killed = 1 THEN t.bet_index END) - MIN(bet_index) AS bets_to_kill_fish,
-        MIN(CASE WHEN t.killed = 1 AND t.fish_type = 'low' THEN t.bet_index END) - MIN(bet_index) AS bets_to_kill_fish_low,
-        MIN(CASE WHEN t.killed = 1 AND t.fish_type = 'medium' THEN t.bet_index END) - MIN(bet_index) AS bets_to_kill_fish_medium,
-        MIN(CASE WHEN t.killed = 1 AND t.fish_type = 'high' THEN t.bet_index END) - MIN(bet_index) AS bets_to_kill_fish_high,
-        MIN(CASE WHEN t.killed = 1 AND t.fish_type = 'ultra' THEN t.bet_index END) - MIN(bet_index) AS bets_to_kill_fish_ultra,
 
         COUNT(t.user_id) AS session_length
     FROM user_session_id t
@@ -196,16 +159,8 @@ user_session_stats AS (
         MIN(t.session_length) AS min_streak_length,
 
         AVG(seconds_to_kill_fish) AS seconds_to_kill_fish,
-        AVG(seconds_to_kill_fish_low) AS seconds_to_kill_fish_low,
-        AVG(seconds_to_kill_fish_medium) AS seconds_to_kill_fish_medium,
-        AVG(seconds_to_kill_fish_high) AS seconds_to_kill_fish_high,
-        AVG(seconds_to_kill_fish_ultra) AS seconds_to_kill_fish_ultra,
 
-        AVG(bets_to_kill_fish) AS bets_to_kill_fish,
-        AVG(bets_to_kill_fish_low) AS bets_to_kill_fish_low,
-        AVG(bets_to_kill_fish_medium) AS bets_to_kill_fish_medium,
-        AVG(bets_to_kill_fish_high) AS bets_to_kill_fish_high,
-        AVG(bets_to_kill_fish_ultra) AS bets_to_kill_fish_ultra
+        AVG(bets_to_kill_fish) AS bets_to_kill_fish
 
     FROM user_session_length t
     GROUP BY t.user_id, t.activity_date
@@ -222,16 +177,8 @@ user_session_stats_agg AS (
         MIN(t.min_streak_length)        AS user_min_streak_length,
 
         AVG(t.seconds_to_kill_fish)         AS user_seconds_to_kill_fish,
-        AVG(t.seconds_to_kill_fish_low)     AS user_seconds_to_kill_fish_low,
-        AVG(t.seconds_to_kill_fish_medium)  AS user_seconds_to_kill_fish_medium,
-        AVG(t.seconds_to_kill_fish_high)    AS user_seconds_to_kill_fish_high,
-        AVG(t.seconds_to_kill_fish_ultra)   AS user_seconds_to_kill_fish_ultra,
 
-        AVG(t.bets_to_kill_fish)        AS user_bets_to_kill_fish,
-        AVG(t.bets_to_kill_fish_low)    AS user_bets_to_kill_fish_low,
-        AVG(t.bets_to_kill_fish_medium) AS user_bets_to_kill_fish_medium,
-        AVG(t.bets_to_kill_fish_high)   AS user_bets_to_kill_fish_high,
-        AVG(t.bets_to_kill_fish_ultra)  AS user_bets_to_kill_fish_ultra
+        AVG(t.bets_to_kill_fish)        AS user_bets_to_kill_fish
     FROM user_session_stats t
     JOIN user_daily_group u ON t.user_id = u.user_id AND t.activity_date = u.activity_date
     GROUP BY u.daily_group, t.user_id, u.activity_week
@@ -243,16 +190,8 @@ max_kill_streak_length_agg AS (
         t.user_id,
         u.activity_week,
         MAX(t.max_kill_streak)          AS user_max_kill_streak,
-        MAX(t.max_kill_streak_low)      AS user_max_kill_streak_low,
-        MAX(t.max_kill_streak_medium)   AS user_max_kill_streak_medium,
-        MAX(t.max_kill_streak_high)     AS user_max_kill_streak_high,
-        MAX(t.max_kill_streak_ultra)    AS user_max_kill_streak_ultra,
 
-        AVG(t.avg_kill_streak)          AS user_avg_kill_streak,
-        AVG(t.avg_kill_streak_low)      AS user_avg_kill_streak_low,
-        AVG(t.avg_kill_streak_medium)   AS user_avg_kill_streak_medium,
-        AVG(t.avg_kill_streak_high)     AS user_avg_kill_streak_high,
-        AVG(t.avg_kill_streak_ultra)    AS user_avg_kill_streak_ultra
+        AVG(t.avg_kill_streak)          AS user_avg_kill_streak
     FROM max_kill_streak_length t
     JOIN user_daily_group u ON t.user_id = u.user_id AND t.activity_date = u.activity_date
     GROUP BY u.daily_group, t.user_id, u.activity_week
@@ -373,27 +312,11 @@ SELECT
     t4.user_max_streak_length,
     t4.user_min_streak_length,
     t4.user_seconds_to_kill_fish,
-    t4.user_seconds_to_kill_fish_low,
-    t4.user_seconds_to_kill_fish_medium,
-    t4.user_seconds_to_kill_fish_high,
-    t4.user_seconds_to_kill_fish_ultra,
     t4.user_bets_to_kill_fish,
-    t4.user_bets_to_kill_fish_low,
-    t4.user_bets_to_kill_fish_medium,
-    t4.user_bets_to_kill_fish_high,
-    t4.user_bets_to_kill_fish_ultra,
 
     -- Kill streak stats:
     t5.user_max_kill_streak,
-    t5.user_max_kill_streak_low,
-    t5.user_max_kill_streak_medium,
-    t5.user_max_kill_streak_high,
-    t5.user_max_kill_streak_ultra,
-    t5.user_avg_kill_streak,
-    t5.user_avg_kill_streak_low,
-    t5.user_avg_kill_streak_medium,
-    t5.user_avg_kill_streak_high,
-    t5.user_avg_kill_streak_ultra
+    t5.user_avg_kill_streak
 FROM stats_by_user_date t1
 LEFT JOIN user_session_stats_agg t4
     ON t1.user_id = t4.user_id

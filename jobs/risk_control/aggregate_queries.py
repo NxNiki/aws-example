@@ -20,7 +20,7 @@ implementation in risk_user_analysis.py):
 - gaps use microsecond DATEDIFF (integer-second DATEDIFF truncates);
 - PERCENTILE_CONT lives in its own CTE joined back (Redshift cannot mix
   WITHIN GROUP aggregates into the main GROUP BY; same pattern as
-  jobs/fish_hunter/etl_game_stats_by_bet.py);
+  jobs/etl/redshift/fish_hunter/etl_game_stats_by_bet.py);
 - TRUNC before int casts (pandas ``.astype(int)`` truncates, CAST rounds);
 - strategy/ip NULLs become 'UNKNOWN' (= fillna), bullet/fish/combo branches
   drop NULLs (= dropna);

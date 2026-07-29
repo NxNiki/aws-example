@@ -83,7 +83,7 @@ cases:
     notes: |
       Regression test for the codebase-tools deploy. The boost-pool /
       boost-pool-2 strategy assignment lives in a CASE expression inside
-      jobs/fish_hunter/etl_game_stats_daily_by_user.py (`daily_group`).
+      jobs/etl/redshift/fish_hunter/etl_game_stats_daily_by_user.py (`daily_group`).
       Assertions chosen for stability: `BOOST_POOL_2` is the discriminating
       label the agent cannot produce without reading the source (distinct
       from `BOOST_POOL` only by the `_2` suffix); `strategy_name` is the

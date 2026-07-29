@@ -1,11 +1,11 @@
-"""Per-user game stats for SS01 (wucaishen), by period, ab_group and mathtable.
+"""Per-user game stats for SS02 (deepdive), by period, ab_group and mathtable.
 
-ETL job: writes output_ss01_wucaishen_v2/{daily,weekly,monthly}_stats
-(the ``user_*`` metrics consumed by the SS01 dashboard / DataMetrics).
+ETL job: writes output_ss02_deepdive_v2/{daily,weekly,monthly}_stats
+(the ``user_*`` metrics consumed by the SS02 dashboard / DataMetrics).
 ``stats_agg_col`` selects the period grain: activity_date / _week / _month.
 
-Rows are one per (period, user, ab_group, mathtable) — every bet lives in
-exactly one row, so sums are correct under ANY selection and no label ever
+Rows are one per (period, user, ab_group, mathtable, bet_level) — every bet
+lives in exactly one row, so sums are correct under ANY selection and no label ever
 re-partitions the same bets. The dashboard exposes ab_group and mathtable as
 two separate cohort dimensions; when a dimension is unselected, the API
 collapses the grain back to one row per user (``user_row_grain`` in the
@@ -37,14 +37,41 @@ from bituslabs_ds.config import (
 )
 from bituslabs_ds.etl import AggCol, DataLoader, ETLScheduler, RedshiftBackend, effective_start_date
 
-GAME_ID = "SS01"
+GAME_ID = "SS02"
 
 
 def generate_query(stats_agg_col: AggCol, start_date: str):
     effective_start = effective_start_date(stats_agg_col, start_date)
     query = dedent(
         f"""
-        WITH bets AS (
+        WITH bet_events AS (
+            -- FourScatter rows are free-game buy-ins: attribute them to the
+            -- mathtable of the FOLLOWING spin (full-stream LEAD on purpose —
+            -- this is mathtable attribution, not a sequence metric).
+            SELECT
+                t.user_id,
+                t.spin_id,
+                t.created_at,
+                CASE
+                    WHEN t.math_table_id = 'FourScatter'
+                    THEN LEAD(t.math_table_id) OVER (PARTITION BY t.user_id ORDER BY t.spin_id, t.created_at)
+                    ELSE t.math_table_id
+                END AS math_table_id,
+                t.bet_amount,
+                t.actual_payout,
+                t.bet_type,
+                t.partition_ab
+            FROM
+                public.fct_bet_orders AS t
+            WHERE
+                t.game_id = '{GAME_ID}'
+                AND CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at) >= '{effective_start}'
+                AND t.currency_type IN {ETL_CURRENCY_CODES}
+                AND t.status = 'COMPLETED'
+                AND t.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
+        ),
+
+        bets AS (
         SELECT
             t.user_id,
             t.spin_id,
@@ -62,13 +89,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 ELSE 'Default'
             END AS ab_group
         FROM
-            public.fct_bet_orders AS t
-        WHERE
-            t.game_id = '{GAME_ID}'
-            AND CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', t.created_at) >= '{effective_start}'
-            AND t.currency_type IN {ETL_CURRENCY_CODES}
-            AND t.status = 'COMPLETED'
-            AND t.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
+            bet_events AS t
         ),
 
         user_bets AS (
@@ -84,6 +105,17 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 EXTRACT(EPOCH FROM (t.created_at - LAG(t.created_at) OVER (PARTITION BY t.user_id, t.activity_date ORDER BY t.spin_id, t.created_at))) AS delta_t_seconds,
                 LAG(t.bet_type) OVER (PARTITION BY t.user_id, t.activity_date ORDER BY t.spin_id, t.created_at) AS prev_bet_type,
                 LAG(t.bet_amount) OVER (PARTITION BY t.user_id, t.activity_date ORDER BY t.spin_id, t.created_at) AS prev_bet_amount,
+                -- Bet-level grain: BASE spins use their own bet_amount; FREE
+                -- spins inherit the day's prevailing BASE bet (their trigger),
+                -- so FG metrics stay meaningful inside a bet-level range. A
+                -- FREE spin with no prior BASE that day keeps its own amount.
+                COALESCE(
+                    LAST_VALUE(CASE WHEN t.bet_type = 'BASE' THEN t.bet_amount END IGNORE NULLS) OVER (
+                        PARTITION BY t.user_id, t.activity_date ORDER BY t.spin_id, t.created_at
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                    ),
+                    t.bet_amount
+                ) AS bet_level,
                 CASE
                     WHEN LAG(t.mathtable) OVER (PARTITION BY t.user_id, t.activity_date ORDER BY t.spin_id, t.created_at) IS NULL THEN 0
                     WHEN LAG(t.mathtable) OVER (PARTITION BY t.user_id, t.activity_date ORDER BY t.spin_id, t.created_at) <> t.mathtable THEN 1
@@ -97,6 +129,7 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 t.{stats_agg_col},
                 t.ab_group,
                 t.mathtable,
+                t.bet_level,
                 t.user_id,
 
                 -- total number of bets:
@@ -141,13 +174,14 @@ def generate_query(stats_agg_col: AggCol, start_date: str):
                 COUNT(t.prev_bet_amount) AS user_num_delta_bet
 
             FROM user_bets AS t
-            GROUP BY t.{stats_agg_col}, t.ab_group, t.mathtable, t.user_id
+            GROUP BY t.{stats_agg_col}, t.ab_group, t.mathtable, t.bet_level, t.user_id
         )
 
         SELECT
             us.{stats_agg_col} AS activity_date,
             us.ab_group,
             us.mathtable,
+            us.bet_level,
             us.user_id,
             us.user_mathtable_change,
             -- DataMetrics input columns (user-level raw stats):
@@ -202,7 +236,7 @@ if __name__ == "__main__":
 
     setup_logging(f"{LOCAL_ROOT}/jobs/log", log_filename=os.path.splitext(os.path.basename(__file__))[0] + ".log")
 
-    parser = argparse.ArgumentParser(description="ETL SS01 Game Stats by Period, AB Group and Mathtable")
+    parser = argparse.ArgumentParser(description="ETL SS02 Game Stats by Period, AB Group and Mathtable")
     parser.add_argument(
         "--bastion-ip",
         type=str,
@@ -230,7 +264,7 @@ if __name__ == "__main__":
     # Initialize Scheduler with a default 3-day lookback
     scheduler = ETLScheduler(
         redshift_loader,
-        f"{DEFAULT_ETL_OUTPUT}/jobs/output_ss01_wucaishen_v2",
+        f"{DEFAULT_ETL_OUTPUT}/jobs/output_ss02_deepdive_v2",
         lookback_days=3,
         overwrite=args.overwrite,
     )
@@ -238,7 +272,7 @@ if __name__ == "__main__":
     scheduler.run_incremental_job(
         job_name="daily_stats",
         query_func=lambda start_date: generate_query("activity_date", start_date),
-        key_cols=["activity_date", "user_id", "ab_group", "mathtable"],
+        key_cols=["activity_date", "user_id", "ab_group", "mathtable", "bet_level"],
         date_col="activity_date",
         partition_level="none",
     )
@@ -247,7 +281,7 @@ if __name__ == "__main__":
     scheduler.run_incremental_job(
         job_name="weekly_stats",
         query_func=lambda start_date: generate_query("activity_week", start_date),
-        key_cols=["activity_date", "user_id", "ab_group", "mathtable"],
+        key_cols=["activity_date", "user_id", "ab_group", "mathtable", "bet_level"],
         date_col="activity_date",  # Always check max activity_date
         partition_level="none",
         lookback=7,
@@ -257,7 +291,7 @@ if __name__ == "__main__":
     scheduler.run_incremental_job(
         job_name="monthly_stats",
         query_func=lambda start_date: generate_query("activity_month", start_date),
-        key_cols=["activity_date", "user_id", "ab_group", "mathtable"],
+        key_cols=["activity_date", "user_id", "ab_group", "mathtable", "bet_level"],
         date_col="activity_date",  # Always check max activity_date
         partition_level="none",
         lookback=31,

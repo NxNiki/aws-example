@@ -51,6 +51,8 @@ class ConfigDetail(BaseModel):
     range_group_col: Optional[str] = None
     range_group_name: Optional[str] = None
     range_group_defaults: list["RangeGroup"] = []
+    # Config-declared bound ladder for the picker; empty → derive from data.
+    range_group_values: list[float] = []
     granularities: list[Granularity]
     groups: list[MetricGroup]
     tabs: list[str]
@@ -154,6 +156,9 @@ class GroupValues(BaseModel):
     granularity: Granularity
     # Distinct selectable values per user_group column, for the cohort pickers.
     values: dict[str, list[str]]
+    # Subset of `values` present in the requested [start, end] date range; the
+    # pickers gray out the rest. None when no range was requested.
+    available: Optional[dict[str, list[str]]] = None
 
 
 class DateBounds(BaseModel):

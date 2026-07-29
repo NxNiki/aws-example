@@ -83,32 +83,32 @@ def main() -> int:
         ),
         (
             "ss01_wucaishen ETL",
-            JOBS_DIR / "ss01_wucaishen" / "etl_game_stats_daily_by_user_group.py",
+            JOBS_DIR / "etl" / "redshift" / "ss01_wucaishen" / "etl_game_stats_daily_by_user_group.py",
             [],
         ),
         (
             "ss01a_golden_goal ETL",
-            JOBS_DIR / "ss01a_golden_goal" / "etl_game_stats_daily_by_user_group.py",
+            JOBS_DIR / "etl" / "redshift" / "ss01a_golden_goal" / "etl_game_stats_daily_by_user_group.py",
             [],
         ),
         (
             "ss02_deepdive ETL",
-            JOBS_DIR / "ss02_deepdive" / "etl_game_stats_daily_by_user_group.py",
+            JOBS_DIR / "etl" / "redshift" / "ss02_deepdive" / "etl_game_stats_daily_by_user_group.py",
             [],
         ),
         (
             "ss03_mahjiang_streak ETL",
-            JOBS_DIR / "ss03_mahjiang_streak" / "etl_game_stats_daily_by_user_group.py",
+            JOBS_DIR / "etl" / "redshift" / "ss03_mahjiang_streak" / "etl_game_stats_daily_by_user_group.py",
             [],
         ),
         (
             "ss06_pocket_soccer ETL",
-            JOBS_DIR / "ss06_pocket_soccer" / "etl_game_stats_daily_by_user_group.py",
+            JOBS_DIR / "etl" / "redshift" / "ss06_pocket_soccer" / "etl_game_stats_daily_by_user_group.py",
             [],
         ),
         (
             "fish_hunter ETL",
-            JOBS_DIR / "fish_hunter" / "etl_game_stats_daily_by_user.py",
+            JOBS_DIR / "etl" / "redshift" / "fish_hunter" / "etl_game_stats_daily_by_user.py",
             [],
         ),
         (

@@ -127,6 +127,16 @@ export function activeLifecycleGroups(
   return s.lifecycleAll ? [{ label: "all", start: 0, end: null }, ...groups] : groups;
 }
 
+// The union window of the visible date ranges, for range-scoped cohort
+// availability; null until at least one shown range is fully specified.
+export function overallDateRange(dg: DateGroupsState): { start: string; end: string } | null {
+  const complete = dg.ranges.filter((r) => r.show && r.start && r.end);
+  if (!complete.length) return null;
+  const start = complete.map((r) => r.start!).sort()[0];
+  const end = complete.map((r) => r.end!).sort().slice(-1)[0];
+  return { start, end };
+}
+
 // Cohort columns for the per-tab pickers: the lifecycle column is owned by
 // the global picker and the range column by RangeGroupSelect, so both are
 // hidden from CohortSelect.
@@ -141,14 +151,17 @@ export function visibleGroupValues(
   return rest;
 }
 
-// Distinct values of the range column present in the data (numeric, sorted) —
-// the options for the range-group [min, max] pickers.
+// Options for the range-group [min, max] pickers: the config-declared value
+// ladder when present (the game's stable stake menu), else the distinct
+// values of the range column present in the loaded data.
 export function rangeGroupValues(
   s: Pick<DashboardState, "config" | "groupValuesByGran">,
   granularity: Granularity,
 ): number[] {
   const col = s.config?.range_group_col;
   if (!col) return [];
+  const declared = (s.config?.range_group_values ?? []).filter(Number.isFinite);
+  if (declared.length) return [...declared].sort((a, b) => a - b);
   return (s.groupValuesByGran[granularity]?.[col] ?? [])
     .map(Number)
     .filter(Number.isFinite)
@@ -384,6 +397,11 @@ interface DashboardState {
   // Available cohort values per granularity (the data can differ by
   // granularity; keyed in case the user flips granularities back and forth).
   groupValuesByGran: Partial<Record<Granularity, Record<string, string[]>>>;
+  // Range-scoped availability: cohort values absent from the current date
+  // range render grayed/disabled. null = no range known (everything enabled).
+  groupAvailableByGran: Partial<Record<Granularity, Record<string, string[]> | null>>;
+  // "start|end" key the availability was fetched for, to skip refetches.
+  groupAvailRangeByGran: Partial<Record<Granularity, string>>;
 
   // Global lifecycle groups (period ranges since first bet, one definition per
   // day/week/month unit): defined once per game, shared by every tab.
@@ -579,12 +597,19 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   setActiveTab: (tab) => set({ activeTab: tab }),
   controls: defaultControls(),
   dateGroups: defaultDateGroups(),
-  setDateGranularity: (g) => set((s) => ({ dateGroups: { ...s.dateGroups, granularity: g } })),
-  setDateRange: (index, range) =>
+  setDateGranularity: (g) => {
+    set((s) => ({ dateGroups: { ...s.dateGroups, granularity: g } }));
+    void get().ensureGroupValues(g);
+  },
+  setDateRange: (index, range) => {
     set((s) => ({
       dateGroups: { ...s.dateGroups, ranges: s.dateGroups.ranges.map((r, i) => (i === index ? range : r)) },
-    })),
+    }));
+    void get().ensureGroupValues(get().dateGroups.granularity);
+  },
   groupValuesByGran: {},
+  groupAvailableByGran: {},
+  groupAvailRangeByGran: {},
   lifecycle: defaultLifecycle(),
   lifecycleAll: false,
   setLifecycleGroup: (unit, index, group) =>
@@ -631,6 +656,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       error: null,
       configId: id,
       groupValuesByGran: {},
+      groupAvailableByGran: {},
+      groupAvailRangeByGran: {},
       summaryTable: emptySummaryTable(),
       deepdiveMetrics: { derived: [], user: [] },
       deepdive: { derived: emptyDeepdivePanel(), user: emptyDeepdivePanel() },
@@ -674,11 +701,18 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     })),
 
   ensureGroupValues: async (gran) => {
-    const { configId, groupValuesByGran } = get();
-    if (!configId || groupValuesByGran[gran]) return;
+    const { configId, groupValuesByGran, groupAvailRangeByGran, dateGroups } = get();
+    if (!configId) return;
+    const range = overallDateRange(dateGroups);
+    const rangeKey = range ? `${range.start}|${range.end}` : "";
+    if (groupValuesByGran[gran] && groupAvailRangeByGran[gran] === rangeKey) return;
     try {
-      const { values } = await api.groupValues(configId, gran);
-      set((s) => ({ groupValuesByGran: { ...s.groupValuesByGran, [gran]: values } }));
+      const { values, available } = await api.groupValues(configId, gran, range?.start, range?.end);
+      set((s) => ({
+        groupValuesByGran: { ...s.groupValuesByGran, [gran]: values },
+        groupAvailableByGran: { ...s.groupAvailableByGran, [gran]: available ?? null },
+        groupAvailRangeByGran: { ...s.groupAvailRangeByGran, [gran]: rangeKey },
+      }));
     } catch (e) {
       // Toast (not just the transient error field): a later successful load
       // clears `error`, so the toast is what reliably surfaces this failure.
@@ -1013,6 +1047,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
           snap.rangeGroups ??
           (config.range_group_defaults ?? []).map((g) => ({ label: g.label, min: g.min, max: g.max ?? null })),
         groupValuesByGran: {},
+        groupAvailableByGran: {},
+        groupAvailRangeByGran: {},
         panels: { ...defaultPanels(config), ...(snap.panels ?? {}) },
         // Merge each saved panel over a default one so snapshots from before a
         // field existed (e.g. pre-filter) still restore with complete state.

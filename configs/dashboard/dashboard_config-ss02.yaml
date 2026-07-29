@@ -3,22 +3,37 @@ title: "SS02 Analytics"
 stats_by_date:
   files:
     day: [
-      "s3://bituslabs-team-ai/etl-results/jobs/output_ss02_deepdive_v2/daily_stats",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss02_deepdive_v2_cold_data/daily_stats",
     ]
     week: [
-      "s3://bituslabs-team-ai/etl-results/jobs/output_ss02_deepdive_v2/weekly_stats",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss02_deepdive_v2_cold_data/weekly_stats",
     ]
     month: [
-      "s3://bituslabs-team-ai/etl-results/jobs/output_ss02_deepdive_v2/monthly_stats",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss02_deepdive_v2_cold_data/monthly_stats",
     ]
 
   group_col: "ab_group"
   date_col: "activity_date"
-  user_group_cols: [ab_group, mathtable, user_group]
-  # Stored grain is one row per (period, user, ab_group, mathtable): every bet
-  # in exactly one row. When a grain dimension is unselected the API collapses
-  # rows back to one per user before computing per-user stats.
-  user_row_grain: [ab_group, mathtable]
+  user_group_cols: [ab_group, mathtable, bet_level, user_group]
+  # Stored grain is one row per (period, user, ab_group, mathtable, bet_level):
+  # every bet in exactly one row. When a grain dimension is unselected the API
+  # collapses rows back to one per user before computing per-user stats.
+  user_row_grain: [ab_group, mathtable, bet_level]
+  # Bet-level picker: user-defined INCLUSIVE [min, max] ranges over bet_level
+  # (BASE spins carry their own bet_amount; FREE spins inherit the day's
+  # prevailing BASE bet, so FG metrics stay meaningful inside a range).
+  range_group:
+    column: bet_level
+    name: "Bet level"
+    # The platform stake ladder (bound options for the picker); declared here
+    # because it is a stable product property -- data-derived distinct values
+    # would vary by game and loaded window.
+    values: [0.1, 0.2, 0.5, 1, 2, 2.5, 5, 8, 10, 15, 20, 25, 30, 50, 70, 100, 200, 250, 500, 700, 1000, 1500, 2000, 2500, 5000, 10000, 20000, 50000, 200000]
+    defaults:
+      - {label: bet_low, min: 0, max: 1}
+      - {label: bet_medium, min: 2, max: 5}
+      - {label: bet_high, min: 8, max: 30}
+      - {label: bet_ultra, min: 50, max: null}
   aggregate_stats_from_user_rows: true
   # Parquet columns required before enrich: ENRICH_USER_ROW_INPUT_COLUMNS ∪ (columns below − enrich outputs)
   # — see dashboards/user_stats_aggregates.py.

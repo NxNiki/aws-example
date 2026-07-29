@@ -69,6 +69,7 @@ export function SummaryTable() {
       >
         <CohortSelect
           groupValues={visibleGroupValues(s.config, s.groupValuesByGran[dg.granularity] ?? {})}
+          available={s.groupAvailableByGran[dg.granularity] ?? null}
           selection={c.cohortSelection}
           onSetCohort={(col, values) => s.setTabCohort("summaryTable", col, values)}
         />

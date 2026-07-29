@@ -50,6 +50,7 @@ export function StatsByDate() {
       >
         <CohortSelect
           groupValues={visibleGroupValues(s.config, s.groupValuesByGran[dg.granularity] ?? {})}
+          available={s.groupAvailableByGran[dg.granularity] ?? null}
           selection={c.cohortSelection}
           onSetCohort={(col, values) => s.setTabCohort("date", col, values)}
         />

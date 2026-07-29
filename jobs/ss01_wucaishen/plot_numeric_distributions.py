@@ -2,7 +2,7 @@
 Plot distributions of all numeric columns in the ss01 features_grouped dataset.
 
 Reads the ss01 features_grouped partitioned parquet dataset from S3 (written by
-jobs/ss01_wucaishen/etl_feature_engineer.py via ETLScheduler). Uses DataProfiler
+jobs/etl/redshift/ss01_wucaishen/etl_feature_engineer.py via ETLScheduler). Uses DataProfiler
 and DataVisualizer from bituslabs_ds.eda. Numeric preparation (including Parquet
 fixed_len_byte_array conversion), skewness, kurtosis, and log y-scale for highly
 skewed features are handled by the EDA module.

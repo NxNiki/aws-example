@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -85,6 +86,12 @@ def create_app() -> FastAPI:
     app.include_router(data.router)
     app.include_router(views.router)
     app.include_router(report.router)
+
+    @app.on_event("startup")
+    def _warm_group_values() -> None:
+        # Pre-fill the group-values vocabulary cache so no user's first picker
+        # load waits on the full parquet scan; runs off the request path.
+        threading.Thread(target=data.warm_group_values_cache, name="group-values-warmup", daemon=True).start()
 
     dist = Path(settings.frontend_dist)
     if dist.is_dir():

@@ -153,6 +153,11 @@ export interface paths {
          * @description API endpoint: GET /api/data/group-values — distinct cohort values per
          *     user-group column, for the Stats-by-Date cohort pickers.
          *
+         *     ``values`` is the full (cached) vocabulary so labels never disappear when
+         *     the date range moves; with ``start``/``end`` the response also carries
+         *     ``available`` — the subset present in that range — which the pickers use
+         *     to gray out values with no data in view.
+         *
          *     Returns ``{}`` when the config defines no user_group columns. Reads the same
          *     user-level parquet as ``/series``.
          */
@@ -458,6 +463,11 @@ export interface components {
             range_group_defaults: components["schemas"]["RangeGroup"][];
             /** Range Group Name */
             range_group_name?: string | null;
+            /**
+             * Range Group Values
+             * @default []
+             */
+            range_group_values: number[];
             /** Tabs */
             tabs: string[];
             /** Title */
@@ -873,6 +883,10 @@ export interface components {
         };
         /** GroupValues */
         GroupValues: {
+            /** Available */
+            available?: {
+                [key: string]: string[];
+            } | null;
             /** Config */
             config: string;
             /**
@@ -1602,6 +1616,8 @@ export interface operations {
             query: {
                 config: string;
                 granularity?: "day" | "week" | "month";
+                start?: string | null;
+                end?: string | null;
             };
             header?: never;
             path?: never;

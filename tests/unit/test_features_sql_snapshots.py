@@ -128,24 +128,24 @@ def test_grouped_snapshot(config: GameFeatureConfig, bin_size: int) -> None:
 # must declare a CONFIG identical to the one used to generate the snapshot.
 # ---------------------------------------------------------------------------
 def test_ss01_jobs_config_matches_snapshot_config() -> None:
-    jobs_config = _load_jobs_config("jobs/ss01_wucaishen/etl_feature_engineer.py")
+    jobs_config = _load_jobs_config("jobs/etl/redshift/ss01_wucaishen/etl_feature_engineer.py")
     assert jobs_config == SS01, (
-        "jobs/ss01_wucaishen/etl_feature_engineer.py CONFIG drifted from the snapshot's SS01 config. "
+        "jobs/etl/redshift/ss01_wucaishen/etl_feature_engineer.py CONFIG drifted from the snapshot's SS01 config. "
         "If the change is intentional, update both and regenerate the snapshot."
     )
 
 
 def test_ss02_jobs_config_matches_snapshot_config() -> None:
-    jobs_config = _load_jobs_config("jobs/ss02_deepdive/etl_feature_engineer.py")
+    jobs_config = _load_jobs_config("jobs/etl/redshift/ss02_deepdive/etl_feature_engineer.py")
     assert jobs_config == SS02, (
-        "jobs/ss02_deepdive/etl_feature_engineer.py CONFIG drifted from the snapshot's SS02 config. "
+        "jobs/etl/redshift/ss02_deepdive/etl_feature_engineer.py CONFIG drifted from the snapshot's SS02 config. "
         "If the change is intentional, update both and regenerate the snapshot."
     )
 
 
 def test_ss03_jobs_config_matches_snapshot_config() -> None:
-    jobs_config = _load_jobs_config("jobs/ss03_mahjiang_streak/etl_feature_engineer.py")
+    jobs_config = _load_jobs_config("jobs/etl/redshift/ss03_mahjiang_streak/etl_feature_engineer.py")
     assert jobs_config == SS03, (
-        "jobs/ss03_mahjiang_streak/etl_feature_engineer.py CONFIG drifted from the snapshot's SS03 config. "
+        "jobs/etl/redshift/ss03_mahjiang_streak/etl_feature_engineer.py CONFIG drifted from the snapshot's SS03 config. "
         "If the change is intentional, update both and regenerate the snapshot."
     )
