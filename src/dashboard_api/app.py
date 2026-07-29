@@ -122,6 +122,21 @@ def create_app() -> FastAPI:
 
     dist = Path(settings.frontend_dist)
     if dist.is_dir():
+
+        @app.middleware("http")
+        async def spa_cache_headers(request: Request, call_next):  # type: ignore[no-untyped-def]
+            # Without Cache-Control, browsers heuristically cache index.html —
+            # users kept running a stale bundle after deploys. index.html must
+            # revalidate on every load (ETag makes that a cheap 304); the
+            # content-hashed /assets/* files are immutable by construction.
+            response = await call_next(request)
+            path = request.url.path
+            if path.startswith("/assets/"):
+                response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            elif response.headers.get("content-type", "").startswith("text/html"):
+                response.headers["Cache-Control"] = "no-cache"
+            return response
+
         # html=True serves index.html for unmatched paths (SPA client-side routing).
         app.mount("/", StaticFiles(directory=str(dist), html=True), name="spa")
         logger.info("Serving SPA static assets from %s", dist)
