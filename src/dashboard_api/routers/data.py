@@ -140,7 +140,7 @@ def post_series(req: SeriesRequest) -> SeriesResponse:
 _GROUP_VALUES_CACHE: dict[tuple[str, str], tuple[float, dict[str, list[str]]]] = {}
 _GROUP_VALUES_REFRESHING: set[tuple[str, str]] = set()
 _GROUP_VALUES_LOADING: dict[tuple[str, str], threading.Event] = {}
-_GROUP_VALUES_TTL_SECONDS = 3600.0
+_GROUP_VALUES_TTL_SECONDS = 600.0
 _group_values_lock = threading.Lock()
 
 

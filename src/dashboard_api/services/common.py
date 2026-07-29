@@ -94,6 +94,11 @@ def _slice_covering_entry(
         out = df.filter((pl.col(date_col) >= req_start) & (pl.col(date_col) <= req_end))
         if columns is not None:
             out = out.select(list(columns))
+        if out.is_empty():
+            # Window keys extend past the data edge (retention load margin), so
+            # a pre-ETL frame can "cover" dates it has no rows for. An empty
+            # slice of a populated frame means collect fresh instead.
+            continue
         _window_cache.move_to_end(key)  # covering entries that serve traffic stay warm
         logger.info("window cache: served %s..%s from covering entry %s (rows=%d)", start_dt, end_dt, key, out.height)
         return out
@@ -157,7 +162,7 @@ class SeriesError(Exception):
 # several users on the same default views that recompute pinned the CPU. Keyed
 # by the endpoint's full request signature; TTL stays well under the window
 # cache's 900s so it never extends data staleness. Errors are never cached.
-_RESPONSE_CACHE_TTL_S = 300
+_RESPONSE_CACHE_TTL_S = 150
 _RESPONSE_CACHE_MAX_ENTRIES = 512
 _response_cache: "OrderedDict[str, tuple[float, Any]]" = OrderedDict()
 _response_loading: dict[str, threading.Event] = {}
@@ -360,7 +365,7 @@ def group_col_partition(cfg: dict[str, Any]) -> tuple[Optional[str], list[str]]:
 # day) reproduces the ETL's Redshift-side first_bet_date (validated ≥99.97%
 # per game, 100% on ss02/ss03/ss06). Cached because it scans the full daily
 # history; the TTL picks up the daily ETL refresh.
-_FIRST_BET_TTL_S = 3600
+_FIRST_BET_TTL_S = 900
 _first_bet_cache: dict[str, tuple[float, pl.DataFrame]] = {}
 _first_bet_lock = threading.Lock()
 

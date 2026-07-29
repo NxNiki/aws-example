@@ -604,6 +604,10 @@ const _panelSig: Record<string, string> = {};
 // removed metrics are hidden by the option-builder (no fetch) and stay cached so
 // re-adding is instant.
 const _panelCtx: Record<string, string> = {};
+// Per-panel signature of the request currently in flight (cleared on land),
+// so duplicate loadAllSeries invocations don't abort-and-reissue identical
+// fetches. Distinct from _panelCtx, which records the last APPLIED context.
+const _panelInflight: Record<string, string> = {};
 
 async function runExclusive<T>(
   key: string,
@@ -834,7 +838,10 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     if (!configId || !dataMax) return;
     try {
       const { max } = await api.dateBounds(configId, dateGroups.granularity);
-      if (!max || max === dataMax) return;
+      // FORWARD-ONLY: at week/month granularity the max is a period-START
+      // label (e.g. Monday 07-27 while day data reaches 07-29), so a naive
+      // comparison would drag the window backward. Only ever advance.
+      if (!max || max <= dataMax) return;
       const untouched = get().dateGroups.ranges[0].end === dataMax;
       set((s) => ({
         dataMax: max,
@@ -884,6 +891,13 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         const loaded = ctxChanged ? new Set<string>() : new Set(panel.series.map((s) => s.metric));
         const toFetch = desired.filter((m) => !loaded.has(m));
 
+        // Startup fires loadAllSeries from both selectConfig and the tab
+        // effect; an identical request already in flight would be aborted and
+        // re-issued (wasted round trip, and the abort churn is where empty
+        // panels can linger). Let the in-flight one land instead.
+        const flightSig = ctxSig + "|" + toFetch.join(",");
+        if (_panelInflight[key] === flightSig) return;
+
         if (toFetch.length === 0) {
           // Nothing new. On a context change with no selected metrics, clear the
           // now-stale series; otherwise the builder already hides unselected ones.
@@ -896,6 +910,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
           return;
         }
 
+        _panelInflight[key] = flightSig;
         return runExclusive(
           key,
           "loading metrics…",
@@ -916,6 +931,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
             return resp.series;
           },
           (fetched, set) => {
+            if (_panelInflight[key] === flightSig) delete _panelInflight[key];
             _panelCtx[key] = ctxSig;
             set((s) => {
               const cur = s.panels[panelId];
