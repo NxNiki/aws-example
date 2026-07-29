@@ -673,3 +673,95 @@ def test_collect_window_caches_per_column_set(monkeypatch):
     assert set(narrow.columns) == {"activity_date", "user_id"}
     assert set(wide.columns) == {"activity_date", "user_id", "user_rtp", "user_num_bets"}
     assert len(common._window_cache) == 2
+
+
+def test_collect_window_serves_subrange_from_covering_entry(monkeypatch):
+    """A narrower request is sliced from a fresh cached wider window (same
+    config/granularity, columns available) instead of collecting again."""
+    from datetime import datetime
+
+    import polars as pl
+
+    from dashboard_api.services import common
+
+    monkeypatch.setattr(common, "_window_cache", type(common._window_cache)())
+    wide = pl.LazyFrame(
+        {
+            "activity_date": ["2026-01-01", "2026-01-15", "2026-02-10"],
+            "user_id": ["u1", "u2", "u3"],
+            "user_num_bets": [1, 2, 3],
+        }
+    ).with_columns(pl.col("activity_date").str.to_datetime())
+    cfg = {"id": "t"}
+    common.collect_window(cfg, "day", wide, "activity_date", datetime(2026, 1, 1), datetime(2026, 3, 1))
+    assert len(common._window_cache) == 1
+
+    # Collecting this LazyFrame would raise — proof the subrange never collects.
+    poisoned = pl.LazyFrame({"activity_date": ["boom"]}).with_columns(
+        pl.col("activity_date").str.to_datetime(strict=True)
+    )
+    sub = common.collect_window(cfg, "day", poisoned, "activity_date", datetime(2026, 1, 10), datetime(2026, 1, 31))
+    assert sub["user_id"].to_list() == ["u2"]
+    assert len(common._window_cache) == 1  # slice not re-cached
+
+    projected = common.collect_window(
+        cfg,
+        "day",
+        poisoned,
+        "activity_date",
+        datetime(2026, 1, 10),
+        datetime(2026, 1, 31),
+        columns=["activity_date", "user_num_bets"],
+    )
+    assert set(projected.columns) == {"activity_date", "user_num_bets"}
+
+
+def test_collect_window_covering_entry_respects_columns_and_config(monkeypatch):
+    """A projected cached frame must not serve requests needing columns it
+    lacks (or full-column requests), and other configs never match."""
+    from datetime import datetime
+
+    import polars as pl
+
+    from dashboard_api.services import common
+
+    monkeypatch.setattr(common, "_window_cache", type(common._window_cache)())
+    lf = pl.LazyFrame({"activity_date": ["2026-01-05"], "user_id": ["u1"], "user_num_bets": [7]}).with_columns(
+        pl.col("activity_date").str.to_datetime()
+    )
+    cfg = {"id": "t"}
+    common.collect_window(
+        cfg,
+        "day",
+        lf,
+        "activity_date",
+        datetime(2026, 1, 1),
+        datetime(2026, 2, 1),
+        columns=["activity_date", "user_id"],
+    )
+
+    # Needs user_num_bets, which the cached projection lacks -> real collect.
+    out = common.collect_window(
+        cfg,
+        "day",
+        lf,
+        "activity_date",
+        datetime(2026, 1, 2),
+        datetime(2026, 1, 31),
+        columns=["activity_date", "user_num_bets"],
+    )
+    assert out["user_num_bets"].to_list() == [7]
+    assert len(common._window_cache) == 2
+
+    # Different config never matches even with an identical window.
+    other = common.collect_window(
+        {"id": "other"},
+        "day",
+        lf,
+        "activity_date",
+        datetime(2026, 1, 2),
+        datetime(2026, 1, 31),
+        columns=["activity_date", "user_id"],
+    )
+    assert other["user_id"].to_list() == ["u1"]
+    assert len(common._window_cache) == 3
