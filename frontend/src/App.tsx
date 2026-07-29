@@ -47,6 +47,22 @@ export default function App() {
     void loadViews();
   }, [loadConfigs, loadViews]);
 
+  // Long-lived sessions: the daily ETL lands while the tab is open, so
+  // re-check the data edge when the tab regains focus and every 10 minutes;
+  // the store slides the default window forward if the user hasn't moved it.
+  const refreshDateBounds = useDashboardStore((s) => s.refreshDateBounds);
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refreshDateBounds();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    const timer = setInterval(() => void refreshDateBounds(), 10 * 60 * 1000);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      clearInterval(timer);
+    };
+  }, [refreshDateBounds]);
+
   return (
     // Right padding reserves room for the docked chat panel (user-resizable);
     // ECharts re-sizes via its ResizeObserver when the panel opens/resizes.

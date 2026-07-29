@@ -477,6 +477,11 @@ interface DashboardState {
   setPanelMetrics: (panelId: string, side: "left" | "right", metrics: string[]) => void;
   setPanelLog: (panelId: string, log: boolean, threshold?: number) => void;
   loadDateBounds: () => Promise<void>;
+  // Long-lived sessions: re-check the data edge (ETL lands while the tab is
+  // open) and slide the default window's end forward if the user hasn't
+  // moved it off the previous edge.
+  dataMax: string | null;
+  refreshDateBounds: () => Promise<void>;
   loadAllSeries: () => Promise<void>;
 
   // Stats-by-Group
@@ -809,6 +814,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       if (max) {
         const { from, to } = lastThirtyDays(max);
         set((s) => ({
+          dataMax: max,
           dateGroups: {
             ...s.dateGroups,
             ranges: s.dateGroups.ranges.map((r, i) => (i === 0 ? { ...r, start: from, end: to } : r)),
@@ -818,6 +824,34 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     } catch (e) {
       set({ error: String(e) });
       get().notify("error", `Failed to load date bounds: ${e}`);
+    }
+  },
+
+  dataMax: null,
+
+  refreshDateBounds: async () => {
+    const { configId, dateGroups, dataMax } = get();
+    if (!configId || !dataMax) return;
+    try {
+      const { max } = await api.dateBounds(configId, dateGroups.granularity);
+      if (!max || max === dataMax) return;
+      const untouched = get().dateGroups.ranges[0].end === dataMax;
+      set((s) => ({
+        dataMax: max,
+        dateGroups: untouched
+          ? {
+              ...s.dateGroups,
+              ranges: s.dateGroups.ranges.map((r, i) => (i === 0 ? { ...r, end: max } : r)),
+            }
+          : s.dateGroups,
+      }));
+      if (untouched) {
+        get().notify("info", `New data through ${max} — date window updated`);
+        void get().ensureGroupValues(get().dateGroups.granularity);
+        void get().loadAllSeries();
+      }
+    } catch {
+      // Periodic best-effort check; the next tick retries.
     }
   },
 
