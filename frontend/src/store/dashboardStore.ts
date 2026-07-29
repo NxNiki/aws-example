@@ -127,6 +127,14 @@ export function activeLifecycleGroups(
   return s.lifecycleAll ? [{ label: "all", start: 0, end: null }, ...groups] : groups;
 }
 
+// An explicitly EMPTIED picker (key present, no values) means "show nothing" —
+// the user unchecked everything, so tabs render no data rather than silently
+// falling back to 'all' (an ABSENT key still means 'all' for older views /
+// direct API calls). Pickers seed to ['all'] when cohort values load.
+export function hasEmptiedCohort(selection: Record<string, string[]>): boolean {
+  return Object.values(selection).some((v) => Array.isArray(v) && v.length === 0);
+}
+
 // The union window of the visible date ranges, for range-scoped cohort
 // availability; null until at least one shown range is fully specified.
 export function overallDateRange(dg: DateGroupsState): { start: string; end: string } | null {
@@ -722,11 +730,30 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     if (groupValuesByGran[gran] && groupAvailRangeByGran[gran] === rangeKey) return;
     try {
       const { values, available } = await api.groupValues(configId, gran, range?.start, range?.end);
-      set((s) => ({
-        groupValuesByGran: { ...s.groupValuesByGran, [gran]: values },
-        groupAvailableByGran: { ...s.groupAvailableByGran, [gran]: available ?? null },
-        groupAvailRangeByGran: { ...s.groupAvailRangeByGran, [gran]: rangeKey },
-      }));
+      set((s) => {
+        // Seed 'all' as the explicit selection for every picker that has no
+        // selection yet, so the UI state matches what the request means and
+        // an emptied picker (user unchecked everything) can mean "no data".
+        const cols = Object.keys(visibleGroupValues(s.config, values));
+        const controls = { ...s.controls };
+        for (const tab of Object.keys(controls) as (keyof typeof controls)[]) {
+          const sel = { ...controls[tab].cohortSelection };
+          let changed = false;
+          for (const c of cols) {
+            if (!(c in sel)) {
+              sel[c] = ["all"];
+              changed = true;
+            }
+          }
+          if (changed) controls[tab] = { ...controls[tab], cohortSelection: sel };
+        }
+        return {
+          groupValuesByGran: { ...s.groupValuesByGran, [gran]: values },
+          groupAvailableByGran: { ...s.groupAvailableByGran, [gran]: available ?? null },
+          groupAvailRangeByGran: { ...s.groupAvailRangeByGran, [gran]: rangeKey },
+          controls,
+        };
+      });
     } catch (e) {
       // Toast (not just the transient error field): a later successful load
       // clears `error`, so the toast is what reliably surfaces this failure.
@@ -779,6 +806,12 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     if (!configId) return;
     const { granularity } = dateGroups;
     const { cohortSelection } = controls.date;
+    if (hasEmptiedCohort(cohortSelection)) {
+      set((s) => ({
+        panels: Object.fromEntries(Object.entries(s.panels).map(([id, p]) => [id, { ...p, series: [] }])),
+      }));
+      return;
+    }
     const reqRanges = activeRanges(dateGroups.ranges);
     if (reqRanges.length === 0) return;
     const lifecycleGroups = activeLifecycleGroups(get(), granularity);
@@ -856,6 +889,14 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     if (!configId) return;
     const { granularity } = dateGroups;
     const { cohortSelection } = controls.group;
+    if (hasEmptiedCohort(cohortSelection)) {
+      set((s) => ({
+        group: Object.fromEntries(
+          Object.entries(s.group).map(([id, p]) => [id, { ...p, stats: [], missing: false }]),
+        ),
+      }));
+      return;
+    }
     const reqRanges = activeRanges(dateGroups.ranges);
     if (reqRanges.length === 0) return;
     const lifecycleGroups = activeLifecycleGroups(get(), granularity);
@@ -928,6 +969,10 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     if (!configId) return;
     const { granularity } = dateGroups;
     const { cohortSelection } = controls.summaryTable;
+    if (hasEmptiedCohort(cohortSelection)) {
+      set((s) => ({ summaryTable: { ...s.summaryTable, columns: [], rows: [], missing: false } }));
+      return;
+    }
     const reqRanges = activeRanges(dateGroups.ranges);
     if (reqRanges.length === 0) return;
     const lifecycleGroups = activeLifecycleGroups(get(), granularity);
@@ -1150,6 +1195,15 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     if (!configId) return;
     const { granularity } = dateGroups;
     const { cohortSelection } = controls.viz;
+    if (hasEmptiedCohort(cohortSelection)) {
+      set((s) => ({
+        deepdive: {
+          derived: { ...s.deepdive.derived, histograms: [], heatmaps: [], scatters: [], missing: [] },
+          user: { ...s.deepdive.user, histograms: [], heatmaps: [], scatters: [], missing: [] },
+        },
+      }));
+      return;
+    }
     const reqRanges = activeRanges(dateGroups.ranges);
     if (reqRanges.length === 0) return;
     const lifecycleGroups = activeLifecycleGroups(get(), granularity);

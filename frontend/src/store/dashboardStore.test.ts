@@ -153,3 +153,42 @@ describe("dashboardStore", () => {
     );
   });
 });
+
+describe("cohort selection defaults", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useDashboardStore.setState(initialState());
+    mockApi.getConfig.mockResolvedValue(CONFIG);
+    mockApi.groupValues.mockResolvedValue({ config: "ss01", granularity: "day", values: { user_group: ["new", "old"] } });
+    mockApi.dateBounds.mockResolvedValue({ config: "ss01", granularity: "day", min: "2025-01-01", max: "2025-01-30" });
+    mockApi.deepdiveMetrics.mockResolvedValue({ config: "ss01", granularity: "day", derived: [], user: [] });
+    mockApi.series.mockResolvedValue({ config: "ss01", granularity: "day", date_col: "activity_date", series: [], missing: [] });
+  });
+
+  it("seeds 'all' explicitly in every visible picker when cohort values load", async () => {
+    mockApi.listConfigs.mockResolvedValue({ configs: [{ id: "ss01", title: "SS01" }] });
+    await useDashboardStore.getState().loadConfigs();
+
+    const s = useDashboardStore.getState();
+    // The UI now states what the request means: 'all' selected, not an
+    // ambiguous empty picker (which used to render an empty-looking state
+    // while the backend silently treated it as 'all').
+    expect(s.controls.date.cohortSelection).toEqual({ user_group: ["all"] });
+    expect(s.controls.group.cohortSelection).toEqual({ user_group: ["all"] });
+    expect(s.controls.viz.cohortSelection).toEqual({ user_group: ["all"] });
+    expect(s.controls.summaryTable.cohortSelection).toEqual({ user_group: ["all"] });
+  });
+
+  it("an explicitly emptied picker clears the plots and skips the fetch", async () => {
+    mockApi.listConfigs.mockResolvedValue({ configs: [{ id: "ss01", title: "SS01" }] });
+    await useDashboardStore.getState().loadConfigs();
+    vi.clearAllMocks();
+
+    useDashboardStore.getState().setTabCohort("date", "user_group", []);
+    await useDashboardStore.getState().loadAllSeries();
+
+    const s = useDashboardStore.getState();
+    expect(mockApi.series).not.toHaveBeenCalled();
+    expect(Object.values(s.panels).every((p) => p.series.length === 0)).toBe(true);
+  });
+});
