@@ -66,15 +66,30 @@ REGION = "us-west-2"
 SERVICE_NAME = "dashboard-api"
 IMAGE_NAME = "bituslabs-ds-dashboard-api"
 DASHBOARD_API_PORT = 8050
-# Sized from production OOMs: 1 GB died on the first /api/data/series; 2 GB
-# died on parallel per-panel collects (fixed by the single-flight window cache
-# in services/common.py); 4 GB still died on Stats-by-Group spans — the
-# user-row frames are simply large. 8 GB is the 1-vCPU Fargate ceiling; the
-# window cache is additionally size-budgeted (see _WINDOW_CACHE_MAX_BYTES).
-# One worker — more workers multiply it all.
-TASK_CPU = 1024
-TASK_MEMORY = 8192
-DESIRED_COUNT = 1  # always-on; scale-to-zero policies wait for metric parity
+# Memory sized from production OOMs: 1 GB died on the first /api/data/series;
+# 2 GB died on parallel per-panel collects (fixed by the single-flight window
+# cache in services/common.py); 4 GB still died on Stats-by-Group spans — the
+# user-row frames are simply large. The window cache is additionally
+# size-budgeted (see _WINDOW_CACHE_MAX_BYTES). One worker — more workers
+# multiply it all.
+# CPU sized from concurrency: polars collects/aggregations are CPU-bound, and
+# 1 vCPU pinned at 100% whenever several users loaded data at once (see
+# CloudWatch CPUUtilization); 2 vCPU lets polars actually parallelize. 12 GB
+# needs >=2 vCPU anyway (8 GB is the 1-vCPU Fargate ceiling) and buys a bigger
+# window cache (_WINDOW_CACHE_MAX_BYTES) plus collect headroom.
+TASK_CPU = 2048
+TASK_MEMORY = 12288
+DESIRED_COUNT = 1  # scale-to-zero: see ensure_autoscaling (idle >1h -> 0, ALB 5xx wakes)
+
+# Scale-to-zero policy knobs. Idle = no Dashboard/UserRequestCount datapoint
+# (the app.py middleware emits one per non-health request) for IDLE_MINUTES.
+# Wake = any ELB 5xx on the ALB: with zero tasks the listener returns 503,
+# which is exactly a user knocking while the service sleeps. First visit after
+# a sleep therefore shows an error page for the ~2-3 min the task needs to
+# start; the SPA/user retry lands normally.
+IDLE_MINUTES = 60
+IDLE_PERIOD_SECONDS = 300  # alarm granularity; IDLE_MINUTES must divide by this
+MAX_TASKS = 1
 
 # The production ALB dashboard-api lives behind (its listener default already
 # forwards to dashboard-api-tg). We read its DNS for the CORS env and keep the
@@ -128,6 +143,99 @@ def sync_configs_to_s3() -> None:
     for path in files:
         upload_file_to_s3(path, S3_BUCKET, f"{prefix}/{path.name}")
     print(f"  Synced {len(files)} config(s) to {DASHBOARD_CONFIG_S3_PATH} (no delete).")
+
+
+def ensure_autoscaling(session, alb_arn: str) -> None:
+    """Scale the service to zero after IDLE_MINUTES without user requests and
+    wake it on the next visit.
+
+    Two step-scaling policies on the ECS service (min 0, max MAX_TASKS):
+
+    - scale-in: alarm on ``Dashboard/UserRequestCount`` (Sum < 1 per
+      IDLE_PERIOD_SECONDS window, IDLE_MINUTES/IDLE_PERIOD consecutive
+      windows, missing data = breaching since the middleware only emits on
+      traffic) -> ExactCapacity 0.
+    - wake: alarm on the ALB's ``HTTPCode_ELB_5XX_Count`` (a request hitting
+      the empty target group 503s at the ALB) -> ExactCapacity 1. Any real
+      5xx burst also wakes the service, which is harmless.
+
+    After a wake, the idle alarm stays in ALARM until the first 5-minute
+    window with traffic lands; the scale-in policy's cooldown (2x the wake
+    window) blocks it from re-zeroing the service in that gap.
+    """
+    aas = session.client("application-autoscaling")
+    cw = session.client("cloudwatch")
+    resource_id = f"service/{ECS_CLUSTER_NAME}/{SERVICE_NAME}"
+    dimension = "ecs:service:DesiredCount"
+
+    aas.register_scalable_target(
+        ServiceNamespace="ecs",
+        ResourceId=resource_id,
+        ScalableDimension=dimension,
+        MinCapacity=0,
+        MaxCapacity=MAX_TASKS,
+    )
+
+    scale_in_arn = aas.put_scaling_policy(
+        PolicyName=f"{SERVICE_NAME}-scale-to-zero",
+        ServiceNamespace="ecs",
+        ResourceId=resource_id,
+        ScalableDimension=dimension,
+        PolicyType="StepScaling",
+        StepScalingPolicyConfiguration={
+            "AdjustmentType": "ExactCapacity",
+            "StepAdjustments": [{"MetricIntervalUpperBound": 0.0, "ScalingAdjustment": 0}],
+            "Cooldown": 2 * IDLE_PERIOD_SECONDS,
+        },
+    )["PolicyARN"]
+    scale_out_arn = aas.put_scaling_policy(
+        PolicyName=f"{SERVICE_NAME}-wake-on-request",
+        ServiceNamespace="ecs",
+        ResourceId=resource_id,
+        ScalableDimension=dimension,
+        PolicyType="StepScaling",
+        StepScalingPolicyConfiguration={
+            "AdjustmentType": "ExactCapacity",
+            "StepAdjustments": [{"MetricIntervalLowerBound": 0.0, "ScalingAdjustment": MAX_TASKS}],
+            "Cooldown": 60,
+        },
+    )["PolicyARN"]
+
+    idle_windows = IDLE_MINUTES * 60 // IDLE_PERIOD_SECONDS
+    cw.put_metric_alarm(
+        AlarmName=f"{SERVICE_NAME}-idle-scale-in",
+        AlarmDescription=f"No dashboard user requests for {IDLE_MINUTES} min -> scale service to 0",
+        Namespace="Dashboard",
+        MetricName="UserRequestCount",
+        Dimensions=[{"Name": "Service", "Value": SERVICE_NAME}],
+        Statistic="Sum",
+        Period=IDLE_PERIOD_SECONDS,
+        EvaluationPeriods=idle_windows,
+        DatapointsToAlarm=idle_windows,
+        Threshold=1.0,
+        ComparisonOperator="LessThanThreshold",
+        TreatMissingData="breaching",
+        AlarmActions=[scale_in_arn],
+    )
+    # ALB dimension value is the ARN suffix: app/<name>/<hash>.
+    alb_dimension = alb_arn.split(":loadbalancer/", 1)[1]
+    cw.put_metric_alarm(
+        AlarmName=f"{SERVICE_NAME}-wake-on-request",
+        AlarmDescription="Request hit the ALB while the service is scaled to 0 -> scale to 1",
+        Namespace="AWS/ApplicationELB",
+        MetricName="HTTPCode_ELB_5XX_Count",
+        Dimensions=[{"Name": "LoadBalancer", "Value": alb_dimension}],
+        Statistic="Sum",
+        Period=60,
+        EvaluationPeriods=1,
+        Threshold=0.0,
+        ComparisonOperator="GreaterThanThreshold",
+        TreatMissingData="notBreaching",
+        AlarmActions=[scale_out_arn],
+    )
+    print(f"  Scalable target: {resource_id} (min 0, max {MAX_TASKS})")
+    print(f"  Scale-in:  {SERVICE_NAME}-idle-scale-in ({IDLE_MINUTES} min without UserRequestCount)")
+    print(f"  Wake:      {SERVICE_NAME}-wake-on-request (ELB 5xx on {alb_dimension})")
 
 
 def main() -> None:
@@ -279,6 +387,9 @@ def main() -> None:
     )
     wait_for_service_stable(ecs, ECS_CLUSTER_NAME, SERVICE_NAME)
     wait_for_targets_healthy(elbv2, tg_arn)
+
+    print("\n6. Autoscaling (scale-to-zero + wake-on-request)...")
+    ensure_autoscaling(session, alb_arn)
 
     print("\n" + "=" * 60)
     print("dashboard-api deployed.")
