@@ -160,7 +160,30 @@ content; the pickers' vocabulary ≤10 min; lifecycle first-bet ≤15 min. An
 open tab's *window* advances within ≤10 min of the bounds check (or on the
 next tab focus).
 
-## 6. ETL freshness and the empty-result rule
+## 6. Cache sharing across users
+
+Every server-side cache is process-global and keyed by *what* was requested,
+never by *who*: there is no per-user state, so one user's work is reused by
+everyone. The layers form a funnel:
+
+1. **Response cache** — hit when a second user's request JSON is byte-identical.
+   Deterministic defaults (explicit `all` pickers, last-30-days window, first
+   panel's first metric) make fresh sessions on the same game byte-identical
+   on purpose. Concurrent identical requests single-flight: one computes, the
+   rest wait and share.
+2. **Window cache / covering slice** — hit when the data window overlaps: a
+   different cohort selection reuses the same frame (cohort filtering re-runs
+   on it); a narrower range is sliced from a fresh covering frame in memory;
+   a different metric set collects its own (small) projected entry.
+3. **S3** — only when nobody loaded that window recently.
+
+Practical consequence: the first person each morning pays the cold collect;
+everyone else inside the window TTL is fast, and identical views inside the
+response TTL are near-instant. Caches live in one process on one ECS task —
+scaling out would warm one copy per task, and a scale-to-zero wake starts
+cold except for the vocabulary pre-warm.
+
+## 7. ETL freshness and the empty-result rule
 
 The daily pipeline overwrites the last 3 Beijing days of `period=`
 partitions with Spark **dynamic partition overwrite** — files are deleted,
@@ -179,7 +202,7 @@ A stronger guarantee (atomic `_SUCCESS` markers or temp-dir-and-rename in
 the ETL) is a known future hardening; today the exposure is the few minutes
 around the 9am LA pipeline run.
 
-## 7. Operational notes
+## 8. Operational notes
 
 - **Scale-to-zero**: the ECS service (min 0 / max 1) scales to zero after 60
   minutes with no `Dashboard/UserRequestCount` datapoint. Only `/api/*`
