@@ -192,3 +192,43 @@ describe("cohort selection defaults", () => {
     expect(Object.values(s.panels).every((p) => p.series.length === 0)).toBe(true);
   });
 });
+
+describe("range-group and lifecycle selection consistency", () => {
+  const RANGE_CONFIG = {
+    ...CONFIG,
+    user_group_cols: ["daily_group", "fish_value"],
+    range_group_col: "fish_value",
+    range_group_defaults: [{ label: "small", min: 0, max: 10 }],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useDashboardStore.setState(initialState());
+    mockApi.getConfig.mockResolvedValue(RANGE_CONFIG);
+    mockApi.groupValues.mockResolvedValue({ config: "ss01", granularity: "day", values: { daily_group: ["a", "b"] } });
+    mockApi.dateBounds.mockResolvedValue({ config: "ss01", granularity: "day", min: "2025-01-01", max: "2025-01-30" });
+    mockApi.deepdiveMetrics.mockResolvedValue({ config: "ss01", granularity: "day", derived: [], user: [] });
+    mockApi.series.mockResolvedValue({ config: "ss01", granularity: "day", date_col: "activity_date", series: [], missing: [] });
+  });
+
+  it("seeds rangeSelection to ['all'] on configs with a range dimension", async () => {
+    mockApi.listConfigs.mockResolvedValue({ configs: [{ id: "ss01", title: "SS01" }] });
+    await useDashboardStore.getState().loadConfigs();
+    const s = useDashboardStore.getState();
+    expect(s.controls.date.rangeSelection).toEqual(["all"]);
+    expect(s.controls.group.rangeSelection).toEqual(["all"]);
+    expect(s.lifecycleAll).toBe(true); // lifecycle bar 'all' checked by default
+  });
+
+  it("an emptied range-group selection means no data, same as cohorts", async () => {
+    mockApi.listConfigs.mockResolvedValue({ configs: [{ id: "ss01", title: "SS01" }] });
+    await useDashboardStore.getState().loadConfigs();
+    vi.clearAllMocks();
+
+    useDashboardStore.getState().setTabRangeSelection("date", []);
+    await useDashboardStore.getState().loadAllSeries();
+
+    expect(mockApi.series).not.toHaveBeenCalled();
+    expect(Object.values(useDashboardStore.getState().panels).every((p) => p.series.length === 0)).toBe(true);
+  });
+});

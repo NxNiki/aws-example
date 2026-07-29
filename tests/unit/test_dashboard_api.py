@@ -844,3 +844,19 @@ def test_cached_response_single_flight_and_ttl(monkeypatch):
     with pytest.raises(RuntimeError):
         common.cached_response("err", boom)
     assert "err" not in common._response_cache  # errors are not cached
+
+
+def test_iter_cohorts_explicit_empty_selection_yields_no_cohorts():
+    """A column present with an EMPTY selection means the caller unselected
+    everything: no cohorts, nothing plotted. Absent columns still mean 'all'."""
+    import polars as pl
+
+    from dashboard_api.services import common
+
+    df = pl.DataFrame({"d": ["2026-06-01"], "user_id": ["u1"], "ai_group": ["A"]}).with_columns(
+        pl.col("d").str.to_datetime()
+    )
+    cfg = {"id": "t", "stats_by_date": {"user_group_cols": ["ai_group"]}}
+
+    assert dict(common.iter_cohorts(cfg, df, {"ai_group": []}, date_col="d")) == {}
+    assert list(dict(common.iter_cohorts(cfg, df, {}, date_col="d"))) == ["all"]

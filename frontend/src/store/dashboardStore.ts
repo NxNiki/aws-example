@@ -129,10 +129,26 @@ export function activeLifecycleGroups(
 
 // An explicitly EMPTIED picker (key present, no values) means "show nothing" —
 // the user unchecked everything, so tabs render no data rather than silently
-// falling back to 'all' (an ABSENT key still means 'all' for older views /
-// direct API calls). Pickers seed to ['all'] when cohort values load.
+// falling back to 'all' (an ABSENT key still means 'all' for direct API
+// calls). Pickers seed to ['all'] when cohort values load.
 export function hasEmptiedCohort(selection: Record<string, string[]>): boolean {
   return Object.values(selection).some((v) => Array.isArray(v) && v.length === 0);
+}
+
+// One rule for every dimension picker — cohorts, range groups (fish/bet
+// level), lifecycle groups: each starts with an explicit 'all' selected, and
+// fully unselecting any of them means "show no data" on that tab.
+export function nothingSelected(
+  s: Pick<DashboardState, "config" | "controls" | "lifecycle" | "lifecycleAll" | "dateGroups">,
+  tab: TabKey,
+): boolean {
+  if (hasEmptiedCohort(s.controls[tab].cohortSelection)) return true;
+  if (s.config?.range_group_col && s.controls[tab].rangeSelection.length === 0) return true;
+  if (s.config?.lifecycle_col && !s.lifecycleAll) {
+    const shown = (s.lifecycle[s.dateGroups.granularity] ?? []).some((g) => g.show && g.label.trim());
+    if (!shown) return true;
+  }
+  return false;
 }
 
 // The union window of the visible date ranges, for range-scoped cohort
@@ -633,7 +649,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   groupAvailableByGran: {},
   groupAvailRangeByGran: {},
   lifecycle: defaultLifecycle(),
-  lifecycleAll: false,
+  lifecycleAll: true,
   setLifecycleGroup: (unit, index, group) =>
     set((s) => ({
       lifecycle: { ...s.lifecycle, [unit]: s.lifecycle[unit].map((g, i) => (i === index ? group : g)) },
@@ -692,17 +708,26 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       },
       // Lifecycle definitions are per-game — back to defaults on a switch.
       lifecycle: defaultLifecycle(),
-      lifecycleAll: false,
+      lifecycleAll: true,
     }));
     try {
       const config = await api.getConfig(id);
-      set({
+      // Range-group picker starts with an explicit 'all' (same rule as the
+      // cohort pickers); configs without a range dimension keep it empty.
+      const seededRange = config.range_group_col ? ["all"] : [];
+      set((s) => ({
         config,
+        controls: {
+          date: { ...s.controls.date, rangeSelection: seededRange },
+          group: { ...s.controls.group, rangeSelection: seededRange },
+          viz: { ...s.controls.viz, rangeSelection: seededRange },
+          summaryTable: { ...s.controls.summaryTable, rangeSelection: seededRange },
+        },
         rangeGroups: (config.range_group_defaults ?? []).map((g) => ({ label: g.label, min: g.min, max: g.max ?? null })),
         panels: defaultPanels(config),
         group: defaultGroupPanels(config),
         summaryTable: { ...emptySummaryTable(), metrics: defaultSummaryMetrics(config) },
-      });
+      }));
       await get().ensureGroupValues(get().dateGroups.granularity);
       await get().loadDeepdiveMetrics();
       await get().loadDateBounds();
@@ -806,7 +831,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     if (!configId) return;
     const { granularity } = dateGroups;
     const { cohortSelection } = controls.date;
-    if (hasEmptiedCohort(cohortSelection)) {
+    if (nothingSelected(get(), "date")) {
       set((s) => ({
         panels: Object.fromEntries(Object.entries(s.panels).map(([id, p]) => [id, { ...p, series: [] }])),
       }));
@@ -889,7 +914,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     if (!configId) return;
     const { granularity } = dateGroups;
     const { cohortSelection } = controls.group;
-    if (hasEmptiedCohort(cohortSelection)) {
+    if (nothingSelected(get(), "group")) {
       set((s) => ({
         group: Object.fromEntries(
           Object.entries(s.group).map(([id, p]) => [id, { ...p, stats: [], missing: false }]),
@@ -969,7 +994,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     if (!configId) return;
     const { granularity } = dateGroups;
     const { cohortSelection } = controls.summaryTable;
-    if (hasEmptiedCohort(cohortSelection)) {
+    if (nothingSelected(get(), "summaryTable")) {
       set((s) => ({ summaryTable: { ...s.summaryTable, columns: [], rows: [], missing: false } }));
       return;
     }
@@ -1079,11 +1104,24 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     try {
       const config = await api.getConfig(snap.configId);
       const validCols = new Set(config.user_group_cols.filter((c) => c !== config.lifecycle_col));
-      const sanitize = <T extends { cohortSelection: Record<string, string[]> }>(t: T): T => ({
+      // Same explicit-'all' rule as live pickers: seed every picker-visible
+      // column, then let the snapshot's non-empty selections override. Saved
+      // empty selections are treated as 'all' (pre-explicit-defaults views).
+      const pickerCols = config.user_group_cols.filter(
+        (c) => c !== config.lifecycle_col && c !== config.range_group_col,
+      );
+      const sanitize = <T extends { cohortSelection: Record<string, string[]>; rangeSelection?: string[] }>(
+        t: T,
+      ): T => ({
         ...t,
-        cohortSelection: Object.fromEntries(
-          Object.entries(t.cohortSelection ?? {}).filter(([col]) => validCols.has(col)),
-        ),
+        cohortSelection: {
+          ...Object.fromEntries(pickerCols.map((c) => [c, ["all"]])),
+          ...Object.fromEntries(
+            Object.entries(t.cohortSelection ?? {}).filter(([col, v]) => validCols.has(col) && (v?.length ?? 0) > 0),
+          ),
+        },
+        rangeSelection:
+          config.range_group_col && !(t.rangeSelection ?? []).length ? ["all"] : (t.rangeSelection ?? []),
       });
       const raw = snapshotControls(snap);
       const controls: TabControls = {
@@ -1101,7 +1139,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         lifecycle: Array.isArray(snap.lifecycle)
           ? { ...defaultLifecycle(), day: snap.lifecycle }
           : { ...defaultLifecycle(), ...(snap.lifecycle ?? {}) },
-        lifecycleAll: snap.lifecycleAll ?? false,
+        lifecycleAll: snap.lifecycleAll ?? true,
         rangeGroups:
           snap.rangeGroups ??
           (config.range_group_defaults ?? []).map((g) => ({ label: g.label, min: g.min, max: g.max ?? null })),
@@ -1195,7 +1233,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     if (!configId) return;
     const { granularity } = dateGroups;
     const { cohortSelection } = controls.viz;
-    if (hasEmptiedCohort(cohortSelection)) {
+    if (nothingSelected(get(), "viz")) {
       set((s) => ({
         deepdive: {
           derived: { ...s.deepdive.derived, histograms: [], heatmaps: [], scatters: [], missing: [] },

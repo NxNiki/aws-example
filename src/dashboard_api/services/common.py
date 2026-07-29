@@ -442,17 +442,25 @@ def clean_floats(values: Any) -> list[Optional[float]]:
 
 
 def cohort_values(group_values: dict[str, list[str]], col: Optional[str]) -> list[str]:
-    """Selected values for a cohort column, de-duped; empty selection means ['all']."""
+    """Selected values for a cohort column, de-duped.
+
+    An ABSENT column means ['all'] — callers need not enumerate every cohort
+    dimension. A column PRESENT with an empty selection means no cohorts at
+    all: the caller explicitly unselected everything, so nothing is plotted
+    (the cohort cross-product becomes empty). Matches the pickers' semantics.
+    """
     if not col:
+        return ["all"]
+    if col not in group_values or group_values[col] is None:
         return ["all"]
     seen: set[str] = set()
     vals: list[str] = []
-    for v in group_values.get(col, []) or []:
+    for v in group_values[col]:
         s = str(v)
         if s and s not in seen:
             seen.add(s)
             vals.append(s)
-    return vals or ["all"]
+    return vals
 
 
 def cohort_label(values: list[str]) -> str:
