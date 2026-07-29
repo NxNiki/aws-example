@@ -250,10 +250,19 @@ const noClip = (): ClipOpts => ({ enable: false, min: null, max: null });
 const noFilter = (): FilterOpts => ({ enable: false, min: null, max: null });
 
 function defaultPanels(config: ConfigDetail): Record<string, PanelState> {
+  // Only the FIRST panel starts with a metric selected, so first launch fires
+  // one series request instead of one per panel. Metrics picked later live in
+  // the store and survive tab switches; a config switch resets to defaults.
   const panels: Record<string, PanelState> = {};
-  for (const g of config.groups) {
-    panels[g.id] = { left: g.metrics.slice(0, 1), right: [], log: false, threshold: DEFAULT_THRESHOLD, series: [] };
-  }
+  config.groups.forEach((g, i) => {
+    panels[g.id] = {
+      left: i === 0 ? g.metrics.slice(0, 1) : [],
+      right: [],
+      log: false,
+      threshold: DEFAULT_THRESHOLD,
+      series: [],
+    };
+  });
   return panels;
 }
 

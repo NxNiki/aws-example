@@ -84,16 +84,18 @@ describe("dashboardStore", () => {
 
     const s = useDashboardStore.getState();
     expect(s.configId).toBe("ss01");
-    // panels are seeded from config.groups, first metric on the left axis.
+    // panels are seeded from config.groups; only the FIRST panel starts with
+    // a metric (one series request on first launch), the rest start empty.
     expect(Object.keys(s.panels)).toEqual(["group1", "group2"]);
     expect(s.panels.group1.left).toEqual(["num_active_users"]);
+    expect(s.panels.group2.left).toEqual([]);
     // cohort values are cached per granularity now.
     expect(s.groupValuesByGran.day).toEqual({ user_group: ["new", "old"] });
     // Default window: last 30 days ending at the data's max date, seeded into
     // the global Date-groups R1.
     expect(s.dateGroups.ranges[0].start).toBe("2025-01-01");
     expect(s.dateGroups.ranges[0].end).toBe("2025-01-30");
-    expect(mockApi.series).toHaveBeenCalledTimes(2); // one fetch per panel
+    expect(mockApi.series).toHaveBeenCalledTimes(1); // only the first panel fetches
     expect(s.error).toBeNull();
   });
 
