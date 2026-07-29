@@ -114,21 +114,20 @@ def _bootstrap_ci(
     m-sized mean overstates an n-sized mean's by sqrt(n/m), so the naive cap
     would give CIs ~sqrt(n/m)× too wide.
 
-    Resamples in batches: a single-shot ``(n_boot, m)`` matrix for large
-    arrays lands concurrently across panels — unbatched, this OOM-killed the
-    dashboard-api task in production. Batching caps the transient at ~80 MB
-    with identical statistics.
+    Resamples one at a time via integer indexing: the transient is a single
+    m-length resample (~80 KB) instead of an (n_boot, m) matrix — an earlier
+    matrix version transiently allocated hundreds of MB per panel and
+    OOM-killed the task when panels bootstrapped in parallel — and at
+    m<=10k the loop is also faster than the vectorized matrix.
     """
     n = len(arr)
     if n < 2:
         return float("nan"), float("nan")
     rng = np.random.default_rng()
     m = min(n, _BOOTSTRAP_MAX_SAMPLE)
-    batch = max(1, min(n_boot, 10_000_000 // m))
     boot_means = np.empty(n_boot)
-    for i in range(0, n_boot, batch):
-        k = min(batch, n_boot - i)
-        boot_means[i : i + k] = rng.choice(arr, size=(k, m), replace=True).mean(axis=1)
+    for i in range(n_boot):
+        boot_means[i] = arr[rng.integers(0, n, m)].mean()
     lo = float(np.percentile(boot_means, 100 * alpha / 2))
     hi = float(np.percentile(boot_means, 100 * (1 - alpha / 2)))
     if m == n:
