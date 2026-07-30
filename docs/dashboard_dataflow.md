@@ -142,17 +142,43 @@ with a single metric and per-(cohort × range) five-number summaries + CIs.
 
 ## 5. Cache reference
 
-| Layer | Where | Key | TTL | Notes |
-| --- | --- | --- | --- | --- |
-| Browser: `index.html` | client | — | `no-cache` (ETag 304) | refresh always gets the current bundle |
-| Browser: `/assets/*` | client | content hash | 1 year, immutable | safe by construction |
-| Config yamls | server | path | 60 s | S3-served; edit = upload, no redeploy |
-| Response cache | server | full request JSON | 150 s | single-flight; errors and empty results never cached |
-| Window cache | server | config+gran+window+columns | 900 s | single-flight lock; byte-budgeted (2.5 GB LRU); covering-slice reuse; empty frames never cached |
-| Group-values vocabulary | server | config+granularity | 600 s | stale-while-revalidate (background refresh); single-flight cold misses |
-| First-bet map (lifecycle) | server | config | 900 s | full-history min-date scan per user |
-| Date bounds | server | — | none | computed fresh per request (this is what lets an open tab discover new data) |
-| Frontend `_panelCtx` / series | client memory | panel + context signature | session | incremental metric fetches; cleared on context change |
+| Layer | Where | Key | TTL | Size limit | Notes |
+| --- | --- | --- | --- | --- | --- |
+| Browser: `index.html` | client | — | `no-cache` (ETag 304) | — | refresh always gets the current bundle |
+| Browser: `/assets/*` | client | content hash | 1 year, immutable | browser-managed | safe by construction |
+| Config yamls | server | path | 60 s | one per config | S3-served; edit = upload, no redeploy |
+| Response cache | server | full request JSON | 150 s | 512 entries (LRU) | single-flight; errors and empty results never cached |
+| Window cache | server | config+gran+window+columns | 900 s | **2.5 GB estimated bytes (LRU)** | single-flight lock; covering-slice reuse; empty frames never cached |
+| Group-values vocabulary | server | config+granularity | 600 s | one per (config, gran) | stale-while-revalidate (background refresh); single-flight cold misses |
+| First-bet map (lifecycle) | server | config | 900 s | one per config | full-history min-date scan per user |
+| Date bounds | server | — | none | — | computed fresh per request (this is what lets an open tab discover new data) |
+| Frontend `_panelCtx` / series | client memory | panel + context signature | session | per open tab | incremental metric fetches; cleared on context change |
+
+### Storage limits in detail
+
+- **Window cache — 2.5 GB of estimated frame bytes**
+  (`_WINDOW_CACHE_MAX_BYTES`, `services/common.py`), enforced by
+  `_evict_over_budget()` on every insert. Budgeted in *bytes*
+  (`DataFrame.estimated_size()`), not entry count, because entries vary from
+  a few MB (one projected metric, short window) to GBs (a months-long
+  Stats-by-Group span) — counting entries is exactly how an earlier 4 GB
+  task OOM'd. Eviction is LRU (hits `move_to_end`; eviction pops the
+  front), so frames that keep serving traffic — including via covering
+  slices — survive. The `len > 1` guard means the **newest frame is never
+  evicted**, even if it alone exceeds the budget: it is what the in-flight
+  burst of panel requests is sharing. The 2.5 GB figure is sized against
+  the 8 GB task — budget + the largest concurrent collects must fit with
+  margin (sizing history in the comment above the constant).
+- **Response cache — 512 entries** (`_RESPONSE_CACHE_MAX_ENTRIES`), LRU by
+  insertion. Entries are small JSON-serializable results, so a count bound
+  is enough.
+- **Vocabulary / first-bet / config caches** hold one small entry per
+  (config[, granularity]) — bounded by the number of games, no explicit
+  limit needed.
+- **`DataMetrics` instances** memoize computed metrics via
+  `cached_property`, but each instance lives only for one request × cohort
+  and is garbage-collected with it — request-scoped, not a persistent
+  cache.
 
 Worst-case staleness after new data lands in S3 (no restarts needed):
 window cache (≤15 min) + response cache (≤2.5 min) ≈ **~17 min** for series
