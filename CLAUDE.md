@@ -161,6 +161,27 @@ A populated `.env` is present locally with the full set of credentials the servi
 
 The bastion **IP is not stored** (it changes) — pass the current one to `DataLoader(bastion_ip=...)` or a job's `--bastion-ip`. Never print `.env` values or commit them (`.env` is gitignored).
 
+## Jira Tickets
+
+Jira Cloud lives at `https://bituslabs.atlassian.net`. The REST API
+(`/rest/api/3/...`) accepts basic auth with the `.env` `CONFLUENCE_EMAIL` +
+`CONFLUENCE_TOKEN` (one Atlassian token covers Confluence and Jira) — no
+separate credential. Never print the token.
+
+- **Project:** data-science work goes in **AIP (AI Projects)**. Dashboard
+  work files under epic **AIP-314 "DS Dashboard"**. Per-game projects
+  (SS01A, SS02, SS06, FM, …) exist for game-team work — don't file DS
+  tickets there.
+- **Issue types on AIP:** Epic, Bug, Task, Sub-task. Link to an epic via the
+  `parent` field at create time.
+- **Format:** descriptions are ADF (Atlassian Document Format) JSON, not
+  markdown/wiki markup.
+- **Content:** short outcome-oriented summary; description with a one-line
+  context paragraph, grouped bullets (what changed / why), and links to the
+  PR and any relevant docs. One ticket per deliverable, not per commit.
+- **When:** create tickets only when asked — creating one is an
+  outward-facing action visible to the whole team.
+
 ## Branch & Merge Workflow
 
 Full workflow rules live in `CONTRIBUTING.md`. Highlights:
