@@ -179,6 +179,9 @@ separate credential. Never print the token.
 - **Content:** short outcome-oriented summary; description with a one-line
   context paragraph, grouped bullets (what changed / why), and links to the
   PR and any relevant docs. One ticket per deliverable, not per commit.
+- **Title prefix:** tickets under an epic start their summary with the epic
+  name in brackets — e.g. under AIP-314 the title is
+  `[DS Dashboard] <outcome summary>`.
 - **When:** create tickets only when asked — creating one is an
   outward-facing action visible to the whole team.
 
