@@ -80,7 +80,7 @@ buckets possible, and it is why the caching layers below exist.
 | Metric added to a panel | incremental — only the newly added metric is fetched and appended; removed metrics stay cached client-side for instant re-add | `POST /series` with just the new metric |
 | Tab switch | pure state flip; selections persist per tab | none (the entering tab refetches only if its context changed) |
 | Saved view load | snapshot sanitized: stale columns dropped, missing pickers seeded `"all"`, empty selections read as `"all"` | full refetch for the restored state |
-| Idle tab | on tab-focus and every 10 min the store re-checks `date-bounds`; **forward-only** — if the data edge advanced and the user hasn't moved R1's end off the old edge, the window slides forward, a toast announces it, and the tab refetches | `GET /date-bounds`, then series on change |
+| Idle tab | on tab-focus and every 10 min (visible tabs only — hidden tabs don't poll, so they don't keep the service awake) the store re-checks `date-bounds`; **forward-only** — if the data edge advanced and the user hasn't moved R1's end off the old edge, the window slides forward, a toast announces it, and the tab refetches | `GET /date-bounds`, then series on change |
 
 Selection semantics are one-to-one by design: *absent* column (API callers
 only) = "all"; *explicit `"all"`* = one aggregate cohort; *explicit values*

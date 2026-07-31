@@ -56,7 +56,13 @@ export default function App() {
       if (document.visibilityState === "visible") void refreshDateBounds();
     };
     document.addEventListener("visibilitychange", onVisible);
-    const timer = setInterval(() => void refreshDateBounds(), 10 * 60 * 1000);
+    // Hidden tabs don't poll: the interval is an /api/* request and counts as
+    // user activity for scale-to-zero — a background tab would keep the
+    // service awake all night. The visibilitychange handler re-checks the
+    // data edge immediately on refocus, so nothing is missed.
+    const timer = setInterval(() => {
+      if (!document.hidden) void refreshDateBounds();
+    }, 10 * 60 * 1000);
     return () => {
       document.removeEventListener("visibilitychange", onVisible);
       clearInterval(timer);
