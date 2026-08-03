@@ -1,20 +1,20 @@
 """FM01 daily/weekly/monthly per-user game stats from S3 cold data — PySpark job.
 
 ETL job: cold-data source for the fish_hunter dashboard tab metrics
-(``daily_group`` dimension plus the ``user_*`` metrics). Same query logic as
+(``ab_test_group`` dimension plus the ``user_*`` metrics). Same query logic as
 etl_game_stats_daily_by_user.py, but reads bullet parquet directly from
 ``s3://oceanhunter-production-data-warehouse/transformed_data/cold_data/bullet``
 (partition-pruned by year=/month=/day=) instead of Redshift ``public.bullet``.
 Output datasets: ``<output-root>/{daily,weekly,monthly}_stats/period=YYYY-MM-DD/``
 where ``period`` is the day / week start / month start of ``activity_date``.
 
-Behavior: one row per (user, period, daily_group, fish_value) for EVERY betting
+Behavior: one row per (user, period, ab_test_group, fish_value) for EVERY betting
 user -- not only fish-killers (kill-specific metrics are NULL/0 for non-killers;
-the ``user_killed_fish`` flag segments killers). ``daily_group`` collapses each
+the ``user_killed_fish`` flag segments killers). ``ab_test_group`` collapses each
 (user, day) to exactly ONE strategy group, priority RC_*/CR_* strategies
 (literal strategy_name kept, MIN tie-break) > RISK_CONTROLLED > BOOST_POOL >
 DYNAMIC_RTP family (MIN tie-break) > DEFAULT_FALLBACK. The companion
-``user_group_combined`` column carries the same assignment with each family
+``ab_test_group_combined`` column carries the same assignment with each family
 collapsed to its rollup label (RC_* -> ``RC_ALL``, CR_* -> ``CR_ALL``, all
 other labels pass through), giving a per-family dimension without changing
 the row grain. Each run
@@ -44,8 +44,8 @@ DELTA_T_MIN_SECONDS = 0.25
 BJ_UTC_OFFSET_HOURS = 8
 
 # A strategy_name starting with one of these prefixes claims the whole
-# user-day (top priority); user_group_combined collapses each family into its
-# rollup label while daily_group keeps the literal strategy_name.
+# user-day (top priority); ab_test_group_combined collapses each family into its
+# rollup label while ab_test_group keeps the literal strategy_name.
 RC_PREFIX = "RC_"
 CR_PREFIX = "CR_"
 RC_ROLLUP_GROUP = "RC_ALL"
@@ -140,7 +140,7 @@ def generate_query(
         ),
 
         -- 2. DETERMINE USER DAILY GROUP (Logic applied inside SUM)
-        user_daily_group AS (
+        user_ab_test_group AS (
             SELECT
                 user_id,
                 activity_date,
@@ -159,7 +159,7 @@ def generate_query(
                     WHEN MAX(CASE WHEN strategy_name IN ('DYNAMIC_RTP', 'DYNAMIC_RTP_V2', 'DYNAMIC_RTP_V3') THEN 1 ELSE 0 END) > 0
                         THEN MIN(CASE WHEN strategy_name IN ('DYNAMIC_RTP', 'DYNAMIC_RTP_V2', 'DYNAMIC_RTP_V3') THEN strategy_name END)
                     ELSE 'DEFAULT_FALLBACK'
-                END AS daily_group,
+                END AS ab_test_group,
                 LAG(activity_date) OVER (PARTITION BY user_id ORDER BY activity_date) AS bj_date_last_bet
             FROM base_data
             GROUP BY user_id, activity_date, activity_week, activity_month
@@ -279,7 +279,7 @@ def generate_query(
 
         user_session_stats_agg AS (
             SELECT
-                u.daily_group,
+                u.ab_test_group,
                 t.user_id,
                 u.{stats_agg_col},
                 SUM(t.num_streak_sessions)      AS user_num_streak_sessions,
@@ -291,21 +291,21 @@ def generate_query(
 
                 AVG(t.bets_to_kill_fish)        AS user_bets_to_kill_fish
             FROM user_session_stats t
-            JOIN user_daily_group u ON t.user_id = u.user_id AND t.activity_date = u.activity_date
-            GROUP BY u.daily_group, t.user_id, u.{stats_agg_col}
+            JOIN user_ab_test_group u ON t.user_id = u.user_id AND t.activity_date = u.activity_date
+            GROUP BY u.ab_test_group, t.user_id, u.{stats_agg_col}
         ),
 
         max_kill_streak_length_agg AS (
             SELECT
-                u.daily_group,
+                u.ab_test_group,
                 t.user_id,
                 u.{stats_agg_col},
                 MAX(t.max_kill_streak)          AS user_max_kill_streak,
 
                 AVG(t.avg_kill_streak)          AS user_avg_kill_streak
             FROM max_kill_streak_length t
-            JOIN user_daily_group u ON t.user_id = u.user_id AND t.activity_date = u.activity_date
-            GROUP BY u.daily_group, t.user_id, u.{stats_agg_col}
+            JOIN user_ab_test_group u ON t.user_id = u.user_id AND t.activity_date = u.activity_date
+            GROUP BY u.ab_test_group, t.user_id, u.{stats_agg_col}
         ),
 
         -- 4a. USER-DAY LEVEL COLUMNS that cannot be sliced by fish_value
@@ -313,23 +313,23 @@ def generate_query(
         user_day_stats AS (
             SELECT
                 b.user_id,
-                u.daily_group,
+                u.ab_test_group,
                 b.{stats_agg_col},
                 COUNT(DISTINCT CONCAT(CAST(b.user_id AS STRING), '-', CAST(b.room_id AS STRING))) AS user_num_rooms,
                 STDDEV(b.profit) / NULLIF(ABS(AVG(b.profit)), 0)  AS user_profit_coef_var
             FROM base_data b
-            JOIN user_daily_group u ON b.user_id = u.user_id AND b.activity_date = u.activity_date
-            GROUP BY b.user_id, u.daily_group, b.{stats_agg_col}
+            JOIN user_ab_test_group u ON b.user_id = u.user_id AND b.activity_date = u.activity_date
+            GROUP BY b.user_id, u.ab_test_group, b.{stats_agg_col}
         ),
 
         -- 4. USER-LEVEL STATS BY DAILY GROUP AND FISH VALUE. One row per
-        -- (period, user, daily_group, fish_value): each bullet in exactly one
+        -- (period, user, ab_test_group, fish_value): each bullet in exactly one
         -- row, so the dashboard's custom fish-level ranges ([min, max]
         -- inclusive over fish_value) recombine every sliced metric exactly.
         stats_by_user_date AS (
             SELECT
                 b.user_id,
-                u.daily_group,
+                u.ab_test_group,
                 b.fish_value,
                 b.{stats_agg_col},
                 COUNT(b.user_id)                              AS user_num_bets,
@@ -364,8 +364,8 @@ def generate_query(
                 COUNT(CASE WHEN (b.bet - b.prev_bet_amount) < 0 THEN 1 END) AS user_neg_delta_bet_num,
                 COUNT(b.prev_bet_amount) AS user_num_delta_bet
             FROM base_data b
-            JOIN user_daily_group u ON b.user_id = u.user_id AND b.activity_date = u.activity_date
-            GROUP BY b.user_id, u.daily_group, b.fish_value, b.{stats_agg_col}
+            JOIN user_ab_test_group u ON b.user_id = u.user_id AND b.activity_date = u.activity_date
+            GROUP BY b.user_id, u.ab_test_group, b.fish_value, b.{stats_agg_col}
             -- Include ALL betting users, not only fish-killers. Kill-specific metrics
             -- already degrade to NULL/0 for non-killers (CASE WHEN killed / NULLIF), while
             -- downstream user counts & retention (day0_num_users, num_active_users, ...) need
@@ -373,22 +373,22 @@ def generate_query(
             -- Segment to killers downstream via the user_killed_fish flag when needed.
         )
 
-        -- 5. FINAL JOIN & FORMATTING. Row grain: (period, user, daily_group,
+        -- 5. FINAL JOIN & FORMATTING. Row grain: (period, user, ab_test_group,
         -- fish_value). The session/streak columns (t4/t5) and the user-day
         -- columns (t6) are computed per user-day and repeat identically on
         -- each of the user's fish_value rows; the dashboard keeps their first
         -- value when collapsing.
         SELECT
             t1.user_id,
-            t1.daily_group,
+            t1.ab_test_group,
             -- Family rollup dimension: RC_*/CR_* variants collapse to RC_ALL /
             -- CR_ALL, every other label passes through unchanged. Functionally
-            -- dependent on daily_group, so the row grain does not change.
+            -- dependent on ab_test_group, so the row grain does not change.
             CASE
-                WHEN substr(t1.daily_group, 1, 3) = '{RC_PREFIX}' THEN '{RC_ROLLUP_GROUP}'
-                WHEN substr(t1.daily_group, 1, 3) = '{CR_PREFIX}' THEN '{CR_ROLLUP_GROUP}'
-                ELSE t1.daily_group
-            END AS user_group_combined,
+                WHEN substr(t1.ab_test_group, 1, 3) = '{RC_PREFIX}' THEN '{RC_ROLLUP_GROUP}'
+                WHEN substr(t1.ab_test_group, 1, 3) = '{CR_PREFIX}' THEN '{CR_ROLLUP_GROUP}'
+                ELSE t1.ab_test_group
+            END AS ab_test_group_combined,
             t1.fish_value,
             t1.{stats_agg_col} AS activity_date,
             t6.user_num_rooms,
@@ -440,15 +440,15 @@ def generate_query(
         LEFT JOIN user_session_stats_agg t4
             ON t1.user_id = t4.user_id
             AND t1.{stats_agg_col} = t4.{stats_agg_col}
-            AND t1.daily_group = t4.daily_group
+            AND t1.ab_test_group = t4.ab_test_group
         LEFT JOIN max_kill_streak_length_agg t5
             ON t1.user_id = t5.user_id
             AND t1.{stats_agg_col} = t5.{stats_agg_col}
-            AND t1.daily_group = t5.daily_group
+            AND t1.ab_test_group = t5.ab_test_group
         LEFT JOIN user_day_stats t6
             ON t1.user_id = t6.user_id
             AND t1.{stats_agg_col} = t6.{stats_agg_col}
-            AND t1.daily_group = t6.daily_group
+            AND t1.ab_test_group = t6.ab_test_group
         WHERE t1.{stats_agg_col} >= DATE '{effective_start}'
           AND t1.{stats_agg_col} < DATE '{output_end}'
         """

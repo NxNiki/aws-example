@@ -151,7 +151,7 @@ def _lifecycle_fixture():
             "d": ["2026-06-01", "2026-06-03", "2026-06-10", "2026-06-10"],
             "user_id": ["u1", "u1", "u2", "u3"],
             "ai_group": ["A", "A", "A", "A"],
-            "user_group": ["new", "new", "old", "old"],
+            "life_cycle_group": ["new", "new", "old", "old"],
         }
     ).with_columns(pl.col("d").str.to_datetime())
     first = pl.DataFrame({"user_id": ["u1", "u2"], "first_bet_date": ["2026-06-01", "2026-05-01"]}).with_columns(
@@ -161,7 +161,7 @@ def _lifecycle_fixture():
 
 
 def test_iter_cohorts_lifecycle_groups(monkeypatch):
-    """Custom lifecycle groups redefine user_group by the HALF-OPEN period range
+    """Custom lifecycle groups redefine life_cycle_group by the HALF-OPEN period range
     [start, end) since first bet: labels come from the request, ranges may
     overlap, end=None is open-ended, 'all' is no-filter, and users without a
     first bet fall only into 'all'."""
@@ -169,7 +169,7 @@ def test_iter_cohorts_lifecycle_groups(monkeypatch):
 
     df, first = _lifecycle_fixture()
     monkeypatch.setattr(common, "load_first_bet_dates", lambda cfg: first)
-    cfg = {"id": "g", "stats_by_date": {"user_group_cols": ["ai_group", "user_group"]}}
+    cfg = {"id": "g", "stats_by_date": {"user_group_cols": ["ai_group", "life_cycle_group"]}}
     lifecycle = [
         {"label": "day0", "start": 0, "end": 1},
         {"label": "day0-3", "start": 0, "end": 4},  # overlaps day0 on purpose
@@ -204,14 +204,14 @@ def test_iter_cohorts_lifecycle_week_month_use_period_index(monkeypatch):
         {
             "d": ["2026-06-01", "2026-06-08", "2026-06-01"],
             "user_id": ["u1", "u1", "u9"],  # u9 never bet
-            "user_group": ["new", "beginner", "old"],
+            "life_cycle_group": ["new", "beginner", "old"],
         }
     ).with_columns(pl.col("d").str.to_datetime())
     first = pl.DataFrame({"user_id": ["u1"], "first_bet_date": ["2026-06-04"]}).with_columns(
         pl.col("first_bet_date").str.to_datetime()
     )
     monkeypatch.setattr(common, "load_first_bet_dates", lambda cfg: first)
-    cfg = {"id": "g", "stats_by_date": {"user_group_cols": ["user_group"]}}
+    cfg = {"id": "g", "stats_by_date": {"user_group_cols": ["life_cycle_group"]}}
     lifecycle = [
         {"label": "new", "start": 0, "end": 1},
         {"label": "beginner", "start": 1, "end": 2},
@@ -223,7 +223,7 @@ def test_iter_cohorts_lifecycle_week_month_use_period_index(monkeypatch):
     assert out["all"].height == 3  # u9 (null periods) only appears here
 
     # Month rows; u1 first bet 06-20 → 06-01 row is month 0, 07-01 row month 1.
-    dfm = pl.DataFrame({"d": ["2026-06-01", "2026-07-01"], "user_id": ["u1", "u1"], "user_group": ["new", "old"]})
+    dfm = pl.DataFrame({"d": ["2026-06-01", "2026-07-01"], "user_id": ["u1", "u1"], "life_cycle_group": ["new", "old"]})
     dfm = dfm.with_columns(pl.col("d").str.to_datetime())
     firstm = pl.DataFrame({"user_id": ["u1"], "first_bet_date": ["2026-06-20"]}).with_columns(
         pl.col("first_bet_date").str.to_datetime()
@@ -236,19 +236,19 @@ def test_iter_cohorts_lifecycle_week_month_use_period_index(monkeypatch):
 
 def test_iter_cohorts_without_lifecycle_uses_stored_labels(monkeypatch):
     """No lifecycle_groups in the request → unchanged behavior: equality filter
-    on the ETL-stored user_group labels."""
+    on the ETL-stored life_cycle_group labels."""
     from dashboard_api.services import common
 
     df, _ = _lifecycle_fixture()
     monkeypatch.setattr(
         common, "load_first_bet_dates", lambda cfg: (_ for _ in ()).throw(AssertionError("must not derive"))
     )
-    cfg = {"id": "g", "stats_by_date": {"user_group_cols": ["ai_group", "user_group"]}}
-    out = dict(common.iter_cohorts(cfg, df, {"user_group": ["new"]}))
+    cfg = {"id": "g", "stats_by_date": {"user_group_cols": ["ai_group", "life_cycle_group"]}}
+    out = dict(common.iter_cohorts(cfg, df, {"life_cycle_group": ["new"]}))
     assert set(out) == {"new"}
     assert set(out["new"]["user_id"]) == {"u1"}
 
-    # A config without a user_group dimension ignores lifecycle entirely.
+    # A config without a life_cycle_group dimension ignores lifecycle entirely.
     cfg2 = {"id": "g2", "stats_by_date": {"user_group_cols": ["ab_group"]}}
     out2 = dict(common.iter_cohorts(cfg2, df, {}, lifecycle=[{"label": "day0", "start": 0, "end": 1}]))
     assert set(out2) == {"all"} and out2["all"].height == 4
@@ -277,7 +277,7 @@ def test_iter_cohorts_all_respects_group_col_partition(monkeypatch):
         "stats_by_date": {
             "group_col": "ai_group",
             "group_col_partition": ["AI", "Default"],
-            "user_group_cols": ["ai_group", "user_group"],
+            "user_group_cols": ["ai_group", "life_cycle_group"],
         },
     }
     out = dict(common.iter_cohorts(cfg, df, {}))
@@ -332,7 +332,7 @@ def test_iter_cohorts_grain_collapses_user_rows(monkeypatch):
     cfg = {
         "id": "g",
         "stats_by_date": {
-            "user_group_cols": ["ab_group", "mathtable", "user_group"],
+            "user_group_cols": ["ab_group", "mathtable", "life_cycle_group"],
             "user_row_grain": ["ab_group", "mathtable"],
         },
     }
@@ -399,7 +399,7 @@ def test_iter_cohorts_range_groups_bucket_by_value(monkeypatch):
         {
             "d": ["2026-06-01"] * 3,
             "user_id": ["u1", "u1", "u2"],
-            "daily_group": ["DEFAULT_FALLBACK"] * 3,
+            "ab_test_group": ["DEFAULT_FALLBACK"] * 3,
             "fish_value": [10, 130, 500],
             "user_num_bets": [5, 20, 7],
             "user_total_bet": [50.0, 200.0, 70.0],
@@ -409,7 +409,7 @@ def test_iter_cohorts_range_groups_bucket_by_value(monkeypatch):
     cfg = {
         "id": "fh",
         "stats_by_date": {
-            "user_group_cols": ["daily_group", "fish_value"],
+            "user_group_cols": ["ab_test_group", "fish_value"],
             "user_row_grain": ["fish_value"],
             "range_group": {"column": "fish_value", "name": "Fish level"},
         },
@@ -502,14 +502,14 @@ def test_lifecycle_group_schema_validation():
 
 def test_config_detail_exposes_lifecycle_col():
     """The frontend shows the global lifecycle picker only when the config has a
-    user_group cohort dimension."""
+    life_cycle_group cohort dimension."""
     from pathlib import Path
 
     from dashboard_api.services.configs import build_config_detail, load_raw_config
 
     config_dir = str(Path(__file__).resolve().parents[2] / "configs" / "dashboard")
     ss02 = load_raw_config(config_dir, "ss02")
-    assert ss02 is not None and build_config_detail("ss02", ss02).lifecycle_col == "user_group"
+    assert ss02 is not None and build_config_detail("ss02", ss02).lifecycle_col == "life_cycle_group"
     cluster = load_raw_config(config_dir, "ss03_user_cluster")
     assert cluster is not None and build_config_detail("ss03_user_cluster", cluster).lifecycle_col is None
 

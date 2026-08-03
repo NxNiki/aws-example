@@ -36,7 +36,7 @@ Day-N retention for a group ``G`` on day ``D`` is::
 
 The follow-up test is **any-group**, not same-group: a day-0 cohort user counts as
 retained if they return to the game on the follow-up date in *any* group — not only ``G``.
-This matters because a user's group can change day to day (e.g. fish_hunter ``daily_group``
+This matters because a user's group can change day to day (e.g. fish_hunter ``ab_test_group``
 is reassigned by strategy priority each day, or a user moves between A/B arms): a user in
 ``dynamic_rtp_v3`` on day D who bets under ``default`` on D+1 is still retained for
 ``dynamic_rtp_v3``. The denominator (cohort) is still per-group; only the return test

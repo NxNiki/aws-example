@@ -23,7 +23,7 @@
 # User group definitions (applies to all slot games: SS01, SS02, SS03)
 # ---------------------------------------------------------------------------
 groups:
-  user_group:
+  life_cycle_group:
     description: >
       User lifecycle cohort by periods since the user's first bet. NOT a stored
       column anymore: cohorts are user-defined in the dashboard's "Lifecycle
@@ -58,10 +58,19 @@ groups:
       unselected (or vice versa) is supported; the API re-aggregates per-user
       stats across the unselected dimension.
 
-  daily_group:
+  ab_test_group:
     description: >
-      Fish Hunter (FM01) grouping column — varies by config. Typically the
-      strategy_name or an AB-test partition.
+      Fish Hunter (FM01) strategy grouping column. Each (user, day) is
+      assigned to exactly ONE group from the bullet strategy_name, priority
+      RC_*/CR_* (literal label kept) > RISK_CONTROLLED > BOOST_POOL >
+      DYNAMIC_RTP family > DEFAULT_FALLBACK; a single bet in a higher tier
+      claims the whole user-day.
+
+  ab_test_group_combined:
+    description: >
+      Fish Hunter (FM01) companion to ab_test_group with the RC_*/CR_*
+      strategy variants collapsed to RC_ALL / CR_ALL; all other labels are
+      identical to ab_test_group. Same rows, coarser per-family cohorts.
 
 # ---------------------------------------------------------------------------
 # Game-specific context
@@ -117,12 +126,12 @@ columns:
     category: dimension
     description: "Unique player identifier."
 
-  user_group:
+  life_cycle_group:
     category: dimension
     description: >
       User lifecycle cohort, derived at query time from the dashboard's
       "Lifecycle groups" picker (day/week/month ranges since first bet).
-      See 'groups.user_group'. Not a physical parquet column.
+      See 'groups.life_cycle_group'. Not a physical parquet column.
 
   # === User-Level Raw Metrics (one row per user per day) ===
   user_num_bets:
@@ -338,7 +347,7 @@ columns:
 
   num_new_users:
     category: aggregate_metric
-    description: "Number of distinct users in the 'new' user_group segment."
+    description: "Number of distinct users in the 'new' life_cycle_group segment."
 
   total_num_bets:
     category: aggregate_metric
