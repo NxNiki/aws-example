@@ -19,8 +19,8 @@ INPUT_ROOT = "s3://oceanhunter-production-data-warehouse/transformed_data/cold_d
 OUTPUT_ROOT = f"s3://{S3_BUCKET}/etl-results/jobs/output_fish_hunter_v2_cold_data"
 
 OUTPUT_START = "2026-01-24"  # keep rows with activity date >= this
-OUTPUT_END = "2026-07-29"  # exclusive; align to Monday / 1st so weekly/monthly periods are complete
-AGG = "daily"  # all | daily | weekly | monthly
+OUTPUT_END = "2026-08-03"  # exclusive; align to Monday / 1st so weekly/monthly periods are complete
+AGG = "all"  # all | daily | weekly | monthly
 
 INSTANCE_TYPE = "ml.m5.4xlarge"  # 16 vCPU, 64 GB memory per node
 INSTANCE_COUNT = 3

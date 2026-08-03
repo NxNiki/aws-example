@@ -1,18 +1,17 @@
 title: "Fish Hunter Analytics"
 
 stats_by_date: 
-  files: 
+  files:
     day: [
-      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter_v2/daily_stats",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter_v2_cold_data/daily_stats",
     ]
 
     week: [
-      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter_v2/weekly_stats",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter_v2_cold_data/weekly_stats",
     ]
 
     month: [
-      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter_v2/monthly_stats",
-
+      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter_v2_cold_data/monthly_stats",
     ]
 
   group_col: "ab_test_group"
