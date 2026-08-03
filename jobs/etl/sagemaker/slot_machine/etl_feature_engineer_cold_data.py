@@ -41,6 +41,8 @@ Months before COLD_DATA_FLOOR stay owned by the Redshift-era data: cold data
 starts 2026-02-10, so recomputing 2026-02 would erase Feb 1-9.
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 from datetime import date, datetime, timedelta, timezone
