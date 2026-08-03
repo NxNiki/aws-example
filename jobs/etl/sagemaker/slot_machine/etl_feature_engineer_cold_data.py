@@ -79,7 +79,6 @@ REQUIRED_COLUMNS = [
     "partition_ab",
     "currency_type",
     "status",
-    "game_id",
     "op_code",
 ]
 
@@ -260,7 +259,6 @@ WITH user_bets AS (
             AND t.created_at < TIMESTAMP '{scan_end} 00:00:00'
             AND t.currency_type IN ('CNY')
             AND t.status = 'COMPLETED'
-            AND t.game_id = 'SS03'
             AND t.op_code NOT IN ('B26', 'TST', 'TSB', 'TSO')
     )
     WHERE {group_filter}
@@ -813,6 +811,8 @@ def main():
     scan_start = output_start - timedelta(days=LOOKBACK_DAYS)
     print(f"output window: [{output_start}, {output_end}) | scan from {scan_start} | groups: {groups}")
 
+    # Reading inside game_id=SS03/ pins the game by path (no game_id column
+    # survives — it is the consumed partition level), and prunes other games.
     bet_order = spark.read.parquet(f"{args.input_root}/game_id=SS03")
     check_schema(bet_order)
     partition_date = F.make_date("year", "month", "day")
