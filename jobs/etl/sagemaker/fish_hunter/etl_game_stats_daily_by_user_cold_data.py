@@ -11,8 +11,13 @@ where ``period`` is the day / week start / month start of ``activity_date``.
 Behavior: one row per (user, period, daily_group, fish_value) for EVERY betting
 user -- not only fish-killers (kill-specific metrics are NULL/0 for non-killers;
 the ``user_killed_fish`` flag segments killers). ``daily_group`` collapses each
-(user, day) to exactly ONE strategy group, priority RISK_CONTROLLED >
-BOOST_POOL > DYNAMIC_RTP family (MIN tie-break) > DEFAULT_FALLBACK. Each run
+(user, day) to exactly ONE strategy group, priority RC_*/CR_* strategies
+(literal strategy_name kept, MIN tie-break) > RISK_CONTROLLED > BOOST_POOL >
+DYNAMIC_RTP family (MIN tie-break) > DEFAULT_FALLBACK. The companion
+``user_group_combined`` column carries the same assignment with each family
+collapsed to its rollup label (RC_* -> ``RC_ALL``, CR_* -> ``CR_ALL``, all
+other labels pass through), giving a per-family dimension without changing
+the row grain. Each run
 recomputes whole periods in [output-start, output-end) and dynamic-partition-
 overwrites exactly the ``period=`` directories it produced, so windowed re-runs
 are idempotent; a partial trailing period (output-end not on a period boundary)
@@ -37,6 +42,14 @@ DELTA_T_MAX_SECONDS = 1800
 DELTA_T_MIN_SECONDS = 0.25
 # Asia/Shanghai has no DST, so a fixed offset equals CONVERT_TIMEZONE.
 BJ_UTC_OFFSET_HOURS = 8
+
+# A strategy_name starting with one of these prefixes claims the whole
+# user-day (top priority); user_group_combined collapses each family into its
+# rollup label while daily_group keeps the literal strategy_name.
+RC_PREFIX = "RC_"
+CR_PREFIX = "CR_"
+RC_ROLLUP_GROUP = "RC_ALL"
+CR_ROLLUP_GROUP = "CR_ALL"
 
 # Same knobs as the Redshift job.
 SCAN_LOOKBACK_DAYS = 30
@@ -87,6 +100,7 @@ def generate_query(
     ``EXTRACT(EPOCH FROM interval)`` becomes a ``CAST(ts AS DOUBLE)``
     difference to keep the sub-second deltas that DELTA_T_MIN_SECONDS guards.
     """
+    is_rc_cr = f"substr(strategy_name, 1, 3) IN ('{RC_PREFIX}', '{CR_PREFIX}')"
     return dedent(
         f"""
         -- 1. FETCH RAW DATA (Keep strictly RAW columns to enable partition pruning)
@@ -133,8 +147,13 @@ def generate_query(
                 activity_week,
                 activity_month,
                 -- Assign the whole user-day to its highest-priority strategy_name.
-                -- A single bet in a higher tier claims the day.
+                -- A single bet in a higher tier claims the day. RC_*/CR_* keep
+                -- their literal label; MIN is the deterministic tie-break when
+                -- several coexist in a day (spanning both families, so a day
+                -- with both lands on the lexicographically smallest label).
                 CASE
+                    WHEN MAX(CASE WHEN {is_rc_cr} THEN 1 ELSE 0 END) > 0
+                        THEN MIN(CASE WHEN {is_rc_cr} THEN strategy_name END)
                     WHEN MAX(CASE WHEN strategy_name = 'RISK_CONTROLLED' THEN 1 ELSE 0 END) > 0 THEN 'RISK_CONTROLLED'
                     WHEN MAX(CASE WHEN strategy_name = 'BOOST_POOL' THEN 1 ELSE 0 END) > 0 THEN 'BOOST_POOL'
                     WHEN MAX(CASE WHEN strategy_name IN ('DYNAMIC_RTP', 'DYNAMIC_RTP_V2', 'DYNAMIC_RTP_V3') THEN 1 ELSE 0 END) > 0
@@ -362,6 +381,14 @@ def generate_query(
         SELECT
             t1.user_id,
             t1.daily_group,
+            -- Family rollup dimension: RC_*/CR_* variants collapse to RC_ALL /
+            -- CR_ALL, every other label passes through unchanged. Functionally
+            -- dependent on daily_group, so the row grain does not change.
+            CASE
+                WHEN substr(t1.daily_group, 1, 3) = '{RC_PREFIX}' THEN '{RC_ROLLUP_GROUP}'
+                WHEN substr(t1.daily_group, 1, 3) = '{CR_PREFIX}' THEN '{CR_ROLLUP_GROUP}'
+                ELSE t1.daily_group
+            END AS user_group_combined,
             t1.fish_value,
             t1.{stats_agg_col} AS activity_date,
             t6.user_num_rooms,
