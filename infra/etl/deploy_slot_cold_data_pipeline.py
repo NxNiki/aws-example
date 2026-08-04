@@ -1,11 +1,13 @@
-"""Create/update the daily slot-machine cold-data ETL schedule.
+"""Create/update the daily game cold-data ETL schedule.
 
-Builds a SageMaker Pipeline (``slot-cold-data-daily``) with one PySpark
-processing step per game, chained sequentially to stay inside the account's
-4x ml.m5.4xlarge processing quota, and an EventBridge Scheduler rule that
-starts it once a day. Steps pass no date window, so each run recomputes the
-job's rolling incremental window (last 3 Beijing days; dynamic period=
-overwrite leaves history untouched).
+Builds a SageMaker Pipeline (``slot-cold-data-daily`` -- the name predates the
+fish_hunter step and is pinned by the admin-managed EventBridge schedule) with
+one PySpark processing step per slot game plus a final fish_hunter (FM01)
+step, chained sequentially to stay inside the account's 4x ml.m5.4xlarge
+processing quota, and an EventBridge Scheduler rule that starts it once a day.
+Steps pass no date window, so each run recomputes the job's rolling
+incremental window (last 3 Beijing days; dynamic period= overwrite leaves
+history untouched).
 
 Usage:
     poetry run python infra/etl/deploy_slot_cold_data_pipeline.py            # upsert pipeline + schedule
@@ -43,6 +45,9 @@ GAME_OUTPUT_ROOTS = {
     "SS06": f"s3://{S3_BUCKET}/etl-results/jobs/output_ss06_pocket_soccer_v2_cold_data",
 }
 
+FISH_INPUT_ROOT = "s3://oceanhunter-production-data-warehouse/transformed_data/cold_data/bullet"
+FISH_OUTPUT_ROOT = f"s3://{S3_BUCKET}/etl-results/jobs/output_fish_hunter_v2_cold_data"
+
 
 def build_pipeline(session: PipelineSession) -> Pipeline:
     steps = []
@@ -77,6 +82,31 @@ def build_pipeline(session: PipelineSession) -> Pipeline:
         )
         steps.append(step)
         prev = step
+
+    # fish_hunter (FM01) runs last: same 3-node footprint, different source
+    # bucket and job script. The bullet table is higher-volume than bet_order
+    # and the monthly level rescans the whole current month plus the 30-day
+    # kill-streak lookback, hence the bigger spill volume and runtime cap.
+    fish_processor = PySparkProcessor(
+        base_job_name="fm01-cold-data-daily",
+        framework_version="3.3",
+        role=ROLE,
+        instance_type="ml.m5.4xlarge",
+        instance_count=3,
+        volume_size_in_gb=200,
+        max_runtime_in_seconds=3 * 60 * 60,
+        sagemaker_session=session,
+    )
+    fish_step_args = fish_processor.run(
+        submit_app=f"{LOCAL_ROOT}/jobs/etl/sagemaker/fish_hunter/etl_game_stats_daily_by_user_cold_data.py",
+        arguments=[
+            "--input-root",
+            FISH_INPUT_ROOT,
+            "--output-root",
+            FISH_OUTPUT_ROOT,
+        ],
+    )
+    steps.append(ProcessingStep(name="etl-fm01", step_args=fish_step_args, depends_on=[steps[-1].name]))
     return Pipeline(name=PIPELINE_NAME, steps=steps, sagemaker_session=session)
 
 
@@ -141,7 +171,7 @@ def ensure_schedule(pipeline_arn: str, role_arn: str) -> None:
             "Input": json.dumps({"PipelineName": PIPELINE_NAME, "ClientRequestToken": "<aws.scheduler.execution-id>"}),
             "RetryPolicy": {"MaximumRetryAttempts": 2, "MaximumEventAgeInSeconds": 3600},
         },
-        Description="Daily slot-machine cold-data ETL (rolling 3-day incremental window)",
+        Description="Daily slot-machine + fish_hunter cold-data ETL (rolling 3-day incremental window)",
         State="ENABLED",
     )
     try:

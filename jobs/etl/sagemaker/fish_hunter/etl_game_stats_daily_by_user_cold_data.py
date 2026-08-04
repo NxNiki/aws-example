@@ -26,8 +26,10 @@ SCAN_LOOKBACK_DAYS before the (period-aligned) start, matching the Redshift
 job's raw window, so kill streaks touching the start boundary are complete.
 
 Runs standalone on the SageMaker Spark container -- no bituslabs_ds imports
-(ETL constants from bituslabs_ds.config are inlined below). Submit with
-etl_game_stats_daily_by_user_cold_data_submit.py.
+(ETL constants from bituslabs_ds.config are inlined below). Scheduled daily as
+the last step of the slot-cold-data-daily pipeline (no date args = rolling
+incremental window; see infra/etl/deploy_slot_cold_data_pipeline.py); submit
+manual/backfill runs with etl_game_stats_daily_by_user_cold_data_submit.py.
 """
 
 import argparse
@@ -50,6 +52,9 @@ RC_PREFIX = "RC_"
 CR_PREFIX = "CR_"
 RC_ROLLUP_GROUP = "RC_ALL"
 CR_ROLLUP_GROUP = "CR_ALL"
+
+# Rolling window for scheduled no-args runs; matches the old ETLScheduler lookback.
+INCREMENTAL_LOOKBACK_DAYS = 3
 
 # Same knobs as the Redshift job.
 SCAN_LOOKBACK_DAYS = 30
@@ -517,12 +522,18 @@ def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input-root", required=True, help="s3://... root of bullet parquet (year=/month=/day=)")
     parser.add_argument("--output-root", required=True, help="s3://... root for the stats datasets")
-    parser.add_argument("--output-start", required=True, help="keep rows with activity date >= this, YYYY-MM-DD")
+    parser.add_argument(
+        "--output-start",
+        default=None,
+        help="keep rows with activity date >= this, YYYY-MM-DD"
+        " (default: rolling daily-incremental window, last INCREMENTAL_LOOKBACK_DAYS Beijing days)",
+    )
     parser.add_argument(
         "--output-end",
-        required=True,
+        default=None,
         help="keep rows with activity date < this, YYYY-MM-DD; align to a period"
-        " start (Monday / 1st) so weekly/monthly rows are complete",
+        " start (Monday / 1st) so weekly/monthly rows are complete"
+        " (default: tomorrow in Beijing time)",
     )
     parser.add_argument("--agg", choices=["all", *AGG_LEVELS], default="all", help="which aggregation levels to run")
     parser.add_argument("--game-id", default="FM01")
@@ -532,8 +543,17 @@ def parse_args():
 
 def main():
     args = parse_args()
-    output_start = date.fromisoformat(args.output_start)
-    output_end = date.fromisoformat(args.output_end)
+    # Rolling daily-incremental defaults: the job recomputes only the periods
+    # in the window (dynamic period= overwrite), so the scheduled no-args run
+    # refreshes recent days without touching history.
+    bj_today = (datetime.utcnow() + timedelta(hours=BJ_UTC_OFFSET_HOURS)).date()
+    output_start = (
+        date.fromisoformat(args.output_start)
+        if args.output_start
+        else bj_today - timedelta(days=INCREMENTAL_LOOKBACK_DAYS)
+    )
+    output_end = date.fromisoformat(args.output_end) if args.output_end else bj_today + timedelta(days=1)
+    print(f"output window: [{output_start}, {output_end})")
     levels = list(AGG_LEVELS) if args.agg == "all" else [args.agg]
 
     spark = (
