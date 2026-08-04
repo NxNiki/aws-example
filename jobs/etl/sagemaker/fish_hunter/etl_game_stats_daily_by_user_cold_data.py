@@ -36,14 +36,33 @@ import argparse
 from datetime import date, datetime, time, timedelta
 from textwrap import dedent
 
-from pyspark.sql import SparkSession, functions as F
+from pyspark.sql import functions as F
 
-# Inlined from bituslabs_ds.config (this job runs without the package).
-EXCLUDED_OP_CODES = "('B26', 'TST', 'TSB', 'TSO')"
+try:
+    from spark_etl_common import (
+        BJ_UTC_OFFSET_HOURS,
+        EXCLUDED_OP_CODES,
+        beijing_today,
+        build_spark_session,
+        check_schema,
+        prune_partition_days,
+    )
+except ImportError:  # local runs/tests: the module sits one directory up
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from spark_etl_common import (
+        BJ_UTC_OFFSET_HOURS,
+        EXCLUDED_OP_CODES,
+        beijing_today,
+        build_spark_session,
+        check_schema,
+        prune_partition_days,
+    )
+
 DELTA_T_MAX_SECONDS = 1800
 DELTA_T_MIN_SECONDS = 0.25
-# Asia/Shanghai has no DST, so a fixed offset equals CONVERT_TIMEZONE.
-BJ_UTC_OFFSET_HOURS = 8
 
 # A strategy_name starting with one of these prefixes claims the whole
 # user-day (top priority); ab_test_group_combined collapses each family into its
@@ -506,18 +525,6 @@ def align_output_schema(df):
     return df.withColumn("_processed_at", F.current_timestamp())
 
 
-def check_schema(bullet) -> None:
-    missing = [c for c in REQUIRED_COLUMNS if c not in bullet.columns]
-    if missing:
-        raise SystemExit(
-            f"cold data bullet table is missing required columns: {missing}; "
-            f"available columns: {sorted(bullet.columns)}"
-        )
-    print("input schema (required columns):")
-    for name, dtype in bullet.select(*REQUIRED_COLUMNS).dtypes:
-        print(f"  {name}: {dtype}")
-
-
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input-root", required=True, help="s3://... root of bullet parquet (year=/month=/day=)")
@@ -538,6 +545,11 @@ def parse_args():
     parser.add_argument("--agg", choices=["all", *AGG_LEVELS], default="all", help="which aggregation levels to run")
     parser.add_argument("--game-id", default="FM01")
     parser.add_argument("--currency", default="CNY")
+    parser.add_argument(
+        "--input-region",
+        default="ap-southeast-1",
+        help="region of the input bucket (s3a needs it spelled out for cross-region reads)",
+    )
     return parser.parse_args()
 
 
@@ -546,7 +558,7 @@ def main():
     # Rolling daily-incremental defaults: the job recomputes only the periods
     # in the window (dynamic period= overwrite), so the scheduled no-args run
     # refreshes recent days without touching history.
-    bj_today = (datetime.utcnow() + timedelta(hours=BJ_UTC_OFFSET_HOURS)).date()
+    bj_today = beijing_today()
     output_start = (
         date.fromisoformat(args.output_start)
         if args.output_start
@@ -556,18 +568,10 @@ def main():
     print(f"output window: [{output_start}, {output_end})")
     levels = list(AGG_LEVELS) if args.agg == "all" else [args.agg]
 
-    spark = (
-        SparkSession.builder.appName("FM01_game_stats_cold_data")  # type: ignore[attr-defined]
-        .config("spark.sql.session.timeZone", "UTC")
-        .config("spark.sql.adaptive.enabled", "true")
-        .config("spark.sql.sources.partitionOverwriteMode", "dynamic")
-        .getOrCreate()
-    )
-    spark.sparkContext.setLogLevel("WARN")
+    spark = build_spark_session(f"{args.game_id}_game_stats_cold_data", args.input_root, args.input_region)
 
     bullet = spark.read.parquet(args.input_root)
-    check_schema(bullet)
-    partition_date = F.make_date("year", "month", "day")
+    check_schema(bullet, REQUIRED_COLUMNS, table_name="cold data bullet")
 
     for level in levels:
         stats_agg_col, job_name = AGG_LEVELS[level]
@@ -580,7 +584,7 @@ def main():
         )
         scan_end_utc = datetime.combine(output_end, time()) - timedelta(hours=BJ_UTC_OFFSET_HOURS)
 
-        raw = bullet.filter(partition_date.between(F.lit(scan_start_utc.date()), F.lit(scan_end_utc.date())))
+        raw = prune_partition_days(bullet, scan_start_utc.date(), scan_end_utc.date())
         if raw.limit(1).count() == 0:
             print("no data, skip:", job_name)
             continue
