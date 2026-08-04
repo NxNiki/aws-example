@@ -22,9 +22,9 @@ from datetime import datetime, timedelta, timezone
 
 import boto3
 from sagemaker.session import Session
-from sagemaker.spark.processing import PySparkProcessor
 
 from bituslabs_ds.config import LOCAL_ROOT, REGION, S3_BUCKET
+from bituslabs_ds.sagemaker_etl import SPARK_COMMON_PY_FILES, spark_processor
 
 LOOKBACK_DAYS = 3
 
@@ -65,19 +65,16 @@ games = args.games or list(GAME_OUTPUT_ROOTS)
 
 for game_id in games:
     output_root = GAME_OUTPUT_ROOTS[game_id]
-    processor = PySparkProcessor(
-        base_job_name=f"{game_id.lower()}-game-stats-cold-data",
-        framework_version="3.3",
-        role=ROLE,
-        instance_type=INSTANCE_TYPE,
-        instance_count=INSTANCE_COUNT,
-        volume_size_in_gb=VOLUME_SIZE_GB,
-        max_runtime_in_seconds=6 * 60 * 60,
-        sagemaker_session=Session(boto3.Session(region_name=REGION)),
+    processor = spark_processor(
+        f"{game_id.lower()}-game-stats-cold-data",
+        Session(boto3.Session(region_name=REGION)),
+        volume_size_gb=VOLUME_SIZE_GB,
+        max_runtime_hours=6,
     )
     print(f"\n===== submitting {game_id} -> {output_root} =====")
     processor.run(
         submit_app=f"{LOCAL_ROOT}/jobs/etl/sagemaker/slot_machine/etl_game_stats_daily_by_user_group_cold_data.py",
+        submit_py_files=SPARK_COMMON_PY_FILES,
         arguments=[
             "--game-id",
             game_id,

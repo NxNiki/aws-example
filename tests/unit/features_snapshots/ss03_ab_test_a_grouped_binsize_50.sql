@@ -23,13 +23,13 @@ WITH user_bets AS (
         END AS ai_group
     FROM public.fct_bet_orders AS t
     WHERE
-        t.created_at >= '2026-01-01'
+        t.created_at >= '2026-06-10'
         AND t.created_at < '2026-07-01'
         AND t.currency_type IN ('CNY')
         AND t.status = 'COMPLETED'
         AND t.game_id = 'SS03'
         AND t.op_code NOT IN ('B26', 'TST', 'TSB', 'TSO')
-        AND ((t.partition_ab[0] IS NULL OR t.partition_ab[0] NOT IN ('jojpin-9mokha-rexQug', '4f1a46ca-7baa-4452-9a40-ef21d9b33b57', '4a04df21-c749-4808-8e55-3a0b74c084d2')))
+        AND (t.partition_ab[0] = '4f1a46ca-7baa-4452-9a40-ef21d9b33b57')
 ),
 
 free_game_group AS (
@@ -199,7 +199,7 @@ raw_stats AS (
 binned AS (
     SELECT
         t.*,
-        ROUND((t.session_bet_index - 1) / 70) AS agg_group
+        ROUND((t.session_bet_index - 1) / 50) AS agg_group
     FROM raw_stats AS t
 ),
 

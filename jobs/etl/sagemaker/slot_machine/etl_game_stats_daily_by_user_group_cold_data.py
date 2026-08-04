@@ -32,23 +32,43 @@ import argparse
 from datetime import date, datetime, time, timedelta
 from textwrap import dedent
 
-from pyspark.sql import SparkSession, functions as F
+from pyspark.sql import functions as F
 
-# Inlined from bituslabs_ds.config (this job runs without the package).
-EXCLUDED_OP_CODES = "('B26', 'TST', 'TSB', 'TSO')"
+try:
+    from spark_etl_common import (
+        AB_TEST_GROUP_A,
+        AB_TEST_GROUP_B,
+        AI_GROUP_ID,
+        BJ_UTC_OFFSET_HOURS,
+        EXCLUDED_OP_CODES,
+        PARTITION_AB_FIRST,
+        beijing_today,
+        build_spark_session,
+        check_schema,
+        prune_partition_days,
+    )
+except ImportError:  # local runs/tests: the module sits one directory up
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from spark_etl_common import (
+        AB_TEST_GROUP_A,
+        AB_TEST_GROUP_B,
+        AI_GROUP_ID,
+        BJ_UTC_OFFSET_HOURS,
+        EXCLUDED_OP_CODES,
+        PARTITION_AB_FIRST,
+        beijing_today,
+        build_spark_session,
+        check_schema,
+        prune_partition_days,
+    )
+
 DELTA_T_MAX_SECONDS = 1800
 DELTA_T_MIN_SECONDS = 1
-AI_GROUP_ID = "jojpin-9mokha-rexQug"
-AB_TEST_GROUP_A = "4f1a46ca-7baa-4452-9a40-ef21d9b33b57"
-AB_TEST_GROUP_B = "4a04df21-c749-4808-8e55-3a0b74c084d2"
-# Asia/Shanghai has no DST, so a fixed offset equals CONVERT_TIMEZONE.
-BJ_UTC_OFFSET_HOURS = 8
 # Rolling window for scheduled no-args runs; matches the old ETLScheduler lookback.
 INCREMENTAL_LOOKBACK_DAYS = 3
-
-# The cold data stores partition_ab as binary JSON (b'["<group-id>"]'), not a
-# parquet list, so the first element is extracted via get_json_object.
-PARTITION_AB_FIRST = "get_json_object(CAST(t.partition_ab AS STRING), '$[0]')"
 
 GAME_CONFIG = {
     "SS01": {},
@@ -338,18 +358,6 @@ def align_output_schema(df):
     return df.withColumn("_processed_at", F.current_timestamp())
 
 
-def check_schema(bet_order) -> None:
-    missing = [c for c in REQUIRED_COLUMNS if c not in bet_order.columns]
-    if missing:
-        raise SystemExit(
-            f"cold data bet_order table is missing required columns: {missing}; "
-            f"available columns: {sorted(bet_order.columns)}"
-        )
-    print("input schema (required columns):")
-    for name, dtype in bet_order.select(*REQUIRED_COLUMNS).dtypes:
-        print(f"  {name}: {dtype}")
-
-
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--game-id", required=True, choices=sorted(GAME_CONFIG))
@@ -383,7 +391,7 @@ def main():
     # Rolling daily-incremental defaults: the job recomputes only the periods
     # in the window (dynamic period= overwrite), so the scheduled no-args run
     # refreshes recent days without touching history.
-    bj_today = (datetime.utcnow() + timedelta(hours=BJ_UTC_OFFSET_HOURS)).date()
+    bj_today = beijing_today()
     output_start = (
         date.fromisoformat(args.output_start)
         if args.output_start
@@ -396,23 +404,10 @@ def main():
     # the output window to attribute buy-ins on the last output day.
     scan_end_margin = timedelta(days=1 if GAME_CONFIG[args.game_id].get("fourscatter_lead") else 0)
 
-    builder = (
-        SparkSession.builder.appName(f"{args.game_id}_game_stats_cold_data")  # type: ignore[attr-defined]
-        .config("spark.sql.session.timeZone", "UTC")
-        .config("spark.sql.adaptive.enabled", "true")
-        .config("spark.sql.sources.partitionOverwriteMode", "dynamic")
-    )
-    if args.input_root.startswith("s3"):
-        input_bucket = args.input_root.split("/")[2]
-        builder = builder.config(f"spark.hadoop.fs.s3a.bucket.{input_bucket}.endpoint.region", args.input_region)
-    spark = builder.getOrCreate()
-    spark.sparkContext.setLogLevel("WARN")
+    spark = build_spark_session(f"{args.game_id}_game_stats_cold_data", args.input_root, args.input_region)
 
     bet_order = spark.read.parquet(args.input_root)
-    check_schema(bet_order)
-    prunable = {"year", "month", "day"} <= set(bet_order.columns)
-    if not prunable:
-        print("no year/month/day partition columns; relying on created_at filter only")
+    check_schema(bet_order, REQUIRED_COLUMNS, table_name="cold data bet_order")
 
     for level in levels:
         stats_agg_col, job_name = AGG_LEVELS[level]
@@ -420,10 +415,7 @@ def main():
         scan_start_utc = datetime.combine(effective_start, time()) - timedelta(hours=BJ_UTC_OFFSET_HOURS)
         scan_end_utc = datetime.combine(output_end + scan_end_margin, time()) - timedelta(hours=BJ_UTC_OFFSET_HOURS)
 
-        raw = bet_order
-        if prunable:
-            partition_date = F.make_date("year", "month", "day")
-            raw = raw.filter(partition_date.between(F.lit(scan_start_utc.date()), F.lit(scan_end_utc.date())))
+        raw = prune_partition_days(bet_order, scan_start_utc.date(), scan_end_utc.date())
         if raw.limit(1).count() == 0:
             print("no data, skip:", job_name)
             continue
