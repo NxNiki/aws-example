@@ -111,10 +111,14 @@ def ensure_scheduler_role(role_name: str, pipeline_name: str, account_id: Option
         pass
     except Exception as e:
         print(f"cannot read role ({e}); assuming it exists: {role_arn}")
-        print("If it does not, an admin must create it with trust policy:")
+        print("An admin can grant this pipeline to the role (roles hold one inline policy per pipeline) with:")
+        print(
+            f"aws iam put-role-policy --role-name {role_name}"
+            f" --policy-name start-{pipeline_name}"
+            f" --policy-document '{json.dumps(policy)}'"
+        )
+        print("If the role itself does not exist yet, create it first with trust policy:")
         print(json.dumps(_SCHEDULER_TRUST, indent=2))
-        print("and inline policy:")
-        print(json.dumps(policy, indent=2))
         return role_arn
     try:
         iam.create_role(

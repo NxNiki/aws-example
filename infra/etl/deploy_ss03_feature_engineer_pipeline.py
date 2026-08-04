@@ -32,7 +32,10 @@ SCHEDULE_NAME = "ss03-feature-engineer-monthly"
 # need 3x ml.m5.4xlarge from the account's 4-instance quota, so overlapping
 # starts would fail on ResourceLimitExceeded).
 SCHEDULE_CRON = "cron(0 20 1 * ? *)"
-SCHEDULER_ROLE_NAME = "ss03-feature-engineer-scheduler-role"
+# Shared with the daily stats schedule: the role's trust policy is the same
+# (scheduler.amazonaws.com) and each pipeline attaches its own least-privilege
+# start-<pipeline> inline policy, so no second role is needed.
+SCHEDULER_ROLE_NAME = "slot-cold-data-scheduler-role"
 
 INPUT_ROOT = "s3://slotmachine-production-data-warehouse/transformed_data/partition_cold_data/bet_order"
 OUTPUT_ROOT_BASE = f"s3://{S3_BUCKET}/etl-results/jobs"
