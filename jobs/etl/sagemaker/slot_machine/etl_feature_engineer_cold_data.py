@@ -47,7 +47,36 @@ import argparse
 import json
 from datetime import date, datetime, timedelta, timezone
 
-from pyspark.sql import SparkSession, functions as F
+from pyspark.sql import functions as F
+
+try:
+    from spark_etl_common import (
+        AB_TEST_GROUP_A,
+        AB_TEST_GROUP_B,
+        AI_GROUP_ID,
+        build_spark_session,
+        check_schema,
+        month_start,
+        prev_month_start,
+        prune_partition_days,
+        utc_today,
+    )
+except ImportError:  # local runs/tests: the module sits one directory up
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from spark_etl_common import (
+        AB_TEST_GROUP_A,
+        AB_TEST_GROUP_B,
+        AI_GROUP_ID,
+        build_spark_session,
+        check_schema,
+        month_start,
+        prev_month_start,
+        prune_partition_days,
+        utc_today,
+    )
 
 # Sessions straddling the window start keep stable keys as long as they are
 # shorter than this (a session only breaks after a 12h gap, so multi-day
@@ -61,10 +90,6 @@ COLD_DATA_FLOOR = date(2026, 3, 1)
 SESSION_BREAK_SECONDS = 43200
 STREAK_THRESHOLD_SECONDS = 200
 MAX_DELTA_T_GAP_SECONDS = 3600
-
-AI_GROUP_ID = "jojpin-9mokha-rexQug"
-AB_TEST_GROUP_A = "4f1a46ca-7baa-4452-9a40-ef21d9b33b57"
-AB_TEST_GROUP_B = "4a04df21-c749-4808-8e55-3a0b74c084d2"
 
 REQUIRED_COLUMNS = [
     "spin_id",
@@ -231,6 +256,7 @@ def grouped_dtypes() -> dict:
 
 
 def enriched_sql(group_filter: str, scan_start: date, scan_end: date) -> str:
+    source_cols = ",\n            ".join(f"t.{c}" for c in REQUIRED_COLUMNS)
     return f"""
 WITH user_bets AS (
     SELECT
@@ -252,7 +278,9 @@ WITH user_bets AS (
             ELSE 'Default'
         END AS ai_group
     FROM (
-        SELECT t.*, get_json_object(CAST(t.partition_ab AS STRING), '$[0]') AS ab_label
+        SELECT
+            {source_cols},
+            get_json_object(CAST(t.partition_ab AS STRING), '$[0]') AS ab_label
         FROM bet_order_raw AS t
         WHERE
             t.created_at >= TIMESTAMP '{scan_start} 00:00:00'
@@ -266,7 +294,18 @@ WITH user_bets AS (
 
 free_game_group AS (
     SELECT
-        t.*,
+        t.spin_id,
+        t.user_id,
+        t.math_table_id,
+        t.created_at,
+        t.bet_type,
+        t.bet_amount,
+        t.payout,
+        t.balance_after_bet,
+        t.balance_after_payout,
+        t.prev_bet_time,
+        t.is_new_game_group,
+        t.ai_group,
         SUM(t.is_new_game_group) OVER (
             PARTITION BY t.user_id
             ORDER BY t.spin_id, t.created_at
@@ -330,7 +369,24 @@ delta_stats AS (
 
 user_group AS (
     SELECT
-        t.*,
+        t.user_id,
+        t.ai_group,
+        t.math_table_id,
+        t.spin_id,
+        t.min_created_at,
+        t.max_created_at,
+        t.fg_rounds,
+        t.bet_amount,
+        t.payout,
+        t.balance_after_bet,
+        t.delta_t_seconds,
+        t.delta_bet_amount,
+        t.delta_payout,
+        t.balance_transaction,
+        t.is_win,
+        t.is_lose,
+        t.prev_win,
+        t.prev_lose,
         LAST(
             CASE
                 WHEN t.delta_t_seconds > {SESSION_BREAK_SECONDS} OR t.delta_t_seconds IS NULL
@@ -409,10 +465,11 @@ FROM user_group AS t
 # math_table_id IS NOT NULL filter reproduces the Redshift inner joins
 # silently dropping NULL-key groups from the grouped output.
 def grouped_sql(enriched_view: str, bin_size: int) -> str:
+    enriched_cols = ",\n        ".join(f"t.{c}" for c in ENRICHED_DTYPES)
     return f"""
 WITH binned AS (
     SELECT
-        t.*,
+        {enriched_cols},
         FLOOR((t.session_bet_index - 1) / {bin_size}) AS agg_group
     FROM {enriched_view} AS t
 ),
@@ -621,23 +678,6 @@ WHERE b.math_table_id IS NOT NULL
 """
 
 
-def month_start(d: date) -> date:
-    return d.replace(day=1)
-
-
-def prev_month_start(d: date) -> date:
-    return (d.replace(day=1) - timedelta(days=1)).replace(day=1)
-
-
-def check_schema(bet_order) -> None:
-    missing = [c for c in REQUIRED_COLUMNS if c not in bet_order.columns]
-    if missing:
-        raise SystemExit(
-            f"cold data bet_order table is missing required columns: {missing}; "
-            f"available columns: {sorted(bet_order.columns)}"
-        )
-
-
 def existing_max_activity_month(spark, root: str) -> date | None:
     """Newest month already materialized under features_enriched, for the
     self-healing default window; None when the dataset is missing/unreadable."""
@@ -768,7 +808,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-    today = datetime.now(timezone.utc).date()
+    today = utc_today()
     output_end = date.fromisoformat(args.output_end) if args.output_end else today + timedelta(days=1)
     if args.output_end and output_end < today and output_end != month_start(output_end):
         raise SystemExit(
@@ -780,18 +820,7 @@ def main():
     if unknown:
         raise SystemExit(f"unknown groups: {unknown}; valid: {sorted(GROUPS)}")
 
-    spark = (
-        SparkSession.builder.appName("SS03_feature_engineer_cold_data")  # type: ignore[attr-defined]
-        .config("spark.sql.session.timeZone", "UTC")
-        .config("spark.sql.ansi.enabled", "false")
-        .config("spark.sql.adaptive.enabled", "true")
-        .config("spark.sql.sources.partitionOverwriteMode", "dynamic")
-        .getOrCreate()
-    )
-    if args.input_root.startswith("s3"):
-        bucket = args.input_root.split("/")[2]
-        spark.conf.set(f"spark.hadoop.fs.s3a.bucket.{bucket}.endpoint.region", args.input_region)
-    spark.sparkContext.setLogLevel("WARN")
+    spark = build_spark_session("SS03_feature_engineer_cold_data", args.input_root, args.input_region)
 
     if args.output_start:
         output_start = month_start(date.fromisoformat(args.output_start))
@@ -814,12 +843,8 @@ def main():
     # Reading inside game_id=SS03/ pins the game by path (no game_id column
     # survives — it is the consumed partition level), and prunes other games.
     bet_order = spark.read.parquet(f"{args.input_root}/game_id=SS03")
-    check_schema(bet_order)
-    partition_date = F.make_date("year", "month", "day")
-    # 1-day margin on partition pruning: day= dirs follow created_at's UTC date.
-    raw = bet_order.filter(
-        partition_date.between(F.lit(scan_start - timedelta(days=1)), F.lit(output_end + timedelta(days=1)))
-    )
+    check_schema(bet_order, REQUIRED_COLUMNS, table_name="cold data bet_order")
+    raw = prune_partition_days(bet_order, scan_start, output_end, margin_days=1)
     if raw.limit(1).count() == 0:
         raise SystemExit(f"no bet_order rows for SS03 in [{scan_start}, {output_end}); refusing to overwrite")
     raw.createOrReplaceTempView("bet_order_raw")

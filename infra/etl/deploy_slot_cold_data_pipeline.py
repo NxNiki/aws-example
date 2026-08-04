@@ -22,6 +22,7 @@ from sagemaker.workflow.pipeline_context import PipelineSession
 from sagemaker.workflow.steps import ProcessingStep
 
 from bituslabs_ds.config import LOCAL_ROOT, REGION, S3_BUCKET
+from bituslabs_ds.sagemaker_etl import SPARK_COMMON_PY_FILES
 
 PIPELINE_NAME = "slot-cold-data-daily"
 SCHEDULE_NAME = "slot-cold-data-daily"
@@ -59,6 +60,7 @@ def build_pipeline(session: PipelineSession) -> Pipeline:
         )
         step_args = processor.run(
             submit_app=f"{LOCAL_ROOT}/jobs/etl/sagemaker/slot_machine/etl_game_stats_daily_by_user_group_cold_data.py",
+            submit_py_files=SPARK_COMMON_PY_FILES,
             arguments=[
                 "--game-id",
                 game_id,
