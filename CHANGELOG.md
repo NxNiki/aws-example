@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **SS03 feature engineering on SageMaker cold data + monthly schedule.**
+  The per-bet feature pipeline (`features_enriched` +
+  `features_grouped_binsize_{N}`, four ai_group slices) moved from manual
+  Redshift-via-bastion runs to one PySpark job reading
+  `partition_cold_data/bet_order`, scheduled monthly via EventBridge
+  (`ss03-feature-engineer-monthly`, 1st of month 20:00 LA). SQL ported 1:1
+  (binary-JSON `partition_ab`, truncating second-diffs, integer-division
+  binning, Redshift's integer-AVG truncation reproduced); outputs stay
+  byte-compatible with the awswrangler-era files (same roots, column order,
+  parquet dtypes). Incremental model: whole-month recompute with dynamic
+  partition overwrite — replaces the ETLScheduler key-dedup compaction and
+  its mutable-key leak — with a self-healing window (a missed firing widens
+  the next run), guards for the pre-cold-data Feb 2026 history and
+  partial-month truncation, and the sidecar semantic-drift check. Validated
+  against the Redshift-produced July output (100% key parity on enriched,
+  exact agreement on all money columns) and re-validated refactor-neutral
+  (all 14 datasets row-identical across the review refactor).
+- **Reusable SageMaker ETL modules.** `bituslabs_ds.sagemaker_etl` (the
+  trusted-role PySpark processor, EventBridge scheduler role/schedule
+  helpers with admin-permission fallbacks and ClientRequestToken dedup, the
+  shared upsert-with-schedule deploy tail) and
+  `jobs/etl/sagemaker/spark_etl_common.py` (container-side helpers shipped
+  via `submit_py_files`: AB-group ids + `partition_ab` extraction, common
+  Spark session, schema check, partition pruning, window helpers) — used by
+  the feature-engineering and daily-stats jobs and all four launchers. The
+  monthly schedule reuses the daily pipeline's scheduler role via a
+  per-pipeline inline policy.
+- **SQL snapshot tests for the cold-data feature queries.** One golden file
+  per ai_group slice (enriched) and per slice × bin size (grouped) under
+  `tests/unit/feature_cold_data_snapshots/`, mirroring the Redshift suite
+  (`REGENERATE_SNAPSHOTS=1` to update).
 - **Fish-level range groups (fish_hunter).** The fish_hunter ETL now stores
   one row per (period, user, daily_group, **fish_value**) in
   `output_fish_hunter_v2`, replacing the fixed per-fish-type wide columns
@@ -77,6 +108,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Redshift ss03 feature-SQL snapshot tests were silently red** since the
+  job moved to its per-slice `GROUPS`/`build_config` structure: the test's
+  inline config copy had drifted and the parity check hit an
+  `AttributeError`. The configs are now loaded from the job script itself
+  and fan out per slice, so drift shows up as a reviewable snapshot diff.
 - **Silent ETL compaction failure duplicated recent rows on every game.** The
   2026-07-17 in-place parquet rewrite produced Arrow `large_string` columns
   while the ETL writes `string`; `_compact_partitions`' dataset read refused
