@@ -38,28 +38,16 @@ from textwrap import dedent
 
 from pyspark.sql import functions as F
 
-try:
-    from spark_etl_common import (
-        BJ_UTC_OFFSET_HOURS,
-        EXCLUDED_OP_CODES,
-        beijing_today,
-        build_spark_session,
-        check_schema,
-        prune_partition_days,
-    )
-except ImportError:  # local runs/tests: the module sits one directory up
-    import sys
-    from pathlib import Path
-
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from spark_etl_common import (
-        BJ_UTC_OFFSET_HOURS,
-        EXCLUDED_OP_CODES,
-        beijing_today,
-        build_spark_session,
-        check_schema,
-        prune_partition_days,
-    )
+# Ships via submit_py_files on SageMaker; for local runs/tests put
+# jobs/etl/sagemaker on the path first (the snapshot tests already do).
+from spark_etl_common import (
+    BJ_UTC_OFFSET_HOURS,
+    EXCLUDED_OP_CODES,
+    beijing_today,
+    build_spark_session,
+    check_schema,
+    prune_partition_days,
+)
 
 DELTA_T_MAX_SECONDS = 1800
 DELTA_T_MIN_SECONDS = 0.25
