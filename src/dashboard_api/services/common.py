@@ -16,7 +16,7 @@ import time
 from collections import OrderedDict
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, Optional, Sequence, cast
+from typing import Any, Callable, Iterable, Iterator, Optional, Sequence
 
 import polars as pl
 
