@@ -765,6 +765,11 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     try {
       const { values, available } = await api.groupValues(configId, gran, range?.start, range?.end);
       set((s) => {
+        // A slow response from a config the user has already switched away
+        // from must be dropped: applying it would render the OLD game's
+        // cohort pickers (e.g. fishhunter's fish_value under ss03) until the
+        // new config's values arrive and overwrite them.
+        if (s.configId !== configId) return {};
         // Seed 'all' as the explicit selection for every picker that has no
         // selection yet, so the UI state matches what the request means and
         // an emptied picker (user unchecked everything) can mean "no data".
@@ -789,6 +794,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         };
       });
     } catch (e) {
+      if (get().configId !== configId) return;
       // Toast (not just the transient error field): a later successful load
       // clears `error`, so the toast is what reliably surfaces this failure.
       set({ error: String(e) });
@@ -815,6 +821,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     if (!configId) return;
     try {
       const { max } = await api.dateBounds(configId, dateGroups.granularity);
+      if (get().configId !== configId) return;
       if (max) {
         const { from, to } = lastThirtyDays(max);
         set((s) => ({
@@ -826,6 +833,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         }));
       }
     } catch (e) {
+      if (get().configId !== configId) return;
       set({ error: String(e) });
       get().notify("error", `Failed to load date bounds: ${e}`);
     }
@@ -838,6 +846,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     if (!configId || !dataMax) return;
     try {
       const { max } = await api.dateBounds(configId, dateGroups.granularity);
+      if (get().configId !== configId) return;
       // FORWARD-ONLY: at week/month granularity the max is a period-START
       // label (e.g. Monday 07-27 while day data reaches 07-29), so a naive
       // comparison would drag the window backward. Only ever advance.
@@ -1107,8 +1116,10 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     if (!configId) return;
     try {
       const { derived, user } = await api.deepdiveMetrics(configId, dateGroups.granularity);
+      if (get().configId !== configId) return;
       set({ deepdiveMetrics: { derived, user } });
     } catch (e) {
+      if (get().configId !== configId) return;
       set({ error: String(e) });
       get().notify("error", `Failed to load Deep Dive metrics: ${e}`);
     }
