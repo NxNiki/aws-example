@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -23,8 +24,14 @@ from dashboard_api.settings import settings
 logger = logging.getLogger(__name__)
 
 
+# Idle heartbeat cadence; alarm evaluation sums 300s periods, so one 0-value
+# datapoint per minute keeps every idle period populated.
+METRIC_HEARTBEAT_SECONDS = 60
+
+
 def _install_request_metric(app: FastAPI) -> None:
-    """Emit CloudWatch ``Dashboard/UserRequestCount`` per user request.
+    """Emit CloudWatch ``Dashboard/UserRequestCount`` per user request, plus a
+    once-a-minute 0-value heartbeat.
 
     Deployment feature: the scale-to-zero idle signal the legacy Dash app
     emitted from a Flask after-request hook — the ECS scale-in alarm watches
@@ -33,6 +40,13 @@ def _install_request_metric(app: FastAPI) -> None:
     doesn't). Health checks are excluded so an idle service can reach zero;
     emission is fire-and-forget on a single worker thread and never fails a
     request.
+
+    The heartbeat exists because step scaling only executes when the alarm
+    has a real datapoint to evaluate against the step bounds: per-request
+    emission alone leaves idle periods with MISSING data, which puts the
+    alarm in ALARM (TreatMissingData=breaching) but never runs the policy —
+    the service sat at 1 task through every idle night. Zeros make idleness
+    a measured value, so the scale-in step can actually fire.
     """
     service_name = os.environ.get("DASHBOARD_SERVICE_NAME")
     if not service_name:
@@ -44,7 +58,7 @@ def _install_request_metric(app: FastAPI) -> None:
     client = boto3.client("cloudwatch", region_name=region)
     pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cw-metric")
 
-    def _emit() -> None:
+    def _emit(value: float = 1) -> None:
         try:
             client.put_metric_data(
                 Namespace="Dashboard",
@@ -52,13 +66,20 @@ def _install_request_metric(app: FastAPI) -> None:
                     {
                         "MetricName": "UserRequestCount",
                         "Dimensions": [{"Name": "Service", "Value": service_name}],
-                        "Value": 1,
+                        "Value": value,
                         "Unit": "Count",
                     }
                 ],
             )
         except Exception:  # noqa: BLE001 — metrics must never break a request
             logger.debug("UserRequestCount emission failed", exc_info=True)
+
+    def _heartbeat() -> None:
+        while True:
+            time.sleep(METRIC_HEARTBEAT_SECONDS)
+            _emit(0)
+
+    threading.Thread(target=_heartbeat, name="cw-metric-heartbeat", daemon=True).start()
 
     @app.middleware("http")
     async def emit_user_request_metric(request: Request, call_next):  # type: ignore[no-untyped-def]
@@ -67,7 +88,7 @@ def _install_request_metric(app: FastAPI) -> None:
             pool.submit(_emit)
         return response
 
-    logger.info("UserRequestCount metric enabled (Service=%s)", service_name)
+    logger.info("UserRequestCount metric enabled (Service=%s, heartbeat=%ss)", service_name, METRIC_HEARTBEAT_SECONDS)
 
 
 def create_app() -> FastAPI:
