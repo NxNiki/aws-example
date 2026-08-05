@@ -84,16 +84,18 @@ describe("dashboardStore", () => {
 
     const s = useDashboardStore.getState();
     expect(s.configId).toBe("ss01");
-    // panels are seeded from config.groups, first metric on the left axis.
+    // panels are seeded from config.groups; only the FIRST panel starts with
+    // a metric (one series request on first launch), the rest start empty.
     expect(Object.keys(s.panels)).toEqual(["group1", "group2"]);
     expect(s.panels.group1.left).toEqual(["num_active_users"]);
+    expect(s.panels.group2.left).toEqual([]);
     // cohort values are cached per granularity now.
     expect(s.groupValuesByGran.day).toEqual({ user_group: ["new", "old"] });
     // Default window: last 30 days ending at the data's max date, seeded into
     // the global Date-groups R1.
     expect(s.dateGroups.ranges[0].start).toBe("2025-01-01");
     expect(s.dateGroups.ranges[0].end).toBe("2025-01-30");
-    expect(mockApi.series).toHaveBeenCalledTimes(2); // one fetch per panel
+    expect(mockApi.series).toHaveBeenCalledTimes(1); // only the first panel fetches
     expect(s.error).toBeNull();
   });
 
@@ -149,5 +151,84 @@ describe("dashboardStore", () => {
       },
       expect.anything(), // AbortSignal threaded for cancellation
     );
+  });
+});
+
+describe("cohort selection defaults", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useDashboardStore.setState(initialState());
+    mockApi.getConfig.mockResolvedValue(CONFIG);
+    mockApi.groupValues.mockResolvedValue({ config: "ss01", granularity: "day", values: { user_group: ["new", "old"] } });
+    mockApi.dateBounds.mockResolvedValue({ config: "ss01", granularity: "day", min: "2025-01-01", max: "2025-01-30" });
+    mockApi.deepdiveMetrics.mockResolvedValue({ config: "ss01", granularity: "day", derived: [], user: [] });
+    mockApi.series.mockResolvedValue({ config: "ss01", granularity: "day", date_col: "activity_date", series: [], missing: [] });
+  });
+
+  it("seeds 'all' explicitly in every visible picker when cohort values load", async () => {
+    mockApi.listConfigs.mockResolvedValue({ configs: [{ id: "ss01", title: "SS01" }] });
+    await useDashboardStore.getState().loadConfigs();
+
+    const s = useDashboardStore.getState();
+    // The UI now states what the request means: 'all' selected, not an
+    // ambiguous empty picker (which used to render an empty-looking state
+    // while the backend silently treated it as 'all').
+    expect(s.controls.date.cohortSelection).toEqual({ user_group: ["all"] });
+    expect(s.controls.group.cohortSelection).toEqual({ user_group: ["all"] });
+    expect(s.controls.viz.cohortSelection).toEqual({ user_group: ["all"] });
+    expect(s.controls.summaryTable.cohortSelection).toEqual({ user_group: ["all"] });
+  });
+
+  it("an explicitly emptied picker clears the plots and skips the fetch", async () => {
+    mockApi.listConfigs.mockResolvedValue({ configs: [{ id: "ss01", title: "SS01" }] });
+    await useDashboardStore.getState().loadConfigs();
+    vi.clearAllMocks();
+
+    useDashboardStore.getState().setTabCohort("date", "user_group", []);
+    await useDashboardStore.getState().loadAllSeries();
+
+    const s = useDashboardStore.getState();
+    expect(mockApi.series).not.toHaveBeenCalled();
+    expect(Object.values(s.panels).every((p) => p.series.length === 0)).toBe(true);
+  });
+});
+
+describe("range-group and lifecycle selection consistency", () => {
+  const RANGE_CONFIG = {
+    ...CONFIG,
+    user_group_cols: ["daily_group", "fish_value"],
+    range_group_col: "fish_value",
+    range_group_defaults: [{ label: "small", min: 0, max: 10 }],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useDashboardStore.setState(initialState());
+    mockApi.getConfig.mockResolvedValue(RANGE_CONFIG);
+    mockApi.groupValues.mockResolvedValue({ config: "ss01", granularity: "day", values: { daily_group: ["a", "b"] } });
+    mockApi.dateBounds.mockResolvedValue({ config: "ss01", granularity: "day", min: "2025-01-01", max: "2025-01-30" });
+    mockApi.deepdiveMetrics.mockResolvedValue({ config: "ss01", granularity: "day", derived: [], user: [] });
+    mockApi.series.mockResolvedValue({ config: "ss01", granularity: "day", date_col: "activity_date", series: [], missing: [] });
+  });
+
+  it("seeds rangeSelection to ['all'] on configs with a range dimension", async () => {
+    mockApi.listConfigs.mockResolvedValue({ configs: [{ id: "ss01", title: "SS01" }] });
+    await useDashboardStore.getState().loadConfigs();
+    const s = useDashboardStore.getState();
+    expect(s.controls.date.rangeSelection).toEqual(["all"]);
+    expect(s.controls.group.rangeSelection).toEqual(["all"]);
+    expect(s.lifecycleAll).toBe(true); // lifecycle bar 'all' checked by default
+  });
+
+  it("an emptied range-group selection means no data, same as cohorts", async () => {
+    mockApi.listConfigs.mockResolvedValue({ configs: [{ id: "ss01", title: "SS01" }] });
+    await useDashboardStore.getState().loadConfigs();
+    vi.clearAllMocks();
+
+    useDashboardStore.getState().setTabRangeSelection("date", []);
+    await useDashboardStore.getState().loadAllSeries();
+
+    expect(mockApi.series).not.toHaveBeenCalled();
+    expect(Object.values(useDashboardStore.getState().panels).every((p) => p.series.length === 0)).toBe(true);
   });
 });

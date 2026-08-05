@@ -47,6 +47,30 @@ export default function App() {
     void loadViews();
   }, [loadConfigs, loadViews]);
 
+  // Long-lived sessions: the daily ETL lands while the tab is open, so
+  // re-check the data edge when the tab regains focus and hourly; the store
+  // slides the default window forward if the user hasn't moved it. Hourly is
+  // enough — the ETL delivers new data once a day, and the focus check
+  // already covers the common "came back to an old tab" case.
+  const refreshDateBounds = useDashboardStore((s) => s.refreshDateBounds);
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refreshDateBounds();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    // Hidden tabs don't poll: the interval is an /api/* request and counts as
+    // user activity for scale-to-zero — a background tab would keep the
+    // service awake all night. The visibilitychange handler re-checks the
+    // data edge immediately on refocus, so nothing is missed.
+    const timer = setInterval(() => {
+      if (!document.hidden) void refreshDateBounds();
+    }, 60 * 60 * 1000);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      clearInterval(timer);
+    };
+  }, [refreshDateBounds]);
+
   return (
     // Right padding reserves room for the docked chat panel (user-resizable);
     // ECharts re-sizes via its ResizeObserver when the panel opens/resizes.

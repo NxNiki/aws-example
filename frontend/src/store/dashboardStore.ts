@@ -127,6 +127,30 @@ export function activeLifecycleGroups(
   return s.lifecycleAll ? [{ label: "all", start: 0, end: null }, ...groups] : groups;
 }
 
+// An explicitly EMPTIED picker (key present, no values) means "show nothing" —
+// the user unchecked everything, so tabs render no data rather than silently
+// falling back to 'all' (an ABSENT key still means 'all' for direct API
+// calls). Pickers seed to ['all'] when cohort values load.
+export function hasEmptiedCohort(selection: Record<string, string[]>): boolean {
+  return Object.values(selection).some((v) => Array.isArray(v) && v.length === 0);
+}
+
+// One rule for every dimension picker — cohorts, range groups (fish/bet
+// level), lifecycle groups: each starts with an explicit 'all' selected, and
+// fully unselecting any of them means "show no data" on that tab.
+export function nothingSelected(
+  s: Pick<DashboardState, "config" | "controls" | "lifecycle" | "lifecycleAll" | "dateGroups">,
+  tab: TabKey,
+): boolean {
+  if (hasEmptiedCohort(s.controls[tab].cohortSelection)) return true;
+  if (s.config?.range_group_col && s.controls[tab].rangeSelection.length === 0) return true;
+  if (s.config?.lifecycle_col && !s.lifecycleAll) {
+    const shown = (s.lifecycle[s.dateGroups.granularity] ?? []).some((g) => g.show && g.label.trim());
+    if (!shown) return true;
+  }
+  return false;
+}
+
 // The union window of the visible date ranges, for range-scoped cohort
 // availability; null until at least one shown range is fully specified.
 export function overallDateRange(dg: DateGroupsState): { start: string; end: string } | null {
@@ -250,10 +274,19 @@ const noClip = (): ClipOpts => ({ enable: false, min: null, max: null });
 const noFilter = (): FilterOpts => ({ enable: false, min: null, max: null });
 
 function defaultPanels(config: ConfigDetail): Record<string, PanelState> {
+  // Only the FIRST panel starts with a metric selected, so first launch fires
+  // one series request instead of one per panel. Metrics picked later live in
+  // the store and survive tab switches; a config switch resets to defaults.
   const panels: Record<string, PanelState> = {};
-  for (const g of config.groups) {
-    panels[g.id] = { left: g.metrics.slice(0, 1), right: [], log: false, threshold: DEFAULT_THRESHOLD, series: [] };
-  }
+  config.groups.forEach((g, i) => {
+    panels[g.id] = {
+      left: i === 0 ? g.metrics.slice(0, 1) : [],
+      right: [],
+      log: false,
+      threshold: DEFAULT_THRESHOLD,
+      series: [],
+    };
+  });
   return panels;
 }
 
@@ -267,10 +300,15 @@ const defaultGroupPanel = (): GroupPanelState => ({
 });
 
 function defaultGroupPanels(config: ConfigDetail): Record<string, GroupPanelState> {
+  // Same first-launch policy as Stats-by-Date: only the FIRST panel computes
+  // by default (num_active_users when the panel offers it), later panels
+  // start at <None> — each selected group metric costs a per-(cohort×range)
+  // CI computation server-side.
   const panels: Record<string, GroupPanelState> = {};
-  for (const g of config.groups) {
-    panels[g.id] = { ...defaultGroupPanel(), metric: g.metrics[0] ?? null };
-  }
+  config.groups.forEach((g, i) => {
+    const first = g.metrics.includes("num_active_users") ? "num_active_users" : (g.metrics[0] ?? null);
+    panels[g.id] = { ...defaultGroupPanel(), metric: i === 0 ? first : null };
+  });
   return panels;
 }
 
@@ -439,10 +477,15 @@ interface DashboardState {
   setPanelMetrics: (panelId: string, side: "left" | "right", metrics: string[]) => void;
   setPanelLog: (panelId: string, log: boolean, threshold?: number) => void;
   loadDateBounds: () => Promise<void>;
+  // Long-lived sessions: re-check the data edge (ETL lands while the tab is
+  // open) and slide the default window's end forward if the user hasn't
+  // moved it off the previous edge.
+  dataMax: string | null;
+  refreshDateBounds: () => Promise<void>;
   loadAllSeries: () => Promise<void>;
 
   // Stats-by-Group
-  setGroupMetric: (panelId: string, metric: string) => void;
+  setGroupMetric: (panelId: string, metric: string | null) => void;
   setGroupMode: (panelId: string, mode: "box" | "bar") => void;
   setGroupClip: (panelId: string, clip: ClipOpts) => void;
   setGroupFilter: (panelId: string, filter: FilterOpts) => void;
@@ -561,6 +604,10 @@ const _panelSig: Record<string, string> = {};
 // removed metrics are hidden by the option-builder (no fetch) and stay cached so
 // re-adding is instant.
 const _panelCtx: Record<string, string> = {};
+// Per-panel signature of the request currently in flight (cleared on land),
+// so duplicate loadAllSeries invocations don't abort-and-reissue identical
+// fetches. Distinct from _panelCtx, which records the last APPLIED context.
+const _panelInflight: Record<string, string> = {};
 
 async function runExclusive<T>(
   key: string,
@@ -611,7 +658,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   groupAvailableByGran: {},
   groupAvailRangeByGran: {},
   lifecycle: defaultLifecycle(),
-  lifecycleAll: false,
+  lifecycleAll: true,
   setLifecycleGroup: (unit, index, group) =>
     set((s) => ({
       lifecycle: { ...s.lifecycle, [unit]: s.lifecycle[unit].map((g, i) => (i === index ? group : g)) },
@@ -670,17 +717,26 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       },
       // Lifecycle definitions are per-game — back to defaults on a switch.
       lifecycle: defaultLifecycle(),
-      lifecycleAll: false,
+      lifecycleAll: true,
     }));
     try {
       const config = await api.getConfig(id);
-      set({
+      // Range-group picker starts with an explicit 'all' (same rule as the
+      // cohort pickers); configs without a range dimension keep it empty.
+      const seededRange = config.range_group_col ? ["all"] : [];
+      set((s) => ({
         config,
+        controls: {
+          date: { ...s.controls.date, rangeSelection: seededRange },
+          group: { ...s.controls.group, rangeSelection: seededRange },
+          viz: { ...s.controls.viz, rangeSelection: seededRange },
+          summaryTable: { ...s.controls.summaryTable, rangeSelection: seededRange },
+        },
         rangeGroups: (config.range_group_defaults ?? []).map((g) => ({ label: g.label, min: g.min, max: g.max ?? null })),
         panels: defaultPanels(config),
         group: defaultGroupPanels(config),
         summaryTable: { ...emptySummaryTable(), metrics: defaultSummaryMetrics(config) },
-      });
+      }));
       await get().ensureGroupValues(get().dateGroups.granularity);
       await get().loadDeepdiveMetrics();
       await get().loadDateBounds();
@@ -708,11 +764,30 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     if (groupValuesByGran[gran] && groupAvailRangeByGran[gran] === rangeKey) return;
     try {
       const { values, available } = await api.groupValues(configId, gran, range?.start, range?.end);
-      set((s) => ({
-        groupValuesByGran: { ...s.groupValuesByGran, [gran]: values },
-        groupAvailableByGran: { ...s.groupAvailableByGran, [gran]: available ?? null },
-        groupAvailRangeByGran: { ...s.groupAvailRangeByGran, [gran]: rangeKey },
-      }));
+      set((s) => {
+        // Seed 'all' as the explicit selection for every picker that has no
+        // selection yet, so the UI state matches what the request means and
+        // an emptied picker (user unchecked everything) can mean "no data".
+        const cols = Object.keys(visibleGroupValues(s.config, values));
+        const controls = { ...s.controls };
+        for (const tab of Object.keys(controls) as (keyof typeof controls)[]) {
+          const sel = { ...controls[tab].cohortSelection };
+          let changed = false;
+          for (const c of cols) {
+            if (!(c in sel)) {
+              sel[c] = ["all"];
+              changed = true;
+            }
+          }
+          if (changed) controls[tab] = { ...controls[tab], cohortSelection: sel };
+        }
+        return {
+          groupValuesByGran: { ...s.groupValuesByGran, [gran]: values },
+          groupAvailableByGran: { ...s.groupAvailableByGran, [gran]: available ?? null },
+          groupAvailRangeByGran: { ...s.groupAvailRangeByGran, [gran]: rangeKey },
+          controls,
+        };
+      });
     } catch (e) {
       // Toast (not just the transient error field): a later successful load
       // clears `error`, so the toast is what reliably surfaces this failure.
@@ -743,6 +818,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       if (max) {
         const { from, to } = lastThirtyDays(max);
         set((s) => ({
+          dataMax: max,
           dateGroups: {
             ...s.dateGroups,
             ranges: s.dateGroups.ranges.map((r, i) => (i === 0 ? { ...r, start: from, end: to } : r)),
@@ -752,6 +828,37 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     } catch (e) {
       set({ error: String(e) });
       get().notify("error", `Failed to load date bounds: ${e}`);
+    }
+  },
+
+  dataMax: null,
+
+  refreshDateBounds: async () => {
+    const { configId, dateGroups, dataMax } = get();
+    if (!configId || !dataMax) return;
+    try {
+      const { max } = await api.dateBounds(configId, dateGroups.granularity);
+      // FORWARD-ONLY: at week/month granularity the max is a period-START
+      // label (e.g. Monday 07-27 while day data reaches 07-29), so a naive
+      // comparison would drag the window backward. Only ever advance.
+      if (!max || max <= dataMax) return;
+      const untouched = get().dateGroups.ranges[0].end === dataMax;
+      set((s) => ({
+        dataMax: max,
+        dateGroups: untouched
+          ? {
+              ...s.dateGroups,
+              ranges: s.dateGroups.ranges.map((r, i) => (i === 0 ? { ...r, end: max } : r)),
+            }
+          : s.dateGroups,
+      }));
+      if (untouched) {
+        get().notify("info", `New data through ${max} — date window updated`);
+        void get().ensureGroupValues(get().dateGroups.granularity);
+        void get().loadAllSeries();
+      }
+    } catch {
+      // Periodic best-effort check; the next tick retries.
     }
   },
 
@@ -765,6 +872,12 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     if (!configId) return;
     const { granularity } = dateGroups;
     const { cohortSelection } = controls.date;
+    if (nothingSelected(get(), "date")) {
+      set((s) => ({
+        panels: Object.fromEntries(Object.entries(s.panels).map(([id, p]) => [id, { ...p, series: [] }])),
+      }));
+      return;
+    }
     const reqRanges = activeRanges(dateGroups.ranges);
     if (reqRanges.length === 0) return;
     const lifecycleGroups = activeLifecycleGroups(get(), granularity);
@@ -778,6 +891,13 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         const loaded = ctxChanged ? new Set<string>() : new Set(panel.series.map((s) => s.metric));
         const toFetch = desired.filter((m) => !loaded.has(m));
 
+        // Startup fires loadAllSeries from both selectConfig and the tab
+        // effect; an identical request already in flight would be aborted and
+        // re-issued (wasted round trip, and the abort churn is where empty
+        // panels can linger). Let the in-flight one land instead.
+        const flightSig = ctxSig + "|" + toFetch.join(",");
+        if (_panelInflight[key] === flightSig) return;
+
         if (toFetch.length === 0) {
           // Nothing new. On a context change with no selected metrics, clear the
           // now-stale series; otherwise the builder already hides unselected ones.
@@ -790,6 +910,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
           return;
         }
 
+        _panelInflight[key] = flightSig;
         return runExclusive(
           key,
           "loading metrics…",
@@ -810,6 +931,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
             return resp.series;
           },
           (fetched, set) => {
+            if (_panelInflight[key] === flightSig) delete _panelInflight[key];
             _panelCtx[key] = ctxSig;
             set((s) => {
               const cur = s.panels[panelId];
@@ -842,6 +964,14 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     if (!configId) return;
     const { granularity } = dateGroups;
     const { cohortSelection } = controls.group;
+    if (nothingSelected(get(), "group")) {
+      set((s) => ({
+        group: Object.fromEntries(
+          Object.entries(s.group).map(([id, p]) => [id, { ...p, stats: [], missing: false }]),
+        ),
+      }));
+      return;
+    }
     const reqRanges = activeRanges(dateGroups.ranges);
     if (reqRanges.length === 0) return;
     const lifecycleGroups = activeLifecycleGroups(get(), granularity);
@@ -914,6 +1044,10 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     if (!configId) return;
     const { granularity } = dateGroups;
     const { cohortSelection } = controls.summaryTable;
+    if (nothingSelected(get(), "summaryTable")) {
+      set((s) => ({ summaryTable: { ...s.summaryTable, columns: [], rows: [], missing: false } }));
+      return;
+    }
     const reqRanges = activeRanges(dateGroups.ranges);
     if (reqRanges.length === 0) return;
     const lifecycleGroups = activeLifecycleGroups(get(), granularity);
@@ -1020,11 +1154,24 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     try {
       const config = await api.getConfig(snap.configId);
       const validCols = new Set(config.user_group_cols.filter((c) => c !== config.lifecycle_col));
-      const sanitize = <T extends { cohortSelection: Record<string, string[]> }>(t: T): T => ({
+      // Same explicit-'all' rule as live pickers: seed every picker-visible
+      // column, then let the snapshot's non-empty selections override. Saved
+      // empty selections are treated as 'all' (pre-explicit-defaults views).
+      const pickerCols = config.user_group_cols.filter(
+        (c) => c !== config.lifecycle_col && c !== config.range_group_col,
+      );
+      const sanitize = <T extends { cohortSelection: Record<string, string[]>; rangeSelection?: string[] }>(
+        t: T,
+      ): T => ({
         ...t,
-        cohortSelection: Object.fromEntries(
-          Object.entries(t.cohortSelection ?? {}).filter(([col]) => validCols.has(col)),
-        ),
+        cohortSelection: {
+          ...Object.fromEntries(pickerCols.map((c) => [c, ["all"]])),
+          ...Object.fromEntries(
+            Object.entries(t.cohortSelection ?? {}).filter(([col, v]) => validCols.has(col) && (v?.length ?? 0) > 0),
+          ),
+        },
+        rangeSelection:
+          config.range_group_col && !(t.rangeSelection ?? []).length ? ["all"] : (t.rangeSelection ?? []),
       });
       const raw = snapshotControls(snap);
       const controls: TabControls = {
@@ -1042,7 +1189,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         lifecycle: Array.isArray(snap.lifecycle)
           ? { ...defaultLifecycle(), day: snap.lifecycle }
           : { ...defaultLifecycle(), ...(snap.lifecycle ?? {}) },
-        lifecycleAll: snap.lifecycleAll ?? false,
+        lifecycleAll: snap.lifecycleAll ?? true,
         rangeGroups:
           snap.rangeGroups ??
           (config.range_group_defaults ?? []).map((g) => ({ label: g.label, min: g.min, max: g.max ?? null })),
@@ -1136,6 +1283,15 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     if (!configId) return;
     const { granularity } = dateGroups;
     const { cohortSelection } = controls.viz;
+    if (nothingSelected(get(), "viz")) {
+      set((s) => ({
+        deepdive: {
+          derived: { ...s.deepdive.derived, histograms: [], heatmaps: [], scatters: [], missing: [] },
+          user: { ...s.deepdive.user, histograms: [], heatmaps: [], scatters: [], missing: [] },
+        },
+      }));
+      return;
+    }
     const reqRanges = activeRanges(dateGroups.ranges);
     if (reqRanges.length === 0) return;
     const lifecycleGroups = activeLifecycleGroups(get(), granularity);

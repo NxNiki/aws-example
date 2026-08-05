@@ -53,7 +53,7 @@ def build_config(group: str) -> GameFeatureConfig:
         game_id="SS03",
         output_prefix=output_prefix,
         date_start=date_start,
-        date_end="2026-07-01",
+        date_end="2026-08-01",
         ai_groups=("AI", "AB_TEST_A", "AB_TEST_B", "Default"),
         selected_groups=selected_groups,
         partition_cols=("math_table_id",),

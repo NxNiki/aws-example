@@ -37,8 +37,10 @@ def _install_request_metric(app: FastAPI) -> None:
     emitted from a Flask after-request hook — the ECS scale-in alarm watches
     this metric (Service dimension = ``DASHBOARD_SERVICE_NAME``). Active only
     when that env var is set (the ECS task definition sets it; local dev
-    doesn't). Health checks are excluded so an idle service can reach zero;
-    emission is fire-and-forget on a single worker thread and never fails a
+    doesn't). Only ``/api/*`` requests (minus health checks) count: the SPA,
+    static assets, and 404s are reachable by internet scanners on the public
+    ALB, so counting them would keep an idle service from ever reaching zero.
+    Emission is fire-and-forget on a single worker thread and never fails a
     request.
 
     The heartbeat exists because step scaling only executes when the alarm
@@ -84,7 +86,11 @@ def _install_request_metric(app: FastAPI) -> None:
     @app.middleware("http")
     async def emit_user_request_metric(request: Request, call_next):  # type: ignore[no-untyped-def]
         response = await call_next(request)
-        if request.url.path != "/api/health":
+        # Only API calls count as user activity. The ALB is public: internet
+        # scanners hitting / (SPA/static/404s) around the clock would keep
+        # resetting the idle clock and the service would never scale to zero.
+        path = request.url.path
+        if path.startswith("/api/") and path != "/api/health":
             pool.submit(_emit)
         return response
 
@@ -116,6 +122,25 @@ def create_app() -> FastAPI:
 
     dist = Path(settings.frontend_dist)
     if dist.is_dir():
+
+        # The decorator registers this with the app; FastAPI then invokes it
+        # around every request — nothing calls it by name. Registered only
+        # when this process also serves the SPA build: in API-only mode the
+        # Vite dev server owns the static files and their caching.
+        @app.middleware("http")
+        async def spa_cache_headers(request: Request, call_next):  # type: ignore[no-untyped-def]
+            # Without Cache-Control, browsers heuristically cache index.html —
+            # users kept running a stale bundle after deploys. index.html must
+            # revalidate on every load (ETag makes that a cheap 304); the
+            # content-hashed /assets/* files are immutable by construction.
+            response = await call_next(request)
+            path = request.url.path
+            if path.startswith("/assets/"):
+                response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            elif response.headers.get("content-type", "").startswith("text/html"):
+                response.headers["Cache-Control"] = "no-cache"
+            return response
+
         # html=True serves index.html for unmatched paths (SPA client-side routing).
         app.mount("/", StaticFiles(directory=str(dist), html=True), name="spa")
         logger.info("Serving SPA static assets from %s", dist)

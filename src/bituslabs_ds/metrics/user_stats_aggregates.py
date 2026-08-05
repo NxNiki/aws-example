@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import math
 import re
 from datetime import date, datetime, timedelta
 from functools import cached_property
@@ -92,6 +93,14 @@ def _norm_date(x: Union[date, datetime]) -> date:
     return x.date() if isinstance(x, datetime) else x
 
 
+# Resample size cap: above this the m-out-of-n bootstrap resamples m=10k
+# values and rescales the deviations by sqrt(m/n). Keeps the empirical
+# (possibly asymmetric) resample shape — unlike an analytic normal CI — while
+# capping cost at n_boot × 10k draws; uncapped resampling cost n_boot × n,
+# seconds per (cohort × range) cell of Stats-by-Group on ss03-sized cohorts.
+_BOOTSTRAP_MAX_SAMPLE = 10_000
+
+
 def _bootstrap_ci(
     arr: np.ndarray,
     n_boot: int = 500,
@@ -99,21 +108,33 @@ def _bootstrap_ci(
 ) -> Tuple[float, float]:
     """Return (lower, upper) bootstrap percentile CI for the mean of ``arr``.
 
-    Resamples in batches: a single-shot ``(n_boot, len(arr))`` matrix is
-    ~800 MB for a 200k-element per-user array, and several land concurrently
-    when a dashboard tab bootstraps its panels in parallel — this OOM-killed
-    the dashboard-api task in production. Batching caps the transient at
-    ~80 MB with identical statistics.
+    Arrays larger than ``_BOOTSTRAP_MAX_SAMPLE`` use the m-out-of-n bootstrap:
+    resamples of size m are drawn, and the resample-mean deviations around the
+    full-sample mean are rescaled by sqrt(m/n) — the sampling error of an
+    m-sized mean overstates an n-sized mean's by sqrt(n/m), so the naive cap
+    would give CIs ~sqrt(n/m)× too wide.
+
+    Resamples one at a time via integer indexing: the transient is a single
+    m-length resample (~80 KB) instead of an (n_boot, m) matrix — an earlier
+    matrix version transiently allocated hundreds of MB per panel and
+    OOM-killed the task when panels bootstrapped in parallel — and at
+    m<=10k the loop is also faster than the vectorized matrix.
     """
-    if len(arr) < 2:
+    n = len(arr)
+    if n < 2:
         return float("nan"), float("nan")
     rng = np.random.default_rng()
-    batch = max(1, min(n_boot, 10_000_000 // len(arr)))
+    m = min(n, _BOOTSTRAP_MAX_SAMPLE)
     boot_means = np.empty(n_boot)
-    for i in range(0, n_boot, batch):
-        k = min(batch, n_boot - i)
-        boot_means[i : i + k] = rng.choice(arr, size=(k, len(arr)), replace=True).mean(axis=1)
-    return float(np.percentile(boot_means, 100 * alpha / 2)), float(np.percentile(boot_means, 100 * (1 - alpha / 2)))
+    for i in range(n_boot):
+        boot_means[i] = arr[rng.integers(0, n, m)].mean()
+    lo = float(np.percentile(boot_means, 100 * alpha / 2))
+    hi = float(np.percentile(boot_means, 100 * (1 - alpha / 2)))
+    if m == n:
+        return lo, hi
+    mean = float(np.mean(arr))
+    scale = math.sqrt(m / n)
+    return mean + (lo - mean) * scale, mean + (hi - mean) * scale
 
 
 def _horizon_dates(d0: Union[date, datetime], granularity: str) -> Tuple[datetime, ...]:

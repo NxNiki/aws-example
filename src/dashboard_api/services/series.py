@@ -24,10 +24,12 @@ import polars as pl
 from bituslabs_ds.metrics.user_stats_aggregates import RETENTION_LOAD_EXTRA_DAYS, DataMetrics
 from dashboard_api.services.common import (
     SeriesError,
+    availability_cols,
     clean_floats,
     collect_window,
     iter_cohorts,
     load_lazy,
+    projection_columns,
     stats_by_date_cfg,
     to_iso_date,
     user_group_cols,
@@ -67,8 +69,11 @@ def _window_series(
     load_end = end_dt + timedelta(days=RETENTION_LOAD_EXTRA_DAYS) if aggregate_from_rows else end_dt
 
     # Shared + single-flight: the per-panel requests of one tab render all hit
-    # the same window and must not each collect their own copy (OOM).
-    df_raw = collect_window(cfg, granularity, lf, date_col, start_dt, load_end)
+    # the same window and must not each collect their own copy (OOM). The
+    # collect is projected to the columns these metrics need — a few user_*
+    # columns instead of the whole row — so frames stay small at any span.
+    columns = projection_columns(cfg, metrics, date_col, set(lf.collect_schema().names()))
+    df_raw = collect_window(cfg, granularity, lf, date_col, start_dt, load_end, columns=columns)
     if df_raw.is_empty():
         return []
 
@@ -217,10 +222,13 @@ def load_group_values_in_range(cfg: dict[str, Any], granularity: str, start: str
     ``load_group_values``). Reads only the ``period=`` files whose partition
     date falls inside the (margin-widened) range, so it stays fast on datasets
     with hundreds of daily partitions; paths without a ``period=`` segment
-    (flat layouts) are always read."""
+    (flat layouts) are always read. Scans just the ``availability_cols``
+    dimensions — the ones that rotate over time (e.g. mathtable, daily_group);
+    static vocabularies don't need a per-range scan and the frontend enables
+    values with no availability entry."""
     from bituslabs_ds.s3_utils import expand_paths_to_files, read_files
 
-    cols = user_group_cols(cfg)
+    cols = availability_cols(cfg)
     if not cols:
         return {}
     sd = stats_by_date_cfg(cfg)

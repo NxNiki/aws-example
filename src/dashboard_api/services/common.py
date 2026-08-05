@@ -14,25 +14,35 @@ import math
 import threading
 import time
 from collections import OrderedDict
-from datetime import date, datetime
-from typing import Any, Iterator, Optional, cast
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import Any, Callable, Iterable, Iterator, Optional, Sequence
 
 import polars as pl
 
 from bituslabs_ds.metrics.user_stats_aggregates import PERIODS_SINCE_FIRST_BET_COL
-from bituslabs_ds.s3_utils import read_files
+from bituslabs_ds.s3_utils import expand_paths_to_files, is_s3_path
 
 logger = logging.getLogger(__name__)
 
-# Collected-window cache, single-flight. Each tab fires one /api/data/*
-# request PER PANEL in parallel, all for the same (config, granularity,
-# window) — without this, each request collects its own copy of the user rows
+# Collected-window cache, single-flight. Maps a request window to the
+# MATERIALIZED user rows collected for it — key (config_id, granularity,
+# start, end, projected-columns-or-None), value (monotonic timestamp,
+# collected DataFrame). Example entry:
+#   ("ss03", "day", "2026-07-01 00:00:00", "2026-07-28 00:00:00",
+#    ("activity_date", "ab_group", "user_id", "user_rtp"))
+#     -> (ts, DataFrame of every per-user daily row in that window, ~80 MB)
+# Each tab fires one /api/data/* request PER PANEL in parallel, all for the
+# same (config, granularity, window) — without this, each request collects
+# its own copy of the user rows
 # simultaneously, which OOM-killed 2 GB and 4 GB tasks in production. One lock
 # serializes collects (a concurrent miss waits, then hits the cache). Eviction
 # is budgeted by ESTIMATED BYTES, not entry count: a Stats-by-Group span can be
 # months of per-user rows, and pinning a few of those by count is exactly how
 # the 4 GB task died. The newest frame always stays (it's what the in-flight
 # burst shares); a TTL picks up the daily ETL refresh without a restart.
+# Sized against the 8 GB task (TASK_MEMORY in infra/dashboard_api/deploy_ecs.py):
+# budget + the largest in-flight collects must stay under it with margin.
 _WINDOW_CACHE_MAX_BYTES = 2_500_000_000
 _WINDOW_CACHE_TTL_S = 900
 _window_cache: "OrderedDict[tuple[Any, ...], tuple[float, pl.DataFrame]]" = OrderedDict()
@@ -49,31 +59,181 @@ def _evict_over_budget() -> None:
         logger.info("window cache: evicted %s (%.0f MB) over budget", key, df.estimated_size() / 1e6)
 
 
+def _as_window_dt(value: Any) -> Optional[datetime]:
+    """Normalize a cache-key bound (datetime, date, or its str form) to datetime."""
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return datetime.combine(value, datetime.min.time())
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def _slice_covering_entry(
+    config_id: Any, granularity: str, date_col: str, start_dt: Any, end_dt: Any, columns: Optional[Sequence[str]]
+) -> Optional[pl.DataFrame]:
+    """Serve [start_dt, end_dt] by slicing a fresh cached frame that covers it.
+
+    One user loading a long range makes every narrower request (same config /
+    granularity, columns available in the cached frame) an in-memory filter
+    instead of a new S3 collect. Runs under ``_window_lock``. The slice is not
+    re-cached — re-slicing a hit is cheap and caching it would duplicate rows
+    the covering entry already holds.
+    """
+    req_start, req_end = _as_window_dt(start_dt), _as_window_dt(end_dt)
+    if req_start is None or req_end is None:
+        return None
+    now = time.monotonic()
+    for key, (ts, df) in _window_cache.items():
+        if key[0] != config_id or key[1] != granularity or now - ts >= _WINDOW_CACHE_TTL_S:
+            continue
+        cov_start, cov_end = _as_window_dt(key[2]), _as_window_dt(key[3])
+        if cov_start is None or cov_end is None or cov_start > req_start or cov_end < req_end:
+            continue
+        if date_col not in df.columns:
+            continue
+        if columns is not None and not set(columns) <= set(df.columns):
+            continue
+        if columns is None and key[4] is not None:
+            # A projected frame can't serve a full-column request.
+            continue
+        out = df.filter((pl.col(date_col) >= req_start) & (pl.col(date_col) <= req_end))
+        if columns is not None:
+            out = out.select(list(columns))
+        if out.is_empty():
+            # Window keys extend past the data edge (retention load margin), so
+            # a pre-ETL frame can "cover" dates it has no rows for. An empty
+            # slice of a populated frame means collect fresh instead.
+            continue
+        _window_cache.move_to_end(key)  # covering entries that serve traffic stay warm
+        logger.info("window cache: served %s..%s from covering entry %s (rows=%d)", start_dt, end_dt, key, out.height)
+        return out
+    return None
+
+
+# Rows with date_col >= window start can live in a period that STARTS up to
+# one period-length earlier, so pruning widens one period to the left.
+_PERIOD_PRUNE_MARGIN_DAYS = {"day": 0, "week": 7, "month": 31}
+
+
+def _prune_periods(lf: pl.LazyFrame, granularity: str, start_dt: Any, end_dt: Any) -> pl.LazyFrame:
+    """Restrict the hive ``period`` partition column to the window so polars
+    skips the other partitions' files by PATH — no footers or pages read.
+    Purely an I/O optimization: the caller's date_col filter still bounds the
+    rows, and flat layouts (no period column) pass through untouched."""
+    if "period" not in lf.collect_schema().names():
+        return lf
+    start, end = _as_window_dt(start_dt), _as_window_dt(end_dt)
+    if start is None or end is None:
+        return lf
+    lo = start.date() - timedelta(days=_PERIOD_PRUNE_MARGIN_DAYS.get(granularity, 31))
+    return lf.filter(pl.col("period").cast(pl.Date, strict=False).is_between(lo, end.date()))
+
+
 def collect_window(
-    cfg: dict[str, Any], granularity: str, lf: pl.LazyFrame, date_col: str, start_dt: Any, end_dt: Any
+    cfg: dict[str, Any],
+    granularity: str,
+    lf: pl.LazyFrame,
+    date_col: str,
+    start_dt: Any,
+    end_dt: Any,
+    columns: Optional[Sequence[str]] = None,
 ) -> pl.DataFrame:
-    """Collect ``lf`` filtered to [start_dt, end_dt], shared across requests."""
+    """Collect ``lf`` filtered to [start_dt, end_dt], shared across requests.
+
+    With ``columns`` the collect is projected to just those columns (parquet
+    projection pushdown — only their chunks are read from S3) and cached per
+    column set, so requests for different metrics don't evict each other's
+    (much smaller) frames. A request whose window/columns are contained in a
+    fresh cached entry is served by slicing that entry in memory — no collect.
+    """
     config_id = cfg.get("id")
     if not config_id:
         # A None id would collide across every config and serve the wrong
         # game's rows from cache (load_raw_config stamps it — see configs.py).
         raise SeriesError("config dict is missing 'id'; cannot safely cache its window")
-    key = (config_id, granularity, str(start_dt), str(end_dt))
+    key = (config_id, granularity, str(start_dt), str(end_dt), tuple(columns) if columns is not None else None)
     with _window_lock:
         hit = _window_cache.get(key)
         if hit and time.monotonic() - hit[0] < _WINDOW_CACHE_TTL_S:
             _window_cache.move_to_end(key)
             return hit[1]
         _window_cache.pop(key, None)
-        df = lf.filter((pl.col(date_col) >= start_dt) & (pl.col(date_col) <= end_dt)).collect()
+        sliced = _slice_covering_entry(config_id, granularity, date_col, start_dt, end_dt, columns)
+        if sliced is not None:
+            return sliced
+        lf_win = _prune_periods(lf, granularity, start_dt, end_dt).filter(
+            (pl.col(date_col) >= start_dt) & (pl.col(date_col) <= end_dt)
+        )
+        if columns is not None:
+            lf_win = lf_win.select(list(columns))
+        df = lf_win.collect()
         logger.info("window cache: collected %s rows=%d est=%.0f MB", key, df.height, df.estimated_size() / 1e6)
-        _window_cache[key] = (time.monotonic(), df)
-        _evict_over_budget()
+        # Never cache an EMPTY frame: a read racing the ETL's dynamic
+        # partition overwrite (files deleted, then rewritten) can collect
+        # nothing for a window that has data — caching it would pin "no data"
+        # on every panel for the whole TTL. Genuinely-empty windows just
+        # re-collect, which is cheap.
+        if df.height > 0:
+            _window_cache[key] = (time.monotonic(), df)
+            _evict_over_budget()
         return df
 
 
 class SeriesError(Exception):
     """Raised when a request can't be served (bad granularity / missing date col)."""
+
+
+# Computed-response cache, single-flight. The window cache dedups I/O, but every
+# request still re-ran cohort filtering + DataMetrics + CI computation — with
+# several users on the same default views that recompute pinned the CPU. Keyed
+# by the endpoint's full request signature; TTL stays well under the window
+# cache's 900s so it never extends data staleness. Errors are never cached.
+_RESPONSE_CACHE_TTL_S = 150
+_RESPONSE_CACHE_MAX_ENTRIES = 512
+_response_cache: "OrderedDict[str, tuple[float, Any]]" = OrderedDict()
+_response_loading: dict[str, threading.Event] = {}
+_response_lock = threading.Lock()
+
+
+def cached_response(key: str, compute: Callable[[], Any], should_cache: Callable[[Any], bool] = lambda v: True) -> Any:
+    """Return ``compute()`` cached under ``key`` with single-flight semantics.
+
+    Identical concurrent requests run ``compute`` once and share the result;
+    an exception in the loader propagates to it, and one waiter retries as the
+    new loader. Callers must not mutate the returned value — it is shared.
+    ``should_cache`` lets callers keep suspicious results (e.g. empty series
+    computed while the ETL rewrites partitions) out of the cache: the value is
+    still returned, just recomputed on the next request.
+    """
+    while True:
+        with _response_lock:
+            hit = _response_cache.get(key)
+            if hit and time.monotonic() - hit[0] < _RESPONSE_CACHE_TTL_S:
+                _response_cache.move_to_end(key)
+                return hit[1]
+            if hit:
+                _response_cache.pop(key, None)
+            loading = _response_loading.get(key)
+            if loading is None:
+                loading = threading.Event()
+                _response_loading[key] = loading
+                break
+        loading.wait()
+    try:
+        value = compute()
+        if should_cache(value):
+            with _response_lock:
+                _response_cache[key] = (time.monotonic(), value)
+                while len(_response_cache) > _RESPONSE_CACHE_MAX_ENTRIES:
+                    _response_cache.popitem(last=False)
+        return value
+    finally:
+        with _response_lock:
+            _response_loading.pop(key, None)
+        loading.set()
 
 
 def stats_by_date_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -88,6 +248,71 @@ def user_group_cols(cfg: dict[str, Any]) -> list[str]:
         return []
     cols = raw if isinstance(raw, list) else [raw]
     return [str(c) for c in cols]
+
+
+def availability_cols(cfg: dict[str, Any]) -> list[str]:
+    """Cohort columns whose availability actually varies with the date range.
+
+    Dashboard feature: the pickers' grayed-out entries. Most cohort vocabularies
+    (user_group, bet_level, …) are static — only dimensions that rotate over
+    time (mathtable for the slot games, daily_group for fishhunter) need the
+    per-range availability scan. ``stats_by_date.availability_cols`` names
+    them; columns left out are simply absent from the ``available`` map and the
+    frontend enables their values unconditionally (CohortSelect treats a
+    missing entry as available). Default: every user_group column.
+    """
+    raw = stats_by_date_cfg(cfg).get("availability_cols")
+    if not raw:
+        return user_group_cols(cfg)
+    cols = raw if isinstance(raw, list) else [raw]
+    allowed = set(user_group_cols(cfg))
+    return [str(c) for c in cols if str(c) in allowed]
+
+
+def projection_columns(
+    cfg: dict[str, Any], metrics: Iterable[str], date_col: str, available: set[str]
+) -> Optional[list[str]]:
+    """Columns a series request actually needs, or None to load everything.
+
+    The user-row parquet carries every ``user_*`` metric column, but a panel
+    plots a handful — projecting the window collect to just the needed columns
+    (parquet pushdown reads only their chunks from S3) shrinks load time and
+    cache size regardless of the date span. Includes the cohort/grain/partition
+    dimensions, each requested metric's transitive ``user_*`` deps, and the
+    components collapse_user_rows recombines (a ratio without its numerator/
+    denominator would be silently dropped; a weighted mean without its weight
+    would pass through as first()). Falls back to None if any computed metric's
+    deps can't be introspected.
+    """
+    from bituslabs_ds.metrics.user_stats_aggregates import DataMetrics
+
+    cols: set[str] = {date_col, "user_id"}
+    cols.update(user_group_cols(cfg))
+    cols.update(user_row_grain(cfg))
+    lc = lifecycle_col(cfg)
+    if lc:
+        cols.add(lc)
+    part_col, _ = group_col_partition(cfg)
+    if part_col:
+        cols.add(part_col)
+    rcol, _, _ = range_group_cfg(cfg)
+    if rcol:
+        cols.add(rcol)
+    for m in metrics:
+        if m in DataMetrics.METRICS:
+            deps = DataMetrics.metric_user_col_deps(m)
+            if not deps:
+                return None
+            cols.update(deps)
+        else:
+            cols.add(str(m))
+    for name, num, den in _USER_ROW_RATIOS:
+        if name in cols:
+            cols.update((num, den))
+    for mean_col, weight_col in _USER_ROW_WEIGHTED_MEANS:
+        if mean_col in cols:
+            cols.add(weight_col)
+    return sorted(c for c in cols if c in available)
 
 
 def effective_cohort_cols(cfg: dict[str, Any]) -> list[str]:
@@ -169,7 +394,7 @@ def group_col_partition(cfg: dict[str, Any]) -> tuple[Optional[str], list[str]]:
 # day) reproduces the ETL's Redshift-side first_bet_date (validated ≥99.97%
 # per game, 100% on ss02/ss03/ss06). Cached because it scans the full daily
 # history; the TTL picks up the daily ETL refresh.
-_FIRST_BET_TTL_S = 3600
+_FIRST_BET_TTL_S = 900
 _first_bet_cache: dict[str, tuple[float, pl.DataFrame]] = {}
 _first_bet_lock = threading.Lock()
 
@@ -231,6 +456,28 @@ def attach_lifecycle_periods(cfg: dict[str, Any], df: pl.DataFrame, date_col: st
     return joined.with_columns(periods.alias(PERIODS_COL)).drop("first_bet_date")
 
 
+def _scan_source(path: str) -> pl.LazyFrame:
+    """One lazy scan per configured source path.
+
+    A single ``scan_parquet`` over the expanded file list (hive-aware when the
+    layout has ``period=`` directories) reads ONE footer for the schema and
+    lets polars prune partitions by path. The previous per-file scan resolved
+    each file's schema eagerly — one blocking S3 round-trip per file, which
+    made request latency scale with a game's history length (ss01's ~250
+    daily periods) rather than its data size.
+    """
+    if is_s3_path(path):
+        files = expand_paths_to_files([path])
+    elif Path(path).is_dir():
+        files = sorted(str(p) for p in Path(path).rglob("*.parquet"))
+    else:
+        return pl.scan_parquet(path)
+    if not files:
+        return pl.DataFrame().lazy()
+    hive = any("period=" in f for f in files)
+    return pl.scan_parquet(files, hive_partitioning=hive)
+
+
 def load_lazy(cfg: dict[str, Any], granularity: str) -> tuple[pl.LazyFrame, str]:
     """Lazily open the user-level parquet for a granularity; return (lf, date_col)."""
     sd = stats_by_date_cfg(cfg)
@@ -238,7 +485,8 @@ def load_lazy(cfg: dict[str, Any], granularity: str) -> tuple[pl.LazyFrame, str]
     files = (sd.get("files") or {}).get(granularity)
     if not files:
         raise SeriesError(f"No stats_by_date files configured for granularity '{granularity}'")
-    lf = cast(pl.LazyFrame, read_files(files, lazy_load=True, expand_s3_prefixes=True))
+    scans = [_scan_source(str(p)) for p in (files if isinstance(files, list) else [files])]
+    lf = scans[0] if len(scans) == 1 else pl.concat(scans, how="diagonal_relaxed")
     return lf, date_col
 
 
@@ -261,17 +509,25 @@ def clean_floats(values: Any) -> list[Optional[float]]:
 
 
 def cohort_values(group_values: dict[str, list[str]], col: Optional[str]) -> list[str]:
-    """Selected values for a cohort column, de-duped; empty selection means ['all']."""
+    """Selected values for a cohort column, de-duped.
+
+    An ABSENT column means ['all'] — callers need not enumerate every cohort
+    dimension. A column PRESENT with an empty selection means no cohorts at
+    all: the caller explicitly unselected everything, so nothing is plotted
+    (the cohort cross-product becomes empty). Matches the pickers' semantics.
+    """
     if not col:
+        return ["all"]
+    if col not in group_values or group_values[col] is None:
         return ["all"]
     seen: set[str] = set()
     vals: list[str] = []
-    for v in group_values.get(col, []) or []:
+    for v in group_values[col]:
         s = str(v)
         if s and s not in seen:
             seen.add(s)
             vals.append(s)
-    return vals or ["all"]
+    return vals
 
 
 def cohort_label(values: list[str]) -> str:

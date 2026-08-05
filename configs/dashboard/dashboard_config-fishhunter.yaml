@@ -24,6 +24,7 @@ stats_by_date:
   # first-bet dates at API time). It intentionally never renders as a
   # regular cohort picker.
   user_group_cols: [ab_test_group, ab_test_group_combined, fish_value, life_cycle_group]
+  availability_cols: [ab_test_group]
   # Stored grain is one row per (period, user, ab_test_group, fish_value); the
   # fish-level picker buckets fish_value by user-defined INCLUSIVE [min, max]
   # ranges, and the API collapses rows back to one per user when unselected.

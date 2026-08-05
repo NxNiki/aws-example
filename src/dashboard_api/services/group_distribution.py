@@ -18,7 +18,14 @@ import numpy as np
 import polars as pl
 
 from bituslabs_ds.metrics.user_stats_aggregates import RETENTION_LOAD_EXTRA_DAYS, DataMetrics, _bootstrap_ci
-from dashboard_api.services.common import SeriesError, collect_window, iter_cohorts, load_lazy, stats_by_date_cfg
+from dashboard_api.services.common import (
+    SeriesError,
+    collect_window,
+    iter_cohorts,
+    load_lazy,
+    projection_columns,
+    stats_by_date_cfg,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -104,8 +111,10 @@ def load_group_distribution(
     load_end = overall_end + timedelta(days=RETENTION_LOAD_EXTRA_DAYS) if aggregate_from_rows else overall_end
 
     # Shared + single-flight with the other tabs' requests (see common.py —
-    # parallel per-panel collects OOM-killed the task in production).
-    df_raw = collect_window(cfg, granularity, lf, date_col, overall_start, load_end)
+    # parallel per-panel collects OOM-killed the task in production). Projected
+    # to this metric's columns, like the series path.
+    columns = projection_columns(cfg, [metric], date_col, set(lf.collect_schema().names()))
+    df_raw = collect_window(cfg, granularity, lf, date_col, overall_start, load_end, columns=columns)
     if df_raw.is_empty():
         return [], True
 

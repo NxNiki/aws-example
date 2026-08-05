@@ -40,6 +40,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per ai_group slice (enriched) and per slice × bin size (grouped) under
   `tests/unit/feature_cold_data_snapshots/`, mirroring the Redshift suite
   (`REGENERATE_SNAPSHOTS=1` to update).
+- **Dashboard response cache + window sharing.** Identical concurrent/repeated
+  `/api/data/series` and `/api/data/group-distribution` requests compute once
+  and share the result (single-flight, 150 s TTL, keyed by the full request
+  JSON; errors and empty results are never cached). Requests whose date
+  window and columns are contained in a fresh cached window are served by an
+  in-memory slice of that frame instead of a new S3 collect.
+- **Column-projected data loads.** Series and Stats-by-Group requests collect
+  only the columns their metrics need (cohort/grain dimensions, each
+  metric's transitive `user_*` dependencies, and the components
+  `collapse_user_rows` recombines); parquet projection pushdown reads just
+  those chunks from S3, so loaded frames stay small at any date span.
+- **Hive-aware scans with `period=` path pruning.** Each configured source
+  loads through one `scan_parquet` (single listing + one schema read) and
+  `collect_window` restricts the hive `period` column to the request window,
+  so partitions outside it are skipped by path. Request latency now scales
+  with the window, not a game's history length (ss01: 248 files / 15 MB,
+  cold 8.6 s → 4.4 s).
+- **Scale-to-zero.** dashboard-api (min 0 / max 1) scales to zero after 60
+  idle minutes — only `/api/*` requests count as activity, so public-ALB
+  scanner noise can't keep it awake — and wakes on the ALB 5xx a visit
+  produces (~2–3 min task start).
+- **Fish hunter on the daily cold-data schedule.** The fish ETL gained the
+  slot games' rolling 3-Beijing-day incremental window and an `etl-fm01`
+  step in the `slot-cold-data-daily` pipeline; daily/weekly/monthly stats
+  were backfilled (2026-01-24 →) and the dashboard config now reads the
+  partitioned cold-data datasets for all three granularities.
+- **Data-edge auto refresh.** The SPA re-checks date bounds on tab focus and
+  hourly; if the data max advanced and the user hasn't moved the
+  default window off the previous edge, the window slides forward
+  (forward-only — week/month period-start labels can't drag it back) and the
+  tab refetches.
+- **Scoped availability scans.** New `stats_by_date.availability_cols`
+  limits the per-date-range cohort availability scan to dimensions that
+  rotate over time (`mathtable`, `ab_test_group`); static vocabularies are
+  always selectable.
+- `docs/dashboard_dataflow.md` — backend dataflow: request lifecycles,
+  the read path, every cache layer with TTLs, ETL freshness guarantees.
+
 - **Fish-level range groups (fish_hunter).** The fish_hunter ETL now stores
   one row per (period, user, daily_group, **fish_value**) in
   `output_fish_hunter_v2`, replacing the fixed per-fish-type wide columns
@@ -97,6 +135,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Explicit, one-to-one picker semantics.** Every dimension picker (cohorts,
+  fish/bet-level range groups, lifecycle bar) starts with an explicit `all`
+  selected, and fully unselecting any of them shows *no data* on that tab —
+  server-side too: a cohort column present with an empty selection yields no
+  cohorts (an absent column still means `all` for API callers). Saved views
+  were migrated to explicit selections (originals in
+  `dashboard-views-backup/`); stale renamed columns were dropped.
+- **First launch fetches one panel.** Stats-by-Date seeds only the first
+  panel's first metric; Stats-by-Group defaults to `num_active_users` in the
+  first panel with a `<None>` option on every panel. Selections persist
+  across tab switches.
+- **Large-sample CIs use the m-out-of-n bootstrap.** Samples above 10k values
+  resample at m=10k and rescale deviations by √(m/n) — empirical shape kept,
+  correct width, cost capped (~0.03 s at n=1M vs ~2 s); resampling is one
+  integer-indexed draw at a time (~80 KB transient instead of a
+  hundreds-of-MB matrix). Smaller samples keep the plain percentile
+  bootstrap.
+- **dashboard-api task 1 → 2 vCPU** (8 GB unchanged): after the software
+  fixes, memory sat under 50% while CPU still pinned at 100% in busy
+  windows; polars aggregation + CI computation is CPU-bound.
+- **SPA cache headers.** `index.html` serves `Cache-Control: no-cache`
+  (revalidates every load; ETag 304s) and hashed assets are immutable —
+  browsers no longer run stale bundles after deploys.
+- Cache TTLs tightened against compound staleness: response 300→150 s,
+  first-bet map 3600→900 s, group-values vocabulary 3600→600 s.
 - **Lifecycle cohorts are derived at query time.** `dashboard_api` computes
   each user's first bet date from the daily user rows (cached per config) and
   filters cohorts by period range on demand
@@ -113,6 +176,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inline config copy had drifted and the parity check hit an
   `AttributeError`. The configs are now loaded from the job script itself
   and fan out per slice, so drift shows up as a reviewable snapshot diff.
+- **Empty results are never cached.** A read racing the ETL's dynamic
+  partition overwrite (delete-then-rewrite) could collect an empty frame for
+  a window that has data; caching it pinned "no data" on every panel for the
+  TTL. Empty windows, empty covering slices, and empty responses are now
+  returned but recomputed on the next request.
+- **Group-values cache stampede.** The picker vocabulary cache had no lock
+  across the request threadpool, warmup and refresh threads; concurrent cold
+  misses each ran a full-parquet scan. Now lock-guarded with per-key
+  single-flight (one scan, shared result).
+- **Backward window slide.** The data-edge refresh compared week/month
+  period-start labels against the day-granularity max and could pull an
+  up-to-date window back two days; it now only advances.
+- **Duplicate startup fetches.** `selectConfig` and the tab effect both fired
+  `loadAllSeries`; the second aborted and re-issued an identical request.
+  In-flight requests with the same signature are now left to land.
+- **Fish hunter daily stats had no schedule.** The cold-data cutover left the
+  fish ETL running only manually with hardcoded dates; its dashboard data
+  froze at the last manual run until the pipeline step above landed.
 - **Silent ETL compaction failure duplicated recent rows on every game.** The
   2026-07-17 in-place parquet rewrite produced Arrow `large_string` columns
   while the ETL writes `string`; `_compact_partitions`' dataset read refused

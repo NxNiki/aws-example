@@ -34,7 +34,7 @@ from dashboard_api.schemas.data import (
     SummaryTableRequest,
     SummaryTableResponse,
 )
-from dashboard_api.services.common import SeriesError
+from dashboard_api.services.common import SeriesError, cached_response
 from dashboard_api.services.configs import build_config_detail, list_config_summaries, load_raw_config
 from dashboard_api.services.deepdive import load_deepdive, load_deepdive_metrics
 from dashboard_api.services.group_distribution import load_group_distribution
@@ -92,16 +92,24 @@ def post_series(req: SeriesRequest) -> SeriesResponse:
     if cfg is None:
         raise HTTPException(status_code=404, detail=f"Unknown config '{req.config}'")
     try:
-        date_col, series, missing = load_series(
-            cfg,
-            req.granularity,
-            req.metrics,
-            req.date_from,
-            req.date_to,
-            req.group_values,
-            lifecycle=_lifecycle(req.lifecycle_groups),
-            range_groups=_ranges_dims(req.range_groups),
-            ranges=[(r.start, r.end) for r in req.ranges] if req.ranges is not None else None,
+        # Identical concurrent/repeated requests (several users on the same
+        # view) compute once and share the result.
+        # Empty series are not cached: they can be a read racing the ETL's
+        # partition rewrite, and pinning them would blank panels for the TTL.
+        date_col, series, missing = cached_response(
+            "series:" + req.model_dump_json(),
+            lambda: load_series(
+                cfg,
+                req.granularity,
+                req.metrics,
+                req.date_from,
+                req.date_to,
+                req.group_values,
+                lifecycle=_lifecycle(req.lifecycle_groups),
+                range_groups=_ranges_dims(req.range_groups),
+                ranges=[(r.start, r.end) for r in req.ranges] if req.ranges is not None else None,
+            ),
+            should_cache=lambda v: bool(v[1]),
         )
     except SeriesError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -123,9 +131,17 @@ def post_series(req: SeriesRequest) -> SeriesResponse:
 # a background thread refreshes, so no request ever waits on the full scan
 # except the very first per (config, granularity) after a cold start.
 # Availability (range-scoped) is cheap (period-pruned read) per request.
+#
+# All state below is guarded by _group_values_lock (request threadpool +
+# refresh/warmup threads share it). Cold misses are single-flighted per key
+# via _GROUP_VALUES_LOADING: the first caller scans, concurrent callers wait
+# on its event — never run N identical full scans. The lock is NOT held
+# during scans, so cached configs stay servable while another config loads.
 _GROUP_VALUES_CACHE: dict[tuple[str, str], tuple[float, dict[str, list[str]]]] = {}
 _GROUP_VALUES_REFRESHING: set[tuple[str, str]] = set()
-_GROUP_VALUES_TTL_SECONDS = 3600.0
+_GROUP_VALUES_LOADING: dict[tuple[str, str], threading.Event] = {}
+_GROUP_VALUES_TTL_SECONDS = 600.0
+_group_values_lock = threading.Lock()
 
 
 def warm_group_values_cache() -> None:
@@ -144,24 +160,55 @@ def warm_group_values_cache() -> None:
 
 def _cached_group_values(config: str, cfg: dict, granularity: str) -> dict[str, list[str]]:
     key = (config, granularity)
-    cached = _GROUP_VALUES_CACHE.get(key)
-    if cached is None:
-        values = load_group_values(cfg, granularity)
-        _GROUP_VALUES_CACHE[key] = (time.monotonic(), values)
-        return values
-    if time.monotonic() - cached[0] >= _GROUP_VALUES_TTL_SECONDS and key not in _GROUP_VALUES_REFRESHING:
-        _GROUP_VALUES_REFRESHING.add(key)
+    while True:
+        with _group_values_lock:
+            cached = _GROUP_VALUES_CACHE.get(key)
+            if cached is not None:
+                break
+            loading = _GROUP_VALUES_LOADING.get(key)
+            if loading is None:
+                loading = threading.Event()
+                _GROUP_VALUES_LOADING[key] = loading
+                is_loader = True
+            else:
+                is_loader = False
+        if is_loader:
+            try:
+                values = load_group_values(cfg, granularity)
+                with _group_values_lock:
+                    _GROUP_VALUES_CACHE[key] = (time.monotonic(), values)
+                return values
+            finally:
+                with _group_values_lock:
+                    _GROUP_VALUES_LOADING.pop(key, None)
+                loading.set()
+        else:
+            # Re-check the cache after the loader finishes; if it failed, the
+            # next iteration elects this thread as the loader (retry).
+            loading.wait()
+
+    spawn_refresh = False
+    with _group_values_lock:
+        if time.monotonic() - cached[0] >= _GROUP_VALUES_TTL_SECONDS and key not in _GROUP_VALUES_REFRESHING:
+            _GROUP_VALUES_REFRESHING.add(key)
+            spawn_refresh = True
+        result = cached[1]
+
+    if spawn_refresh:
 
         def _refresh() -> None:
             try:
-                _GROUP_VALUES_CACHE[key] = (time.monotonic(), load_group_values(cfg, granularity))
+                values = load_group_values(cfg, granularity)
+                with _group_values_lock:
+                    _GROUP_VALUES_CACHE[key] = (time.monotonic(), values)
             except Exception:
                 logger.exception("group-values background refresh failed for %s", key)
             finally:
-                _GROUP_VALUES_REFRESHING.discard(key)
+                with _group_values_lock:
+                    _GROUP_VALUES_REFRESHING.discard(key)
 
         threading.Thread(target=_refresh, name=f"group-values-{config}-{granularity}", daemon=True).start()
-    return cached[1]
+    return result
 
 
 @router.get("/group-values", response_model=GroupValues)
@@ -232,20 +279,24 @@ def post_group_distribution(req: GroupDistributionRequest) -> GroupDistributionR
     if cfg is None:
         raise HTTPException(status_code=404, detail=f"Unknown config '{req.config}'")
     try:
-        stats, missing = load_group_distribution(
-            cfg,
-            req.granularity,
-            req.metric,
-            [(r.start, r.end) for r in req.ranges],
-            req.group_values,
-            _lifecycle(req.lifecycle_groups),
-            _ranges_dims(req.range_groups),
-            req.clip.enable,
-            req.clip.min,
-            req.clip.max,
-            req.filter.enable,
-            req.filter.min,
-            req.filter.max,
+        stats, missing = cached_response(
+            "group-distribution:" + req.model_dump_json(),
+            lambda: load_group_distribution(
+                cfg,
+                req.granularity,
+                req.metric,
+                [(r.start, r.end) for r in req.ranges],
+                req.group_values,
+                _lifecycle(req.lifecycle_groups),
+                _ranges_dims(req.range_groups),
+                req.clip.enable,
+                req.clip.min,
+                req.clip.max,
+                req.filter.enable,
+                req.filter.min,
+                req.filter.max,
+            ),
+            should_cache=lambda v: bool(v[0]),
         )
     except SeriesError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
