@@ -1,18 +1,23 @@
 """FM01 daily/weekly/monthly per-user game stats from S3 cold data — PySpark job.
 
 ETL job: cold-data source for the fish_hunter dashboard tab metrics
-(``daily_group`` dimension plus the ``user_*`` metrics). Same query logic as
+(``ab_test_group`` dimension plus the ``user_*`` metrics). Same query logic as
 etl_game_stats_daily_by_user.py, but reads bullet parquet directly from
 ``s3://oceanhunter-production-data-warehouse/transformed_data/cold_data/bullet``
 (partition-pruned by year=/month=/day=) instead of Redshift ``public.bullet``.
 Output datasets: ``<output-root>/{daily,weekly,monthly}_stats/period=YYYY-MM-DD/``
 where ``period`` is the day / week start / month start of ``activity_date``.
 
-Behavior: one row per (user, period, daily_group, fish_value) for EVERY betting
+Behavior: one row per (user, period, ab_test_group, fish_value) for EVERY betting
 user -- not only fish-killers (kill-specific metrics are NULL/0 for non-killers;
-the ``user_killed_fish`` flag segments killers). ``daily_group`` collapses each
-(user, day) to exactly ONE strategy group, priority RISK_CONTROLLED >
-BOOST_POOL > DYNAMIC_RTP family (MIN tie-break) > DEFAULT_FALLBACK. Each run
+the ``user_killed_fish`` flag segments killers). ``ab_test_group`` collapses each
+(user, day) to exactly ONE strategy group, priority RC_*/CR_* strategies
+(literal strategy_name kept, MIN tie-break) > RISK_CONTROLLED > BOOST_POOL >
+DYNAMIC_RTP family (MIN tie-break) > DEFAULT_FALLBACK. The companion
+``ab_test_group_combined`` column carries the same assignment with each family
+collapsed to its rollup label (RC_* -> ``RC_ALL``, CR_* -> ``CR_ALL``, all
+other labels pass through), giving a per-family dimension without changing
+the row grain. Each run
 recomputes whole periods in [output-start, output-end) and dynamic-partition-
 overwrites exactly the ``period=`` directories it produced, so windowed re-runs
 are idempotent; a partial trailing period (output-end not on a period boundary)
@@ -21,22 +26,42 @@ SCAN_LOOKBACK_DAYS before the (period-aligned) start, matching the Redshift
 job's raw window, so kill streaks touching the start boundary are complete.
 
 Runs standalone on the SageMaker Spark container -- no bituslabs_ds imports
-(ETL constants from bituslabs_ds.config are inlined below). Submit with
-etl_game_stats_daily_by_user_cold_data_submit.py.
+(ETL constants from bituslabs_ds.config are inlined below). Scheduled daily as
+the last step of the slot-cold-data-daily pipeline (no date args = rolling
+incremental window; see infra/etl/deploy_slot_cold_data_pipeline.py); submit
+manual/backfill runs with etl_game_stats_daily_by_user_cold_data_submit.py.
 """
 
 import argparse
 from datetime import date, datetime, time, timedelta
 from textwrap import dedent
 
-from pyspark.sql import SparkSession, functions as F
+from pyspark.sql import functions as F
 
-# Inlined from bituslabs_ds.config (this job runs without the package).
-EXCLUDED_OP_CODES = "('B26', 'TST', 'TSB', 'TSO')"
+# Ships via submit_py_files on SageMaker; for local runs/tests put
+# jobs/etl/sagemaker on the path first (the snapshot tests already do).
+from spark_etl_common import (
+    BJ_UTC_OFFSET_HOURS,
+    EXCLUDED_OP_CODES,
+    beijing_today,
+    build_spark_session,
+    check_schema,
+    prune_partition_days,
+)
+
 DELTA_T_MAX_SECONDS = 1800
 DELTA_T_MIN_SECONDS = 0.25
-# Asia/Shanghai has no DST, so a fixed offset equals CONVERT_TIMEZONE.
-BJ_UTC_OFFSET_HOURS = 8
+
+# A strategy_name starting with one of these prefixes claims the whole
+# user-day (top priority); ab_test_group_combined collapses each family into its
+# rollup label while ab_test_group keeps the literal strategy_name.
+RC_PREFIX = "RC_"
+CR_PREFIX = "CR_"
+RC_ROLLUP_GROUP = "RC_ALL"
+CR_ROLLUP_GROUP = "CR_ALL"
+
+# Rolling window for scheduled no-args runs; matches the old ETLScheduler lookback.
+INCREMENTAL_LOOKBACK_DAYS = 3
 
 # Same knobs as the Redshift job.
 SCAN_LOOKBACK_DAYS = 30
@@ -87,6 +112,7 @@ def generate_query(
     ``EXTRACT(EPOCH FROM interval)`` becomes a ``CAST(ts AS DOUBLE)``
     difference to keep the sub-second deltas that DELTA_T_MIN_SECONDS guards.
     """
+    is_rc_cr = f"substr(strategy_name, 1, 3) IN ('{RC_PREFIX}', '{CR_PREFIX}')"
     return dedent(
         f"""
         -- 1. FETCH RAW DATA (Keep strictly RAW columns to enable partition pruning)
@@ -126,21 +152,26 @@ def generate_query(
         ),
 
         -- 2. DETERMINE USER DAILY GROUP (Logic applied inside SUM)
-        user_daily_group AS (
+        user_ab_test_group AS (
             SELECT
                 user_id,
                 activity_date,
                 activity_week,
                 activity_month,
                 -- Assign the whole user-day to its highest-priority strategy_name.
-                -- A single bet in a higher tier claims the day.
+                -- A single bet in a higher tier claims the day. RC_*/CR_* keep
+                -- their literal label; MIN is the deterministic tie-break when
+                -- several coexist in a day (spanning both families, so a day
+                -- with both lands on the lexicographically smallest label).
                 CASE
+                    WHEN MAX(CASE WHEN {is_rc_cr} THEN 1 ELSE 0 END) > 0
+                        THEN MIN(CASE WHEN {is_rc_cr} THEN strategy_name END)
                     WHEN MAX(CASE WHEN strategy_name = 'RISK_CONTROLLED' THEN 1 ELSE 0 END) > 0 THEN 'RISK_CONTROLLED'
                     WHEN MAX(CASE WHEN strategy_name = 'BOOST_POOL' THEN 1 ELSE 0 END) > 0 THEN 'BOOST_POOL'
                     WHEN MAX(CASE WHEN strategy_name IN ('DYNAMIC_RTP', 'DYNAMIC_RTP_V2', 'DYNAMIC_RTP_V3') THEN 1 ELSE 0 END) > 0
                         THEN MIN(CASE WHEN strategy_name IN ('DYNAMIC_RTP', 'DYNAMIC_RTP_V2', 'DYNAMIC_RTP_V3') THEN strategy_name END)
                     ELSE 'DEFAULT_FALLBACK'
-                END AS daily_group,
+                END AS ab_test_group,
                 LAG(activity_date) OVER (PARTITION BY user_id ORDER BY activity_date) AS bj_date_last_bet
             FROM base_data
             GROUP BY user_id, activity_date, activity_week, activity_month
@@ -260,7 +291,7 @@ def generate_query(
 
         user_session_stats_agg AS (
             SELECT
-                u.daily_group,
+                u.ab_test_group,
                 t.user_id,
                 u.{stats_agg_col},
                 SUM(t.num_streak_sessions)      AS user_num_streak_sessions,
@@ -272,21 +303,21 @@ def generate_query(
 
                 AVG(t.bets_to_kill_fish)        AS user_bets_to_kill_fish
             FROM user_session_stats t
-            JOIN user_daily_group u ON t.user_id = u.user_id AND t.activity_date = u.activity_date
-            GROUP BY u.daily_group, t.user_id, u.{stats_agg_col}
+            JOIN user_ab_test_group u ON t.user_id = u.user_id AND t.activity_date = u.activity_date
+            GROUP BY u.ab_test_group, t.user_id, u.{stats_agg_col}
         ),
 
         max_kill_streak_length_agg AS (
             SELECT
-                u.daily_group,
+                u.ab_test_group,
                 t.user_id,
                 u.{stats_agg_col},
                 MAX(t.max_kill_streak)          AS user_max_kill_streak,
 
                 AVG(t.avg_kill_streak)          AS user_avg_kill_streak
             FROM max_kill_streak_length t
-            JOIN user_daily_group u ON t.user_id = u.user_id AND t.activity_date = u.activity_date
-            GROUP BY u.daily_group, t.user_id, u.{stats_agg_col}
+            JOIN user_ab_test_group u ON t.user_id = u.user_id AND t.activity_date = u.activity_date
+            GROUP BY u.ab_test_group, t.user_id, u.{stats_agg_col}
         ),
 
         -- 4a. USER-DAY LEVEL COLUMNS that cannot be sliced by fish_value
@@ -294,23 +325,23 @@ def generate_query(
         user_day_stats AS (
             SELECT
                 b.user_id,
-                u.daily_group,
+                u.ab_test_group,
                 b.{stats_agg_col},
                 COUNT(DISTINCT CONCAT(CAST(b.user_id AS STRING), '-', CAST(b.room_id AS STRING))) AS user_num_rooms,
                 STDDEV(b.profit) / NULLIF(ABS(AVG(b.profit)), 0)  AS user_profit_coef_var
             FROM base_data b
-            JOIN user_daily_group u ON b.user_id = u.user_id AND b.activity_date = u.activity_date
-            GROUP BY b.user_id, u.daily_group, b.{stats_agg_col}
+            JOIN user_ab_test_group u ON b.user_id = u.user_id AND b.activity_date = u.activity_date
+            GROUP BY b.user_id, u.ab_test_group, b.{stats_agg_col}
         ),
 
         -- 4. USER-LEVEL STATS BY DAILY GROUP AND FISH VALUE. One row per
-        -- (period, user, daily_group, fish_value): each bullet in exactly one
+        -- (period, user, ab_test_group, fish_value): each bullet in exactly one
         -- row, so the dashboard's custom fish-level ranges ([min, max]
         -- inclusive over fish_value) recombine every sliced metric exactly.
         stats_by_user_date AS (
             SELECT
                 b.user_id,
-                u.daily_group,
+                u.ab_test_group,
                 b.fish_value,
                 b.{stats_agg_col},
                 COUNT(b.user_id)                              AS user_num_bets,
@@ -345,8 +376,8 @@ def generate_query(
                 COUNT(CASE WHEN (b.bet - b.prev_bet_amount) < 0 THEN 1 END) AS user_neg_delta_bet_num,
                 COUNT(b.prev_bet_amount) AS user_num_delta_bet
             FROM base_data b
-            JOIN user_daily_group u ON b.user_id = u.user_id AND b.activity_date = u.activity_date
-            GROUP BY b.user_id, u.daily_group, b.fish_value, b.{stats_agg_col}
+            JOIN user_ab_test_group u ON b.user_id = u.user_id AND b.activity_date = u.activity_date
+            GROUP BY b.user_id, u.ab_test_group, b.fish_value, b.{stats_agg_col}
             -- Include ALL betting users, not only fish-killers. Kill-specific metrics
             -- already degrade to NULL/0 for non-killers (CASE WHEN killed / NULLIF), while
             -- downstream user counts & retention (day0_num_users, num_active_users, ...) need
@@ -354,14 +385,22 @@ def generate_query(
             -- Segment to killers downstream via the user_killed_fish flag when needed.
         )
 
-        -- 5. FINAL JOIN & FORMATTING. Row grain: (period, user, daily_group,
+        -- 5. FINAL JOIN & FORMATTING. Row grain: (period, user, ab_test_group,
         -- fish_value). The session/streak columns (t4/t5) and the user-day
         -- columns (t6) are computed per user-day and repeat identically on
         -- each of the user's fish_value rows; the dashboard keeps their first
         -- value when collapsing.
         SELECT
             t1.user_id,
-            t1.daily_group,
+            t1.ab_test_group,
+            -- Family rollup dimension: RC_*/CR_* variants collapse to RC_ALL /
+            -- CR_ALL, every other label passes through unchanged. Functionally
+            -- dependent on ab_test_group, so the row grain does not change.
+            CASE
+                WHEN substr(t1.ab_test_group, 1, 3) = '{RC_PREFIX}' THEN '{RC_ROLLUP_GROUP}'
+                WHEN substr(t1.ab_test_group, 1, 3) = '{CR_PREFIX}' THEN '{CR_ROLLUP_GROUP}'
+                ELSE t1.ab_test_group
+            END AS ab_test_group_combined,
             t1.fish_value,
             t1.{stats_agg_col} AS activity_date,
             t6.user_num_rooms,
@@ -413,15 +452,15 @@ def generate_query(
         LEFT JOIN user_session_stats_agg t4
             ON t1.user_id = t4.user_id
             AND t1.{stats_agg_col} = t4.{stats_agg_col}
-            AND t1.daily_group = t4.daily_group
+            AND t1.ab_test_group = t4.ab_test_group
         LEFT JOIN max_kill_streak_length_agg t5
             ON t1.user_id = t5.user_id
             AND t1.{stats_agg_col} = t5.{stats_agg_col}
-            AND t1.daily_group = t5.daily_group
+            AND t1.ab_test_group = t5.ab_test_group
         LEFT JOIN user_day_stats t6
             ON t1.user_id = t6.user_id
             AND t1.{stats_agg_col} = t6.{stats_agg_col}
-            AND t1.daily_group = t6.daily_group
+            AND t1.ab_test_group = t6.ab_test_group
         WHERE t1.{stats_agg_col} >= DATE '{effective_start}'
           AND t1.{stats_agg_col} < DATE '{output_end}'
         """
@@ -474,53 +513,53 @@ def align_output_schema(df):
     return df.withColumn("_processed_at", F.current_timestamp())
 
 
-def check_schema(bullet) -> None:
-    missing = [c for c in REQUIRED_COLUMNS if c not in bullet.columns]
-    if missing:
-        raise SystemExit(
-            f"cold data bullet table is missing required columns: {missing}; "
-            f"available columns: {sorted(bullet.columns)}"
-        )
-    print("input schema (required columns):")
-    for name, dtype in bullet.select(*REQUIRED_COLUMNS).dtypes:
-        print(f"  {name}: {dtype}")
-
-
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input-root", required=True, help="s3://... root of bullet parquet (year=/month=/day=)")
     parser.add_argument("--output-root", required=True, help="s3://... root for the stats datasets")
-    parser.add_argument("--output-start", required=True, help="keep rows with activity date >= this, YYYY-MM-DD")
+    parser.add_argument(
+        "--output-start",
+        default=None,
+        help="keep rows with activity date >= this, YYYY-MM-DD"
+        " (default: rolling daily-incremental window, last INCREMENTAL_LOOKBACK_DAYS Beijing days)",
+    )
     parser.add_argument(
         "--output-end",
-        required=True,
+        default=None,
         help="keep rows with activity date < this, YYYY-MM-DD; align to a period"
-        " start (Monday / 1st) so weekly/monthly rows are complete",
+        " start (Monday / 1st) so weekly/monthly rows are complete"
+        " (default: tomorrow in Beijing time)",
     )
     parser.add_argument("--agg", choices=["all", *AGG_LEVELS], default="all", help="which aggregation levels to run")
     parser.add_argument("--game-id", default="FM01")
     parser.add_argument("--currency", default="CNY")
+    parser.add_argument(
+        "--input-region",
+        default="ap-southeast-1",
+        help="region of the input bucket (s3a needs it spelled out for cross-region reads)",
+    )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-    output_start = date.fromisoformat(args.output_start)
-    output_end = date.fromisoformat(args.output_end)
+    # Rolling daily-incremental defaults: the job recomputes only the periods
+    # in the window (dynamic period= overwrite), so the scheduled no-args run
+    # refreshes recent days without touching history.
+    bj_today = beijing_today()
+    output_start = (
+        date.fromisoformat(args.output_start)
+        if args.output_start
+        else bj_today - timedelta(days=INCREMENTAL_LOOKBACK_DAYS)
+    )
+    output_end = date.fromisoformat(args.output_end) if args.output_end else bj_today + timedelta(days=1)
+    print(f"output window: [{output_start}, {output_end})")
     levels = list(AGG_LEVELS) if args.agg == "all" else [args.agg]
 
-    spark = (
-        SparkSession.builder.appName("FM01_game_stats_cold_data")  # type: ignore[attr-defined]
-        .config("spark.sql.session.timeZone", "UTC")
-        .config("spark.sql.adaptive.enabled", "true")
-        .config("spark.sql.sources.partitionOverwriteMode", "dynamic")
-        .getOrCreate()
-    )
-    spark.sparkContext.setLogLevel("WARN")
+    spark = build_spark_session(f"{args.game_id}_game_stats_cold_data", args.input_root, args.input_region)
 
     bullet = spark.read.parquet(args.input_root)
-    check_schema(bullet)
-    partition_date = F.make_date("year", "month", "day")
+    check_schema(bullet, REQUIRED_COLUMNS, table_name="cold data bullet")
 
     for level in levels:
         stats_agg_col, job_name = AGG_LEVELS[level]
@@ -533,7 +572,7 @@ def main():
         )
         scan_end_utc = datetime.combine(output_end, time()) - timedelta(hours=BJ_UTC_OFFSET_HOURS)
 
-        raw = bullet.filter(partition_date.between(F.lit(scan_start_utc.date()), F.lit(scan_end_utc.date())))
+        raw = prune_partition_days(bullet, scan_start_utc.date(), scan_end_utc.date())
         if raw.limit(1).count() == 0:
             print("no data, skip:", job_name)
             continue

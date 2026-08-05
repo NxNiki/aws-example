@@ -81,36 +81,10 @@ def main() -> int:
             JOBS_DIR / "operation_daily_report" / "run_daily_report.py",
             ["--lookback-days", str(args.lookback_days), "--send-slack", "--skip-ss01"],
         ),
-        (
-            "ss01_wucaishen ETL",
-            JOBS_DIR / "etl" / "redshift" / "ss01_wucaishen" / "etl_game_stats_daily_by_user_group.py",
-            [],
-        ),
-        (
-            "ss01a_golden_goal ETL",
-            JOBS_DIR / "etl" / "redshift" / "ss01a_golden_goal" / "etl_game_stats_daily_by_user_group.py",
-            [],
-        ),
-        (
-            "ss02_deepdive ETL",
-            JOBS_DIR / "etl" / "redshift" / "ss02_deepdive" / "etl_game_stats_daily_by_user_group.py",
-            [],
-        ),
-        (
-            "ss03_mahjiang_streak ETL",
-            JOBS_DIR / "etl" / "redshift" / "ss03_mahjiang_streak" / "etl_game_stats_daily_by_user_group.py",
-            [],
-        ),
-        (
-            "ss06_pocket_soccer ETL",
-            JOBS_DIR / "etl" / "redshift" / "ss06_pocket_soccer" / "etl_game_stats_daily_by_user_group.py",
-            [],
-        ),
-        (
-            "fish_hunter ETL",
-            JOBS_DIR / "etl" / "redshift" / "fish_hunter" / "etl_game_stats_daily_by_user.py",
-            [],
-        ),
+        # The per-game user-stats ETLs run on the SageMaker cold-data pipeline;
+        # the jobs/etl/redshift versions are rollback-only and their old S3
+        # output roots were deleted (2026-08-03) — re-adding one here would
+        # trigger a full-history Redshift reload, not an incremental top-up.
         (
             "operation daily weekly report ETL",
             JOBS_DIR / "operation_daily_report" / "etl_weekly_report_all_games.py",

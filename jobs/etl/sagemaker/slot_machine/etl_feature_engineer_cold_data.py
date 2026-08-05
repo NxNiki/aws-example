@@ -49,34 +49,19 @@ from datetime import date, datetime, timedelta, timezone
 
 from pyspark.sql import functions as F
 
-try:
-    from spark_etl_common import (
-        AB_TEST_GROUP_A,
-        AB_TEST_GROUP_B,
-        AI_GROUP_ID,
-        build_spark_session,
-        check_schema,
-        month_start,
-        prev_month_start,
-        prune_partition_days,
-        utc_today,
-    )
-except ImportError:  # local runs/tests: the module sits one directory up
-    import sys
-    from pathlib import Path
-
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from spark_etl_common import (
-        AB_TEST_GROUP_A,
-        AB_TEST_GROUP_B,
-        AI_GROUP_ID,
-        build_spark_session,
-        check_schema,
-        month_start,
-        prev_month_start,
-        prune_partition_days,
-        utc_today,
-    )
+# Ships via submit_py_files on SageMaker; for local runs/tests put
+# jobs/etl/sagemaker on the path first (the snapshot tests already do).
+from spark_etl_common import (
+    AB_TEST_GROUP_A,
+    AB_TEST_GROUP_B,
+    AI_GROUP_ID,
+    build_spark_session,
+    check_schema,
+    month_start,
+    prev_month_start,
+    prune_partition_days,
+    utc_today,
+)
 
 # Sessions straddling the window start keep stable keys as long as they are
 # shorter than this (a session only breaks after a 12h gap, so multi-day

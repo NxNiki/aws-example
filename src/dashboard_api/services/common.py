@@ -113,8 +113,10 @@ def user_row_grain(cfg: dict[str, Any]) -> list[str]:
     return [str(c) for c in (sd.get("user_row_grain") or [])]
 
 
-# The stored ETL cohort column (new/beginner/old) the lifecycle picker redefines.
-LIFECYCLE_COL = "user_group"
+# Virtual cohort dimension the "Lifecycle groups" picker defines (cohorts are
+# derived at API time from first-bet dates, never read from a stored column).
+# Configs opt in by listing this name in user_group_cols.
+LIFECYCLE_COL = "life_cycle_group"
 # Helper column carrying each row's period offset (days / weeks / months,
 # matching the request granularity) from the user's first bet. Canonical name
 # lives with DataMetrics, which reads it for num_new_users.

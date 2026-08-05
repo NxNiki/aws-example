@@ -1,24 +1,30 @@
 title: "Fish Hunter Analytics"
 
 stats_by_date: 
-  files: 
+  files:
     day: [
-      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter_v2/daily_stats",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter_v2_cold_data/daily_stats",
     ]
 
     week: [
-      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter_v2/weekly_stats",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter_v2_cold_data/weekly_stats",
     ]
 
     month: [
-      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter_v2/monthly_stats",
-
+      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter_v2_cold_data/monthly_stats",
     ]
 
-  group_col: "daily_group"
+  group_col: "ab_test_group"
   date_col: "activity_date"
-  user_group_cols: [daily_group, fish_value, user_group]
-  # Stored grain is one row per (period, user, daily_group, fish_value); the
+  # ab_test_group_combined = ab_test_group with the RC_*/CR_* strategy
+  # variants collapsed to RC_ALL / CR_ALL (other labels identical).
+  # life_cycle_group is not a stored column: it is the reserved lifecycle
+  # name (LIFECYCLE_COL in dashboard_api services/common.py), and listing it
+  # is what enables the "Lifecycle groups" picker (cohorts derived from
+  # first-bet dates at API time). It intentionally never renders as a
+  # regular cohort picker.
+  user_group_cols: [ab_test_group, ab_test_group_combined, fish_value, life_cycle_group]
+  # Stored grain is one row per (period, user, ab_test_group, fish_value); the
   # fish-level picker buckets fish_value by user-defined INCLUSIVE [min, max]
   # ranges, and the API collapses rows back to one per user when unselected.
   user_row_grain: [fish_value]
