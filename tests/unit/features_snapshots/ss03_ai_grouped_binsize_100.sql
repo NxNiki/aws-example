@@ -24,7 +24,7 @@ WITH user_bets AS (
     FROM public.fct_bet_orders AS t
     WHERE
         t.created_at >= '2026-01-01'
-        AND t.created_at < '2026-07-01'
+        AND t.created_at < '2026-08-01'
         AND t.currency_type IN ('CNY')
         AND t.status = 'COMPLETED'
         AND t.game_id = 'SS03'
