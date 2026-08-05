@@ -123,6 +123,10 @@ def create_app() -> FastAPI:
     dist = Path(settings.frontend_dist)
     if dist.is_dir():
 
+        # The decorator registers this with the app; FastAPI then invokes it
+        # around every request — nothing calls it by name. Registered only
+        # when this process also serves the SPA build: in API-only mode the
+        # Vite dev server owns the static files and their caching.
         @app.middleware("http")
         async def spa_cache_headers(request: Request, call_next):  # type: ignore[no-untyped-def]
             # Without Cache-Control, browsers heuristically cache index.html —

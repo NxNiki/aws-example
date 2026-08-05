@@ -25,9 +25,16 @@ from bituslabs_ds.s3_utils import expand_paths_to_files, is_s3_path
 
 logger = logging.getLogger(__name__)
 
-# Collected-window cache, single-flight. Each tab fires one /api/data/*
-# request PER PANEL in parallel, all for the same (config, granularity,
-# window) — without this, each request collects its own copy of the user rows
+# Collected-window cache, single-flight. Maps a request window to the
+# MATERIALIZED user rows collected for it — key (config_id, granularity,
+# start, end, projected-columns-or-None), value (monotonic timestamp,
+# collected DataFrame). Example entry:
+#   ("ss03", "day", "2026-07-01 00:00:00", "2026-07-28 00:00:00",
+#    ("activity_date", "ab_group", "user_id", "user_rtp"))
+#     -> (ts, DataFrame of every per-user daily row in that window, ~80 MB)
+# Each tab fires one /api/data/* request PER PANEL in parallel, all for the
+# same (config, granularity, window) — without this, each request collects
+# its own copy of the user rows
 # simultaneously, which OOM-killed 2 GB and 4 GB tasks in production. One lock
 # serializes collects (a concurrent miss waits, then hits the cache). Eviction
 # is budgeted by ESTIMATED BYTES, not entry count: a Stats-by-Group span can be

@@ -67,7 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   were backfilled (2026-01-24 →) and the dashboard config now reads the
   partitioned cold-data datasets for all three granularities.
 - **Data-edge auto refresh.** The SPA re-checks date bounds on tab focus and
-  every 10 minutes; if the data max advanced and the user hasn't moved the
+  hourly; if the data max advanced and the user hasn't moved the
   default window off the previous edge, the window slides forward
   (forward-only — week/month period-start labels can't drag it back) and the
   tab refetches.
