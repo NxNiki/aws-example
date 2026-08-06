@@ -14,6 +14,7 @@ vi.mock("../api/client", () => ({
 
 import { api } from "../api/client";
 import { useDashboardStore } from "./dashboardStore";
+import type { ConfigDetail } from "../api/types";
 import type { RangeState } from "../components/DateRanges";
 
 const mockApi = api as unknown as {
@@ -97,6 +98,25 @@ describe("dashboardStore", () => {
     expect(s.dateGroups.ranges[0].end).toBe("2025-01-30");
     expect(mockApi.series).toHaveBeenCalledTimes(1); // only the first panel fetches
     expect(s.error).toBeNull();
+  });
+
+  it("drops a stale group-values response after the config switches", async () => {
+    // A slow response for the previous config must not populate the pickers
+    // of the config the user switched to (e.g. fishhunter's fish_value
+    // briefly rendering as a cohort picker under ss03).
+    useDashboardStore.setState({
+      configId: "fishhunter",
+      config: { ...CONFIG, id: "fishhunter", range_group_values: [] } as ConfigDetail,
+    });
+    let resolve!: (v: unknown) => void;
+    mockApi.groupValues.mockReturnValue(new Promise((r) => (resolve = r)));
+    const pending = useDashboardStore.getState().ensureGroupValues("day");
+    useDashboardStore.setState({ configId: "ss03", groupValuesByGran: {} });
+    resolve({ config: "fishhunter", granularity: "day", values: { fish_value: ["2", "10"] } });
+    await pending;
+    const s = useDashboardStore.getState();
+    expect(s.groupValuesByGran.day).toBeUndefined();
+    expect(s.controls.date.cohortSelection).toEqual({});
   });
 
   it("records an error and clears loading when listing configs fails", async () => {

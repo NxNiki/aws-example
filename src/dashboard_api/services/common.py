@@ -376,6 +376,61 @@ def lifecycle_col(cfg: dict[str, Any]) -> Optional[str]:
     return LIFECYCLE_COL if LIFECYCLE_COL in user_group_cols(cfg) else None
 
 
+def derived_group_cols(cfg: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Virtual cohort columns rolled up from a stored column at load time.
+
+    Dashboard feature: extra cohort pickers that combine stored subgroups
+    without an ETL column or backfill — e.g. ss03's "ai_group" picker (AI vs
+    non-AI) rolled up from the stored ``ab_group`` labels. Configured as
+    ``stats_by_date.derived_group_cols``::
+
+        derived_group_cols:
+          ai_group:
+            source: ab_group
+            groups:
+              AI: [AI]
+            default: non-AI
+
+    Behavior: each ``groups`` entry maps a derived label to the source values
+    it combines; ``default`` labels every unmatched value (omit it to leave
+    them null, i.e. only in 'all'). The column is attached in ``load_lazy``,
+    so every endpoint — pickers, series, deep-dive — sees it as if stored.
+    List the name in ``user_group_cols`` to surface the picker.
+    """
+    raw = stats_by_date_cfg(cfg).get("derived_group_cols") or {}
+    out: dict[str, dict[str, Any]] = {}
+    for name, spec in raw.items():
+        source = str((spec or {}).get("source") or "")
+        raw_groups = (spec or {}).get("groups") or {}
+        groups = {str(label): [str(v) for v in (vals or [])] for label, vals in raw_groups.items()}
+        if not source or not groups:
+            continue
+        default = (spec or {}).get("default")
+        out[str(name)] = {"source": source, "groups": groups, "default": None if default is None else str(default)}
+    return out
+
+
+def attach_derived_group_cols(cfg: dict[str, Any], lf: pl.LazyFrame) -> pl.LazyFrame:
+    """Add each configured derived group column to the lazy frame (see
+    ``derived_group_cols``). Skips a column whose source is missing, and never
+    overwrites one that already exists in the data — so an ETL can later
+    materialize the same column and the config keeps working unchanged."""
+    derived = derived_group_cols(cfg)
+    if not derived:
+        return lf
+    available = set(lf.collect_schema().names())
+    exprs = []
+    for name, spec in derived.items():
+        if name in available or spec["source"] not in available:
+            continue
+        expr = pl.lit(spec["default"], dtype=pl.String)
+        source = pl.col(spec["source"]).cast(pl.String)
+        for label, values in spec["groups"].items():
+            expr = pl.when(source.is_in(values)).then(pl.lit(label)).otherwise(expr)
+        exprs.append(expr.alias(name))
+    return lf.with_columns(exprs) if exprs else lf
+
+
 def group_col_partition(cfg: dict[str, Any]) -> tuple[Optional[str], list[str]]:
     """(group_col, disjoint labels) for configs whose group column is NOT a
     partition — the ss-game ETLs UNION ALL every bet into a combined AB-test
@@ -487,7 +542,7 @@ def load_lazy(cfg: dict[str, Any], granularity: str) -> tuple[pl.LazyFrame, str]
         raise SeriesError(f"No stats_by_date files configured for granularity '{granularity}'")
     scans = [_scan_source(str(p)) for p in (files if isinstance(files, list) else [files])]
     lf = scans[0] if len(scans) == 1 else pl.concat(scans, how="diagonal_relaxed")
-    return lf, date_col
+    return attach_derived_group_cols(cfg, lf), date_col
 
 
 def to_iso_date(value: Any) -> str:

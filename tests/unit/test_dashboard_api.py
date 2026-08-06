@@ -384,6 +384,97 @@ def test_iter_cohorts_grain_collapses_user_rows(monkeypatch):
     assert lc["AI | new"].height == 1 and lc["AI | new"]["user_num_bets"][0] == 40  # u1 collapsed
 
 
+def test_derived_group_cols_attached_by_load_lazy(tmp_path):
+    """ss03's "ai_group" picker: a config-declared rollup of the stored
+    ab_group labels (AI vs non-AI), attached at load time so pickers, series
+    and deep-dive all see it as if it were a stored column."""
+    df = pl.DataFrame(
+        {
+            "activity_date": ["2026-06-01"] * 4,
+            "user_id": ["u1", "u2", "u3", "u4"],
+            "ab_group": ["AI", "AB_TEST_A", "AB_TEST_B", "Default"],
+            "user_num_bets": [1, 2, 3, 4],
+        }
+    )
+    path = tmp_path / "daily_stats"
+    path.mkdir()
+    df.write_parquet(path / "part.parquet")
+    cfg = {
+        "id": "g",
+        "stats_by_date": {
+            "files": {"day": [str(path)]},
+            "user_group_cols": ["ab_group", "ai_group"],
+            "derived_group_cols": {"ai_group": {"source": "ab_group", "groups": {"AI": ["AI"]}, "default": "non-AI"}},
+        },
+    }
+    lf, _ = common.load_lazy(cfg, "day")
+    out = lf.collect().sort("user_id")
+    assert out["ai_group"].to_list() == ["AI", "non-AI", "non-AI", "non-AI"]
+
+    values = series_mod.load_group_values(cfg, "day")
+    assert values["ai_group"] == ["AI", "non-AI"]
+    assert values["ab_group"] == ["AB_TEST_A", "AB_TEST_B", "AI", "Default"]
+
+
+def test_attach_derived_group_cols_guards():
+    df = pl.DataFrame({"ab_group": ["AI", "Default"], "ai_group": ["stored", "stored"]})
+    cfg = {
+        "id": "g",
+        "stats_by_date": {
+            "derived_group_cols": {
+                "ai_group": {"source": "ab_group", "groups": {"AI": ["AI"]}, "default": "non-AI"},
+                "other": {"source": "missing_col", "groups": {"X": ["x"]}},
+            }
+        },
+    }
+    out = common.attach_derived_group_cols(cfg, df.lazy()).collect()
+    assert out["ai_group"].to_list() == ["stored", "stored"]  # never overwrites a real column
+    assert "other" not in out.columns  # missing source is skipped
+
+    # No default: unmatched values stay null (they only ever match 'all').
+    cfg2 = {
+        "id": "g",
+        "stats_by_date": {"derived_group_cols": {"ai_group": {"source": "ab_group", "groups": {"AI": ["AI"]}}}},
+    }
+    out2 = common.attach_derived_group_cols(cfg2, df.drop("ai_group").lazy()).collect()
+    assert out2["ai_group"].to_list() == ["AI", None]
+
+
+def test_iter_cohorts_derived_group_collapses_grain(monkeypatch):
+    """Selecting ai_group='non-AI' with ab_group unselected must collapse the
+    per-(user, ab_group) grain rows back to one row per user, so per-user
+    stats count each user once across the combined subgroups."""
+    df = pl.DataFrame(
+        {
+            "d": ["2026-06-01"] * 4,
+            "user_id": ["u1", "u1", "u2", "u2"],
+            "ab_group": ["AB_TEST_A", "Default", "AI", "AB_TEST_B"],
+            "user_num_bets": [10, 30, 5, 7],
+            "user_total_bet": [100.0, 300.0, 50.0, 70.0],
+        }
+    ).with_columns(pl.col("d").str.to_datetime())
+    cfg = {
+        "id": "g",
+        "stats_by_date": {
+            "user_group_cols": ["ab_group", "ai_group"],
+            "user_row_grain": ["ab_group"],
+            "derived_group_cols": {"ai_group": {"source": "ab_group", "groups": {"AI": ["AI"]}, "default": "non-AI"}},
+        },
+    }
+    df = common.attach_derived_group_cols(cfg, df.lazy()).collect()
+
+    out = dict(common.iter_cohorts(cfg, df, {"ai_group": ["AI", "non-AI"]}, date_col="d"))
+    assert set(out) == {"AI", "non-AI"}
+    non_ai = out["non-AI"].sort("user_id")
+    assert non_ai.height == 2  # u1's two subgroup rows collapsed; u2 keeps only AB_TEST_B
+    assert non_ai["user_num_bets"].to_list() == [40, 7]
+    assert out["AI"].height == 1 and out["AI"]["user_num_bets"][0] == 5
+
+    # Pinning both dimensions intersects them: AI ∩ non-AI is empty.
+    crossed = dict(common.iter_cohorts(cfg, df, {"ab_group": ["AI"], "ai_group": ["non-AI"]}, date_col="d"))
+    assert crossed["AI | non-AI"].height == 0
+
+
 def test_iter_cohorts_range_groups_bucket_by_value(monkeypatch):
     """The range-group dimension (e.g. fish_value) buckets rows by INCLUSIVE
     [min, max] ranges from the request; a pinned range still collapses the

@@ -14,8 +14,16 @@ stats_by_date:
 
   group_col: "ab_group"
   date_col: "activity_date"
-  user_group_cols: [ab_group, mathtable, bet_level, life_cycle_group]
+  user_group_cols: [ab_group, ai_group, mathtable, bet_level, life_cycle_group]
   availability_cols: [mathtable]
+  # ai_group is API-derived from ab_group (no stored column): AI vs everything
+  # else. New ab_group labels fall into non-AI via the default.
+  derived_group_cols:
+    ai_group:
+      source: ab_group
+      groups:
+        AI: [AI]
+      default: non-AI
   # Stored grain is one row per (period, user, ab_group, mathtable, bet_level):
   # every bet in exactly one row. When a grain dimension is unselected the API
   # collapses rows back to one per user before computing per-user stats.
