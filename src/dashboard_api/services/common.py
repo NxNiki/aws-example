@@ -428,6 +428,84 @@ def attach_derived_group_cols(cfg: dict[str, Any], lf: pl.LazyFrame) -> pl.LazyF
     return lf.with_columns(exprs) if exprs else lf
 
 
+def combo_group_cols(cfg: dict[str, Any]) -> dict[str, dict[str, str]]:
+    """Virtual cohort columns labeling each (period, user) by the COMBINATION
+    of a grain column's values the user actually hit that period.
+
+    Dashboard feature: ss03-AI's "mathtable_combo" picker — each user-day is
+    labeled with the mathtables the user played that day, ordered by the
+    user's bet count on each (dominant first, ties alphabetical), e.g. a day
+    on normal_zero + normal_shi + normal_ichi → ``ai_zero_shi_ichi``.
+    Configured as ``stats_by_date.combo_group_cols``::
+
+        combo_group_cols:
+          mathtable_combo:
+            source: mathtable        # grain column whose values combine
+            weight: user_num_bets    # per-row count that orders the label
+            strip_prefix: "normal_"  # optional: shorten each value
+            label_prefix: "ai"       # optional: prepended as "<prefix>_"
+
+    Behavior: attached in ``load_lazy`` AFTER ``filters``, so only the
+    config's slice counts toward a user's combination. Every row of a user's
+    period carries the same label, so selecting a combo cohort keeps whole
+    user-periods and the grain collapse combines the member mathtables'
+    stats per user. At week/month granularity the combination spans the
+    whole period, so labels are generally longer than the daily ones.
+    """
+    raw = stats_by_date_cfg(cfg).get("combo_group_cols") or {}
+    out: dict[str, dict[str, str]] = {}
+    for name, spec in raw.items():
+        source = str((spec or {}).get("source") or "")
+        weight = str((spec or {}).get("weight") or "")
+        if not source or not weight:
+            continue
+        out[str(name)] = {
+            "source": source,
+            "weight": weight,
+            "strip_prefix": str((spec or {}).get("strip_prefix") or ""),
+            "label_prefix": str((spec or {}).get("label_prefix") or ""),
+        }
+    return out
+
+
+def attach_combo_group_cols(cfg: dict[str, Any], lf: pl.LazyFrame, date_col: str) -> pl.LazyFrame:
+    """Add each configured combination group column (see ``combo_group_cols``).
+    Skips a column whose inputs are missing and never overwrites a stored one.
+
+    The window partitions include the hive ``period`` column (redundant with
+    date_col — one period per date value) because polars only pushes the
+    window-cache period/date predicates down to the parquet scan when they
+    reference partition keys; without it every request would re-read the
+    full history instead of the pruned window."""
+    specs = combo_group_cols(cfg)
+    if not specs:
+        return lf
+    available = set(lf.collect_schema().names())
+    if "user_id" not in available or date_col not in available:
+        return lf
+    keys = (["period"] if "period" in available else []) + [date_col, "user_id"]
+    for name, spec in specs.items():
+        if name in available or spec["source"] not in available or spec["weight"] not in available:
+            continue
+        val = pl.col(spec["source"]).cast(pl.String)
+        if spec["strip_prefix"]:
+            val = val.str.strip_prefix(spec["strip_prefix"])
+        vcol, wcol = f"_combo_val_{name}", f"_combo_w_{name}"
+        weight = pl.col(spec["weight"]).sum().over(keys + [spec["source"]])
+        lf = lf.with_columns(val.alias(vcol), weight.alias(wcol))
+        label = (
+            pl.col(vcol)
+            .sort_by([wcol, vcol], descending=[True, False])
+            .unique(maintain_order=True)
+            .str.join("_")
+            .over(keys)
+        )
+        if spec["label_prefix"]:
+            label = pl.lit(spec["label_prefix"] + "_") + label
+        lf = lf.with_columns(label.alias(name)).drop([vcol, wcol])
+    return lf
+
+
 def row_filters(cfg: dict[str, Any]) -> dict[str, list[str]]:
     """Config-declared row filters restricting a whole dashboard to a slice of
     the stored parquet.
@@ -569,7 +647,7 @@ def load_lazy(cfg: dict[str, Any], granularity: str) -> tuple[pl.LazyFrame, str]
     scans = [_scan_source(str(p)) for p in (files if isinstance(files, list) else [files])]
     lf = scans[0] if len(scans) == 1 else pl.concat(scans, how="diagonal_relaxed")
     lf = apply_row_filters(cfg, attach_derived_group_cols(cfg, lf))
-    return lf, date_col
+    return attach_combo_group_cols(cfg, lf, date_col), date_col
 
 
 def to_iso_date(value: Any) -> str:
