@@ -277,7 +277,7 @@ def projection_columns(
     The user-row parquet carries every ``user_*`` metric column, but a panel
     plots a handful — projecting the window collect to just the needed columns
     (parquet pushdown reads only their chunks from S3) shrinks load time and
-    cache size regardless of the date span. Includes the cohort/grain/partition
+    cache size regardless of the date span. Includes the cohort/grain
     dimensions, each requested metric's transitive ``user_*`` deps, and the
     components collapse_user_rows recombines (a ratio without its numerator/
     denominator would be silently dropped; a weighted mean without its weight
@@ -292,9 +292,6 @@ def projection_columns(
     lc = lifecycle_col(cfg)
     if lc:
         cols.add(lc)
-    part_col, _ = group_col_partition(cfg)
-    if part_col:
-        cols.add(part_col)
     rcol, _, _ = range_group_cfg(cfg)
     if rcol:
         cols.add(rcol)
@@ -429,19 +426,6 @@ def attach_derived_group_cols(cfg: dict[str, Any], lf: pl.LazyFrame) -> pl.LazyF
             expr = pl.when(source.is_in(values)).then(pl.lit(label)).otherwise(expr)
         exprs.append(expr.alias(name))
     return lf.with_columns(exprs) if exprs else lf
-
-
-def group_col_partition(cfg: dict[str, Any]) -> tuple[Optional[str], list[str]]:
-    """(group_col, disjoint labels) for configs whose group column is NOT a
-    partition — the ss-game ETLs UNION ALL every bet into a combined AB-test
-    label AND a per-mathtable re-partition of the same bets, so the "all"
-    cohort must aggregate only the combined labels (``group_col_partition`` in
-    the config) or every total roughly doubles. ([], no filtering) when the
-    config doesn't set it."""
-    sd = stats_by_date_cfg(cfg)
-    values = [str(v) for v in (sd.get("group_col_partition") or [])]
-    col = str(sd.get("group_col") or "") or None
-    return (col, values) if col and values else (None, [])
 
 
 # Per-config first-bet map. Derived, not stored: the daily parquet keeps the
@@ -729,7 +713,6 @@ def iter_cohorts(
     cols = effective_cohort_cols(cfg)
     lc = lifecycle_col(cfg) if lifecycle else None
     by_label = {str(g["label"]): g for g in lifecycle or []}
-    part_col, partition = group_col_partition(cfg)
     grain = user_row_grain(cfg)
     rcol, _, _ = range_group_cfg(cfg)
     range_by_label = {str(g["label"]): g for g in range_groups or []} if rcol else {}
@@ -763,11 +746,6 @@ def iter_cohorts(
             if g.get("max") is not None:
                 cond = cond & (pl.col(col) <= float(g["max"]))
             return df_.filter(cond)
-        if value == "all" and col == part_col and col in df_.columns:
-            # "all" on a non-partition group column keeps only the disjoint
-            # labels; the other values re-partition the same bets and would
-            # double-count (see group_col_partition).
-            return df_.filter(pl.col(col).is_in(partition))
         return apply_cohort(df_, col, value)
 
     if not cols:
