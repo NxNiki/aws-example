@@ -55,6 +55,13 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("games", nargs="*", choices=sorted(GAME_OUTPUT_ROOTS), help="subset of games (default all)")
 parser.add_argument("--start", help="activity date >= this (default: rolling lookback window)")
 parser.add_argument("--end", help="activity date < this (default: tomorrow in Beijing time)")
+parser.add_argument(
+    "--min-mathtable-run",
+    type=int,
+    default=0,
+    help="keep only >= N-bet same-mathtable runs; outputs go to the game's"
+    " _run<N> root so the unfiltered datasets stay untouched",
+)
 args = parser.parse_args()
 
 bj_today = (datetime.now(timezone.utc) + timedelta(hours=8)).date()
@@ -63,8 +70,10 @@ output_end = args.end or str(bj_today + timedelta(days=1))
 
 games = args.games or list(GAME_OUTPUT_ROOTS)
 
+run_suffix = f"_run{args.min_mathtable_run}" if args.min_mathtable_run else ""
+
 for game_id in games:
-    output_root = GAME_OUTPUT_ROOTS[game_id]
+    output_root = GAME_OUTPUT_ROOTS[game_id] + run_suffix
     processor = spark_processor(
         f"{game_id.lower()}-game-stats-cold-data",
         Session(boto3.Session(region_name=REGION)),
@@ -88,6 +97,8 @@ for game_id in games:
             output_end,
             "--agg",
             AGG,
+            "--min-mathtable-run",
+            str(args.min_mathtable_run),
         ],
         spark_event_logs_s3_uri=f"{output_root}/spark-event-logs",
         logs=True,
