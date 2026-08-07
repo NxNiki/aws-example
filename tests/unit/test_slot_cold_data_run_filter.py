@@ -97,3 +97,21 @@ def test_generate_query_wires_the_filter():
     assert "mathtable_run_len >= 30" in filtered
     # user_bets (and every sequence metric) reads the filtered stream.
     assert "FROM long_run_bets AS t" in filtered
+
+
+def test_generate_query_ab_group_scan_filter():
+    kwargs = dict(
+        stats_agg_col="activity_date",
+        game_id="SS03",
+        effective_start=date(2026, 8, 1),
+        output_end=date(2026, 8, 5),
+        scan_start_utc=datetime(2026, 7, 31, 16),
+        scan_end_utc=datetime(2026, 8, 4, 16),
+        currency="CNY",
+    )
+    assert JOB.AI_GROUP_ID not in JOB.generate_query(**kwargs).split("CASE")[0]  # no scan filter by default
+
+    only_ai = JOB.generate_query(**kwargs, ab_group="AI")
+    # bet_events' WHERE keeps only the AI partition (raw id equality), so
+    # with the run filter runs are computed over the AI stream alone.
+    assert f"AND get_json_object(CAST(t.partition_ab AS STRING), '$[0]') = '{JOB.AI_GROUP_ID}'" in only_ai

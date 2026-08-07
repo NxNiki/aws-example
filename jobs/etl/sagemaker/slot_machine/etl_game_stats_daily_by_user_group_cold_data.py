@@ -26,8 +26,10 @@ windowed runs compose exactly.
 ``--min-mathtable-run N`` keeps only bets inside a stretch of >= N consecutive
 same-mathtable bets (per user per Beijing day) — the ss03 AI mathtable-combo
 dashboard reads a run-filtered output so brief mathtable dabbles don't count
-toward a user's daily combination. Write filtered outputs to their own
-``<output-root>_runN`` so the unfiltered dashboards stay untouched.
+toward a user's daily combination. ``--ab-group`` restricts the scan to one
+AB partition (e.g. AI) so a cohort-specific dataset stays small. Write
+filtered outputs to their own suffixed root (``..._ai_run30``) so the
+unfiltered dashboards stay untouched.
 
 Runs standalone on the SageMaker Spark container -- no bituslabs_ds imports
 (ETL constants from bituslabs_ds.config are inlined below). Submit with
@@ -66,6 +68,14 @@ GAME_CONFIG = {
     "SS02": {"fourscatter_lead": True},
     "SS03": {"ab_test_groups": True},
     "SS06": {"ab_test_groups": True},
+}
+
+# --ab-group choices: labels of the partitions selectable by raw id equality.
+# 'Default' is every OTHER partition id, so it can't be expressed this way.
+AB_GROUP_IDS = {
+    "AI": AI_GROUP_ID,
+    "AB_TEST_A": AB_TEST_GROUP_A,
+    "AB_TEST_B": AB_TEST_GROUP_B,
 }
 
 AGG_LEVELS = {
@@ -182,6 +192,7 @@ def generate_query(
     scan_end_utc: datetime,
     currency: str,
     min_mathtable_run: int = 0,
+    ab_group: str = "",
 ) -> str:
     """Spark-SQL version of the per-game generate_query over ``bet_order_raw``.
 
@@ -197,6 +208,9 @@ def generate_query(
     # adjacent (their delta-t spans the dropped run's wall time).
     run_ctes = f"\n        {_mathtable_run_ctes(day_window, min_mathtable_run)},\n" if min_mathtable_run > 0 else ""
     bets_source = "long_run_bets" if min_mathtable_run > 0 else "bets"
+    # Filtering on the raw partition id keeps the scan cheap and, with the run
+    # filter on, computes runs over the cohort's own bet stream only.
+    ab_where = f"\n                AND {PARTITION_AB_FIRST} = '{AB_GROUP_IDS[ab_group]}'" if ab_group else ""
     return dedent(
         f"""
         WITH bet_events AS (
@@ -217,7 +231,7 @@ def generate_query(
                 AND t.status = 'COMPLETED'
                 AND t.op_code NOT IN {EXCLUDED_OP_CODES}
                 AND CAST(t.created_at AS TIMESTAMP) >= TIMESTAMP '{scan_start_utc:%Y-%m-%d %H:%M:%S}'
-                AND CAST(t.created_at AS TIMESTAMP) < TIMESTAMP '{scan_end_utc:%Y-%m-%d %H:%M:%S}'
+                AND CAST(t.created_at AS TIMESTAMP) < TIMESTAMP '{scan_end_utc:%Y-%m-%d %H:%M:%S}'{ab_where}
         ),
 
         bets AS (
@@ -420,6 +434,12 @@ def parse_args():
         " (per user per Beijing day); 0 disables the filter. Point --output-root"
         " at a dedicated _runN root so the unfiltered datasets stay untouched",
     )
+    parser.add_argument(
+        "--ab-group",
+        choices=sorted(AB_GROUP_IDS),
+        default="",
+        help="only scan bets of this AB partition (raw partition-id equality);" " default: all partitions",
+    )
     parser.add_argument("--currency", default="CNY")
     parser.add_argument(
         "--input-region",
@@ -441,7 +461,10 @@ def main():
         else bj_today - timedelta(days=INCREMENTAL_LOOKBACK_DAYS)
     )
     output_end = date.fromisoformat(args.output_end) if args.output_end else bj_today + timedelta(days=1)
-    print(f"output window: [{output_start}, {output_end}) min_mathtable_run={args.min_mathtable_run}")
+    print(
+        f"output window: [{output_start}, {output_end})"
+        f" min_mathtable_run={args.min_mathtable_run} ab_group={args.ab_group or 'all'}"
+    )
     levels = list(AGG_LEVELS) if args.agg == "all" else [args.agg]
     # The SS02 FourScatter LEAD looks at the next spin, so scan one day past
     # the output window to attribute buy-ins on the last output day.
@@ -474,6 +497,7 @@ def main():
                 scan_end_utc=scan_end_utc,
                 currency=args.currency,
                 min_mathtable_run=args.min_mathtable_run,
+                ab_group=args.ab_group,
             )
         )
         df = align_output_schema(df)

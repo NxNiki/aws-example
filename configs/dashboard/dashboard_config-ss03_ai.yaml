@@ -1,18 +1,19 @@
 title: "SS03 AI Mathtable Combos"
 
 stats_by_date:
-  # run30 dataset: only stretches of >= 30 consecutive same-mathtable bets
-  # survive the ETL, so brief mathtable dabbles neither appear in a user's
-  # daily combination label nor count toward its stats.
+  # ai_run30 dataset: AI-partition bets only, and only stretches of >= 30
+  # consecutive same-mathtable bets survive the ETL, so brief mathtable
+  # dabbles neither appear in a user's daily combination label nor count
+  # toward its stats.
   files:
     day: [
-      "s3://bituslabs-team-ai/etl-results/jobs/output_ss03_mahjiang_streak_v2_cold_data_run30/daily_stats",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss03_mahjiang_streak_v2_cold_data_ai_run30/daily_stats",
     ]
     week: [
-      "s3://bituslabs-team-ai/etl-results/jobs/output_ss03_mahjiang_streak_v2_cold_data_run30/weekly_stats",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss03_mahjiang_streak_v2_cold_data_ai_run30/weekly_stats",
     ]
     month: [
-      "s3://bituslabs-team-ai/etl-results/jobs/output_ss03_mahjiang_streak_v2_cold_data_run30/monthly_stats",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss03_mahjiang_streak_v2_cold_data_ai_run30/monthly_stats",
     ]
 
   group_col: "mathtable_combo"
