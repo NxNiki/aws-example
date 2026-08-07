@@ -428,7 +428,7 @@ def attach_derived_group_cols(cfg: dict[str, Any], lf: pl.LazyFrame) -> pl.LazyF
     return lf.with_columns(exprs) if exprs else lf
 
 
-def combo_group_cols(cfg: dict[str, Any]) -> dict[str, dict[str, str]]:
+def combo_group_cols(cfg: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Virtual cohort columns labeling each (period, user) by the COMBINATION
     of a grain column's values the user actually hit that period.
 
@@ -444,16 +444,22 @@ def combo_group_cols(cfg: dict[str, Any]) -> dict[str, dict[str, str]]:
             weight: user_num_bets    # per-row count that orders the label
             strip_prefix: "normal_"  # optional: shorten each value
             label_prefix: "ai"       # optional: prepended as "<prefix>_"
+            order: user_first_spin_id  # optional: tie-break = first played
+            max_tables: 4            # optional: cap label length, '+' suffix
 
     Behavior: attached in ``load_lazy`` AFTER ``filters``, so only the
-    config's slice counts toward a user's combination. Every row of a user's
-    period carries the same label, so selecting a combo cohort keeps whole
-    user-periods and the grain collapse combines the member mathtables'
-    stats per user. At week/month granularity the combination spans the
-    whole period, so labels are generally longer than the daily ones.
+    config's slice counts toward a user's combination. Equal-weight ties
+    order by the ``order`` column's per-value minimum (first appearance in
+    the period) when configured and stored, else alphabetically. With
+    ``max_tables`` only the first N values name the label and any longer
+    combination gets a trailing ``+``. Every row of a user's period carries
+    the same label, so selecting a combo cohort keeps whole user-periods and
+    the grain collapse combines the member mathtables' stats per user. At
+    week/month granularity the combination spans the whole period, so labels
+    are generally longer than the daily ones.
     """
     raw = stats_by_date_cfg(cfg).get("combo_group_cols") or {}
-    out: dict[str, dict[str, str]] = {}
+    out: dict[str, dict[str, Any]] = {}
     for name, spec in raw.items():
         source = str((spec or {}).get("source") or "")
         weight = str((spec or {}).get("weight") or "")
@@ -464,6 +470,8 @@ def combo_group_cols(cfg: dict[str, Any]) -> dict[str, dict[str, str]]:
             "weight": weight,
             "strip_prefix": str((spec or {}).get("strip_prefix") or ""),
             "label_prefix": str((spec or {}).get("label_prefix") or ""),
+            "order": str((spec or {}).get("order") or ""),
+            "max_tables": int((spec or {}).get("max_tables") or 0),
         }
     return out
 
@@ -490,19 +498,25 @@ def attach_combo_group_cols(cfg: dict[str, Any], lf: pl.LazyFrame, date_col: str
         val = pl.col(spec["source"]).cast(pl.String)
         if spec["strip_prefix"]:
             val = val.str.strip_prefix(spec["strip_prefix"])
-        vcol, wcol = f"_combo_val_{name}", f"_combo_w_{name}"
+        vcol, wcol, ocol = f"_combo_val_{name}", f"_combo_w_{name}", f"_combo_o_{name}"
         weight = pl.col(spec["weight"]).sum().over(keys + [spec["source"]])
-        lf = lf.with_columns(val.alias(vcol), weight.alias(wcol))
-        label = (
-            pl.col(vcol)
-            .sort_by([wcol, vcol], descending=[True, False])
-            .unique(maintain_order=True)
-            .str.join("_")
-            .over(keys)
-        )
+        # Tie-break: the value's first appearance in the period when the order
+        # column is configured AND stored (older datasets lack it -> falls
+        # back to the alphabetical tie via vcol below).
+        use_order = bool(spec["order"]) and spec["order"] in available
+        pos = pl.col(spec["order"]).min().over(keys + [spec["source"]]) if use_order else pl.lit(0)
+        lf = lf.with_columns(val.alias(vcol), weight.alias(wcol), pos.alias(ocol))
+        ordered = pl.col(vcol).sort_by([wcol, ocol, vcol], descending=[True, False, False]).unique(maintain_order=True)
+        max_tables = spec["max_tables"]
+        if max_tables > 0:
+            label = ordered.head(max_tables).str.join("_").over(keys) + pl.when(
+                pl.col(vcol).n_unique().over(keys) > max_tables
+            ).then(pl.lit("+")).otherwise(pl.lit(""))
+        else:
+            label = ordered.str.join("_").over(keys)
         if spec["label_prefix"]:
             label = pl.lit(spec["label_prefix"] + "_") + label
-        lf = lf.with_columns(label.alias(name)).drop([vcol, wcol])
+        lf = lf.with_columns(label.alias(name)).drop([vcol, wcol, ocol])
     return lf
 
 

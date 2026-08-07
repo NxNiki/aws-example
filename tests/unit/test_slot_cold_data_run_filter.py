@@ -92,6 +92,8 @@ def test_generate_query_wires_the_filter():
     )
     base = JOB.generate_query(**kwargs)
     assert "long_run_bets" not in base and "FROM bets AS t" in base
+    # Combination-label tie-break input for the dashboards.
+    assert "MIN(t.spin_id) AS user_first_spin_id" in base and "us.user_first_spin_id" in base
 
     filtered = JOB.generate_query(**kwargs, min_mathtable_run=30)
     assert "mathtable_run_len >= 30" in filtered

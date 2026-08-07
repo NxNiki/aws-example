@@ -291,6 +291,10 @@ def generate_query(
                 t.bet_level,
                 t.user_id,
 
+                -- first-appearance order of this grain row within the user's
+                -- period (dashboards break combination-label ties with it):
+                MIN(t.spin_id) AS user_first_spin_id,
+
                 -- total number of bets:
                 COUNT(t.user_id) AS user_num_bets,
                 COUNT(CASE WHEN t.bet_type = 'BASE' THEN t.user_id END) AS user_num_bets_bg,
@@ -342,6 +346,7 @@ def generate_query(
             us.mathtable,
             us.bet_level,
             us.user_id,
+            us.user_first_spin_id,
             us.user_mathtable_change,
             -- DataMetrics input columns (user-level raw stats):
             us.user_num_bets,

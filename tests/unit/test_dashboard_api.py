@@ -433,7 +433,7 @@ def test_row_filters_applied_by_load_lazy(tmp_path):
     assert sorted(out["user_id"].to_list()) == ["u2", "u4"]
 
 
-def _combo_cfg(path, filters=None):
+def _combo_cfg(path, filters=None, **combo_opts):
     sd = {
         "files": {"day": [str(path)]},
         "user_group_cols": ["mathtable_combo"],
@@ -444,6 +444,7 @@ def _combo_cfg(path, filters=None):
                 "weight": "user_num_bets",
                 "strip_prefix": "normal_",
                 "label_prefix": "ai",
+                **combo_opts,
             }
         },
     }
@@ -491,6 +492,53 @@ def test_combo_group_cols_label_per_user_day(tmp_path):
     tie.write_parquet(path / "part.parquet")
     out = common.load_lazy(_combo_cfg(path), "day")[0].collect()
     assert out["mathtable_combo"].to_list() == ["ai_ichi_zero"] * 2
+
+
+def test_combo_group_cols_order_tiebreak_and_max_tables(tmp_path):
+    """Equal bet counts order by which mathtable the user played FIRST (the
+    ETL's user_first_spin_id), and max_tables caps the label at the first N
+    tables with a trailing '+' when the combination is longer."""
+    path = tmp_path / "daily_stats"
+    path.mkdir()
+    # u1: ichi(10) ties zero(10) but was played first -> ichi leads, and with
+    # zero's earlier alphabetical rank the order column must be what decides.
+    tie = pl.DataFrame(
+        {
+            "activity_date": ["2026-06-01"] * 2,
+            "user_id": ["u1", "u1"],
+            "mathtable": ["normal_zero", "normal_ichi"],
+            "bet_level": [1.0, 1.0],
+            "user_num_bets": [10, 10],
+            "user_first_spin_id": [200, 100],
+        }
+    )
+    tie.write_parquet(path / "part.parquet")
+    out = common.load_lazy(_combo_cfg(path, order="user_first_spin_id"), "day")[0].collect()
+    assert out["mathtable_combo"].to_list() == ["ai_ichi_zero"] * 2
+    # Order column configured but absent from the data: alphabetical fallback.
+    tie.drop("user_first_spin_id").write_parquet(path / "part.parquet")
+    out = common.load_lazy(_combo_cfg(path, order="user_first_spin_id"), "day")[0].collect()
+    assert out["mathtable_combo"].to_list() == ["ai_ichi_zero"] * 2  # alphabetical happens to agree
+    # Five tables, distinct weights: label keeps the top 4 and flags the rest.
+    five = pl.DataFrame(
+        {
+            "activity_date": ["2026-06-01"] * 5,
+            "user_id": ["u2"] * 5,
+            "mathtable": [f"normal_m{i}" for i in range(5)],
+            "bet_level": [1.0] * 5,
+            "user_num_bets": [50, 40, 30, 20, 10],
+            "user_first_spin_id": list(range(5)),
+        }
+    )
+    five.write_parquet(path / "part.parquet")
+    cfg = _combo_cfg(path, order="user_first_spin_id", max_tables=4)
+    out = common.load_lazy(cfg, "day")[0].collect()
+    assert out["mathtable_combo"].to_list() == ["ai_m0_m1_m2_m3+"] * 5
+    # Exactly max_tables tables: no '+' suffix.
+    four = five.head(4)
+    four.write_parquet(path / "part.parquet")
+    out = common.load_lazy(cfg, "day")[0].collect()
+    assert out["mathtable_combo"].to_list() == ["ai_m0_m1_m2_m3"] * 4
 
 
 def test_combo_group_cols_after_filters_and_guards(tmp_path):
