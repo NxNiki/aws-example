@@ -43,6 +43,14 @@ GAME_OUTPUT_ROOTS = {
 FISH_INPUT_ROOT = "s3://oceanhunter-production-data-warehouse/transformed_data/cold_data/bullet"
 FISH_OUTPUT_ROOT = f"s3://{S3_BUCKET}/etl-results/jobs/output_fish_hunter_v2_cold_data"
 
+# Run-filtered variants appended after the base games, (game_id, min_run):
+# only stretches of >= min_run consecutive same-mathtable bets survive,
+# written to the game's _run<N> root. ss03's AI mathtable-combo dashboard
+# reads the SS03 run30 dataset.
+GAME_VARIANTS = [
+    ("SS03", 30),
+]
+
 
 def build_pipeline(session: PipelineSession) -> Pipeline:
     steps: list[ProcessingStep] = []
@@ -65,6 +73,30 @@ def build_pipeline(session: PipelineSession) -> Pipeline:
                 name=f"etl-{game_id.lower()}",
                 step_args=step_args,
                 depends_on=[steps[-1].name] if steps else None,
+            )
+        )
+
+    for game_id, min_run in GAME_VARIANTS:
+        processor = spark_processor(f"{game_id.lower()}-run{min_run}-cold-data-daily", session)
+        step_args = processor.run(
+            submit_app=f"{LOCAL_ROOT}/jobs/etl/sagemaker/slot_machine/etl_game_stats_daily_by_user_group_cold_data.py",
+            submit_py_files=SPARK_COMMON_PY_FILES,
+            arguments=[
+                "--game-id",
+                game_id,
+                "--input-root",
+                SLOT_INPUT_ROOT,
+                "--output-root",
+                f"{GAME_OUTPUT_ROOTS[game_id]}_run{min_run}",
+                "--min-mathtable-run",
+                str(min_run),
+            ],
+        )
+        steps.append(
+            ProcessingStep(
+                name=f"etl-{game_id.lower()}-run{min_run}",
+                step_args=step_args,
+                depends_on=[steps[-1].name],
             )
         )
 
