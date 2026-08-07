@@ -1,0 +1,130 @@
+title: "SS03 AI Mathtable Combos"
+
+stats_by_date:
+  files:
+    day: [
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss03_mahjiang_streak_v2_cold_data/daily_stats",
+    ]
+    week: [
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss03_mahjiang_streak_v2_cold_data/weekly_stats",
+    ]
+    month: [
+      "s3://bituslabs-team-ai/etl-results/jobs/output_ss03_mahjiang_streak_v2_cold_data/monthly_stats",
+    ]
+
+  group_col: "mathtable_combo"
+  date_col: "activity_date"
+  user_group_cols: [mathtable_combo, bet_level]
+  # AI-cohort-only view of the shared ss03 v2 parquet: every endpoint
+  # (including 'all') sees just the AI rows.
+  filters:
+    ab_group: [AI]
+  # Each user-day is labeled with the combination of mathtables the user
+  # played that day, ordered by their bet count (dominant first), e.g.
+  # ai_zero_shi_ichi. Selecting a combo keeps whole user-days and combines
+  # the member mathtables' stats per user.
+  combo_group_cols:
+    mathtable_combo:
+      source: mathtable
+      weight: user_num_bets
+      strip_prefix: "normal_"
+      label_prefix: "ai"
+  # Stored grain is one row per (period, user, ab_group, mathtable, bet_level):
+  # every bet in exactly one row. When a grain dimension is unselected the API
+  # collapses rows back to one per user before computing per-user stats.
+  user_row_grain: [ab_group, mathtable, bet_level]
+  # Bet-level picker: user-defined INCLUSIVE [min, max] ranges over bet_level
+  # (BASE spins carry their own bet_amount; FREE spins inherit the day's
+  # prevailing BASE bet, so FG metrics stay meaningful inside a range).
+  range_group:
+    column: bet_level
+    name: "Bet level"
+    # The platform stake ladder (bound options for the picker); declared here
+    # because it is a stable product property -- data-derived distinct values
+    # would vary by game and loaded window.
+    values: [0.1, 0.2, 0.5, 1, 2, 2.5, 5, 8, 10, 15, 20, 25, 30, 50, 70, 100, 200, 250, 500, 700, 1000, 1500, 2000, 2500, 5000, 10000, 20000, 50000, 200000]
+    defaults:
+      - {label: bet_low, min: 0, max: 1}
+      - {label: bet_medium, min: 2, max: 5}
+      - {label: bet_high, min: 8, max: 30}
+      - {label: bet_ultra, min: 50, max: null}
+  aggregate_stats_from_user_rows: true
+
+  group1_label: "DAU and Retention"
+  group1_columns: [
+    "num_active_users",
+    "day0_num_users",
+    "day1_num_users",
+    "day3_num_users",
+    "day5_num_users",
+    "day7_num_users",
+    "day10_num_users",
+    "day15_num_users",
+    "day30_num_users",
+    "active_user_no_fg_ratio",
+    "num_active_user_0_rtp",
+    "active_user_0_rtp_ratio",
+    "active_user_rtp_less_0_1_ratio",
+    "active_user_rtp_less_0_2_ratio",
+    "active_user_rtp_less_0_3_ratio",
+    "active_user_rtp_less_0_4_ratio",
+    "active_user_rtp_less_0_5_ratio",
+    "retention_rate_day1",
+    "retention_rate_day3",
+    "retention_rate_day5",
+    "retention_rate_day7",
+    "retention_rate_day10",
+    "retention_rate_day15",
+    "retention_rate_day30",
+  ]
+
+  group2_label: "User RTP and Profit"
+  group2_columns: [
+    "user_num_bets",
+    "user_num_bets_bg",
+    "user_num_bets_fg",
+    "user_total_bet",
+    "user_avg_bet_amount",
+    "user_total_profit",
+    "user_rtp",
+    "user_rtp_bg",
+    "user_rtp_fg",
+    "user_hit_rate",
+    "user_hit_rate_bg",
+    "user_hit_rate_fg",
+    "user_fg_ratio",
+    "user_avg_delta_t_seconds_bg",
+    "user_mathtable_change",
+    "user_accu_pos_delta_bet",
+    "user_accu_neg_delta_bet",
+    "user_accu_pos_delta_bet_avg",
+    "user_accu_neg_delta_bet_avg",
+    "user_accu_delta_bet",
+    "user_accu_delta_bet_avg",
+    "user_pos_delta_bet_num",
+    "user_neg_delta_bet_num",
+  ]
+
+  group3_label: "Total RTP and Profit"
+  group3_columns: [
+    "total_num_bets",
+    "total_bet",
+    "total_profit",
+    "rtp",
+    "rtp_bg",
+    "rtp_fg",
+    "user_rtp_median",
+    "user_rtp_ultilization_ratio",
+    "hit_rate",
+    "hit_rate_bg",
+    "hit_rate_fg",
+    "fg_ratio",
+  ]
+
+
+stats_by_bet:
+  files: [
+
+  ]
+
+  group_col: ""
