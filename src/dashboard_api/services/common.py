@@ -428,6 +428,48 @@ def attach_derived_group_cols(cfg: dict[str, Any], lf: pl.LazyFrame) -> pl.LazyF
     return lf.with_columns(exprs) if exprs else lf
 
 
+def row_filters(cfg: dict[str, Any]) -> dict[str, list[str]]:
+    """Config-declared row filters restricting a whole dashboard to a slice of
+    the stored parquet.
+
+    Dashboard feature: cohort-scoped configs — e.g. the "SS03 AI" dashboard
+    reads the same daily_stats parquet as the full ss03 config but keeps only
+    ``ab_group = AI`` rows, so every picker, series, deep-dive and the 'all'
+    cohort describe just that slice. Configured as ``stats_by_date.filters``::
+
+        filters:
+          ab_group: [AI]
+
+    Behavior: each entry keeps rows whose column (stored or derived, compared
+    as strings) matches one of the listed values; multiple entries AND
+    together. Applied in ``load_lazy``, before any caching or aggregation.
+    """
+    raw = stats_by_date_cfg(cfg).get("filters") or {}
+    out: dict[str, list[str]] = {}
+    for col, values in raw.items():
+        vals = values if isinstance(values, list) else [values]
+        cleaned = [str(v) for v in vals if v is not None]
+        if cleaned:
+            out[str(col)] = cleaned
+    return out
+
+
+def apply_row_filters(cfg: dict[str, Any], lf: pl.LazyFrame) -> pl.LazyFrame:
+    """Apply each configured row filter (see ``row_filters``) to the lazy
+    frame. A filter column missing from the data is an error, not a skip —
+    silently dropping the filter would serve the whole game's rows under a
+    config that promises a slice of them."""
+    filters = row_filters(cfg)
+    if not filters:
+        return lf
+    available = set(lf.collect_schema().names())
+    for col, values in filters.items():
+        if col not in available:
+            raise SeriesError(f"stats_by_date.filters column '{col}' not found in the data")
+        lf = lf.filter(pl.col(col).cast(pl.String).is_in(values))
+    return lf
+
+
 # Per-config first-bet map. Derived, not stored: the daily parquet keeps the
 # game's full per-user-per-day history, so min(activity_date | user bet that
 # day) reproduces the ETL's Redshift-side first_bet_date (validated ≥99.97%
@@ -526,7 +568,8 @@ def load_lazy(cfg: dict[str, Any], granularity: str) -> tuple[pl.LazyFrame, str]
         raise SeriesError(f"No stats_by_date files configured for granularity '{granularity}'")
     scans = [_scan_source(str(p)) for p in (files if isinstance(files, list) else [files])]
     lf = scans[0] if len(scans) == 1 else pl.concat(scans, how="diagonal_relaxed")
-    return attach_derived_group_cols(cfg, lf), date_col
+    lf = apply_row_filters(cfg, attach_derived_group_cols(cfg, lf))
+    return lf, date_col
 
 
 def to_iso_date(value: Any) -> str:

@@ -391,6 +391,48 @@ def test_attach_derived_group_cols_guards():
     assert out2["ai_group"].to_list() == ["AI", None]
 
 
+def test_row_filters_applied_by_load_lazy(tmp_path):
+    """Cohort-scoped configs (e.g. the SS03 AI dashboard): stats_by_date.filters
+    keeps only the declared slice of the parquet, so every endpoint — including
+    the 'all' cohort — describes just that slice."""
+    df = pl.DataFrame(
+        {
+            "activity_date": ["2026-06-01"] * 4,
+            "user_id": ["u1", "u2", "u3", "u4"],
+            "ab_group": ["AI", "AB_TEST_A", "AI", "Default"],
+            "user_num_bets": [1, 2, 3, 4],
+        }
+    )
+    path = tmp_path / "daily_stats"
+    path.mkdir()
+    df.write_parquet(path / "part.parquet")
+    cfg = {
+        "id": "g",
+        "stats_by_date": {"files": {"day": [str(path)]}, "filters": {"ab_group": ["AI"]}},
+    }
+    lf, _ = common.load_lazy(cfg, "day")
+    out = lf.collect()
+    assert sorted(out["user_id"].to_list()) == ["u1", "u3"]
+
+    # A scalar value works like a one-element list.
+    cfg["stats_by_date"]["filters"] = {"ab_group": "Default"}
+    assert common.load_lazy(cfg, "day")[0].collect()["user_id"].to_list() == ["u4"]
+
+    # A filter on a column the data doesn't have must fail loudly — skipping it
+    # would serve the whole game's rows under a config that promises a slice.
+    cfg["stats_by_date"]["filters"] = {"missing_col": ["AI"]}
+    with pytest.raises(common.SeriesError, match="missing_col"):
+        common.load_lazy(cfg, "day")
+
+    # Filters see derived group columns (attached before filtering applies).
+    cfg["stats_by_date"]["filters"] = {"ai_group": ["non-AI"]}
+    cfg["stats_by_date"]["derived_group_cols"] = {
+        "ai_group": {"source": "ab_group", "groups": {"AI": ["AI"]}, "default": "non-AI"}
+    }
+    out = common.load_lazy(cfg, "day")[0].collect()
+    assert sorted(out["user_id"].to_list()) == ["u2", "u4"]
+
+
 def test_iter_cohorts_derived_group_collapses_grain(monkeypatch):
     """Selecting ai_group='non-AI' with ab_group unselected must collapse the
     per-(user, ab_group) grain rows back to one row per user, so per-user
