@@ -579,6 +579,28 @@ def test_combo_group_cols_min_user_days_folds_rare_labels(tmp_path):
     assert out2["mathtable_combo"].to_list() == ["ai_a", "ai_a", "ai_other"]
 
 
+def test_group_values_in_range_covers_combo_cols(tmp_path):
+    """Availability behind the pickers' grayed/hidden entries: derived and
+    combo columns don't exist in the raw parquet, so the range scan attaches
+    the same column chain as load_lazy — a combo label only played outside
+    the picked date range must show as unavailable."""
+    root = tmp_path / "daily_stats"
+    for day, table in (("2026-06-01", "normal_a"), ("2026-06-02", "normal_b")):
+        (root / f"period={day}").mkdir(parents=True)
+        pl.DataFrame(
+            {
+                "activity_date": [day],
+                "user_id": ["u1"],
+                "mathtable": [table],
+                "bet_level": [1.0],
+                "user_num_bets": [5],
+            }
+        ).with_columns(pl.col("activity_date").str.to_datetime()).write_parquet(root / f"period={day}" / "part.parquet")
+    cfg = _combo_cfg(root)
+    out = series_mod.load_group_values_in_range(cfg, "day", "2026-06-02", "2026-06-02")
+    assert out["mathtable_combo"] == ["ai_b"]
+
+
 def test_combo_group_cols_after_filters_and_guards(tmp_path):
     """The combination counts only the config's filtered slice (an AI-only
     config must not fold a user's Default-group rows into their combo), and
