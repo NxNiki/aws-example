@@ -531,14 +531,19 @@ def test_combo_group_cols_order_tiebreak_and_max_tables(tmp_path):
         }
     )
     five.write_parquet(path / "part.parquet")
-    cfg = _combo_cfg(path, order="user_first_spin_id", max_tables=4)
+    cfg = _combo_cfg(path, separator="-", max_tables=4)
     out = common.load_lazy(cfg, "day")[0].collect()
-    assert out["mathtable_combo"].to_list() == ["ai_m0_m1_m2_m3+"] * 5
-    # Exactly max_tables tables: no '+' suffix.
+    assert out["mathtable_combo"].to_list() == ["ai_m0-m1-m2-m3+"] * 5
+    # Exactly max_tables tables merges into the SAME '+' label as longer
+    # days with the same leading four, so 4 and 4+ aren't split.
     four = five.head(4)
     four.write_parquet(path / "part.parquet")
     out = common.load_lazy(cfg, "day")[0].collect()
-    assert out["mathtable_combo"].to_list() == ["ai_m0_m1_m2_m3"] * 4
+    assert out["mathtable_combo"].to_list() == ["ai_m0-m1-m2-m3+"] * 4
+    # Below the cap: plain label, no '+'.
+    five.head(3).write_parquet(path / "part.parquet")
+    out = common.load_lazy(cfg, "day")[0].collect()
+    assert out["mathtable_combo"].to_list() == ["ai_m0-m1-m2"] * 3
 
 
 def test_combo_group_cols_after_filters_and_guards(tmp_path):

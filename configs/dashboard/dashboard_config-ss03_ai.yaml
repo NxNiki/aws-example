@@ -24,17 +24,18 @@ stats_by_date:
   filters:
     ab_group: [AI]
   # Each user-day is labeled with the combination of mathtables the user
-  # played that day, ordered by their bet count (dominant first; ties by
-  # which was played first), e.g. ai_zero_shi_ichi. Labels cap at the first
-  # 4 tables — longer combinations get a trailing '+'. Selecting a combo
-  # keeps whole user-days and combines the member mathtables' stats per user.
+  # played that day, '-'-joined and ordered by their bet count (dominant
+  # first, ties alphabetical), e.g. ai_zero-shi-ichi. Labels show at most
+  # the first 4 tables and any day with 4+ tables gets a trailing '+'.
+  # Selecting a combo keeps whole user-days and combines the member
+  # mathtables' stats per user.
   combo_group_cols:
     mathtable_combo:
       source: mathtable
       weight: user_num_bets
       strip_prefix: "normal_"
       label_prefix: "ai"
-      order: user_first_spin_id
+      separator: "-"
       max_tables: 4
   # Stored grain is one row per (period, user, ab_group, mathtable, bet_level):
   # every bet in exactly one row. When a grain dimension is unselected the API
