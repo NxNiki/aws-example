@@ -546,6 +546,39 @@ def test_combo_group_cols_order_tiebreak_and_max_tables(tmp_path):
     assert out["mathtable_combo"].to_list() == ["ai_m0-m1-m2"] * 3
 
 
+def test_combo_group_cols_min_user_days_folds_rare_labels(tmp_path):
+    """Combinations with fewer than min_user_days (user, day) samples in the
+    full daily history fold into other_label, so the picker only lists
+    well-populated combo groups; the vocabulary is cached per config."""
+    common._combo_vocab_cache.clear()
+    path = tmp_path / "daily_stats"
+    path.mkdir()
+    df = pl.DataFrame(
+        {
+            # normal_a alone: 2 user-day samples (u1 d1, u2 d1); normal_b: 1.
+            "activity_date": ["2026-06-01", "2026-06-01", "2026-06-02"],
+            "user_id": ["u1", "u2", "u3"],
+            "mathtable": ["normal_a", "normal_a", "normal_b"],
+            "bet_level": [1.0, 1.0, 1.0],
+            "user_num_bets": [5, 5, 5],
+        }
+    )
+    df.write_parquet(path / "part.parquet")
+    cfg = _combo_cfg(path, min_user_days=2, other_label="ai_other")
+    cfg["id"] = "g-vocab"
+    out = common.load_lazy(cfg, "day")[0].collect().sort("user_id")
+    assert out["mathtable_combo"].to_list() == ["ai_a", "ai_a", "ai_other"]
+    values = series_mod.load_group_values(cfg, "day")
+    assert values["mathtable_combo"] == ["ai_a", "ai_other"]
+
+    # other_label defaults to '<label_prefix>_other' when not configured.
+    common._combo_vocab_cache.clear()
+    cfg2 = _combo_cfg(path, min_user_days=2)
+    cfg2["id"] = "g-vocab-2"
+    out2 = common.load_lazy(cfg2, "day")[0].collect().sort("user_id")
+    assert out2["mathtable_combo"].to_list() == ["ai_a", "ai_a", "ai_other"]
+
+
 def test_combo_group_cols_after_filters_and_guards(tmp_path):
     """The combination counts only the config's filtered slice (an AI-only
     config must not fold a user's Default-group rows into their combo), and

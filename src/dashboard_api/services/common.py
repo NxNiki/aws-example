@@ -447,6 +447,8 @@ def combo_group_cols(cfg: dict[str, Any]) -> dict[str, dict[str, Any]]:
             separator: "-"           # optional: joins the values (default _)
             order: user_first_spin_id  # optional: tie-break = first played
             max_tables: 4            # optional: cap label length, '+' suffix
+            min_user_days: 30        # optional: rarer labels -> other_label
+            other_label: "ai_other"  # bucket for sub-threshold labels
 
     Behavior: attached in ``load_lazy`` AFTER ``filters``, so only the
     config's slice counts toward a user's combination. Equal-weight ties
@@ -455,11 +457,15 @@ def combo_group_cols(cfg: dict[str, Any]) -> dict[str, dict[str, Any]]:
     ``max_tables`` only the first N values name the label, and every
     combination of N OR MORE values gets a trailing ``+`` — so an exactly-N
     day and a longer day with the same leading values share one label.
-    Every row of a user's period carries
-    the same label, so selecting a combo cohort keeps whole user-periods and
-    the grain collapse combines the member mathtables' stats per user. At
-    week/month granularity the combination spans the whole period, so labels
-    are generally longer than the daily ones.
+    With ``min_user_days`` a label must reach that many (user, day) samples
+    in the FULL daily history to keep its name; rarer combinations fold into
+    ``other_label`` (default ``<label_prefix>_other``). The vocabulary comes
+    from the daily data at every granularity, cached like first-bet dates,
+    so pickers stay stable across date windows. Every row of a user's period
+    carries the same label, so selecting a combo cohort keeps whole
+    user-periods and the grain collapse combines the member mathtables'
+    stats per user. At week/month granularity the combination spans the
+    whole period, so labels are generally longer than the daily ones.
     """
     raw = stats_by_date_cfg(cfg).get("combo_group_cols") or {}
     out: dict[str, dict[str, Any]] = {}
@@ -476,13 +482,58 @@ def combo_group_cols(cfg: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "separator": str((spec or {}).get("separator") or "_"),
             "order": str((spec or {}).get("order") or ""),
             "max_tables": int((spec or {}).get("max_tables") or 0),
+            "min_user_days": int((spec or {}).get("min_user_days") or 0),
+            "other_label": str((spec or {}).get("other_label") or ""),
         }
     return out
 
 
-def attach_combo_group_cols(cfg: dict[str, Any], lf: pl.LazyFrame, date_col: str) -> pl.LazyFrame:
+# Combo-label vocabulary cache: labels with >= min_user_days DAILY samples,
+# per (config id, combo column). Recomputed per TTL from the full daily
+# history (like the first-bet cache) so picker values stay stable across
+# requests and date windows, and the per-request lazy plan only gains a
+# cheap is_in — no count-per-label window that would break period pruning.
+_COMBO_VOCAB_TTL_S = 900
+_combo_vocab_cache: dict[tuple[str, str], tuple[float, set[str]]] = {}
+_combo_vocab_lock = threading.Lock()
+
+
+def combo_label_vocab(cfg: dict[str, Any], name: str) -> set[str]:
+    """Labels of combo column ``name`` with at least ``min_user_days`` distinct
+    (user, day) samples in the config's full daily history."""
+    config_id = cfg.get("id")
+    if not config_id:
+        raise SeriesError("config dict is missing 'id'; cannot safely cache combo vocabularies")
+    key = (str(config_id), name)
+    min_user_days = combo_group_cols(cfg)[name]["min_user_days"]
+    with _combo_vocab_lock:
+        hit = _combo_vocab_cache.get(key)
+        if hit and time.monotonic() - hit[0] < _COMBO_VOCAB_TTL_S:
+            return hit[1]
+        lf, date_col = load_lazy(cfg, "day", raw_combo_labels=True)
+        if name not in set(lf.collect_schema().names()):
+            return set()
+        counts = (
+            lf.select(date_col, "user_id", name)
+            .unique()
+            .group_by(name)
+            .len()
+            .filter(pl.col("len") >= min_user_days)
+            .collect()
+        )
+        vocab = set(counts[name].drop_nulls().to_list())
+        logger.info("combo vocab: %s.%s -> %d labels >= %d user-days", config_id, name, len(vocab), min_user_days)
+        _combo_vocab_cache[key] = (time.monotonic(), vocab)
+        return vocab
+
+
+def attach_combo_group_cols(
+    cfg: dict[str, Any], lf: pl.LazyFrame, date_col: str, raw_labels: bool = False
+) -> pl.LazyFrame:
     """Add each configured combination group column (see ``combo_group_cols``).
     Skips a column whose inputs are missing and never overwrites a stored one.
+    ``raw_labels`` skips the min_user_days vocabulary fold (used when BUILDING
+    that vocabulary, which needs every label's raw frequency).
 
     The window partitions include the hive ``period`` column (redundant with
     date_col — one period per date value) because polars only pushes the
@@ -520,6 +571,10 @@ def attach_combo_group_cols(cfg: dict[str, Any], lf: pl.LazyFrame, date_col: str
             label = ordered.str.join(sep).over(keys)
         if spec["label_prefix"]:
             label = pl.lit(spec["label_prefix"] + "_") + label
+        if not raw_labels and spec["min_user_days"] > 0:
+            other = spec["other_label"] or (f"{spec['label_prefix']}_other" if spec["label_prefix"] else "other")
+            vocab = sorted(combo_label_vocab(cfg, name))
+            label = pl.when(label.is_in(vocab)).then(label).otherwise(pl.lit(other))
         lf = lf.with_columns(label.alias(name)).drop([vcol, wcol, ocol])
     return lf
 
@@ -655,7 +710,7 @@ def _scan_source(path: str) -> pl.LazyFrame:
     return pl.scan_parquet(files, hive_partitioning=hive)
 
 
-def load_lazy(cfg: dict[str, Any], granularity: str) -> tuple[pl.LazyFrame, str]:
+def load_lazy(cfg: dict[str, Any], granularity: str, raw_combo_labels: bool = False) -> tuple[pl.LazyFrame, str]:
     """Lazily open the user-level parquet for a granularity; return (lf, date_col)."""
     sd = stats_by_date_cfg(cfg)
     date_col = str(sd.get("date_col", "activity_date"))
@@ -665,7 +720,7 @@ def load_lazy(cfg: dict[str, Any], granularity: str) -> tuple[pl.LazyFrame, str]
     scans = [_scan_source(str(p)) for p in (files if isinstance(files, list) else [files])]
     lf = scans[0] if len(scans) == 1 else pl.concat(scans, how="diagonal_relaxed")
     lf = apply_row_filters(cfg, attach_derived_group_cols(cfg, lf))
-    return attach_combo_group_cols(cfg, lf, date_col), date_col
+    return attach_combo_group_cols(cfg, lf, date_col, raw_labels=raw_combo_labels), date_col
 
 
 def to_iso_date(value: Any) -> str:
