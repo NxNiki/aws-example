@@ -684,12 +684,16 @@ def read_sidecar(spark, root: str) -> dict | None:
     fs = hadoop_path.getFileSystem(sc._jsc.hadoopConfiguration())
     if not fs.exists(hadoop_path):
         return None
-    # Read through Spark, not FSDataInputStream.read(buf): py4j passes the
-    # bytearray to Java BY VALUE, so the Java side fills a copy and the
-    # Python buffer stays empty (json got "" and failed on the first
-    # incremental run to ever read a sidecar).
-    text = spark.read.text(f"{root}/_feature_config.json", wholetext=True).head()[0]
-    return json.loads(text)
+    # Copy the stream JVM-side: FSDataInputStream.read(buf) can't work from
+    # py4j (bytearray args pass BY VALUE, the Python buffer stays empty) and
+    # spark.read.text skips underscore-prefixed files as hidden.
+    stream = fs.open(hadoop_path)
+    try:
+        out = sc._jvm.java.io.ByteArrayOutputStream()
+        sc._jvm.org.apache.hadoop.io.IOUtils.copyBytes(stream, out, 65536, False)
+        return json.loads(out.toString("UTF-8"))
+    finally:
+        stream.close()
 
 
 def sidecar_payload(prefix: str, group: str, bins: list, output_end: date) -> dict:
