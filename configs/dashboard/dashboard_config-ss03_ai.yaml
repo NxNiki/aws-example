@@ -23,11 +23,12 @@ stats_by_date:
   # (including 'all') sees just the AI rows.
   filters:
     ab_group: [AI]
-  # Each user-day is labeled with the combination of mathtables the user
-  # played that day, ':'-joined and ordered by their bet count (dominant
-  # first, ties alphabetical). No prefix — everything here is the AI
-  # cohort. Labels name only the top-2 tables; days with 2 or more tables
-  # get a glob-style ':*' ("zero or more further tables"), e.g. zero:ni:*.
+  # Each user-day is labeled with the SET of mathtables the user played
+  # that day, ':'-joined alphabetically (unordered — go:ni and ni:go are
+  # one group; bet count only decides WHICH tables make a capped label).
+  # No prefix — everything here is the AI cohort. Labels name only the
+  # day's top-2 tables; days with 2 or more tables get a glob-style ':*'
+  # ("zero or more further tables"), e.g. ni:zero:*.
   # Combinations with fewer than min_user_days (user, day) samples in the
   # full daily history fold into 'other' so the picker only lists
   # well-populated groups. Selecting a combo keeps whole user-days and

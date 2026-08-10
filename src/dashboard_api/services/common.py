@@ -451,13 +451,15 @@ def combo_group_cols(cfg: dict[str, Any]) -> dict[str, dict[str, Any]]:
             other_label: "ai_other"  # bucket for sub-threshold labels
 
     Behavior: attached in ``load_lazy`` AFTER ``filters``, so only the
-    config's slice counts toward a user's combination. Equal-weight ties
-    order by the ``order`` column's per-value minimum (first appearance in
-    the period) when configured and stored, else alphabetically. With
-    ``max_tables`` only the first N values name the label, and every
-    combination of N OR MORE values gets a trailing ``<separator>*`` (glob
+    config's slice counts toward a user's combination. The label is an
+    UNORDERED set, listed alphabetically — weight decides WHICH values make
+    the label (the period's top ``max_tables``), never their order, so
+    go:ni and ni:go are one group. Equal-weight selection ties break on the
+    ``order`` column's per-value minimum (first appearance in the period)
+    when configured and stored, else alphabetically. Every combination of
+    ``max_tables`` OR MORE values gets a trailing ``<separator>*`` (glob
     style: zero or more further tables) — so an exactly-N day and a longer
-    day with the same leading values share one label.
+    day with the same top values share one label.
     With ``min_user_days`` a label must reach that many (user, day) samples
     in the FULL daily history to keep its name; rarer combinations fold into
     ``other_label`` (default ``<label_prefix>_other``). The vocabulary comes
@@ -578,16 +580,20 @@ def attach_combo_group_cols(
         use_order = bool(spec["order"]) and spec["order"] in available
         pos = pl.col(spec["order"]).min().over(keys + [spec["source"]]) if use_order else pl.lit(0)
         lf = lf.with_columns(val.alias(vcol), weight.alias(wcol), pos.alias(ocol))
-        ordered = pl.col(vcol).sort_by([wcol, ocol, vcol], descending=[True, False, False]).unique(maintain_order=True)
+        # Weight order picks the period's top tables; the label then lists
+        # them alphabetically (an unordered set — go:ni == ni:go).
+        by_weight = (
+            pl.col(vcol).sort_by([wcol, ocol, vcol], descending=[True, False, False]).unique(maintain_order=True)
+        )
         max_tables, sep = spec["max_tables"], spec["separator"]
         if max_tables > 0:
             # '<sep>*' = glob-style "zero or more further tables": days with
             # exactly max_tables and longer days share the capped label.
-            label = ordered.head(max_tables).str.join(sep).over(keys) + pl.when(
+            label = by_weight.head(max_tables).sort().str.join(sep).over(keys) + pl.when(
                 pl.col(vcol).n_unique().over(keys) >= max_tables
             ).then(pl.lit(sep + "*")).otherwise(pl.lit(""))
         else:
-            label = ordered.str.join(sep).over(keys)
+            label = by_weight.sort().str.join(sep).over(keys)
         if spec["label_prefix"]:
             label = pl.lit(spec["label_prefix"] + "_") + label
         if not raw_labels and spec["min_user_days"] > 0:
