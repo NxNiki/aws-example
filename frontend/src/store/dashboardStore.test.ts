@@ -251,4 +251,31 @@ describe("range-group and lifecycle selection consistency", () => {
     expect(mockApi.series).not.toHaveBeenCalled();
     expect(Object.values(useDashboardStore.getState().panels).every((p) => p.series.length === 0)).toBe(true);
   });
+
+  it("ensureGroupValues is awaitable, shares one in-flight request, and shows a status", async () => {
+    // Tabs await it before loading data so the pickers' availability updates
+    // BEFORE the plots; the shared request means setDateRange + tab effects
+    // don't double-fetch, and the header shows the interim loading status.
+    useDashboardStore.setState({ ...initialState(), configId: "ss01", config: CONFIG as unknown as ConfigDetail });
+    let release!: (v: unknown) => void;
+    mockApi.groupValues.mockReturnValue(new Promise((res) => (release = res)));
+
+    const s = useDashboardStore.getState();
+    const first = s.ensureGroupValues("day");
+    const second = s.ensureGroupValues("day");
+    expect(mockApi.groupValues).toHaveBeenCalledTimes(1);
+    expect(useDashboardStore.getState().loading).toBe(true);
+    expect(useDashboardStore.getState().status).toContain("group labels");
+
+    release({ values: { user_group: ["A", "B"] }, available: { user_group: ["A"] } });
+    await Promise.all([first, second]);
+    const done = useDashboardStore.getState();
+    expect(done.loading).toBe(false);
+    expect(done.groupValuesByGran.day).toEqual({ user_group: ["A", "B"] });
+    expect(done.groupAvailableByGran.day).toEqual({ user_group: ["A"] });
+
+    // Same range again: served from state, no new request.
+    await useDashboardStore.getState().ensureGroupValues("day");
+    expect(mockApi.groupValues).toHaveBeenCalledTimes(1);
+  });
 });

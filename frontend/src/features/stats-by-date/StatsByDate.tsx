@@ -34,8 +34,9 @@ export function StatsByDate() {
       return;
     }
     if (s.configId) {
-      void s.ensureGroupValues(dg.granularity);
-      void s.loadAllSeries();
+      // Availability first: the pickers' grayed labels reflect the new date
+      // range before any chart redraws (the header shows the interim status).
+      void s.ensureGroupValues(dg.granularity).then(() => s.loadAllSeries());
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedKey]);

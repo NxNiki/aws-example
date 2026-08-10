@@ -49,8 +49,8 @@ export function SummaryTable() {
   const debouncedKey = useDebouncedValue(fetchKey);
   useEffect(() => {
     if (s.configId) {
-      void s.ensureGroupValues(dg.granularity);
-      void s.loadSummaryTable();
+      // Availability before data — see StatsByDate.
+      void s.ensureGroupValues(dg.granularity).then(() => s.loadSummaryTable());
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedKey]);

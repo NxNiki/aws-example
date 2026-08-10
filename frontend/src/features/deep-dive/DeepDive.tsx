@@ -285,8 +285,8 @@ export function DeepDive() {
   const debouncedKey = useDebouncedValue(fetchKey);
   useEffect(() => {
     if (s.configId) {
-      void s.ensureGroupValues(dg.granularity);
-      void s.loadDeepdive();
+      // Availability before data — see StatsByDate.
+      void s.ensureGroupValues(dg.granularity).then(() => s.loadDeepdive());
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedKey]);

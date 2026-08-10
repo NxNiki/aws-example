@@ -472,6 +472,12 @@ interface DashboardState {
   selectConfig: (id: string) => Promise<void>;
   setTabCohort: (tab: TabKey, col: string, values: string[]) => void;
   ensureGroupValues: (gran: Granularity) => Promise<void>;
+  _fetchGroupValues: (
+    gran: Granularity,
+    configId: string,
+    range: { start: string; end: string } | null,
+    rangeKey: string,
+  ) => Promise<void>;
 
   // Stats-by-Date
   setPanelMetrics: (panelId: string, side: "left" | "right", metrics: string[]) => void;
@@ -608,6 +614,10 @@ const _panelCtx: Record<string, string> = {};
 // so duplicate loadAllSeries invocations don't abort-and-reissue identical
 // fetches. Distinct from _panelCtx, which records the last APPLIED context.
 const _panelInflight: Record<string, string> = {};
+// In-flight group-values/availability fetches keyed (config|gran|range):
+// concurrent callers (setDateRange, tab effects) share one request and can
+// await its completion.
+const _groupValuesInflight: Record<string, Promise<void>> = {};
 
 async function runExclusive<T>(
   key: string,
@@ -756,12 +766,33 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       },
     })),
 
+  // Tabs AWAIT this before loading their data, so the pickers' grayed-out
+  // (availability) state always updates BEFORE the plots for a new date
+  // range. Concurrent callers of the same (config, granularity, range) share
+  // one request, and the fetch shows in the header's loading status.
   ensureGroupValues: async (gran) => {
     const { configId, groupValuesByGran, groupAvailRangeByGran, dateGroups } = get();
     if (!configId) return;
     const range = overallDateRange(dateGroups);
     const rangeKey = range ? `${range.start}|${range.end}` : "";
     if (groupValuesByGran[gran] && groupAvailRangeByGran[gran] === rangeKey) return;
+    const flightKey = `${configId}|${gran}|${rangeKey}`;
+    const inflight = _groupValuesInflight[flightKey];
+    if (inflight) return inflight;
+    const request = get()._fetchGroupValues(gran, configId, range, rangeKey);
+    _groupValuesInflight[flightKey] = request;
+    _inflight += 1;
+    set({ loading: true, status: "updating group labels…" });
+    try {
+      await request;
+    } finally {
+      delete _groupValuesInflight[flightKey];
+      _inflight = Math.max(0, _inflight - 1);
+      set(_inflight > 0 ? { loading: true } : { loading: false, status: null });
+    }
+  },
+
+  _fetchGroupValues: async (gran, configId, range, rangeKey) => {
     try {
       const { values, available } = await api.groupValues(configId, gran, range?.start, range?.end);
       set((s) => {
@@ -863,7 +894,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       }));
       if (untouched) {
         get().notify("info", `New data through ${max} — date window updated`);
-        void get().ensureGroupValues(get().dateGroups.granularity);
+        await get().ensureGroupValues(get().dateGroups.granularity);
         void get().loadAllSeries();
       }
     } catch {

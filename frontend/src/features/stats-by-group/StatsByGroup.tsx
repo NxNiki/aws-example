@@ -113,8 +113,8 @@ export function StatsByGroup() {
   const debouncedKey = useDebouncedValue(fetchKey);
   useEffect(() => {
     if (s.configId) {
-      void s.ensureGroupValues(dg.granularity);
-      void s.loadGroupDistribution();
+      // Availability before data — see StatsByDate.
+      void s.ensureGroupValues(dg.granularity).then(() => s.loadGroupDistribution());
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedKey]);
