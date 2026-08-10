@@ -143,13 +143,13 @@ def test_generate_query_ab_group_scan_filter():
 
 
 def _ab_group_rows(rows, include_ab_tests=True):
-    """Run the policy CASE against sqlite (DATE literals stripped: sqlite
-    compares ISO date strings directly)."""
+    """Run the policy CASE against sqlite (TIMESTAMP literals stripped:
+    sqlite compares ISO datetime strings directly)."""
     con = sqlite3.connect(":memory:")
-    con.execute("CREATE TABLE bets (ab_label, user_id, bj_date)")
+    con.execute("CREATE TABLE bets (ab_label, user_id, bj_ts)")
     con.executemany("INSERT INTO bets VALUES (?, ?, ?)", rows)
-    case = COMMON.ab_group_sql("ab_label", "user_id", "bj_date", include_ab_tests=include_ab_tests)
-    sql = f"SELECT {case} FROM bets ORDER BY rowid".replace("DATE '", "'")
+    case = COMMON.ab_group_sql("ab_label", "user_id", "bj_ts", include_ab_tests=include_ab_tests)
+    sql = f"SELECT {case} FROM bets ORDER BY rowid".replace("TIMESTAMP '", "'")
     return [r[0] for r in con.execute(sql)]
 
 
@@ -166,25 +166,27 @@ def test_slot_orders_query_composition():
     finally:
         sys.path.pop(0)
     sql = mod.generate_query(["SS03", "SS06"], date(2026, 8, 1), date(2026, 8, 5))
-    assert "AS ab_group" in sql and "DATE '2026-08-04'" in sql and "% 10" in sql
+    assert "AS ab_group" in sql and "TIMESTAMP '2026-08-04 05:30:00'" in sql and "% 10" in sql
     assert "t.game_id IN ('SS03', 'SS06')" in sql
     assert "status =" not in sql and "op_code NOT IN" not in sql  # raw copy, unfiltered
 
 
-def test_ab_group_policy_date_gate():
-    """AB groups: partition_ab ids before the 2026-08-04 Beijing cutover,
-    user-id last digit (0-3 Default, 4-5 A, 6-7 B, 8-9 AI) from that date."""
+def test_ab_group_policy_timestamp_gate():
+    """AB groups: partition_ab ids before the empirically-located cutover
+    (2026-08-04 05:30 Beijing — the deploy hour where mathtable serving
+    flips), user-id last digit (0-3 Default, 4-5 A, 6-7 B, 8-9 AI) after."""
     rows = [
-        # Before the cutover the digit is ignored — only the id counts.
-        (COMMON.AI_GROUP_ID, 13, "2026-08-03"),
-        (COMMON.AB_TEST_GROUP_A, 18, "2026-08-03"),
-        ("some-other-id", 19, "2026-08-03"),
-        (None, 15, "2026-08-03"),
+        # Before the cutover the digit is ignored — only the id counts
+        # (including the early hours of 08-04, which a date gate mislabels).
+        (COMMON.AI_GROUP_ID, 13, "2026-08-03 12:00:00"),
+        (COMMON.AB_TEST_GROUP_A, 18, "2026-08-04 03:00:00"),
+        ("some-other-id", 19, "2026-08-04 05:29:59"),
+        (None, 15, "2026-08-03 23:00:00"),
         # From the cutover the id is ignored — only the digit counts.
-        (COMMON.AI_GROUP_ID, 13, "2026-08-04"),
-        ("whatever", 24, "2026-08-04"),
-        (None, 37, "2026-08-04"),
-        ("whatever", 58, "2026-08-04"),
+        (COMMON.AI_GROUP_ID, 13, "2026-08-04 05:30:00"),
+        ("whatever", 24, "2026-08-04 06:00:00"),
+        (None, 37, "2026-08-05 00:00:00"),
+        ("whatever", 58, "2026-08-04 23:59:59"),
     ]
     assert _ab_group_rows(rows) == [
         "AI",
@@ -198,7 +200,11 @@ def test_ab_group_policy_date_gate():
     ]
     # Games without AB test groups collapse the test digits/ids into Default.
     no_tests = _ab_group_rows(
-        [(COMMON.AB_TEST_GROUP_A, 11, "2026-08-03"), ("x", 25, "2026-08-04"), ("x", 39, "2026-08-04")],
+        [
+            (COMMON.AB_TEST_GROUP_A, 11, "2026-08-03 12:00:00"),
+            ("x", 25, "2026-08-04 06:00:00"),
+            ("x", 39, "2026-08-04 06:00:00"),
+        ],
         include_ab_tests=False,
     )
     assert no_tests == ["Default", "Default", "AI"]
