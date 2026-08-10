@@ -24,23 +24,23 @@ stats_by_date:
   filters:
     ab_group: [AI]
   # Each user-day is labeled with the combination of mathtables the user
-  # played that day, '-'-joined and ordered by their bet count (dominant
-  # first, ties alphabetical), e.g. ai_zero-shi-ichi. Labels show at most
-  # the first 4 tables and any day with 4+ tables gets a trailing '+'.
-  # Combinations with fewer than min_user_days (user, day) samples in the
-  # full daily history fold into ai_other so the picker only lists
-  # well-populated groups. Selecting a combo keeps whole user-days and
-  # combines the member mathtables' stats per user.
+  # played that day, ':'-joined and ordered by their bet count (dominant
+  # first, ties alphabetical), e.g. zero:shi:ichi (no prefix — everything
+  # here is the AI cohort). Labels show at most the first 4 tables and any
+  # day with 4+ tables gets a trailing '+'. Combinations with fewer than
+  # min_user_days (user, day) samples in the full daily history fold into
+  # 'other' so the picker only lists well-populated groups. Selecting a
+  # combo keeps whole user-days and combines the member mathtables' stats
+  # per user.
   combo_group_cols:
     mathtable_combo:
       source: mathtable
       weight: user_num_bets
       strip_prefix: "normal_"
-      label_prefix: "ai"
-      separator: "-"
+      separator: ":"
       max_tables: 4
       min_user_days: 30
-      other_label: "ai_other"
+      other_label: "other"
   # Stored grain is one row per (period, user, ab_group, mathtable, bet_level):
   # every bet in exactly one row. When a grain dimension is unselected the API
   # collapses rows back to one per user before computing per-user stats.
