@@ -52,9 +52,8 @@ from pyspark.sql import functions as F
 # Ships via submit_py_files on SageMaker; for local runs/tests put
 # jobs/etl/sagemaker on the path first (the snapshot tests already do).
 from spark_etl_common import (
-    AB_TEST_GROUP_A,
-    AB_TEST_GROUP_B,
-    AI_GROUP_ID,
+    BJ_UTC_OFFSET_HOURS,
+    ab_group_sql,
     build_spark_session,
     check_schema,
     month_start,
@@ -76,6 +75,14 @@ SESSION_BREAK_SECONDS = 43200
 STREAK_THRESHOLD_SECONDS = 200
 MAX_DELTA_T_GAP_SECONDS = 3600
 
+# The AB grouping policy flipped from partition_ab ids to user-id last digits
+# across these Beijing days (announced 08-03, effective 08-04), so group
+# membership DURING them is ambiguous — sessions STARTING on them are dropped
+# from every output. Keying on the session start keeps cross-midnight
+# sessions whole: a session opened 08-04 23:50 BJ is excluded entirely, one
+# opened 08-05 00:10 is kept entirely.
+EXCLUDED_SESSION_START_DATES_BJ = ("2026-08-03", "2026-08-04")
+
 REQUIRED_COLUMNS = [
     "spin_id",
     "user_id",
@@ -92,18 +99,14 @@ REQUIRED_COLUMNS = [
     "op_code",
 ]
 
-# ai_group slice -> (output_prefix, ab-label filter SQL, bin sizes, selected label).
-# Mirrors jobs/etl/redshift/ss03_mahjiang_streak/etl_feature_engineer.py GROUPS.
+# ai_group slice -> (output_prefix, ai_group filter SQL, bin sizes, selected label).
+# Mirrors jobs/etl/redshift/ss03_mahjiang_streak/etl_feature_engineer.py GROUPS;
+# the ai_group label itself is the date-gated policy (ab_group_sql).
 GROUPS = {
-    "default": (
-        "output_ss03_feature_engineer",
-        f"(ab_label IS NULL OR ab_label NOT IN ('{AI_GROUP_ID}', '{AB_TEST_GROUP_A}', '{AB_TEST_GROUP_B}'))",
-        [50, 70],
-        "Default",
-    ),
-    "ai": ("output_ss03_feature_engineer_ai", f"ab_label = '{AI_GROUP_ID}'", [30, 50, 70, 100], "AI"),
-    "ab_test_a": ("output_ss03_feature_engineer_ab_test_a", f"ab_label = '{AB_TEST_GROUP_A}'", [50, 70], "AB_TEST_A"),
-    "ab_test_b": ("output_ss03_feature_engineer_ab_test_b", f"ab_label = '{AB_TEST_GROUP_B}'", [50, 70], "AB_TEST_B"),
+    "default": ("output_ss03_feature_engineer", "ai_group = 'Default'", [50, 70], "Default"),
+    "ai": ("output_ss03_feature_engineer_ai", "ai_group = 'AI'", [30, 50, 70, 100], "AI"),
+    "ab_test_a": ("output_ss03_feature_engineer_ab_test_a", "ai_group = 'AB_TEST_A'", [50, 70], "AB_TEST_A"),
+    "ab_test_b": ("output_ss03_feature_engineer_ab_test_b", "ai_group = 'AB_TEST_B'", [50, 70], "AB_TEST_B"),
 }
 
 SIDECAR_SEMANTIC_FIELDS = [
@@ -242,6 +245,14 @@ def grouped_dtypes() -> dict:
 
 def enriched_sql(group_filter: str, scan_start: date, scan_end: date) -> str:
     source_cols = ",\n            ".join(f"t.{c}" for c in REQUIRED_COLUMNS)
+    # Date-gated group label: partition_ab ids before the 2026-08-04 policy
+    # cutover, user-id last digit from that date on.
+    ab_group_case = ab_group_sql(
+        "get_json_object(CAST(t.partition_ab AS STRING), '$[0]')",
+        "t.user_id",
+        f"CAST(t.created_at + INTERVAL '{BJ_UTC_OFFSET_HOURS}' HOUR AS DATE)",
+    )
+    excluded_session_days = ", ".join(f"DATE '{d}'" for d in EXCLUDED_SESSION_START_DATES_BJ)
     return f"""
 WITH user_bets AS (
     SELECT
@@ -256,16 +267,11 @@ WITH user_bets AS (
         balance_after_payout,
         LAG(created_at, 1) OVER (PARTITION BY user_id ORDER BY spin_id, created_at) AS prev_bet_time,
         CASE WHEN bet_type = 'BASE' THEN 1 ELSE 0 END AS is_new_game_group,
-        CASE
-            WHEN ab_label = '{AI_GROUP_ID}' THEN 'AI'
-            WHEN ab_label = '{AB_TEST_GROUP_A}' THEN 'AB_TEST_A'
-            WHEN ab_label = '{AB_TEST_GROUP_B}' THEN 'AB_TEST_B'
-            ELSE 'Default'
-        END AS ai_group
+        ai_group
     FROM (
         SELECT
             {source_cols},
-            get_json_object(CAST(t.partition_ab AS STRING), '$[0]') AS ab_label
+            {ab_group_case} AS ai_group
         FROM bet_order_raw AS t
         WHERE
             t.created_at >= TIMESTAMP '{scan_start} 00:00:00'
@@ -440,6 +446,8 @@ SELECT
     ROW_NUMBER() OVER (PARTITION BY t.user_id, t.session_start_ts ORDER BY t.spin_id, t.min_created_at)
         AS session_bet_index
 FROM user_group AS t
+WHERE CAST(t.session_start_ts + INTERVAL '{BJ_UTC_OFFSET_HOURS}' HOUR AS DATE)
+    NOT IN ({excluded_session_days})
 """
 
 
@@ -711,7 +719,9 @@ def sidecar_payload(prefix: str, group: str, bins: list, output_end: date) -> di
             "streak_threshold_seconds": STREAK_THRESHOLD_SECONDS,
             "max_delta_t_gap_seconds": MAX_DELTA_T_GAP_SECONDS,
             "drop_incomplete_tail_groups": False,
-            "extra_where_clauses": [],
+            # Recorded as a semantic field: the grouping-policy transition
+            # days are excluded by BJ session start (see the constant).
+            "extra_where_clauses": [f"session_start_date_bj NOT IN {EXCLUDED_SESSION_START_DATES_BJ}"],
             "requires_full_history": False,
             "lookback_days": None,
         },

@@ -16,8 +16,10 @@ fish_hunter fish-level groups): BASE spins carry their own bet_amount and
 FREE spins inherit the day's prevailing BASE bet.
 Per-game variations (from the Redshift originals): SS02 attributes FourScatter
 free-game buy-ins to the mathtable of the FOLLOWING spin (full-stream LEAD, so
-its scan window extends one day past output-end); SS03/SS06 map the AB-test
-partition ids to AB_TEST_A/B groups on top of the AI/Default mapping. Each run
+its scan window extends one day past output-end); SS03/SS06 carry the AB_TEST_A/B
+groups on top of the AI/Default mapping. ``ab_group`` follows the date-gated
+policy (spark_etl_common.ab_group_sql): partition_ab ids before 2026-08-04
+Beijing time, user-id last digit from that date on. Each run
 recomputes whole periods in [output-start, output-end) and dynamic-partition-
 overwrites exactly the ``period=`` directories it produced. Sequence metrics
 (delta-t / delta-bet / mathtable_change / FG trigger) are DAY-partitioned, so
@@ -27,7 +29,7 @@ windowed runs compose exactly.
 same-mathtable bets (per user per Beijing day) — the ss03 AI mathtable-combo
 dashboard reads a run-filtered output so brief mathtable dabbles don't count
 toward a user's daily combination. ``--ab-group`` restricts the scan to one
-AB partition (e.g. AI) so a cohort-specific dataset stays small. Write
+AB group label (e.g. AI) so a cohort-specific dataset stays small. Write
 filtered outputs to their own suffixed root (``..._ai_run30``) so the
 unfiltered dashboards stay untouched.
 
@@ -45,12 +47,10 @@ from pyspark.sql import functions as F
 # Ships via submit_py_files on SageMaker; for local runs/tests put
 # jobs/etl/sagemaker on the path first (the snapshot tests already do).
 from spark_etl_common import (
-    AB_TEST_GROUP_A,
-    AB_TEST_GROUP_B,
-    AI_GROUP_ID,
     BJ_UTC_OFFSET_HOURS,
     EXCLUDED_OP_CODES,
     PARTITION_AB_FIRST,
+    ab_group_sql,
     beijing_today,
     build_spark_session,
     check_schema,
@@ -70,13 +70,7 @@ GAME_CONFIG = {
     "SS06": {"ab_test_groups": True},
 }
 
-# --ab-group choices: labels of the partitions selectable by raw id equality.
-# 'Default' is every OTHER partition id, so it can't be expressed this way.
-AB_GROUP_IDS = {
-    "AI": AI_GROUP_ID,
-    "AB_TEST_A": AB_TEST_GROUP_A,
-    "AB_TEST_B": AB_TEST_GROUP_B,
-}
+AB_GROUP_LABELS = ["AI", "AB_TEST_A", "AB_TEST_B", "Default"]
 
 AGG_LEVELS = {
     "daily": ("activity_date", "daily_stats"),
@@ -117,18 +111,17 @@ OUTPUT_BIGINT_COLUMNS = [
 ]
 
 
-def _ab_group_case(game_id: str) -> str:
-    ab_test_lines = (
-        f"""
-                WHEN {PARTITION_AB_FIRST} = '{AB_TEST_GROUP_A}' THEN 'AB_TEST_A'
-                WHEN {PARTITION_AB_FIRST} = '{AB_TEST_GROUP_B}' THEN 'AB_TEST_B'"""
-        if GAME_CONFIG[game_id].get("ab_test_groups")
-        else ""
+def _ab_group_case(game_id: str, bj_date_expr: str) -> str:
+    """Date-gated AB group label (see spark_etl_common.ab_group_sql): the
+    partition_ab ids before the 2026-08-04 policy cutover, the user-id last
+    digit after it."""
+    case = ab_group_sql(
+        PARTITION_AB_FIRST,
+        "t.user_id",
+        bj_date_expr,
+        include_ab_tests=bool(GAME_CONFIG[game_id].get("ab_test_groups")),
     )
-    return f"""CASE
-                WHEN {PARTITION_AB_FIRST} = '{AI_GROUP_ID}' THEN 'AI'{ab_test_lines}
-                ELSE 'Default'
-            END AS ab_group"""
+    return f"{case} AS ab_group"
 
 
 def _math_table_expr(game_id: str) -> str:
@@ -208,9 +201,18 @@ def generate_query(
     # adjacent (their delta-t spans the dropped run's wall time).
     run_ctes = f"\n        {_mathtable_run_ctes(day_window, min_mathtable_run)},\n" if min_mathtable_run > 0 else ""
     bets_source = "long_run_bets" if min_mathtable_run > 0 else "bets"
-    # Filtering on the raw partition id keeps the scan cheap and, with the run
-    # filter on, computes runs over the cohort's own bet stream only.
-    ab_where = f"\n                AND {PARTITION_AB_FIRST} = '{AB_GROUP_IDS[ab_group]}'" if ab_group else ""
+    # Filtering in bet_events keeps the scan cheap and, with the run filter
+    # on, computes runs over the cohort's own bet stream only. The membership
+    # test is the same date-gated policy expression as ab_group itself.
+    ab_where = ""
+    if ab_group:
+        member = ab_group_sql(
+            PARTITION_AB_FIRST,
+            "t.user_id",
+            f"CAST({bj_ts} AS DATE)",
+            include_ab_tests=bool(GAME_CONFIG[game_id].get("ab_test_groups")),
+        )
+        ab_where = f"\n                AND {member} = '{ab_group}'"
     return dedent(
         f"""
         WITH bet_events AS (
@@ -247,7 +249,7 @@ def generate_query(
                 CAST({bj_ts} AS DATE) AS activity_date,
                 CAST(DATE_TRUNC('week', {bj_ts}) AS DATE) AS activity_week,
                 CAST(DATE_TRUNC('month', {bj_ts}) AS DATE) AS activity_month,
-                {_ab_group_case(game_id)}
+                {_ab_group_case(game_id, f"CAST({bj_ts} AS DATE)")}
             FROM bet_events AS t
         ),
 {run_ctes}
@@ -441,9 +443,9 @@ def parse_args():
     )
     parser.add_argument(
         "--ab-group",
-        choices=sorted(AB_GROUP_IDS),
+        choices=AB_GROUP_LABELS,
         default="",
-        help="only scan bets of this AB partition (raw partition-id equality);" " default: all partitions",
+        help="only keep bets whose date-gated AB group label equals this; default: all groups",
     )
     parser.add_argument("--currency", default="CNY")
     parser.add_argument(

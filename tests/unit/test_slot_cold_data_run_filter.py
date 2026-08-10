@@ -34,6 +34,19 @@ def _load_job_module():
 
 JOB = _load_job_module()
 
+
+def _load_common():
+    sys.path.insert(0, str(REPO_ROOT / "jobs/etl/sagemaker"))
+    try:
+        import spark_etl_common
+
+        return spark_etl_common
+    finally:
+        sys.path.pop(0)
+
+
+COMMON = _load_common()
+
 DAY_WINDOW = "PARTITION BY t.user_id, t.activity_date ORDER BY t.spin_id, t.created_at"
 
 
@@ -111,9 +124,57 @@ def test_generate_query_ab_group_scan_filter():
         scan_end_utc=datetime(2026, 8, 4, 16),
         currency="CNY",
     )
-    assert JOB.AI_GROUP_ID not in JOB.generate_query(**kwargs).split("CASE")[0]  # no scan filter by default
+    base = JOB.generate_query(**kwargs)
+    assert "AND CASE" not in base  # no scan filter by default
 
     only_ai = JOB.generate_query(**kwargs, ab_group="AI")
-    # bet_events' WHERE keeps only the AI partition (raw id equality), so
-    # with the run filter runs are computed over the AI stream alone.
-    assert f"AND get_json_object(CAST(t.partition_ab AS STRING), '$[0]') = '{JOB.AI_GROUP_ID}'" in only_ai
+    # bet_events' WHERE keeps only bets whose date-gated policy label is AI
+    # (partition_ab ids before the 2026-08-04 cutover, user-id last digit
+    # after), so with the run filter runs are computed over the AI stream.
+    where = only_ai.split("bet_events")[1].split("bets AS")[0]
+    assert "END = 'AI'" in where
+    assert "DATE '2026-08-04'" in where and "% 10" in where
+
+
+def _ab_group_rows(rows, include_ab_tests=True):
+    """Run the policy CASE against sqlite (DATE literals stripped: sqlite
+    compares ISO date strings directly)."""
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE bets (ab_label, user_id, bj_date)")
+    con.executemany("INSERT INTO bets VALUES (?, ?, ?)", rows)
+    case = COMMON.ab_group_sql("ab_label", "user_id", "bj_date", include_ab_tests=include_ab_tests)
+    sql = f"SELECT {case} FROM bets ORDER BY rowid".replace("DATE '", "'")
+    return [r[0] for r in con.execute(sql)]
+
+
+def test_ab_group_policy_date_gate():
+    """AB groups: partition_ab ids before the 2026-08-04 Beijing cutover,
+    user-id last digit (0-3 Default, 4-5 A, 6-7 B, 8-9 AI) from that date."""
+    rows = [
+        # Before the cutover the digit is ignored — only the id counts.
+        (COMMON.AI_GROUP_ID, 13, "2026-08-03"),
+        (COMMON.AB_TEST_GROUP_A, 18, "2026-08-03"),
+        ("some-other-id", 19, "2026-08-03"),
+        (None, 15, "2026-08-03"),
+        # From the cutover the id is ignored — only the digit counts.
+        (COMMON.AI_GROUP_ID, 13, "2026-08-04"),
+        ("whatever", 24, "2026-08-04"),
+        (None, 37, "2026-08-04"),
+        ("whatever", 58, "2026-08-04"),
+    ]
+    assert _ab_group_rows(rows) == [
+        "AI",
+        "AB_TEST_A",
+        "Default",
+        "Default",
+        "Default",  # digit 3
+        "AB_TEST_A",  # digit 4
+        "AB_TEST_B",  # digit 7
+        "AI",  # digit 8
+    ]
+    # Games without AB test groups collapse the test digits/ids into Default.
+    no_tests = _ab_group_rows(
+        [(COMMON.AB_TEST_GROUP_A, 11, "2026-08-03"), ("x", 25, "2026-08-04"), ("x", 39, "2026-08-04")],
+        include_ab_tests=False,
+    )
+    assert no_tests == ["Default", "Default", "AI"]

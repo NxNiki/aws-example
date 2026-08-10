@@ -12,12 +12,7 @@ WITH user_bets AS (
         balance_after_payout,
         LAG(created_at, 1) OVER (PARTITION BY user_id ORDER BY spin_id, created_at) AS prev_bet_time,
         CASE WHEN bet_type = 'BASE' THEN 1 ELSE 0 END AS is_new_game_group,
-        CASE
-            WHEN ab_label = 'jojpin-9mokha-rexQug' THEN 'AI'
-            WHEN ab_label = '4f1a46ca-7baa-4452-9a40-ef21d9b33b57' THEN 'AB_TEST_A'
-            WHEN ab_label = '4a04df21-c749-4808-8e55-3a0b74c084d2' THEN 'AB_TEST_B'
-            ELSE 'Default'
-        END AS ai_group
+        ai_group
     FROM (
         SELECT
             t.spin_id,
@@ -33,7 +28,20 @@ WITH user_bets AS (
             t.currency_type,
             t.status,
             t.op_code,
-            get_json_object(CAST(t.partition_ab AS STRING), '$[0]') AS ab_label
+            CASE
+            WHEN CAST(t.created_at + INTERVAL '8' HOUR AS DATE) >= DATE '2026-08-04' THEN CASE
+                WHEN CAST(t.user_id AS BIGINT) % 10 >= 8 THEN 'AI'
+                WHEN CAST(t.user_id AS BIGINT) % 10 >= 6 THEN 'AB_TEST_B'
+                WHEN CAST(t.user_id AS BIGINT) % 10 >= 4 THEN 'AB_TEST_A'
+                ELSE 'Default'
+            END
+            ELSE CASE
+                WHEN get_json_object(CAST(t.partition_ab AS STRING), '$[0]') = 'jojpin-9mokha-rexQug' THEN 'AI'
+                WHEN get_json_object(CAST(t.partition_ab AS STRING), '$[0]') = '4f1a46ca-7baa-4452-9a40-ef21d9b33b57' THEN 'AB_TEST_A'
+                WHEN get_json_object(CAST(t.partition_ab AS STRING), '$[0]') = '4a04df21-c749-4808-8e55-3a0b74c084d2' THEN 'AB_TEST_B'
+                ELSE 'Default'
+            END
+        END AS ai_group
         FROM bet_order_raw AS t
         WHERE
             t.created_at >= TIMESTAMP '2026-06-17 00:00:00'
@@ -42,7 +50,7 @@ WITH user_bets AS (
             AND t.status = 'COMPLETED'
             AND t.op_code NOT IN ('B26', 'TST', 'TSB', 'TSO')
     )
-    WHERE ab_label = '4f1a46ca-7baa-4452-9a40-ef21d9b33b57'
+    WHERE ai_group = 'AB_TEST_A'
 ),
 
 free_game_group AS (
@@ -208,3 +216,5 @@ SELECT
     ROW_NUMBER() OVER (PARTITION BY t.user_id, t.session_start_ts ORDER BY t.spin_id, t.min_created_at)
         AS session_bet_index
 FROM user_group AS t
+WHERE CAST(t.session_start_ts + INTERVAL '8' HOUR AS DATE)
+    NOT IN (DATE '2026-08-03', DATE '2026-08-04')

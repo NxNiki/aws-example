@@ -24,6 +24,43 @@ BJ_UTC_OFFSET_HOURS = 8
 # parquet list, so the first element is extracted via get_json_object.
 PARTITION_AB_FIRST = "get_json_object(CAST(t.partition_ab AS STRING), '$[0]')"
 
+# AB grouping policy cutover (announced 2026-08-03, effective 08-04 Beijing
+# time): from this date groups are assigned by the LAST DIGIT of user_id —
+# 0-3 Default, 4-5 AB_TEST_A, 6-7 AB_TEST_B, 8-9 AI. Before it, by the
+# partition_ab ids above (which STOPPED reflecting assignment at the cutover).
+AB_GROUP_DIGIT_POLICY_START = "2026-08-04"
+
+
+def ab_group_sql(ab_label_expr: str, user_id_expr: str, bj_date_expr: str, include_ab_tests: bool = True) -> str:
+    """CASE expression labeling a bet's AB group under the date-gated policy.
+
+    ``ab_label_expr`` is the first partition_ab id (e.g. PARTITION_AB_FIRST),
+    ``user_id_expr`` the numeric user id, ``bj_date_expr`` a DATE in Beijing
+    time. Games without AB test groups (include_ab_tests=False) collapse the
+    test digits / legacy test ids into Default, keeping their historical
+    two-group vocabulary."""
+    digit = f"CAST({user_id_expr} AS BIGINT) % 10"
+    if include_ab_tests:
+        digit_case = f"""CASE
+                WHEN {digit} >= 8 THEN 'AI'
+                WHEN {digit} >= 6 THEN 'AB_TEST_B'
+                WHEN {digit} >= 4 THEN 'AB_TEST_A'
+                ELSE 'Default'
+            END"""
+        legacy_tests = f"""
+                WHEN {ab_label_expr} = '{AB_TEST_GROUP_A}' THEN 'AB_TEST_A'
+                WHEN {ab_label_expr} = '{AB_TEST_GROUP_B}' THEN 'AB_TEST_B'"""
+    else:
+        digit_case = f"CASE WHEN {digit} >= 8 THEN 'AI' ELSE 'Default' END"
+        legacy_tests = ""
+    return f"""CASE
+            WHEN {bj_date_expr} >= DATE '{AB_GROUP_DIGIT_POLICY_START}' THEN {digit_case}
+            ELSE CASE
+                WHEN {ab_label_expr} = '{AI_GROUP_ID}' THEN 'AI'{legacy_tests}
+                ELSE 'Default'
+            END
+        END"""
+
 
 def build_spark_session(app_name: str, input_root: str, input_region: str) -> SparkSession:
     """The jobs' common session: UTC, AQE, dynamic partition overwrite, ANSI
