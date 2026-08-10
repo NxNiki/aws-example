@@ -26,9 +26,9 @@ stats_by_date:
   # Each user-day is labeled with the SET of mathtables the user played
   # that day, ':'-joined alphabetically (unordered — go:ni and ni:go are
   # one group; bet count only decides WHICH tables make a capped label).
-  # No prefix — everything here is the AI cohort. Labels name only the
-  # day's top-2 tables; days with 2 or more tables get a glob-style ':*'
-  # ("zero or more further tables"), e.g. ni:zero:*.
+  # No prefix — everything here is the AI cohort. Singles and pairs are
+  # exact; days with 3 or more tables show the top-3 plus a glob-style
+  # ':*' ("zero or more further tables"), e.g. ni:shi:zero:*.
   # Combinations with fewer than min_user_days (user, day) samples in the
   # full daily history fold into 'other' so the picker only lists
   # well-populated groups. Selecting a combo keeps whole user-days and
@@ -39,7 +39,7 @@ stats_by_date:
       weight: user_num_bets
       strip_prefix: "normal_"
       separator: ":"
-      max_tables: 2
+      max_tables: 3
       min_user_days: 30
       other_label: "other"
   # Stored grain is one row per (period, user, ab_group, mathtable, bet_level):
