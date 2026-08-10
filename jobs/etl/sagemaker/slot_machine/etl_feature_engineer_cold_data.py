@@ -784,7 +784,11 @@ def parse_args():
         help="exclusive end date, YYYY-MM-DD; must be month-aligned or in the future"
         " (a mid-month historical end would truncate that month's partition). Default: tomorrow, UTC",
     )
-    parser.add_argument("--input-region", default="ap-southeast-1", help="region of the input bucket")
+    parser.add_argument(
+        "--input-region",
+        default="us-west-2",
+        help="region of the input bucket (the slot_orders_ab_group dataset lives in our us-west-2 bucket)",
+    )
     parser.add_argument(
         "--allow-semantic-drift",
         action="store_true",

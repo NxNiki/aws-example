@@ -435,8 +435,8 @@ def parse_args():
     parser.add_argument("--currency", default="CNY")
     parser.add_argument(
         "--input-region",
-        default="ap-southeast-1",
-        help="region of the input bucket (s3a needs it spelled out for cross-region reads)",
+        default="us-west-2",
+        help="region of the input bucket (the slot_orders_ab_group dataset lives in our us-west-2 bucket)",
     )
     return parser.parse_args()
 
