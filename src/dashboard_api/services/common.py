@@ -455,8 +455,9 @@ def combo_group_cols(cfg: dict[str, Any]) -> dict[str, dict[str, Any]]:
     order by the ``order`` column's per-value minimum (first appearance in
     the period) when configured and stored, else alphabetically. With
     ``max_tables`` only the first N values name the label, and every
-    combination of N OR MORE values gets a trailing ``+`` — so an exactly-N
-    day and a longer day with the same leading values share one label.
+    combination of N OR MORE values gets a trailing ``<separator>*`` (glob
+    style: zero or more further tables) — so an exactly-N day and a longer
+    day with the same leading values share one label.
     With ``min_user_days`` a label must reach that many (user, day) samples
     in the FULL daily history to keep its name; rarer combinations fold into
     ``other_label`` (default ``<label_prefix>_other``). The vocabulary comes
@@ -527,6 +528,22 @@ def combo_label_vocab(cfg: dict[str, Any], name: str) -> set[str]:
         return vocab
 
 
+def combo_label_sort_key(spec: dict[str, Any]) -> Callable[[str], tuple[int, int, str]]:
+    """Picker ordering for a combo column's labels: fewest tables first
+    (singles, then pairs, ...), alphabetical within a size, and the
+    min_user_days ``other`` bucket last."""
+    other = spec["other_label"] or (f"{spec['label_prefix']}_other" if spec["label_prefix"] else "other")
+    sep = spec["separator"]
+
+    def key(label: str) -> tuple[int, int, str]:
+        if label == other:
+            return (2, 0, label)
+        shown = label.removesuffix(sep + "*")
+        return (1, shown.count(sep) + 1, label)
+
+    return key
+
+
 def attach_combo_group_cols(
     cfg: dict[str, Any], lf: pl.LazyFrame, date_col: str, raw_labels: bool = False
 ) -> pl.LazyFrame:
@@ -564,9 +581,11 @@ def attach_combo_group_cols(
         ordered = pl.col(vcol).sort_by([wcol, ocol, vcol], descending=[True, False, False]).unique(maintain_order=True)
         max_tables, sep = spec["max_tables"], spec["separator"]
         if max_tables > 0:
+            # '<sep>*' = glob-style "zero or more further tables": days with
+            # exactly max_tables and longer days share the capped label.
             label = ordered.head(max_tables).str.join(sep).over(keys) + pl.when(
                 pl.col(vcol).n_unique().over(keys) >= max_tables
-            ).then(pl.lit("+")).otherwise(pl.lit(""))
+            ).then(pl.lit(sep + "*")).otherwise(pl.lit(""))
         else:
             label = ordered.str.join(sep).over(keys)
         if spec["label_prefix"]:

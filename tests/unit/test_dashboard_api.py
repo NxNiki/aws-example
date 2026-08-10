@@ -533,14 +533,15 @@ def test_combo_group_cols_order_tiebreak_and_max_tables(tmp_path):
     five.write_parquet(path / "part.parquet")
     cfg = _combo_cfg(path, separator="-", max_tables=4)
     out = common.load_lazy(cfg, "day")[0].collect()
-    assert out["mathtable_combo"].to_list() == ["ai_m0-m1-m2-m3+"] * 5
-    # Exactly max_tables tables merges into the SAME '+' label as longer
-    # days with the same leading four, so 4 and 4+ aren't split.
+    assert out["mathtable_combo"].to_list() == ["ai_m0-m1-m2-m3-*"] * 5
+    # Exactly max_tables tables merges into the SAME '-*' label as longer
+    # days with the same leading four (the marker reads "zero or more
+    # further tables"), so 4 and 4+ aren't split.
     four = five.head(4)
     four.write_parquet(path / "part.parquet")
     out = common.load_lazy(cfg, "day")[0].collect()
-    assert out["mathtable_combo"].to_list() == ["ai_m0-m1-m2-m3+"] * 4
-    # Below the cap: plain label, no '+'.
+    assert out["mathtable_combo"].to_list() == ["ai_m0-m1-m2-m3-*"] * 4
+    # Below the cap: plain label, no marker.
     five.head(3).write_parquet(path / "part.parquet")
     out = common.load_lazy(cfg, "day")[0].collect()
     assert out["mathtable_combo"].to_list() == ["ai_m0-m1-m2"] * 3
@@ -577,6 +578,41 @@ def test_combo_group_cols_min_user_days_folds_rare_labels(tmp_path):
     cfg2["id"] = "g-vocab-2"
     out2 = common.load_lazy(cfg2, "day")[0].collect().sort("user_id")
     assert out2["mathtable_combo"].to_list() == ["ai_a", "ai_a", "ai_other"]
+
+
+def test_load_group_values_orders_combo_labels_by_size(tmp_path):
+    """The combo picker lists singles first, then pairs, then 'other' —
+    not plain alphabetical (which would interleave 'a:b' between 'a' and
+    'b' and bury the residual bucket mid-list)."""
+    common._combo_vocab_cache.clear()
+    path = tmp_path / "daily_stats"
+    path.mkdir()
+    pl.DataFrame(
+        {
+            # 2 samples each: single a, single b, pair a:b; single c once -> other.
+            "activity_date": ["2026-06-01"] * 4 + ["2026-06-02"] * 5,
+            "user_id": ["u1", "u2", "u3", "u3", "u1", "u2", "u3", "u3", "u4"],
+            "mathtable": [
+                "normal_a",
+                "normal_b",
+                "normal_a",
+                "normal_b",
+                "normal_a",
+                "normal_b",
+                "normal_a",
+                "normal_b",
+                "normal_c",
+            ],
+            "bet_level": [1.0] * 9,
+            "user_num_bets": [5, 5, 9, 5, 5, 5, 9, 5, 5],
+        }
+    ).with_columns(pl.col("activity_date").str.to_datetime()).write_parquet(path / "part.parquet")
+    cfg = _combo_cfg(path, separator=":", min_user_days=2, other_label="ai_other", max_tables=2)
+    cfg["id"] = "g-order"
+    values = series_mod.load_group_values(cfg, "day")
+    # Pairs carry the ':*' overflow marker (2-or-more tables share the label)
+    # and still sort in the pairs block, after all singles, with 'other' last.
+    assert values["mathtable_combo"] == ["ai_a", "ai_b", "ai_a:b:*", "ai_other"]
 
 
 def test_group_values_in_range_covers_combo_cols(tmp_path):
