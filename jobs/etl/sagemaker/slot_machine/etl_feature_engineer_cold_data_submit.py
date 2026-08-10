@@ -31,6 +31,11 @@ parser.add_argument("--output-start", help="recompute months from this date's mo
 parser.add_argument("--output-end", help="exclusive end date (default: tomorrow UTC)")
 parser.add_argument("--no-wait", action="store_true", help="submit and return without streaming logs")
 parser.add_argument(
+    "--allow-semantic-drift",
+    action="store_true",
+    help="proceed when the run's semantics differ from the existing sidecar (deliberate one-time changes)",
+)
+parser.add_argument(
     "--output-root-base",
     default=OUTPUT_ROOT_BASE,
     help="override the output prefix (e.g. a scratch prefix for a validation run)",
@@ -42,6 +47,8 @@ if args.output_start:
     job_args += ["--output-start", args.output_start]
 if args.output_end:
     job_args += ["--output-end", args.output_end]
+if args.allow_semantic_drift:
+    job_args += ["--allow-semantic-drift"]
 
 # 300 GB: the per-user window functions shuffle-spill far past the 30 GB default.
 processor = spark_processor(
