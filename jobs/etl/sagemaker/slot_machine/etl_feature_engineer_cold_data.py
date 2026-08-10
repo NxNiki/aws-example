@@ -1,15 +1,17 @@
-"""SS03 per-bet feature engineering from the cold-data warehouse (PySpark).
+"""SS03 per-bet feature engineering from the slot_orders_ab_group dataset (PySpark).
 
 ETL job: SageMaker port of ``jobs/etl/redshift/ss03_mahjiang_streak/
 etl_feature_engineer.py`` — same two outputs per ai_group slice
 (``features_enriched`` per aggregated bet, ``features_grouped_binsize_{N}``
 per session bin), same output roots, ``year=/month=`` layout, column order
-and parquet dtypes (see OUTPUT dtype maps), reading
-``partition_cold_data/bet_order`` instead of Redshift through the bastion.
+and parquet dtypes (see OUTPUT dtype maps), reading the
+``output_slot_orders_ab_group/orders`` dataset (raw bets + the
+policy-correct ``ab_group`` — see etl_slot_orders_ab_group.py) instead of
+Redshift through the bastion, so group membership is derived exactly once
+upstream.
 
 Semantics ported 1:1 from the Redshift SQL with these deliberate translations:
-``partition_ab`` is binary JSON in cold data (``get_json_object`` instead of
-SUPER indexing); ``DATEDIFF(SECONDS, ...)`` becomes a truncating
+``DATEDIFF(SECONDS, ...)`` becomes a truncating
 ``unix_timestamp`` difference; ``LAST_VALUE(... IGNORE NULLS)`` becomes
 ``LAST(expr, TRUE)``; ``ROUND((idx-1)/N)`` — integer division on Redshift —
 becomes explicit ``FLOOR``; the 12 single-percentile CTEs collapse into one
@@ -53,12 +55,11 @@ from pyspark.sql import functions as F
 # jobs/etl/sagemaker on the path first (the snapshot tests already do).
 from spark_etl_common import (
     BJ_UTC_OFFSET_HOURS,
-    ab_group_sql,
     build_spark_session,
     check_schema,
     month_start,
     prev_month_start,
-    prune_partition_days,
+    prune_period_days,
     utc_today,
 )
 
@@ -93,7 +94,7 @@ REQUIRED_COLUMNS = [
     "actual_payout",
     "balance_after_bet",
     "balance_after_payout",
-    "partition_ab",
+    "ab_group",
     "currency_type",
     "status",
     "op_code",
@@ -244,14 +245,7 @@ def grouped_dtypes() -> dict:
 
 
 def enriched_sql(group_filter: str, scan_start: date, scan_end: date) -> str:
-    source_cols = ",\n            ".join(f"t.{c}" for c in REQUIRED_COLUMNS)
-    # Date-gated group label: partition_ab ids before the 2026-08-04 policy
-    # cutover, user-id last digit from that date on.
-    ab_group_case = ab_group_sql(
-        "get_json_object(CAST(t.partition_ab AS STRING), '$[0]')",
-        "t.user_id",
-        f"CAST(t.created_at + INTERVAL '{BJ_UTC_OFFSET_HOURS}' HOUR AS DATE)",
-    )
+    source_cols = ",\n            ".join(f"t.{c}" for c in REQUIRED_COLUMNS if c != "ab_group")
     excluded_session_days = ", ".join(f"DATE '{d}'" for d in EXCLUDED_SESSION_START_DATES_BJ)
     return f"""
 WITH user_bets AS (
@@ -271,7 +265,7 @@ WITH user_bets AS (
     FROM (
         SELECT
             {source_cols},
-            {ab_group_case} AS ai_group
+            t.ab_group AS ai_group
         FROM bet_order_raw AS t
         WHERE
             t.created_at >= TIMESTAMP '{scan_start} 00:00:00'
@@ -836,8 +830,8 @@ def main():
     # Reading inside game_id=SS03/ pins the game by path (no game_id column
     # survives — it is the consumed partition level), and prunes other games.
     bet_order = spark.read.parquet(f"{args.input_root}/game_id=SS03")
-    check_schema(bet_order, REQUIRED_COLUMNS, table_name="cold data bet_order")
-    raw = prune_partition_days(bet_order, scan_start, output_end, margin_days=1)
+    check_schema(bet_order, REQUIRED_COLUMNS, table_name="slot_orders_ab_group orders")
+    raw = prune_period_days(bet_order, scan_start, output_end, margin_days=1)
     if raw.limit(1).count() == 0:
         raise SystemExit(f"no bet_order rows for SS03 in [{scan_start}, {output_end}); refusing to overwrite")
     raw.createOrReplaceTempView("bet_order_raw")

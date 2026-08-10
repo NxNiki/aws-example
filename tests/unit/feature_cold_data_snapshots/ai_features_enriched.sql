@@ -24,24 +24,10 @@ WITH user_bets AS (
             t.actual_payout,
             t.balance_after_bet,
             t.balance_after_payout,
-            t.partition_ab,
             t.currency_type,
             t.status,
             t.op_code,
-            CASE
-            WHEN CAST(t.created_at + INTERVAL '8' HOUR AS DATE) >= DATE '2026-08-04' THEN CASE
-                WHEN CAST(t.user_id AS BIGINT) % 10 >= 8 THEN 'AI'
-                WHEN CAST(t.user_id AS BIGINT) % 10 >= 6 THEN 'AB_TEST_B'
-                WHEN CAST(t.user_id AS BIGINT) % 10 >= 4 THEN 'AB_TEST_A'
-                ELSE 'Default'
-            END
-            ELSE CASE
-                WHEN get_json_object(CAST(t.partition_ab AS STRING), '$[0]') = 'jojpin-9mokha-rexQug' THEN 'AI'
-                WHEN get_json_object(CAST(t.partition_ab AS STRING), '$[0]') = '4f1a46ca-7baa-4452-9a40-ef21d9b33b57' THEN 'AB_TEST_A'
-                WHEN get_json_object(CAST(t.partition_ab AS STRING), '$[0]') = '4a04df21-c749-4808-8e55-3a0b74c084d2' THEN 'AB_TEST_B'
-                ELSE 'Default'
-            END
-        END AS ai_group
+            t.ab_group AS ai_group
         FROM bet_order_raw AS t
         WHERE
             t.created_at >= TIMESTAMP '2026-06-17 00:00:00'

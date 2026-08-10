@@ -125,15 +125,21 @@ def test_generate_query_ab_group_scan_filter():
         currency="CNY",
     )
     base = JOB.generate_query(**kwargs)
-    assert "AND CASE" not in base  # no scan filter by default
+    assert "AND t.ab_group =" not in base  # no scan filter by default
 
     only_ai = JOB.generate_query(**kwargs, ab_group="AI")
-    # bet_events' WHERE keeps only bets whose date-gated policy label is AI
-    # (partition_ab ids before the 2026-08-04 cutover, user-id last digit
-    # after), so with the run filter runs are computed over the AI stream.
+    # bet_events' WHERE keeps only bets stored with the AI label (the policy
+    # is derived once, upstream in slot_orders_ab_group), so with the run
+    # filter runs are computed over the AI stream alone.
     where = only_ai.split("bet_events")[1].split("bets AS")[0]
-    assert "END = 'AI'" in where
-    assert "DATE '2026-08-04'" in where and "% 10" in where
+    assert "AND t.ab_group = 'AI'" in where
+
+    # Games without AB test groups collapse the stored test labels into
+    # Default; games with them pass the stored label through.
+    assert "WHEN t.ab_group IN ('AB_TEST_A', 'AB_TEST_B') THEN 'Default'" in JOB.generate_query(
+        **{**kwargs, "game_id": "SS01"}
+    )
+    assert "WHEN t.ab_group IN" not in base  # SS03 keeps the full vocabulary
 
 
 def _ab_group_rows(rows, include_ab_tests=True):
@@ -145,6 +151,24 @@ def _ab_group_rows(rows, include_ab_tests=True):
     case = COMMON.ab_group_sql("ab_label", "user_id", "bj_date", include_ab_tests=include_ab_tests)
     sql = f"SELECT {case} FROM bets ORDER BY rowid".replace("DATE '", "'")
     return [r[0] for r in con.execute(sql)]
+
+
+def test_slot_orders_query_composition():
+    """The Athena-backing orders copy: raw rows plus the policy ab_group —
+    no status/op-code/currency filtering (downstream queries filter)."""
+    orders_path = REPO_ROOT / "jobs/etl/sagemaker/slot_machine/etl_slot_orders_ab_group.py"
+    sys.path.insert(0, str(REPO_ROOT / "jobs/etl/sagemaker"))
+    try:
+        spec = importlib.util.spec_from_file_location("_slot_orders_job", orders_path)
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    finally:
+        sys.path.pop(0)
+    sql = mod.generate_query(["SS03", "SS06"], date(2026, 8, 1), date(2026, 8, 5))
+    assert "AS ab_group" in sql and "DATE '2026-08-04'" in sql and "% 10" in sql
+    assert "t.game_id IN ('SS03', 'SS06')" in sql
+    assert "status =" not in sql and "op_code NOT IN" not in sql  # raw copy, unfiltered
 
 
 def test_ab_group_policy_date_gate():

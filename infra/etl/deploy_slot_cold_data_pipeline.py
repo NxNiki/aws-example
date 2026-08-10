@@ -32,6 +32,11 @@ SCHEDULE_CRON = "cron(0 9 * * ? *)"
 SCHEDULER_ROLE_NAME = "slot-cold-data-scheduler-role"
 
 SLOT_INPUT_ROOT = "s3://slotmachine-production-data-warehouse/transformed_data/partition_cold_data/bet_order"
+# The orders dataset (raw bets + policy-correct ab_group; backs the Athena
+# table bituslabs_ds.slot_orders_ab_group). Built FIRST each day; every other
+# slot step reads it instead of the warehouse, so ab_group is derived once.
+ORDERS_OUTPUT_ROOT = f"s3://{S3_BUCKET}/etl-results/jobs/output_slot_orders_ab_group"
+ORDERS_DATA_ROOT = f"{ORDERS_OUTPUT_ROOT}/orders"
 GAME_OUTPUT_ROOTS = {
     "SS01": f"s3://{S3_BUCKET}/etl-results/jobs/output_ss01_wucaishen_v2_cold_data",
     "SS01A": f"s3://{S3_BUCKET}/etl-results/jobs/output_ss01a_golden_goal_v2_cold_data",
@@ -55,6 +60,21 @@ GAME_VARIANTS = [
 
 def build_pipeline(session: PipelineSession) -> Pipeline:
     steps: list[ProcessingStep] = []
+
+    # Orders first: everything downstream reads it (rolling 3-day window).
+    orders_processor = spark_processor("slot-orders-ab-group-daily", session)
+    orders_step_args = orders_processor.run(
+        submit_app=f"{LOCAL_ROOT}/jobs/etl/sagemaker/slot_machine/etl_slot_orders_ab_group.py",
+        submit_py_files=SPARK_COMMON_PY_FILES,
+        arguments=[
+            "--input-root",
+            SLOT_INPUT_ROOT,
+            "--output-root",
+            ORDERS_OUTPUT_ROOT,
+        ],
+    )
+    steps.append(ProcessingStep(name="etl-slot-orders-ab-group", step_args=orders_step_args))
+
     for game_id, output_root in GAME_OUTPUT_ROOTS.items():
         processor = spark_processor(f"{game_id.lower()}-cold-data-daily", session)
         step_args = processor.run(
@@ -64,7 +84,7 @@ def build_pipeline(session: PipelineSession) -> Pipeline:
                 "--game-id",
                 game_id,
                 "--input-root",
-                SLOT_INPUT_ROOT,
+                ORDERS_DATA_ROOT,
                 "--output-root",
                 output_root,
             ],
@@ -73,7 +93,7 @@ def build_pipeline(session: PipelineSession) -> Pipeline:
             ProcessingStep(
                 name=f"etl-{game_id.lower()}",
                 step_args=step_args,
-                depends_on=[steps[-1].name] if steps else None,
+                depends_on=[steps[-1].name],
             )
         )
 
@@ -87,7 +107,7 @@ def build_pipeline(session: PipelineSession) -> Pipeline:
                 "--game-id",
                 game_id,
                 "--input-root",
-                SLOT_INPUT_ROOT,
+                ORDERS_DATA_ROOT,
                 "--output-root",
                 f"{GAME_OUTPUT_ROOTS[game_id]}_{ab_group.lower()}_run{min_run}",
                 "--min-mathtable-run",

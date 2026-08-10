@@ -32,8 +32,11 @@ LOOKBACK_DAYS = 3
 # another account) only trusts this role -- see feature_engineer_life_cycle_submit.py.
 ROLE = "arn:aws:iam::338568447110:role/service-role/AmazonSageMaker-ExecutionRole-20250102T151291"
 
-# game_id partitioning makes each per-game run prune to its own partition.
-INPUT_ROOT = "s3://slotmachine-production-data-warehouse/transformed_data/partition_cold_data/bet_order"
+# The orders dataset (raw bets + policy-correct ab_group) is the single
+# source for every downstream slot ETL; game_id partitioning makes each
+# per-game run prune to its own partition. Keep it fresh first (see
+# etl_slot_orders_ab_group_submit.py).
+INPUT_ROOT = f"s3://{S3_BUCKET}/etl-results/jobs/output_slot_orders_ab_group/orders"
 
 GAME_OUTPUT_ROOTS = {
     "SS01": f"s3://{S3_BUCKET}/etl-results/jobs/output_ss01_wucaishen_v2_cold_data",

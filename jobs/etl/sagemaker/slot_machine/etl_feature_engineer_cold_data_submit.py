@@ -22,7 +22,7 @@ from sagemaker.session import Session
 from bituslabs_ds.config import LOCAL_ROOT, REGION, S3_BUCKET
 from bituslabs_ds.sagemaker_etl import SPARK_COMMON_PY_FILES, spark_processor
 
-INPUT_ROOT = "s3://slotmachine-production-data-warehouse/transformed_data/partition_cold_data/bet_order"
+INPUT_ROOT = f"s3://{S3_BUCKET}/etl-results/jobs/output_slot_orders_ab_group/orders"
 OUTPUT_ROOT_BASE = f"s3://{S3_BUCKET}/etl-results/jobs"
 
 parser = argparse.ArgumentParser(description=__doc__)

@@ -37,7 +37,7 @@ SCHEDULE_CRON = "cron(0 20 1 * ? *)"
 # start-<pipeline> inline policy, so no second role is needed.
 SCHEDULER_ROLE_NAME = "slot-cold-data-scheduler-role"
 
-INPUT_ROOT = "s3://slotmachine-production-data-warehouse/transformed_data/partition_cold_data/bet_order"
+INPUT_ROOT = f"s3://{S3_BUCKET}/etl-results/jobs/output_slot_orders_ab_group/orders"
 OUTPUT_ROOT_BASE = f"s3://{S3_BUCKET}/etl-results/jobs"
 
 

@@ -104,6 +104,19 @@ def prune_partition_days(df, start: date, end: date, margin_days: int = 0):
     )
 
 
+def prune_period_days(df, start: date, end: date, margin_days: int = 0):
+    """Path-level pruning on the ``period=YYYY-MM-DD`` layout the derived
+    datasets use (e.g. slot_orders_ab_group), widened by ``margin_days``
+    (period follows the BEIJING activity date; boundary rows can sit one
+    partition over from a UTC scan bound). No-op without the column."""
+    if "period" not in df.columns:
+        print("no period partition column; relying on timestamp filters only")
+        return df
+    lo = str(start - timedelta(days=margin_days))
+    hi = str(end + timedelta(days=margin_days))
+    return df.filter(F.col("period").between(lo, hi))
+
+
 def beijing_today() -> date:
     return (datetime.now(timezone.utc) + timedelta(hours=BJ_UTC_OFFSET_HOURS)).date()
 
