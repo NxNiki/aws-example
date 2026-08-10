@@ -24,9 +24,14 @@ import polars as pl
 from bituslabs_ds.metrics.user_stats_aggregates import RETENTION_LOAD_EXTRA_DAYS, DataMetrics
 from dashboard_api.services.common import (
     SeriesError,
+    apply_row_filters,
+    attach_combo_group_cols,
+    attach_derived_group_cols,
     availability_cols,
     clean_floats,
     collect_window,
+    combo_group_cols,
+    combo_label_sort_key,
     iter_cohorts,
     load_lazy,
     projection_columns,
@@ -197,7 +202,9 @@ def load_date_bounds(cfg: dict[str, Any], granularity: str) -> tuple[Optional[st
 
 def load_group_values(cfg: dict[str, Any], granularity: str) -> dict[str, list[str]]:
     """Distinct selectable values for each configured user_group column, for the
-    cohort pickers. Reads the same parquet as the series endpoint."""
+    cohort pickers. Reads the same parquet as the series endpoint. Combo
+    columns order by combination size (singles, pairs, ..., 'other' last)
+    instead of alphabetically."""
     cols = user_group_cols(cfg)
     if not cols:
         return {}
@@ -207,7 +214,12 @@ def load_group_values(cfg: dict[str, Any], granularity: str) -> dict[str, list[s
     if not present:
         return {}
     df = lf.select(present).unique().collect()
-    return {c: sorted(str(v) for v in df[c].drop_nulls().unique().to_list()) for c in present}
+    combos = combo_group_cols(cfg)
+    out: dict[str, list[str]] = {}
+    for c in present:
+        values = [str(v) for v in df[c].drop_nulls().unique().to_list()]
+        out[c] = sorted(values, key=combo_label_sort_key(combos[c])) if c in combos else sorted(values)
+    return out
 
 
 _PERIOD_RE = re.compile(r"period=(\d{4}-\d{2}-\d{2})")
@@ -245,6 +257,11 @@ def load_group_values_in_range(cfg: dict[str, Any], granularity: str, start: str
     if not keep:
         return {c: [] for c in cols}
     lf = cast(pl.LazyFrame, read_files(keep, lazy_load=True, expand_s3_prefixes=False))
+    date_col = str(sd.get("date_col", "activity_date"))
+    # Derived / combo cohort columns (e.g. ss03_ai's mathtable_combo) and row
+    # filters don't exist in the raw files — attach the same chain load_lazy
+    # applies, so their availability matches the labels the pickers list.
+    lf = attach_combo_group_cols(cfg, apply_row_filters(cfg, attach_derived_group_cols(cfg, lf)), date_col)
     schema_names = set(lf.collect_schema().names())
     present = [c for c in cols if c in schema_names]
     if not present:
@@ -252,7 +269,6 @@ def load_group_values_in_range(cfg: dict[str, Any], granularity: str, start: str
     # Row-level date filter: path pruning only narrows hive (period=) layouts;
     # flat single-file datasets (e.g. fish_hunter daily_stats) need the rows
     # themselves bounded or availability degenerates to the full vocabulary.
-    date_col = str(sd.get("date_col", "activity_date"))
     if date_col in schema_names:
         lf = lf.with_columns(pl.col(date_col).cast(pl.Datetime, strict=False)).filter(
             (pl.col(date_col) >= datetime.combine(lo, datetime.min.time()))

@@ -257,55 +257,6 @@ def test_iter_cohorts_without_lifecycle_uses_stored_labels(monkeypatch):
     assert set(out2) == {"all"} and out2["all"].height == 4
 
 
-def test_iter_cohorts_all_respects_group_col_partition(monkeypatch):
-    """The ss-game ETLs UNION ALL every bet into a combined AB-test label AND a
-    per-mathtable re-partition of the same bets, so 'all' on ai_group must
-    aggregate only the configured disjoint labels — summing every row counted
-    bets twice (the total_bet inflation bug). Named groups stay untouched."""
-
-    # u1's bets appear twice: once combined ('AI'/'Default'), once per-mathtable.
-    df = pl.DataFrame(
-        {
-            "d": ["2026-06-01"] * 4,
-            "user_id": ["u1", "u2", "u1", "u2"],
-            "ai_group": ["AI", "Default", "mt_a", "Default_mt_a"],
-            "user_total_bet": [100.0, 50.0, 100.0, 50.0],
-        }
-    ).with_columns(pl.col("d").str.to_datetime())
-    cfg = {
-        "id": "g",
-        "stats_by_date": {
-            "group_col": "ai_group",
-            "group_col_partition": ["AI", "Default"],
-            "user_group_cols": ["ai_group", "life_cycle_group"],
-        },
-    }
-    out = dict(common.iter_cohorts(cfg, df, {}))
-    assert out["all"]["user_total_bet"].sum() == 150.0  # not 300 — no double count
-    assert set(out["all"]["ai_group"]) == {"AI", "Default"}
-
-    # Named groups (combined or re-partition) are unchanged.
-    named = dict(common.iter_cohorts(cfg, df, {"ai_group": ["AI", "mt_a"]}))
-    assert named["AI"]["user_total_bet"].sum() == 100.0
-    assert named["mt_a"]["user_total_bet"].sum() == 100.0
-
-    # Composes with lifecycle groups on the second cohort column.
-    first = pl.DataFrame({"user_id": ["u1", "u2"], "first_bet_date": ["2026-06-01", "2026-05-01"]}).with_columns(
-        pl.col("first_bet_date").str.to_datetime()
-    )
-    monkeypatch.setattr(common, "load_first_bet_dates", lambda cfg: first)
-    lc = dict(
-        common.iter_cohorts(
-            cfg, df, {}, lifecycle=[{"label": "new", "start": 0, "end": 3}], date_col="d", granularity="day"
-        )
-    )
-    assert lc["new"]["user_total_bet"].sum() == 100.0  # u1 only, combined row only
-
-    # Configs without a partition keep the old no-filter 'all'.
-    cfg2 = {"id": "g2", "stats_by_date": {"group_col": "ai_group", "user_group_cols": ["ai_group"]}}
-    assert dict(common.iter_cohorts(cfg2, df, {}))["all"].height == 4
-
-
 def test_iter_cohorts_grain_collapses_user_rows(monkeypatch):
     """Two-column grain (ab_group × mathtable): each bet lives in exactly one
     row, so group sums are always right, but per-user stats must collapse the
@@ -438,6 +389,306 @@ def test_attach_derived_group_cols_guards():
     }
     out2 = common.attach_derived_group_cols(cfg2, df.drop("ai_group").lazy()).collect()
     assert out2["ai_group"].to_list() == ["AI", None]
+
+
+def test_row_filters_applied_by_load_lazy(tmp_path):
+    """Cohort-scoped configs (e.g. the SS03 AI dashboard): stats_by_date.filters
+    keeps only the declared slice of the parquet, so every endpoint — including
+    the 'all' cohort — describes just that slice."""
+    df = pl.DataFrame(
+        {
+            "activity_date": ["2026-06-01"] * 4,
+            "user_id": ["u1", "u2", "u3", "u4"],
+            "ab_group": ["AI", "AB_TEST_A", "AI", "Default"],
+            "user_num_bets": [1, 2, 3, 4],
+        }
+    )
+    path = tmp_path / "daily_stats"
+    path.mkdir()
+    df.write_parquet(path / "part.parquet")
+    cfg = {
+        "id": "g",
+        "stats_by_date": {"files": {"day": [str(path)]}, "filters": {"ab_group": ["AI"]}},
+    }
+    lf, _ = common.load_lazy(cfg, "day")
+    out = lf.collect()
+    assert sorted(out["user_id"].to_list()) == ["u1", "u3"]
+
+    # A scalar value works like a one-element list.
+    cfg["stats_by_date"]["filters"] = {"ab_group": "Default"}
+    assert common.load_lazy(cfg, "day")[0].collect()["user_id"].to_list() == ["u4"]
+
+    # A filter on a column the data doesn't have must fail loudly — skipping it
+    # would serve the whole game's rows under a config that promises a slice.
+    cfg["stats_by_date"]["filters"] = {"missing_col": ["AI"]}
+    with pytest.raises(common.SeriesError, match="missing_col"):
+        common.load_lazy(cfg, "day")
+
+    # Filters see derived group columns (attached before filtering applies).
+    cfg["stats_by_date"]["filters"] = {"ai_group": ["non-AI"]}
+    cfg["stats_by_date"]["derived_group_cols"] = {
+        "ai_group": {"source": "ab_group", "groups": {"AI": ["AI"]}, "default": "non-AI"}
+    }
+    out = common.load_lazy(cfg, "day")[0].collect()
+    assert sorted(out["user_id"].to_list()) == ["u2", "u4"]
+
+
+def _combo_cfg(path, filters=None, **combo_opts):
+    sd = {
+        "files": {"day": [str(path)]},
+        "user_group_cols": ["mathtable_combo"],
+        "user_row_grain": ["mathtable"],
+        "combo_group_cols": {
+            "mathtable_combo": {
+                "source": "mathtable",
+                "weight": "user_num_bets",
+                "strip_prefix": "normal_",
+                "label_prefix": "ai",
+                **combo_opts,
+            }
+        },
+    }
+    if filters:
+        sd["filters"] = filters
+    return {"id": "g", "stats_by_date": sd}
+
+
+def test_combo_group_cols_label_per_user_day(tmp_path):
+    """ss03-AI's mathtable_combo picker: each user-day is labeled with the
+    SET of mathtables the user played that day, listed alphabetically;
+    every row of the user-day carries the same label."""
+    df = pl.DataFrame(
+        {
+            "activity_date": ["2026-06-01"] * 4 + ["2026-06-02"],
+            "user_id": ["u1", "u1", "u1", "u2", "u1"],
+            "ab_group": ["AI"] * 5,
+            # u1 day1: shi dominates zero (12 > 10 bets, summed across
+            # bet_levels); u2 plays a single table; u1 day2 relabels.
+            "mathtable": ["normal_zero", "normal_shi", "normal_shi", "normal_ichi", "normal_zero"],
+            "bet_level": [1.0, 1.0, 2.0, 1.0, 1.0],
+            "user_num_bets": [10, 5, 7, 3, 4],
+        }
+    )
+    path = tmp_path / "daily_stats"
+    path.mkdir()
+    df.write_parquet(path / "part.parquet")
+    out = common.load_lazy(_combo_cfg(path), "day")[0].collect()
+    by = {(r["activity_date"], r["user_id"], r["mathtable"]): r["mathtable_combo"] for r in out.iter_rows(named=True)}
+    assert by[("2026-06-01", "u1", "normal_zero")] == "ai_shi_zero"
+    assert by[("2026-06-01", "u1", "normal_shi")] == "ai_shi_zero"
+    assert by[("2026-06-01", "u2", "normal_ichi")] == "ai_ichi"
+    assert by[("2026-06-02", "u1", "normal_zero")] == "ai_zero"
+
+    # The label is an unordered set: which table dominates doesn't matter.
+    tie = pl.DataFrame(
+        {
+            "activity_date": ["2026-06-01"] * 2,
+            "user_id": ["u3", "u3"],
+            "mathtable": ["normal_zero", "normal_ichi"],
+            "bet_level": [1.0, 1.0],
+            "user_num_bets": [3, 10],
+        }
+    )
+    tie.write_parquet(path / "part.parquet")
+    out = common.load_lazy(_combo_cfg(path), "day")[0].collect()
+    assert out["mathtable_combo"].to_list() == ["ai_ichi_zero"] * 2
+
+
+def test_combo_group_cols_order_tiebreak_and_max_tables(tmp_path):
+    """Weight picks WHICH tables enter a capped label (never their order —
+    the label lists them alphabetically, so go:ni == ni:go); equal-weight
+    selection ties break on the order column (first played) when stored."""
+    path = tmp_path / "daily_stats"
+    path.mkdir()
+    # Three tables tie at 10 bets, cap 2: the order column selects c then b
+    # (played first), and the label lists the pair alphabetically.
+    tie = pl.DataFrame(
+        {
+            "activity_date": ["2026-06-01"] * 3,
+            "user_id": ["u1"] * 3,
+            "mathtable": ["normal_a", "normal_b", "normal_c"],
+            "bet_level": [1.0] * 3,
+            "user_num_bets": [10, 10, 10],
+            "user_first_spin_id": [300, 200, 100],
+        }
+    )
+    tie.write_parquet(path / "part.parquet")
+    cfg_tie = _combo_cfg(path, order="user_first_spin_id", separator="-", max_tables=2)
+    out = common.load_lazy(cfg_tie, "day")[0].collect()
+    assert out["mathtable_combo"].to_list() == ["ai_b-c-*"] * 3
+    # Order column configured but absent from the data: alphabetical
+    # fallback selects a then b.
+    tie.drop("user_first_spin_id").write_parquet(path / "part.parquet")
+    out = common.load_lazy(cfg_tie, "day")[0].collect()
+    assert out["mathtable_combo"].to_list() == ["ai_a-b-*"] * 3
+    # Five tables, distinct weights: label keeps the top 4 and flags the rest.
+    five = pl.DataFrame(
+        {
+            "activity_date": ["2026-06-01"] * 5,
+            "user_id": ["u2"] * 5,
+            "mathtable": [f"normal_m{i}" for i in range(5)],
+            "bet_level": [1.0] * 5,
+            "user_num_bets": [50, 40, 30, 20, 10],
+            "user_first_spin_id": list(range(5)),
+        }
+    )
+    five.write_parquet(path / "part.parquet")
+    cfg = _combo_cfg(path, separator="-", max_tables=4)
+    out = common.load_lazy(cfg, "day")[0].collect()
+    assert out["mathtable_combo"].to_list() == ["ai_m0-m1-m2-m3-*"] * 5
+    # Exactly max_tables tables merges into the SAME '-*' label as longer
+    # days with the same leading four (the marker reads "zero or more
+    # further tables"), so 4 and 4+ aren't split.
+    four = five.head(4)
+    four.write_parquet(path / "part.parquet")
+    out = common.load_lazy(cfg, "day")[0].collect()
+    assert out["mathtable_combo"].to_list() == ["ai_m0-m1-m2-m3-*"] * 4
+    # Below the cap: plain label, no marker.
+    five.head(3).write_parquet(path / "part.parquet")
+    out = common.load_lazy(cfg, "day")[0].collect()
+    assert out["mathtable_combo"].to_list() == ["ai_m0-m1-m2"] * 3
+
+
+def test_combo_group_cols_min_user_days_folds_rare_labels(tmp_path):
+    """Combinations with fewer than min_user_days (user, day) samples in the
+    full daily history fold into other_label, so the picker only lists
+    well-populated combo groups; the vocabulary is cached per config."""
+    common._combo_vocab_cache.clear()
+    path = tmp_path / "daily_stats"
+    path.mkdir()
+    df = pl.DataFrame(
+        {
+            # normal_a alone: 2 user-day samples (u1 d1, u2 d1); normal_b: 1.
+            "activity_date": ["2026-06-01", "2026-06-01", "2026-06-02"],
+            "user_id": ["u1", "u2", "u3"],
+            "mathtable": ["normal_a", "normal_a", "normal_b"],
+            "bet_level": [1.0, 1.0, 1.0],
+            "user_num_bets": [5, 5, 5],
+        }
+    )
+    df.write_parquet(path / "part.parquet")
+    cfg = _combo_cfg(path, min_user_days=2, other_label="ai_other")
+    cfg["id"] = "g-vocab"
+    out = common.load_lazy(cfg, "day")[0].collect().sort("user_id")
+    assert out["mathtable_combo"].to_list() == ["ai_a", "ai_a", "ai_other"]
+    values = series_mod.load_group_values(cfg, "day")
+    assert values["mathtable_combo"] == ["ai_a", "ai_other"]
+
+    # other_label defaults to '<label_prefix>_other' when not configured.
+    common._combo_vocab_cache.clear()
+    cfg2 = _combo_cfg(path, min_user_days=2)
+    cfg2["id"] = "g-vocab-2"
+    out2 = common.load_lazy(cfg2, "day")[0].collect().sort("user_id")
+    assert out2["mathtable_combo"].to_list() == ["ai_a", "ai_a", "ai_other"]
+
+
+def test_load_group_values_orders_combo_labels_by_size(tmp_path):
+    """The combo picker lists singles first, then pairs, then 'other' —
+    not plain alphabetical (which would interleave 'a:b' between 'a' and
+    'b' and bury the residual bucket mid-list)."""
+    common._combo_vocab_cache.clear()
+    path = tmp_path / "daily_stats"
+    path.mkdir()
+    pl.DataFrame(
+        {
+            # 2 samples each: single a, single b, pair a:b; single c once -> other.
+            "activity_date": ["2026-06-01"] * 4 + ["2026-06-02"] * 5,
+            "user_id": ["u1", "u2", "u3", "u3", "u1", "u2", "u3", "u3", "u4"],
+            "mathtable": [
+                "normal_a",
+                "normal_b",
+                "normal_a",
+                "normal_b",
+                "normal_a",
+                "normal_b",
+                "normal_a",
+                "normal_b",
+                "normal_c",
+            ],
+            "bet_level": [1.0] * 9,
+            "user_num_bets": [5, 5, 9, 5, 5, 5, 9, 5, 5],
+        }
+    ).with_columns(pl.col("activity_date").str.to_datetime()).write_parquet(path / "part.parquet")
+    cfg = _combo_cfg(path, separator=":", min_user_days=2, other_label="ai_other", max_tables=2)
+    cfg["id"] = "g-order"
+    values = series_mod.load_group_values(cfg, "day")
+    # Pairs carry the ':*' overflow marker (2-or-more tables share the label)
+    # and still sort in the pairs block, after all singles, with 'other' last.
+    assert values["mathtable_combo"] == ["ai_a", "ai_b", "ai_a:b:*", "ai_other"]
+
+
+def test_group_values_in_range_covers_combo_cols(tmp_path):
+    """Availability behind the pickers' grayed/hidden entries: derived and
+    combo columns don't exist in the raw parquet, so the range scan attaches
+    the same column chain as load_lazy — a combo label only played outside
+    the picked date range must show as unavailable."""
+    root = tmp_path / "daily_stats"
+    for day, table in (("2026-06-01", "normal_a"), ("2026-06-02", "normal_b")):
+        (root / f"period={day}").mkdir(parents=True)
+        pl.DataFrame(
+            {
+                "activity_date": [day],
+                "user_id": ["u1"],
+                "mathtable": [table],
+                "bet_level": [1.0],
+                "user_num_bets": [5],
+            }
+        ).with_columns(pl.col("activity_date").str.to_datetime()).write_parquet(root / f"period={day}" / "part.parquet")
+    cfg = _combo_cfg(root)
+    out = series_mod.load_group_values_in_range(cfg, "day", "2026-06-02", "2026-06-02")
+    assert out["mathtable_combo"] == ["ai_b"]
+
+
+def test_combo_group_cols_after_filters_and_guards(tmp_path):
+    """The combination counts only the config's filtered slice (an AI-only
+    config must not fold a user's Default-group rows into their combo), and
+    missing inputs / already-stored columns are left untouched."""
+    df = pl.DataFrame(
+        {
+            "activity_date": ["2026-06-01"] * 2,
+            "user_id": ["u1", "u1"],
+            "ab_group": ["AI", "Default"],
+            "mathtable": ["normal_zero", "normal_shi"],
+            "bet_level": [1.0, 1.0],
+            "user_num_bets": [5, 50],
+        }
+    )
+    path = tmp_path / "daily_stats"
+    path.mkdir()
+    df.write_parquet(path / "part.parquet")
+    out = common.load_lazy(_combo_cfg(path, filters={"ab_group": ["AI"]}), "day")[0].collect()
+    assert out["mathtable_combo"].to_list() == ["ai_zero"]  # Default row excluded entirely
+
+    # A stored column with the same name wins; a missing weight column skips.
+    stored = df.with_columns(pl.lit("stored").alias("mathtable_combo"))
+    cfg = _combo_cfg(path)
+    assert common.attach_combo_group_cols(cfg, stored.lazy(), "activity_date").collect()[
+        "mathtable_combo"
+    ].to_list() == ["stored", "stored"]
+    out2 = common.attach_combo_group_cols(cfg, df.drop("user_num_bets").lazy(), "activity_date").collect()
+    assert "mathtable_combo" not in out2.columns
+
+
+def test_combo_group_cols_keep_period_pruning(tmp_path):
+    """The window-cache period predicate must still prune parquet paths under
+    the combo window expressions (period is in the partition keys precisely
+    so polars can push it down) — otherwise every request re-reads the full
+    history and the ss01-scale latency fix regresses."""
+    root = tmp_path / "daily_stats"
+    for d in ("2026-06-01", "2026-06-02", "2026-06-03"):
+        (root / f"period={d}").mkdir(parents=True)
+        pl.DataFrame(
+            {
+                "activity_date": [d],
+                "user_id": ["u1"],
+                "mathtable": ["normal_zero"],
+                "bet_level": [1.0],
+                "user_num_bets": [1],
+            }
+        ).write_parquet(root / f"period={d}" / "part.parquet")
+    lf, _ = common.load_lazy(_combo_cfg(root), "day")
+    plan = common._prune_periods(lf, "day", "2026-06-02", "2026-06-02").explain()
+    assert "other sources" not in plan  # 1 of 3 files scanned, not all
 
 
 def test_iter_cohorts_derived_group_collapses_grain(monkeypatch):

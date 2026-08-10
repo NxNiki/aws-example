@@ -277,7 +277,7 @@ def projection_columns(
     The user-row parquet carries every ``user_*`` metric column, but a panel
     plots a handful — projecting the window collect to just the needed columns
     (parquet pushdown reads only their chunks from S3) shrinks load time and
-    cache size regardless of the date span. Includes the cohort/grain/partition
+    cache size regardless of the date span. Includes the cohort/grain
     dimensions, each requested metric's transitive ``user_*`` deps, and the
     components collapse_user_rows recombines (a ratio without its numerator/
     denominator would be silently dropped; a weighted mean without its weight
@@ -292,9 +292,6 @@ def projection_columns(
     lc = lifecycle_col(cfg)
     if lc:
         cols.add(lc)
-    part_col, _ = group_col_partition(cfg)
-    if part_col:
-        cols.add(part_col)
     rcol, _, _ = range_group_cfg(cfg)
     if rcol:
         cols.add(rcol)
@@ -431,17 +428,222 @@ def attach_derived_group_cols(cfg: dict[str, Any], lf: pl.LazyFrame) -> pl.LazyF
     return lf.with_columns(exprs) if exprs else lf
 
 
-def group_col_partition(cfg: dict[str, Any]) -> tuple[Optional[str], list[str]]:
-    """(group_col, disjoint labels) for configs whose group column is NOT a
-    partition — the ss-game ETLs UNION ALL every bet into a combined AB-test
-    label AND a per-mathtable re-partition of the same bets, so the "all"
-    cohort must aggregate only the combined labels (``group_col_partition`` in
-    the config) or every total roughly doubles. ([], no filtering) when the
-    config doesn't set it."""
-    sd = stats_by_date_cfg(cfg)
-    values = [str(v) for v in (sd.get("group_col_partition") or [])]
-    col = str(sd.get("group_col") or "") or None
-    return (col, values) if col and values else (None, [])
+def combo_group_cols(cfg: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Virtual cohort columns labeling each (period, user) by the COMBINATION
+    of a grain column's values the user actually hit that period.
+
+    Dashboard feature: ss03-AI's "mathtable_combo" picker — each user-day is
+    labeled with the mathtables the user played that day, ordered by the
+    user's bet count on each (dominant first, ties alphabetical), e.g. a day
+    on normal_zero + normal_shi + normal_ichi → ``ai_zero_shi_ichi``.
+    Configured as ``stats_by_date.combo_group_cols``::
+
+        combo_group_cols:
+          mathtable_combo:
+            source: mathtable        # grain column whose values combine
+            weight: user_num_bets    # per-row count that orders the label
+            strip_prefix: "normal_"  # optional: shorten each value
+            label_prefix: "ai"       # optional: prepended as "<prefix>_"
+            separator: "-"           # optional: joins the values (default _)
+            order: user_first_spin_id  # optional: tie-break = first played
+            max_tables: 4            # optional: cap label length, '+' suffix
+            min_user_days: 30        # optional: rarer labels -> other_label
+            other_label: "ai_other"  # bucket for sub-threshold labels
+
+    Behavior: attached in ``load_lazy`` AFTER ``filters``, so only the
+    config's slice counts toward a user's combination. The label is an
+    UNORDERED set, listed alphabetically — weight decides WHICH values make
+    the label (the period's top ``max_tables``), never their order, so
+    go:ni and ni:go are one group. Equal-weight selection ties break on the
+    ``order`` column's per-value minimum (first appearance in the period)
+    when configured and stored, else alphabetically. Every combination of
+    ``max_tables`` OR MORE values gets a trailing ``<separator>*`` (glob
+    style: zero or more further tables) — so an exactly-N day and a longer
+    day with the same top values share one label.
+    With ``min_user_days`` a label must reach that many (user, day) samples
+    in the FULL daily history to keep its name; rarer combinations fold into
+    ``other_label`` (default ``<label_prefix>_other``). The vocabulary comes
+    from the daily data at every granularity, cached like first-bet dates,
+    so pickers stay stable across date windows. Every row of a user's period
+    carries the same label, so selecting a combo cohort keeps whole
+    user-periods and the grain collapse combines the member mathtables'
+    stats per user. At week/month granularity the combination spans the
+    whole period, so labels are generally longer than the daily ones.
+    """
+    raw = stats_by_date_cfg(cfg).get("combo_group_cols") or {}
+    out: dict[str, dict[str, Any]] = {}
+    for name, spec in raw.items():
+        source = str((spec or {}).get("source") or "")
+        weight = str((spec or {}).get("weight") or "")
+        if not source or not weight:
+            continue
+        out[str(name)] = {
+            "source": source,
+            "weight": weight,
+            "strip_prefix": str((spec or {}).get("strip_prefix") or ""),
+            "label_prefix": str((spec or {}).get("label_prefix") or ""),
+            "separator": str((spec or {}).get("separator") or "_"),
+            "order": str((spec or {}).get("order") or ""),
+            "max_tables": int((spec or {}).get("max_tables") or 0),
+            "min_user_days": int((spec or {}).get("min_user_days") or 0),
+            "other_label": str((spec or {}).get("other_label") or ""),
+        }
+    return out
+
+
+# Combo-label vocabulary cache: labels with >= min_user_days DAILY samples,
+# per (config id, combo column). Recomputed per TTL from the full daily
+# history (like the first-bet cache) so picker values stay stable across
+# requests and date windows, and the per-request lazy plan only gains a
+# cheap is_in — no count-per-label window that would break period pruning.
+_COMBO_VOCAB_TTL_S = 900
+_combo_vocab_cache: dict[tuple[str, str], tuple[float, set[str]]] = {}
+_combo_vocab_lock = threading.Lock()
+
+
+def combo_label_vocab(cfg: dict[str, Any], name: str) -> set[str]:
+    """Labels of combo column ``name`` with at least ``min_user_days`` distinct
+    (user, day) samples in the config's full daily history."""
+    config_id = cfg.get("id")
+    if not config_id:
+        raise SeriesError("config dict is missing 'id'; cannot safely cache combo vocabularies")
+    key = (str(config_id), name)
+    min_user_days = combo_group_cols(cfg)[name]["min_user_days"]
+    with _combo_vocab_lock:
+        hit = _combo_vocab_cache.get(key)
+        if hit and time.monotonic() - hit[0] < _COMBO_VOCAB_TTL_S:
+            return hit[1]
+        lf, date_col = load_lazy(cfg, "day", raw_combo_labels=True)
+        if name not in set(lf.collect_schema().names()):
+            return set()
+        counts = (
+            lf.select(date_col, "user_id", name)
+            .unique()
+            .group_by(name)
+            .len()
+            .filter(pl.col("len") >= min_user_days)
+            .collect()
+        )
+        vocab = set(counts[name].drop_nulls().to_list())
+        logger.info("combo vocab: %s.%s -> %d labels >= %d user-days", config_id, name, len(vocab), min_user_days)
+        _combo_vocab_cache[key] = (time.monotonic(), vocab)
+        return vocab
+
+
+def combo_label_sort_key(spec: dict[str, Any]) -> Callable[[str], tuple[int, int, str]]:
+    """Picker ordering for a combo column's labels: fewest tables first
+    (singles, then pairs, ...), alphabetical within a size, and the
+    min_user_days ``other`` bucket last."""
+    other = spec["other_label"] or (f"{spec['label_prefix']}_other" if spec["label_prefix"] else "other")
+    sep = spec["separator"]
+
+    def key(label: str) -> tuple[int, int, str]:
+        if label == other:
+            return (2, 0, label)
+        shown = label.removesuffix(sep + "*")
+        return (1, shown.count(sep) + 1, label)
+
+    return key
+
+
+def attach_combo_group_cols(
+    cfg: dict[str, Any], lf: pl.LazyFrame, date_col: str, raw_labels: bool = False
+) -> pl.LazyFrame:
+    """Add each configured combination group column (see ``combo_group_cols``).
+    Skips a column whose inputs are missing and never overwrites a stored one.
+    ``raw_labels`` skips the min_user_days vocabulary fold (used when BUILDING
+    that vocabulary, which needs every label's raw frequency).
+
+    The window partitions include the hive ``period`` column (redundant with
+    date_col — one period per date value) because polars only pushes the
+    window-cache period/date predicates down to the parquet scan when they
+    reference partition keys; without it every request would re-read the
+    full history instead of the pruned window."""
+    specs = combo_group_cols(cfg)
+    if not specs:
+        return lf
+    available = set(lf.collect_schema().names())
+    if "user_id" not in available or date_col not in available:
+        return lf
+    keys = (["period"] if "period" in available else []) + [date_col, "user_id"]
+    for name, spec in specs.items():
+        if name in available or spec["source"] not in available or spec["weight"] not in available:
+            continue
+        val = pl.col(spec["source"]).cast(pl.String)
+        if spec["strip_prefix"]:
+            val = val.str.strip_prefix(spec["strip_prefix"])
+        vcol, wcol, ocol = f"_combo_val_{name}", f"_combo_w_{name}", f"_combo_o_{name}"
+        weight = pl.col(spec["weight"]).sum().over(keys + [spec["source"]])
+        # Tie-break: the value's first appearance in the period when the order
+        # column is configured AND stored (older datasets lack it -> falls
+        # back to the alphabetical tie via vcol below).
+        use_order = bool(spec["order"]) and spec["order"] in available
+        pos = pl.col(spec["order"]).min().over(keys + [spec["source"]]) if use_order else pl.lit(0)
+        lf = lf.with_columns(val.alias(vcol), weight.alias(wcol), pos.alias(ocol))
+        # Weight order picks the period's top tables; the label then lists
+        # them alphabetically (an unordered set — go:ni == ni:go).
+        by_weight = (
+            pl.col(vcol).sort_by([wcol, ocol, vcol], descending=[True, False, False]).unique(maintain_order=True)
+        )
+        max_tables, sep = spec["max_tables"], spec["separator"]
+        if max_tables > 0:
+            # '<sep>*' = glob-style "zero or more further tables": days with
+            # exactly max_tables and longer days share the capped label.
+            label = by_weight.head(max_tables).sort().str.join(sep).over(keys) + pl.when(
+                pl.col(vcol).n_unique().over(keys) >= max_tables
+            ).then(pl.lit(sep + "*")).otherwise(pl.lit(""))
+        else:
+            label = by_weight.sort().str.join(sep).over(keys)
+        if spec["label_prefix"]:
+            label = pl.lit(spec["label_prefix"] + "_") + label
+        if not raw_labels and spec["min_user_days"] > 0:
+            other = spec["other_label"] or (f"{spec['label_prefix']}_other" if spec["label_prefix"] else "other")
+            vocab = sorted(combo_label_vocab(cfg, name))
+            label = pl.when(label.is_in(vocab)).then(label).otherwise(pl.lit(other))
+        lf = lf.with_columns(label.alias(name)).drop([vcol, wcol, ocol])
+    return lf
+
+
+def row_filters(cfg: dict[str, Any]) -> dict[str, list[str]]:
+    """Config-declared row filters restricting a whole dashboard to a slice of
+    the stored parquet.
+
+    Dashboard feature: cohort-scoped configs — e.g. the "SS03 AI" dashboard
+    reads the same daily_stats parquet as the full ss03 config but keeps only
+    ``ab_group = AI`` rows, so every picker, series, deep-dive and the 'all'
+    cohort describe just that slice. Configured as ``stats_by_date.filters``::
+
+        filters:
+          ab_group: [AI]
+
+    Behavior: each entry keeps rows whose column (stored or derived, compared
+    as strings) matches one of the listed values; multiple entries AND
+    together. Applied in ``load_lazy``, before any caching or aggregation.
+    """
+    raw = stats_by_date_cfg(cfg).get("filters") or {}
+    out: dict[str, list[str]] = {}
+    for col, values in raw.items():
+        vals = values if isinstance(values, list) else [values]
+        cleaned = [str(v) for v in vals if v is not None]
+        if cleaned:
+            out[str(col)] = cleaned
+    return out
+
+
+def apply_row_filters(cfg: dict[str, Any], lf: pl.LazyFrame) -> pl.LazyFrame:
+    """Apply each configured row filter (see ``row_filters``) to the lazy
+    frame. A filter column missing from the data is an error, not a skip —
+    silently dropping the filter would serve the whole game's rows under a
+    config that promises a slice of them."""
+    filters = row_filters(cfg)
+    if not filters:
+        return lf
+    available = set(lf.collect_schema().names())
+    for col, values in filters.items():
+        if col not in available:
+            raise SeriesError(f"stats_by_date.filters column '{col}' not found in the data")
+        lf = lf.filter(pl.col(col).cast(pl.String).is_in(values))
+    return lf
 
 
 # Per-config first-bet map. Derived, not stored: the daily parquet keeps the
@@ -533,7 +735,7 @@ def _scan_source(path: str) -> pl.LazyFrame:
     return pl.scan_parquet(files, hive_partitioning=hive)
 
 
-def load_lazy(cfg: dict[str, Any], granularity: str) -> tuple[pl.LazyFrame, str]:
+def load_lazy(cfg: dict[str, Any], granularity: str, raw_combo_labels: bool = False) -> tuple[pl.LazyFrame, str]:
     """Lazily open the user-level parquet for a granularity; return (lf, date_col)."""
     sd = stats_by_date_cfg(cfg)
     date_col = str(sd.get("date_col", "activity_date"))
@@ -542,7 +744,8 @@ def load_lazy(cfg: dict[str, Any], granularity: str) -> tuple[pl.LazyFrame, str]
         raise SeriesError(f"No stats_by_date files configured for granularity '{granularity}'")
     scans = [_scan_source(str(p)) for p in (files if isinstance(files, list) else [files])]
     lf = scans[0] if len(scans) == 1 else pl.concat(scans, how="diagonal_relaxed")
-    return attach_derived_group_cols(cfg, lf), date_col
+    lf = apply_row_filters(cfg, attach_derived_group_cols(cfg, lf))
+    return attach_combo_group_cols(cfg, lf, date_col, raw_labels=raw_combo_labels), date_col
 
 
 def to_iso_date(value: Any) -> str:
@@ -729,7 +932,6 @@ def iter_cohorts(
     cols = effective_cohort_cols(cfg)
     lc = lifecycle_col(cfg) if lifecycle else None
     by_label = {str(g["label"]): g for g in lifecycle or []}
-    part_col, partition = group_col_partition(cfg)
     grain = user_row_grain(cfg)
     rcol, _, _ = range_group_cfg(cfg)
     range_by_label = {str(g["label"]): g for g in range_groups or []} if rcol else {}
@@ -763,11 +965,6 @@ def iter_cohorts(
             if g.get("max") is not None:
                 cond = cond & (pl.col(col) <= float(g["max"]))
             return df_.filter(cond)
-        if value == "all" and col == part_col and col in df_.columns:
-            # "all" on a non-partition group column keeps only the disjoint
-            # labels; the other values re-partition the same bets and would
-            # double-count (see group_col_partition).
-            return df_.filter(pl.col(col).is_in(partition))
         return apply_cohort(df_, col, value)
 
     if not cols:

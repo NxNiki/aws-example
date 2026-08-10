@@ -23,6 +23,14 @@ overwrites exactly the ``period=`` directories it produced. Sequence metrics
 (delta-t / delta-bet / mathtable_change / FG trigger) are DAY-partitioned, so
 windowed runs compose exactly.
 
+``--min-mathtable-run N`` keeps only bets inside a stretch of >= N consecutive
+same-mathtable bets (per user per Beijing day) — the ss03 AI mathtable-combo
+dashboard reads a run-filtered output so brief mathtable dabbles don't count
+toward a user's daily combination. ``--ab-group`` restricts the scan to one
+AB partition (e.g. AI) so a cohort-specific dataset stays small. Write
+filtered outputs to their own suffixed root (``..._ai_run30``) so the
+unfiltered dashboards stay untouched.
+
 Runs standalone on the SageMaker Spark container -- no bituslabs_ds imports
 (ETL constants from bituslabs_ds.config are inlined below). Submit with
 etl_game_stats_daily_by_user_group_cold_data_submit.py.
@@ -60,6 +68,14 @@ GAME_CONFIG = {
     "SS02": {"fourscatter_lead": True},
     "SS03": {"ab_test_groups": True},
     "SS06": {"ab_test_groups": True},
+}
+
+# --ab-group choices: labels of the partitions selectable by raw id equality.
+# 'Default' is every OTHER partition id, so it can't be expressed this way.
+AB_GROUP_IDS = {
+    "AI": AI_GROUP_ID,
+    "AB_TEST_A": AB_TEST_GROUP_A,
+    "AB_TEST_B": AB_TEST_GROUP_B,
 }
 
 AGG_LEVELS = {
@@ -128,6 +144,45 @@ def _math_table_expr(game_id: str) -> str:
     return "t.math_table_id"
 
 
+def _mathtable_run_ctes(day_window: str, min_run: int) -> str:
+    """CTE chain keeping only bets inside a run of >= min_run consecutive
+    same-mathtable bets. Runs are per user per activity_date like every other
+    sequence computation here, so windowed ETL runs compose exactly; a stretch
+    crossing Beijing midnight counts as two separate runs."""
+    return f"""mathtable_run_flags AS (
+            SELECT
+                t.*,
+                CASE
+                    WHEN LAG(t.mathtable) OVER ({day_window}) IS NULL THEN 1
+                    WHEN LAG(t.mathtable) OVER ({day_window}) <> t.mathtable THEN 1
+                    ELSE 0
+                END AS mathtable_run_start
+            FROM bets AS t
+        ),
+
+        mathtable_runs AS (
+            SELECT
+                t.*,
+                SUM(t.mathtable_run_start) OVER (
+                    {day_window}
+                    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                ) AS mathtable_run_id
+            FROM mathtable_run_flags AS t
+        ),
+
+        long_run_bets AS (
+            SELECT * FROM (
+                SELECT
+                    t.*,
+                    COUNT(*) OVER (
+                        PARTITION BY t.user_id, t.activity_date, t.mathtable_run_id
+                    ) AS mathtable_run_len
+                FROM mathtable_runs AS t
+            ) AS runs
+            WHERE runs.mathtable_run_len >= {min_run}
+        )"""
+
+
 def generate_query(
     stats_agg_col: str,
     game_id: str,
@@ -136,6 +191,8 @@ def generate_query(
     scan_start_utc: datetime,
     scan_end_utc: datetime,
     currency: str,
+    min_mathtable_run: int = 0,
+    ab_group: str = "",
 ) -> str:
     """Spark-SQL version of the per-game generate_query over ``bet_order_raw``.
 
@@ -146,6 +203,14 @@ def generate_query(
     """
     bj_ts = f"CAST(t.created_at AS TIMESTAMP) + INTERVAL '{BJ_UTC_OFFSET_HOURS}' HOUR"
     day_window = "PARTITION BY t.user_id, t.activity_date ORDER BY t.spin_id, t.created_at"
+    # With the run filter on, sequence metrics are computed on the RETAINED
+    # stream: surviving bets on either side of a dropped short run count as
+    # adjacent (their delta-t spans the dropped run's wall time).
+    run_ctes = f"\n        {_mathtable_run_ctes(day_window, min_mathtable_run)},\n" if min_mathtable_run > 0 else ""
+    bets_source = "long_run_bets" if min_mathtable_run > 0 else "bets"
+    # Filtering on the raw partition id keeps the scan cheap and, with the run
+    # filter on, computes runs over the cohort's own bet stream only.
+    ab_where = f"\n                AND {PARTITION_AB_FIRST} = '{AB_GROUP_IDS[ab_group]}'" if ab_group else ""
     return dedent(
         f"""
         WITH bet_events AS (
@@ -166,7 +231,7 @@ def generate_query(
                 AND t.status = 'COMPLETED'
                 AND t.op_code NOT IN {EXCLUDED_OP_CODES}
                 AND CAST(t.created_at AS TIMESTAMP) >= TIMESTAMP '{scan_start_utc:%Y-%m-%d %H:%M:%S}'
-                AND CAST(t.created_at AS TIMESTAMP) < TIMESTAMP '{scan_end_utc:%Y-%m-%d %H:%M:%S}'
+                AND CAST(t.created_at AS TIMESTAMP) < TIMESTAMP '{scan_end_utc:%Y-%m-%d %H:%M:%S}'{ab_where}
         ),
 
         bets AS (
@@ -185,7 +250,7 @@ def generate_query(
                 {_ab_group_case(game_id)}
             FROM bet_events AS t
         ),
-
+{run_ctes}
         user_bets AS (
             -- Sequence metrics (delta_t / delta_bet / mathtable_change / FG
             -- trigger) are DAY-partitioned: each activity_date is
@@ -215,7 +280,7 @@ def generate_query(
                     WHEN LAG(t.mathtable) OVER ({day_window}) <> t.mathtable THEN 1
                     ELSE 0
                 END AS mathtable_change
-            FROM bets AS t
+            FROM {bets_source} AS t
         ),
 
         user_stats AS (
@@ -225,6 +290,10 @@ def generate_query(
                 t.mathtable,
                 t.bet_level,
                 t.user_id,
+
+                -- first-appearance order of this grain row within the user's
+                -- period (dashboards break combination-label ties with it):
+                MIN(t.spin_id) AS user_first_spin_id,
 
                 -- total number of bets:
                 COUNT(t.user_id) AS user_num_bets,
@@ -277,6 +346,7 @@ def generate_query(
             us.mathtable,
             us.bet_level,
             us.user_id,
+            us.user_first_spin_id,
             us.user_mathtable_change,
             -- DataMetrics input columns (user-level raw stats):
             us.user_num_bets,
@@ -361,6 +431,20 @@ def parse_args():
         " (default: tomorrow in Beijing time)",
     )
     parser.add_argument("--agg", choices=["all", *AGG_LEVELS], default="all", help="which aggregation levels to run")
+    parser.add_argument(
+        "--min-mathtable-run",
+        type=int,
+        default=0,
+        help="keep only bets inside a run of >= N consecutive same-mathtable bets"
+        " (per user per Beijing day); 0 disables the filter. Point --output-root"
+        " at a dedicated _runN root so the unfiltered datasets stay untouched",
+    )
+    parser.add_argument(
+        "--ab-group",
+        choices=sorted(AB_GROUP_IDS),
+        default="",
+        help="only scan bets of this AB partition (raw partition-id equality);" " default: all partitions",
+    )
     parser.add_argument("--currency", default="CNY")
     parser.add_argument(
         "--input-region",
@@ -382,7 +466,10 @@ def main():
         else bj_today - timedelta(days=INCREMENTAL_LOOKBACK_DAYS)
     )
     output_end = date.fromisoformat(args.output_end) if args.output_end else bj_today + timedelta(days=1)
-    print(f"output window: [{output_start}, {output_end})")
+    print(
+        f"output window: [{output_start}, {output_end})"
+        f" min_mathtable_run={args.min_mathtable_run} ab_group={args.ab_group or 'all'}"
+    )
     levels = list(AGG_LEVELS) if args.agg == "all" else [args.agg]
     # The SS02 FourScatter LEAD looks at the next spin, so scan one day past
     # the output window to attribute buy-ins on the last output day.
@@ -414,6 +501,8 @@ def main():
                 scan_start_utc=scan_start_utc,
                 scan_end_utc=scan_end_utc,
                 currency=args.currency,
+                min_mathtable_run=args.min_mathtable_run,
+                ab_group=args.ab_group,
             )
         )
         df = align_output_schema(df)

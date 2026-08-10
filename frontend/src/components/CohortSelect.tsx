@@ -22,11 +22,12 @@ export function CohortSelect(props: {
         return (
           <div key={col} className="flex flex-col text-base">
             <span className="text-gray-600 mb-1">{col} (cohorts)</span>
-            {/* Fixed 4 rows; extra values flow into new columns (scroll if wide).
-                "all" renders last so the real values fill the first column. */}
-            <div className="border rounded px-3 py-2 overflow-x-auto">
-              <div className="grid grid-flow-col grid-rows-4 gap-x-6 gap-y-1 w-max">
-                {[...values, "all"].map((v) => {
+            {/* Up to 4 content-sized columns; extra values wrap into new rows
+                and the box scrolls vertically past ~6 rows (same pattern as
+                the metric pickers). "all" renders first so it stays visible. */}
+            <div className="border rounded px-3 py-2 overflow-auto max-h-48">
+              <div className="grid grid-cols-[repeat(4,max-content)] gap-x-6 gap-y-1 w-max">
+                {["all", ...values].map((v) => {
                   const inRange = v === "all" || !props.available?.[col] || props.available[col].includes(v);
                   return (
                     <label
