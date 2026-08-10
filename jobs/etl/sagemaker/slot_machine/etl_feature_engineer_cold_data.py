@@ -684,18 +684,12 @@ def read_sidecar(spark, root: str) -> dict | None:
     fs = hadoop_path.getFileSystem(sc._jsc.hadoopConfiguration())
     if not fs.exists(hadoop_path):
         return None
-    stream = fs.open(hadoop_path)
-    try:
-        data = bytearray()
-        buf = bytearray(65536)
-        while True:
-            n = stream.read(buf)
-            if n <= 0:
-                break
-            data.extend(buf[:n])
-        return json.loads(bytes(data).decode("utf-8"))
-    finally:
-        stream.close()
+    # Read through Spark, not FSDataInputStream.read(buf): py4j passes the
+    # bytearray to Java BY VALUE, so the Java side fills a copy and the
+    # Python buffer stays empty (json got "" and failed on the first
+    # incremental run to ever read a sidecar).
+    text = spark.read.text(f"{root}/_feature_config.json", wholetext=True).head()[0]
+    return json.loads(text)
 
 
 def sidecar_payload(prefix: str, group: str, bins: list, output_end: date) -> dict:
