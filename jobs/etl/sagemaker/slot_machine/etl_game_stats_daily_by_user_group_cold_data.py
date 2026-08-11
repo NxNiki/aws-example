@@ -53,6 +53,7 @@ from spark_etl_common import (
     build_spark_session,
     check_schema,
     prune_period_days,
+    warn_on_schema_drift,
 )
 
 DELTA_T_MAX_SECONDS = 1800
@@ -498,6 +499,7 @@ def main():
         df = df.withColumn("period", F.date_format("activity_date", "yyyy-MM-dd"))
 
         out = f"{args.output_root}/{job_name}"
+        warn_on_schema_drift(spark, out, df)
         df.repartition("period").write.partitionBy("period").mode("overwrite").parquet(out)
         print("saved:", out)
         summary = (

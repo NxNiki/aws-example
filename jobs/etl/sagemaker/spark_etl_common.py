@@ -109,6 +109,26 @@ def prune_partition_days(df, start: date, end: date, margin_days: int = 0):
     )
 
 
+def warn_on_schema_drift(spark, out_path: str, df) -> None:
+    """Log a loud warning when the frame about to be written adds or drops
+    columns versus the dataset already at ``out_path``. An incremental run
+    then leaves the dataset split-schema (readers tolerate it, but the new
+    column stays invisible) until a full-history rewrite — the warning makes
+    that state explicit in the job logs instead of silent."""
+    try:
+        existing = set(spark.read.parquet(out_path).columns)
+    except Exception:
+        return  # first write — nothing to compare against
+    new = set(df.columns)
+    added, dropped = sorted(new - existing), sorted(existing - new)
+    if added or dropped:
+        print(
+            f"WARNING: SCHEMA DRIFT vs {out_path}: added={added} dropped={dropped} — "
+            "this run's periods will differ from the rest of the dataset; "
+            "plan a full-history rewrite to make the schema uniform"
+        )
+
+
 def prune_period_days(df, start: date, end: date, margin_days: int = 0):
     """Path-level pruning on the ``period=YYYY-MM-DD`` layout the derived
     datasets use (e.g. slot_orders_ab_group), widened by ``margin_days``

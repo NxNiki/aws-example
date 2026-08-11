@@ -34,6 +34,7 @@ from spark_etl_common import (
     build_spark_session,
     check_schema,
     prune_partition_days,
+    warn_on_schema_drift,
 )
 
 INCREMENTAL_LOOKBACK_DAYS = 3
@@ -141,6 +142,7 @@ def main():
     df = spark.sql(generate_query(games, output_start, output_end))
     df = df.withColumn("period", F.date_format("activity_date", "yyyy-MM-dd"))
     out = f"{args.output_root}/orders"
+    warn_on_schema_drift(spark, out, df)
     (df.repartition("game_id", "period").write.partitionBy("game_id", "period").mode("overwrite").parquet(out))
     print("saved:", out)
     summary = (
