@@ -238,7 +238,7 @@ def load_group_values_in_range(cfg: dict[str, Any], granularity: str, start: str
     dimensions — the ones that rotate over time (e.g. mathtable, daily_group);
     static vocabularies don't need a per-range scan and the frontend enables
     values with no availability entry."""
-    from bituslabs_ds.s3_utils import expand_paths_to_files, read_files
+    from bituslabs_ds.s3_utils import expand_paths_to_files
 
     cols = availability_cols(cfg)
     if not cols:
@@ -256,7 +256,9 @@ def load_group_values_in_range(cfg: dict[str, Any], granularity: str, start: str
             keep.append(p)
     if not keep:
         return {c: [] for c in cols}
-    lf = cast(pl.LazyFrame, read_files(keep, lazy_load=True, expand_s3_prefixes=False))
+    # Same schema-evolution tolerance as _scan_source: recently-backfilled
+    # period files may carry columns older ones lack.
+    lf = pl.scan_parquet(keep, missing_columns="insert", extra_columns="ignore")
     date_col = str(sd.get("date_col", "activity_date"))
     # Derived / combo cohort columns (e.g. ss03_ai's mathtable_combo) and row
     # filters don't exist in the raw files — attach the same chain load_lazy

@@ -732,7 +732,11 @@ def _scan_source(path: str) -> pl.LazyFrame:
     if not files:
         return pl.DataFrame().lazy()
     hive = any("period=" in f for f in files)
-    return pl.scan_parquet(files, hive_partitioning=hive)
+    # ETL schema evolution: an incremental backfill adds a column to recent
+    # period files only, so one dataset legitimately mixes schemas until the
+    # next full-history rewrite. Take the first file's schema and tolerate
+    # both directions instead of failing every read of the whole dataset.
+    return pl.scan_parquet(files, hive_partitioning=hive, missing_columns="insert", extra_columns="ignore")
 
 
 def load_lazy(cfg: dict[str, Any], granularity: str, raw_combo_labels: bool = False) -> tuple[pl.LazyFrame, str]:

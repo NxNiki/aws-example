@@ -391,6 +391,22 @@ def test_attach_derived_group_cols_guards():
     assert out2["ai_group"].to_list() == ["AI", None]
 
 
+def test_scan_tolerates_schema_evolution(tmp_path):
+    """An incremental ETL backfill adds a column to recent period files only,
+    so one dataset mixes schemas until the next full-history rewrite — reads
+    must not fail on the extra column (regression: user_first_spin_id broke
+    every ss03 endpoint the day the 08-04 periods were rewritten)."""
+    root = tmp_path / "daily_stats"
+    (root / "period=2026-08-01").mkdir(parents=True)
+    (root / "period=2026-08-04").mkdir(parents=True)
+    old = pl.DataFrame({"activity_date": ["2026-08-01"], "user_id": ["u1"], "user_num_bets": [5]})
+    old.write_parquet(root / "period=2026-08-01" / "part.parquet")
+    old.with_columns(pl.lit(7).alias("user_first_spin_id")).write_parquet(root / "period=2026-08-04" / "part.parquet")
+    cfg = {"id": "g", "stats_by_date": {"files": {"day": [str(root)]}}}
+    out = common.load_lazy(cfg, "day")[0].collect()
+    assert out.height == 2  # both periods readable despite the schema drift
+
+
 def test_row_filters_applied_by_load_lazy(tmp_path):
     """Cohort-scoped configs (e.g. the SS03 AI dashboard): stats_by_date.filters
     keeps only the declared slice of the parquet, so every endpoint — including
