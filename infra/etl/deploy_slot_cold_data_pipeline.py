@@ -28,9 +28,11 @@ from bituslabs_ds.sagemaker_etl import SPARK_COMMON_PY_FILES, spark_processor, u
 
 PIPELINE_NAME = "slot-cold-data-daily"
 SCHEDULE_NAME = "slot-cold-data-daily"
-# 9:10 AM LA = ~00:10 next day Beijing: the whole Beijing day is complete in
-# the warehouse (with 10 min of margin) before the orders copy runs.
-SCHEDULE_CRON = "cron(10 9 * * ? *)"
+# 9:30 AM LA = ~00:30 next day Beijing: the whole Beijing day is complete in
+# the warehouse (with half an hour of margin) before the orders copy runs;
+# every downstream step is chained in this ONE pipeline, so nothing else
+# needs its own schedule or can race the orders refresh.
+SCHEDULE_CRON = "cron(30 9 * * ? *)"
 SCHEDULER_ROLE_NAME = "slot-cold-data-scheduler-role"
 
 SLOT_INPUT_ROOT = "s3://slotmachine-production-data-warehouse/transformed_data/partition_cold_data/bet_order"

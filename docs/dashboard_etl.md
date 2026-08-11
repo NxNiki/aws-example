@@ -6,6 +6,10 @@ Metric dictionary for the per-user game-stats pipelines
 them by `bituslabs_ds.metrics.user_stats_aggregates.DataMetrics`. The exact
 SQL per game is snapshotted in `tests/unit/etl_snapshots/`.
 
+> AB group assignment (`ab_group`) is derived once, in the
+> `slot_orders_ab_group` dataset every slot ETL reads — including the
+> 2026-08 policy cutover. See [`ab_group_policy.md`](ab_group_policy.md).
+
 ## Datasets
 
 Each game writes three datasets to
