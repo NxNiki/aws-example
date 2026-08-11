@@ -84,6 +84,21 @@ nothing downstream touches `partition_ab`.
   semantic field changes (it exists so months computed under different
   semantics are never silently appended next to each other).
 
+## How the schedule picks up code changes
+
+The EventBridge schedule only calls ``StartPipelineExecution`` by pipeline
+name; the code each run executes is the SNAPSHOT uploaded to S3 by the last
+pipeline upsert. Editing an ETL script locally (or even merging it) changes
+nothing for the scheduled runs until the deploy script is re-run:
+
+    poetry run python infra/etl/deploy_slot_cold_data_pipeline.py
+    poetry run python infra/etl/deploy_ss03_feature_engineer_pipeline.py
+
+A stale snapshot silently rewrites its rolling window with old logic every
+morning (that's how the 2026-08 post-cutover residue appeared), so re-run
+the upsert as part of shipping ANY slot ETL change. Manual ``*_submit.py``
+runs are different: they upload the current local file per job.
+
 ## Changing the policy again
 
 1. Update `ab_group_sql` / add a new gate in `spark_etl_common.py`.
