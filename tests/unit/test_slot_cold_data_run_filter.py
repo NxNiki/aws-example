@@ -34,6 +34,19 @@ def _load_job_module():
 
 JOB = _load_job_module()
 
+
+def _load_common():
+    sys.path.insert(0, str(REPO_ROOT / "jobs/etl/sagemaker"))
+    try:
+        import spark_etl_common
+
+        return spark_etl_common
+    finally:
+        sys.path.pop(0)
+
+
+COMMON = _load_common()
+
 DAY_WINDOW = "PARTITION BY t.user_id, t.activity_date ORDER BY t.spin_id, t.created_at"
 
 
@@ -111,9 +124,87 @@ def test_generate_query_ab_group_scan_filter():
         scan_end_utc=datetime(2026, 8, 4, 16),
         currency="CNY",
     )
-    assert JOB.AI_GROUP_ID not in JOB.generate_query(**kwargs).split("CASE")[0]  # no scan filter by default
+    base = JOB.generate_query(**kwargs)
+    assert "AND t.ab_group =" not in base  # no scan filter by default
 
     only_ai = JOB.generate_query(**kwargs, ab_group="AI")
-    # bet_events' WHERE keeps only the AI partition (raw id equality), so
-    # with the run filter runs are computed over the AI stream alone.
-    assert f"AND get_json_object(CAST(t.partition_ab AS STRING), '$[0]') = '{JOB.AI_GROUP_ID}'" in only_ai
+    # bet_events' WHERE keeps only bets stored with the AI label (the policy
+    # is derived once, upstream in slot_orders_ab_group), so with the run
+    # filter runs are computed over the AI stream alone.
+    where = only_ai.split("bet_events")[1].split("bets AS")[0]
+    assert "AND t.ab_group = 'AI'" in where
+
+    # Games without AB test groups collapse the stored test labels into
+    # Default; games with them pass the stored label through.
+    assert "WHEN t.ab_group IN ('AB_TEST_A', 'AB_TEST_B') THEN 'Default'" in JOB.generate_query(
+        **{**kwargs, "game_id": "SS01"}
+    )
+    assert "WHEN t.ab_group IN" not in base  # SS03 keeps the full vocabulary
+
+
+def _ab_group_rows(rows, include_ab_tests=True):
+    """Run the policy CASE against sqlite (TIMESTAMP literals stripped:
+    sqlite compares ISO datetime strings directly)."""
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE bets (ab_label, user_id, bj_ts)")
+    con.executemany("INSERT INTO bets VALUES (?, ?, ?)", rows)
+    case = COMMON.ab_group_sql("ab_label", "user_id", "bj_ts", include_ab_tests=include_ab_tests)
+    sql = f"SELECT {case} FROM bets ORDER BY rowid".replace("TIMESTAMP '", "'")
+    return [r[0] for r in con.execute(sql)]
+
+
+def test_slot_orders_query_composition():
+    """The Athena-backing orders copy: raw rows plus the policy ab_group —
+    no status/op-code/currency filtering (downstream queries filter)."""
+    orders_path = REPO_ROOT / "jobs/etl/sagemaker/slot_machine/etl_slot_orders_ab_group.py"
+    sys.path.insert(0, str(REPO_ROOT / "jobs/etl/sagemaker"))
+    try:
+        spec = importlib.util.spec_from_file_location("_slot_orders_job", orders_path)
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    finally:
+        sys.path.pop(0)
+    sql = mod.generate_query(["SS03", "SS06"], date(2026, 8, 1), date(2026, 8, 5))
+    assert "AS ab_group" in sql and "TIMESTAMP '2026-08-04 05:30:00'" in sql and "% 10" in sql
+    assert "t.game_id IN ('SS03', 'SS06')" in sql
+    assert "status =" not in sql and "op_code NOT IN" not in sql  # raw copy, unfiltered
+
+
+def test_ab_group_policy_timestamp_gate():
+    """AB groups: partition_ab ids before the empirically-located cutover
+    (2026-08-04 05:30 Beijing — the deploy hour where mathtable serving
+    flips), user-id last digit (0-3 Default, 4-5 A, 6-7 B, 8-9 AI) after."""
+    rows = [
+        # Before the cutover the digit is ignored — only the id counts
+        # (including the early hours of 08-04, which a date gate mislabels).
+        (COMMON.AI_GROUP_ID, 13, "2026-08-03 12:00:00"),
+        (COMMON.AB_TEST_GROUP_A, 18, "2026-08-04 03:00:00"),
+        ("some-other-id", 19, "2026-08-04 05:29:59"),
+        (None, 15, "2026-08-03 23:00:00"),
+        # From the cutover the id is ignored — only the digit counts.
+        (COMMON.AI_GROUP_ID, 13, "2026-08-04 05:30:00"),
+        ("whatever", 24, "2026-08-04 06:00:00"),
+        (None, 37, "2026-08-05 00:00:00"),
+        ("whatever", 58, "2026-08-04 23:59:59"),
+    ]
+    assert _ab_group_rows(rows) == [
+        "AI",
+        "AB_TEST_A",
+        "Default",
+        "Default",
+        "Default",  # digit 3
+        "AB_TEST_A",  # digit 4
+        "AB_TEST_B",  # digit 7
+        "AI",  # digit 8
+    ]
+    # Games without AB test groups collapse the test digits/ids into Default.
+    no_tests = _ab_group_rows(
+        [
+            (COMMON.AB_TEST_GROUP_A, 11, "2026-08-03 12:00:00"),
+            ("x", 25, "2026-08-04 06:00:00"),
+            ("x", 39, "2026-08-04 06:00:00"),
+        ],
+        include_ab_tests=False,
+    )
+    assert no_tests == ["Default", "Default", "AI"]

@@ -1,15 +1,17 @@
-"""SS03 per-bet feature engineering from the cold-data warehouse (PySpark).
+"""SS03 per-bet feature engineering from the slot_orders_ab_group dataset (PySpark).
 
 ETL job: SageMaker port of ``jobs/etl/redshift/ss03_mahjiang_streak/
 etl_feature_engineer.py`` — same two outputs per ai_group slice
 (``features_enriched`` per aggregated bet, ``features_grouped_binsize_{N}``
 per session bin), same output roots, ``year=/month=`` layout, column order
-and parquet dtypes (see OUTPUT dtype maps), reading
-``partition_cold_data/bet_order`` instead of Redshift through the bastion.
+and parquet dtypes (see OUTPUT dtype maps), reading the
+``output_slot_orders_ab_group/orders`` dataset (raw bets + the
+policy-correct ``ab_group`` — see etl_slot_orders_ab_group.py) instead of
+Redshift through the bastion, so group membership is derived exactly once
+upstream.
 
 Semantics ported 1:1 from the Redshift SQL with these deliberate translations:
-``partition_ab`` is binary JSON in cold data (``get_json_object`` instead of
-SUPER indexing); ``DATEDIFF(SECONDS, ...)`` becomes a truncating
+``DATEDIFF(SECONDS, ...)`` becomes a truncating
 ``unix_timestamp`` difference; ``LAST_VALUE(... IGNORE NULLS)`` becomes
 ``LAST(expr, TRUE)``; ``ROUND((idx-1)/N)`` — integer division on Redshift —
 becomes explicit ``FLOOR``; the 12 single-percentile CTEs collapse into one
@@ -52,14 +54,12 @@ from pyspark.sql import functions as F
 # Ships via submit_py_files on SageMaker; for local runs/tests put
 # jobs/etl/sagemaker on the path first (the snapshot tests already do).
 from spark_etl_common import (
-    AB_TEST_GROUP_A,
-    AB_TEST_GROUP_B,
-    AI_GROUP_ID,
+    BJ_UTC_OFFSET_HOURS,
     build_spark_session,
     check_schema,
     month_start,
     prev_month_start,
-    prune_partition_days,
+    prune_period_days,
     utc_today,
 )
 
@@ -76,6 +76,14 @@ SESSION_BREAK_SECONDS = 43200
 STREAK_THRESHOLD_SECONDS = 200
 MAX_DELTA_T_GAP_SECONDS = 3600
 
+# The AB grouping policy flipped from partition_ab ids to user-id last digits
+# across these Beijing days (announced 08-03, effective 08-04), so group
+# membership DURING them is ambiguous — sessions STARTING on them are dropped
+# from every output. Keying on the session start keeps cross-midnight
+# sessions whole: a session opened 08-04 23:50 BJ is excluded entirely, one
+# opened 08-05 00:10 is kept entirely.
+EXCLUDED_SESSION_START_DATES_BJ = ("2026-08-03", "2026-08-04")
+
 REQUIRED_COLUMNS = [
     "spin_id",
     "user_id",
@@ -86,24 +94,20 @@ REQUIRED_COLUMNS = [
     "actual_payout",
     "balance_after_bet",
     "balance_after_payout",
-    "partition_ab",
+    "ab_group",
     "currency_type",
     "status",
     "op_code",
 ]
 
-# ai_group slice -> (output_prefix, ab-label filter SQL, bin sizes, selected label).
-# Mirrors jobs/etl/redshift/ss03_mahjiang_streak/etl_feature_engineer.py GROUPS.
+# ai_group slice -> (output_prefix, ai_group filter SQL, bin sizes, selected label).
+# Mirrors jobs/etl/redshift/ss03_mahjiang_streak/etl_feature_engineer.py GROUPS;
+# the ai_group label itself is the date-gated policy (ab_group_sql).
 GROUPS = {
-    "default": (
-        "output_ss03_feature_engineer",
-        f"(ab_label IS NULL OR ab_label NOT IN ('{AI_GROUP_ID}', '{AB_TEST_GROUP_A}', '{AB_TEST_GROUP_B}'))",
-        [50, 70],
-        "Default",
-    ),
-    "ai": ("output_ss03_feature_engineer_ai", f"ab_label = '{AI_GROUP_ID}'", [30, 50, 70, 100], "AI"),
-    "ab_test_a": ("output_ss03_feature_engineer_ab_test_a", f"ab_label = '{AB_TEST_GROUP_A}'", [50, 70], "AB_TEST_A"),
-    "ab_test_b": ("output_ss03_feature_engineer_ab_test_b", f"ab_label = '{AB_TEST_GROUP_B}'", [50, 70], "AB_TEST_B"),
+    "default": ("output_ss03_feature_engineer", "ai_group = 'Default'", [50, 70], "Default"),
+    "ai": ("output_ss03_feature_engineer_ai", "ai_group = 'AI'", [30, 50, 70, 100], "AI"),
+    "ab_test_a": ("output_ss03_feature_engineer_ab_test_a", "ai_group = 'AB_TEST_A'", [50, 70], "AB_TEST_A"),
+    "ab_test_b": ("output_ss03_feature_engineer_ab_test_b", "ai_group = 'AB_TEST_B'", [50, 70], "AB_TEST_B"),
 }
 
 SIDECAR_SEMANTIC_FIELDS = [
@@ -241,7 +245,8 @@ def grouped_dtypes() -> dict:
 
 
 def enriched_sql(group_filter: str, scan_start: date, scan_end: date) -> str:
-    source_cols = ",\n            ".join(f"t.{c}" for c in REQUIRED_COLUMNS)
+    source_cols = ",\n            ".join(f"t.{c}" for c in REQUIRED_COLUMNS if c != "ab_group")
+    excluded_session_days = ", ".join(f"DATE '{d}'" for d in EXCLUDED_SESSION_START_DATES_BJ)
     return f"""
 WITH user_bets AS (
     SELECT
@@ -256,16 +261,11 @@ WITH user_bets AS (
         balance_after_payout,
         LAG(created_at, 1) OVER (PARTITION BY user_id ORDER BY spin_id, created_at) AS prev_bet_time,
         CASE WHEN bet_type = 'BASE' THEN 1 ELSE 0 END AS is_new_game_group,
-        CASE
-            WHEN ab_label = '{AI_GROUP_ID}' THEN 'AI'
-            WHEN ab_label = '{AB_TEST_GROUP_A}' THEN 'AB_TEST_A'
-            WHEN ab_label = '{AB_TEST_GROUP_B}' THEN 'AB_TEST_B'
-            ELSE 'Default'
-        END AS ai_group
+        ai_group
     FROM (
         SELECT
             {source_cols},
-            get_json_object(CAST(t.partition_ab AS STRING), '$[0]') AS ab_label
+            t.ab_group AS ai_group
         FROM bet_order_raw AS t
         WHERE
             t.created_at >= TIMESTAMP '{scan_start} 00:00:00'
@@ -440,6 +440,8 @@ SELECT
     ROW_NUMBER() OVER (PARTITION BY t.user_id, t.session_start_ts ORDER BY t.spin_id, t.min_created_at)
         AS session_bet_index
 FROM user_group AS t
+WHERE CAST(t.session_start_ts + INTERVAL '{BJ_UTC_OFFSET_HOURS}' HOUR AS DATE)
+    NOT IN ({excluded_session_days})
 """
 
 
@@ -711,7 +713,9 @@ def sidecar_payload(prefix: str, group: str, bins: list, output_end: date) -> di
             "streak_threshold_seconds": STREAK_THRESHOLD_SECONDS,
             "max_delta_t_gap_seconds": MAX_DELTA_T_GAP_SECONDS,
             "drop_incomplete_tail_groups": False,
-            "extra_where_clauses": [],
+            # Recorded as a semantic field: the grouping-policy transition
+            # days are excluded by BJ session start (see the constant).
+            "extra_where_clauses": [f"session_start_date_bj NOT IN {EXCLUDED_SESSION_START_DATES_BJ}"],
             "requires_full_history": False,
             "lookback_days": None,
         },
@@ -780,7 +784,11 @@ def parse_args():
         help="exclusive end date, YYYY-MM-DD; must be month-aligned or in the future"
         " (a mid-month historical end would truncate that month's partition). Default: tomorrow, UTC",
     )
-    parser.add_argument("--input-region", default="ap-southeast-1", help="region of the input bucket")
+    parser.add_argument(
+        "--input-region",
+        default="us-west-2",
+        help="region of the input bucket (the slot_orders_ab_group dataset lives in our us-west-2 bucket)",
+    )
     parser.add_argument(
         "--allow-semantic-drift",
         action="store_true",
@@ -826,8 +834,8 @@ def main():
     # Reading inside game_id=SS03/ pins the game by path (no game_id column
     # survives — it is the consumed partition level), and prunes other games.
     bet_order = spark.read.parquet(f"{args.input_root}/game_id=SS03")
-    check_schema(bet_order, REQUIRED_COLUMNS, table_name="cold data bet_order")
-    raw = prune_partition_days(bet_order, scan_start, output_end, margin_days=1)
+    check_schema(bet_order, REQUIRED_COLUMNS, table_name="slot_orders_ab_group orders")
+    raw = prune_period_days(bet_order, scan_start, output_end, margin_days=1)
     if raw.limit(1).count() == 0:
         raise SystemExit(f"no bet_order rows for SS03 in [{scan_start}, {output_end}); refusing to overwrite")
     raw.createOrReplaceTempView("bet_order_raw")

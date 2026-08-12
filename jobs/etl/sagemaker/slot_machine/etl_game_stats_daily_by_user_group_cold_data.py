@@ -1,11 +1,13 @@
-"""Slot-machine per-user game stats from S3 cold data — PySpark job, all games.
+"""Slot-machine per-user game stats from the slot_orders_ab_group dataset.
 
 ETL job: cold-data source for the per-game dashboards' ``user_*`` metrics
 (grain: one row per period, user, ab_group, mathtable, bet_level). Same query logic as
 the per-game ``jobs/ss*/etl_game_stats_daily_by_user_group.py`` Redshift jobs,
 parameterized by ``--game-id`` (SS01, SS01A, SS02, SS03, SS06), reading the
-``cold_data_bet_order`` parquet from the slotmachine production warehouse
-instead of Redshift ``public.fct_bet_orders``. Output datasets:
+``output_slot_orders_ab_group/orders`` dataset (the data behind the Athena
+table ``bituslabs_ds.slot_orders_ab_group`` — raw bet orders plus the
+policy-correct ``ab_group``, see etl_slot_orders_ab_group.py), so group
+membership is derived exactly once upstream. Output datasets:
 ``<output-root>/{daily,weekly,monthly}_stats/period=YYYY-MM-DD/``.
 
 Behavior: every bet lives in exactly one (period, user, ab_group, mathtable,
@@ -16,8 +18,8 @@ fish_hunter fish-level groups): BASE spins carry their own bet_amount and
 FREE spins inherit the day's prevailing BASE bet.
 Per-game variations (from the Redshift originals): SS02 attributes FourScatter
 free-game buy-ins to the mathtable of the FOLLOWING spin (full-stream LEAD, so
-its scan window extends one day past output-end); SS03/SS06 map the AB-test
-partition ids to AB_TEST_A/B groups on top of the AI/Default mapping. Each run
+its scan window extends one day past output-end); SS03/SS06 carry the AB_TEST_A/B
+groups; games without AB tests collapse those labels into Default. Each run
 recomputes whole periods in [output-start, output-end) and dynamic-partition-
 overwrites exactly the ``period=`` directories it produced. Sequence metrics
 (delta-t / delta-bet / mathtable_change / FG trigger) are DAY-partitioned, so
@@ -27,7 +29,7 @@ windowed runs compose exactly.
 same-mathtable bets (per user per Beijing day) — the ss03 AI mathtable-combo
 dashboard reads a run-filtered output so brief mathtable dabbles don't count
 toward a user's daily combination. ``--ab-group`` restricts the scan to one
-AB partition (e.g. AI) so a cohort-specific dataset stays small. Write
+AB group label (e.g. AI) so a cohort-specific dataset stays small. Write
 filtered outputs to their own suffixed root (``..._ai_run30``) so the
 unfiltered dashboards stay untouched.
 
@@ -45,16 +47,13 @@ from pyspark.sql import functions as F
 # Ships via submit_py_files on SageMaker; for local runs/tests put
 # jobs/etl/sagemaker on the path first (the snapshot tests already do).
 from spark_etl_common import (
-    AB_TEST_GROUP_A,
-    AB_TEST_GROUP_B,
-    AI_GROUP_ID,
     BJ_UTC_OFFSET_HOURS,
     EXCLUDED_OP_CODES,
-    PARTITION_AB_FIRST,
     beijing_today,
     build_spark_session,
     check_schema,
-    prune_partition_days,
+    prune_period_days,
+    warn_on_schema_drift,
 )
 
 DELTA_T_MAX_SECONDS = 1800
@@ -70,13 +69,7 @@ GAME_CONFIG = {
     "SS06": {"ab_test_groups": True},
 }
 
-# --ab-group choices: labels of the partitions selectable by raw id equality.
-# 'Default' is every OTHER partition id, so it can't be expressed this way.
-AB_GROUP_IDS = {
-    "AI": AI_GROUP_ID,
-    "AB_TEST_A": AB_TEST_GROUP_A,
-    "AB_TEST_B": AB_TEST_GROUP_B,
-}
+AB_GROUP_LABELS = ["AI", "AB_TEST_A", "AB_TEST_B", "Default"]
 
 AGG_LEVELS = {
     "daily": ("activity_date", "daily_stats"),
@@ -92,8 +85,7 @@ REQUIRED_COLUMNS = [
     "bet_amount",
     "actual_payout",
     "bet_type",
-    "partition_ab",
-    "game_id",
+    "ab_group",
     "currency_type",
     "status",
     "op_code",
@@ -118,17 +110,11 @@ OUTPUT_BIGINT_COLUMNS = [
 
 
 def _ab_group_case(game_id: str) -> str:
-    ab_test_lines = (
-        f"""
-                WHEN {PARTITION_AB_FIRST} = '{AB_TEST_GROUP_A}' THEN 'AB_TEST_A'
-                WHEN {PARTITION_AB_FIRST} = '{AB_TEST_GROUP_B}' THEN 'AB_TEST_B'"""
-        if GAME_CONFIG[game_id].get("ab_test_groups")
-        else ""
-    )
-    return f"""CASE
-                WHEN {PARTITION_AB_FIRST} = '{AI_GROUP_ID}' THEN 'AI'{ab_test_lines}
-                ELSE 'Default'
-            END AS ab_group"""
+    """The stored slot_orders_ab_group label, collapsed to the game's group
+    vocabulary: games without AB test groups fold AB_TEST_A/B into Default."""
+    if GAME_CONFIG[game_id].get("ab_test_groups"):
+        return "t.ab_group"
+    return "CASE WHEN t.ab_group IN ('AB_TEST_A', 'AB_TEST_B') THEN 'Default' ELSE t.ab_group END AS ab_group"
 
 
 def _math_table_expr(game_id: str) -> str:
@@ -208,9 +194,10 @@ def generate_query(
     # adjacent (their delta-t spans the dropped run's wall time).
     run_ctes = f"\n        {_mathtable_run_ctes(day_window, min_mathtable_run)},\n" if min_mathtable_run > 0 else ""
     bets_source = "long_run_bets" if min_mathtable_run > 0 else "bets"
-    # Filtering on the raw partition id keeps the scan cheap and, with the run
-    # filter on, computes runs over the cohort's own bet stream only.
-    ab_where = f"\n                AND {PARTITION_AB_FIRST} = '{AB_GROUP_IDS[ab_group]}'" if ab_group else ""
+    # Filtering in bet_events keeps the scan cheap and, with the run filter
+    # on, computes runs over the cohort's own bet stream only (the stored
+    # slot_orders_ab_group label is already policy-correct).
+    ab_where = f"\n                AND t.ab_group = '{ab_group}'" if ab_group else ""
     return dedent(
         f"""
         WITH bet_events AS (
@@ -222,12 +209,11 @@ def generate_query(
                 CAST(t.bet_amount AS DOUBLE) AS bet_amount,
                 CAST(t.actual_payout AS DOUBLE) AS actual_payout,
                 t.bet_type,
-                t.partition_ab
+                t.ab_group
             FROM
                 bet_order_raw AS t
             WHERE
-                t.game_id = '{game_id}'
-                AND t.currency_type = '{currency}'
+                t.currency_type = '{currency}'
                 AND t.status = 'COMPLETED'
                 AND t.op_code NOT IN {EXCLUDED_OP_CODES}
                 AND CAST(t.created_at AS TIMESTAMP) >= TIMESTAMP '{scan_start_utc:%Y-%m-%d %H:%M:%S}'
@@ -415,7 +401,9 @@ def align_output_schema(df):
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--game-id", required=True, choices=sorted(GAME_CONFIG))
-    parser.add_argument("--input-root", required=True, help="s3://... root of bet_order parquet")
+    parser.add_argument(
+        "--input-root", required=True, help="s3://... root of the slot_orders_ab_group 'orders' dataset"
+    )
     parser.add_argument("--output-root", required=True, help="s3://... root for the stats datasets")
     parser.add_argument(
         "--output-start",
@@ -441,15 +429,15 @@ def parse_args():
     )
     parser.add_argument(
         "--ab-group",
-        choices=sorted(AB_GROUP_IDS),
+        choices=AB_GROUP_LABELS,
         default="",
-        help="only scan bets of this AB partition (raw partition-id equality);" " default: all partitions",
+        help="only keep bets whose date-gated AB group label equals this; default: all groups",
     )
     parser.add_argument("--currency", default="CNY")
     parser.add_argument(
         "--input-region",
-        default="ap-southeast-1",
-        help="region of the input bucket (s3a needs it spelled out for cross-region reads)",
+        default="us-west-2",
+        help="region of the input bucket (the slot_orders_ab_group dataset lives in our us-west-2 bucket)",
     )
     return parser.parse_args()
 
@@ -477,8 +465,10 @@ def main():
 
     spark = build_spark_session(f"{args.game_id}_game_stats_cold_data", args.input_root, args.input_region)
 
-    bet_order = spark.read.parquet(args.input_root)
-    check_schema(bet_order, REQUIRED_COLUMNS, table_name="cold data bet_order")
+    # Reading inside game_id=<G>/ pins the game by path (no game_id column
+    # inside, matching REQUIRED_COLUMNS).
+    bet_order = spark.read.parquet(f"{args.input_root}/game_id={args.game_id}")
+    check_schema(bet_order, REQUIRED_COLUMNS, table_name="slot_orders_ab_group orders")
 
     for level in levels:
         stats_agg_col, job_name = AGG_LEVELS[level]
@@ -486,7 +476,7 @@ def main():
         scan_start_utc = datetime.combine(effective_start, time()) - timedelta(hours=BJ_UTC_OFFSET_HOURS)
         scan_end_utc = datetime.combine(output_end + scan_end_margin, time()) - timedelta(hours=BJ_UTC_OFFSET_HOURS)
 
-        raw = prune_partition_days(bet_order, scan_start_utc.date(), scan_end_utc.date())
+        raw = prune_period_days(bet_order, scan_start_utc.date(), scan_end_utc.date(), margin_days=1)
         if raw.limit(1).count() == 0:
             print("no data, skip:", job_name)
             continue
@@ -509,6 +499,7 @@ def main():
         df = df.withColumn("period", F.date_format("activity_date", "yyyy-MM-dd"))
 
         out = f"{args.output_root}/{job_name}"
+        warn_on_schema_drift(spark, out, df)
         df.repartition("period").write.partitionBy("period").mode("overwrite").parquet(out)
         print("saved:", out)
         summary = (

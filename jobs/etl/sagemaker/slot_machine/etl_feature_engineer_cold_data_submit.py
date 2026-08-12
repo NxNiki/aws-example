@@ -22,7 +22,7 @@ from sagemaker.session import Session
 from bituslabs_ds.config import LOCAL_ROOT, REGION, S3_BUCKET
 from bituslabs_ds.sagemaker_etl import SPARK_COMMON_PY_FILES, spark_processor
 
-INPUT_ROOT = "s3://slotmachine-production-data-warehouse/transformed_data/partition_cold_data/bet_order"
+INPUT_ROOT = f"s3://{S3_BUCKET}/etl-results/jobs/output_slot_orders_ab_group/orders"
 OUTPUT_ROOT_BASE = f"s3://{S3_BUCKET}/etl-results/jobs"
 
 parser = argparse.ArgumentParser(description=__doc__)
@@ -30,6 +30,11 @@ parser.add_argument("--groups", default="default,ai,ab_test_a,ab_test_b")
 parser.add_argument("--output-start", help="recompute months from this date's month (default: previous month)")
 parser.add_argument("--output-end", help="exclusive end date (default: tomorrow UTC)")
 parser.add_argument("--no-wait", action="store_true", help="submit and return without streaming logs")
+parser.add_argument(
+    "--allow-semantic-drift",
+    action="store_true",
+    help="proceed when the run's semantics differ from the existing sidecar (deliberate one-time changes)",
+)
 parser.add_argument(
     "--output-root-base",
     default=OUTPUT_ROOT_BASE,
@@ -42,6 +47,8 @@ if args.output_start:
     job_args += ["--output-start", args.output_start]
 if args.output_end:
     job_args += ["--output-end", args.output_end]
+if args.allow_semantic_drift:
+    job_args += ["--allow-semantic-drift"]
 
 # 300 GB: the per-user window functions shuffle-spill far past the 30 GB default.
 processor = spark_processor(
