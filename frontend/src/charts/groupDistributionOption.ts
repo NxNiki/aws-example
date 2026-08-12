@@ -8,15 +8,18 @@ import { colorForIndex, wrapCohort } from "./styles";
 // (parity with the legacy opacity/hatch). Backend returns the summary stats;
 // this just lays them out.
 
-// Width sized to the number of bars so a few groups don't stretch across the
-// full container (which looked bad at 3–6 groups) yet stay readable as bars are
-// added. Each bar needs room for the bar itself, its left-side multi-line stat
-// block (~120px), AND its two-line x-axis label (the full date range runs ~190px
-// wide), so budget ~250px/bar on top of the y-axis gutter (grid.left 96 +
-// grid.right 24). The caller wraps the chart in an overflow-x-auto container so
-// many bars scroll instead of squashing.
+// Bar-density tiers: the per-bar width budget steps down as cohorts are
+// added, so large selections — e.g. the ss03_ai mathtable-combo picker —
+// don't produce a multi-screen-wide chart. The x-axis date range always
+// wraps its end date onto its own line (~95px instead of ~190px), so the
+// label never dictates bar spacing; the real per-bar constraint is the
+// left-side stat block, whose font already shrinks with bar count.
+export const COMPACT_BARS_FROM = 8; // 1-7 bars = base tier
+export const DENSE_BARS_FROM = 15; // "more than 14"
+
 export function groupChartWidth(nBars: number): number {
-  return Math.max(620, 120 + nBars * 250);
+  const perBar = nBars >= DENSE_BARS_FROM ? 120 : nBars >= COMPACT_BARS_FROM ? 150 : 180;
+  return Math.max(500, 120 + nBars * perBar);
 }
 
 function cohortColors(stats: GroupStat[]): Map<string, string> {
@@ -27,8 +30,10 @@ function cohortColors(stats: GroupStat[]): Map<string, string> {
 
 const opacityFor = (rangeIndex: number) => (rangeIndex === 0 ? 1 : 0.45);
 // Multi-line category label: cohort on top (one line per group dimension when
-// two are selected, e.g. lifecycle | daily), the exact date range beneath.
-const label = (s: GroupStat) => `${wrapCohort(s.cohort)}\n${s.range_label}`;
+// two are selected, e.g. lifecycle | daily), then the date range with its end
+// date on its own line — half the width of the one-line form, so bars can sit
+// close together at every density tier.
+const label = (s: GroupStat) => `${wrapCohort(s.cohort)}\n${s.range_label.replace(" → ", " →\n")}`;
 
 function tooltipText(s: GroupStat): string {
   const f = (v: number | null) => (v == null ? "–" : v.toFixed(3));
@@ -55,16 +60,18 @@ function compact(v: number | null, integer = false): string {
 
 // Per-bar summary drawn beside each bar (parity with the legacy plotly tab's
 // annotation). The "95%" qualifier and full precision live in the tooltip.
-function statText(s: GroupStat): string {
+// (name, value) pairs: the renderer lays them out in two columns so the
+// metric names are left-aligned and every '=' lands in the same column.
+function statLines(s: GroupStat): [string, string][] {
   return [
-    `n=${compact(s.n, true)}`,
-    `μ=${compact(s.mean)}`,
-    `med=${compact(s.median)}`,
-    `max=${compact(s.max)}`,
-    `min=${compact(s.min)}`,
-    `CI lo=${compact(s.ci_lower)}`,
-    `CI hi=${compact(s.ci_upper)}`,
-  ].join("\n");
+    ["n", compact(s.n, true)],
+    ["μ", compact(s.mean)],
+    ["med", compact(s.median)],
+    ["max", compact(s.max)],
+    ["min", compact(s.min)],
+    ["CI lo", compact(s.ci_lower)],
+    ["CI hi", compact(s.ci_upper)],
+  ];
 }
 
 export function buildGroupDistributionOption(
@@ -79,7 +86,8 @@ export function buildGroupDistributionOption(
   const base: EChartsOption = {
     graphic: infoGraphic(info),
     tooltip: { trigger: "axis", formatter: (p) => tips[(Array.isArray(p) ? p[0] : p).dataIndex] ?? "" },
-    grid: { left: 96, right: 24, top: 24, bottom: 88 },
+    // Bottom gutter sized for the three-line label (cohort + wrapped range).
+    grid: { left: 96, right: 24, top: 24, bottom: 108 },
     xAxis: { type: "category", data: categories, axisLabel: { interval: 0, fontSize: 16, lineHeight: 20 } },
     yAxis: {
       type: "value",
@@ -144,7 +152,7 @@ export function buildGroupDistributionOption(
         renderItem: (_params, api) => {
           const idx = api.value(0) as number;
           const s = stats[idx];
-          const stroke = { stroke: "#333", lineWidth: 1.5 };
+          const stroke = { stroke: "rgba(128, 128, 128, 0.6)", lineWidth: 1.5 };
           const cap = 5;
           // ECharts custom-element children are awkward to type precisely; the
           // renderItem return is the documented escape hatch.
@@ -161,25 +169,31 @@ export function buildGroupDistributionOption(
             );
           }
 
-          // Left-aligned stat block to the LEFT of the CI whisker, sitting just
-          // above the bar's top (mean) and growing upward. Right edge clears the
-          // whisker's cap; left edge is offset by the full block width
-          // (estimated from the longest line so wide values still clear it).
-          const text = statText(s);
-          const longest = Math.max(...text.split("\n").map((l) => l.length));
-          const blockWidth = longest * statFontSize * 0.5;
+          // Two-column stat block centered on the bar: a fixed-width name
+          // column (names left-aligned, sized to snugly fit "CI lo") followed
+          // by the aligned '=' column, positioned so each '=' ends just LEFT
+          // of the error bar; values extend rightward from the whisker.
+          // Anchored just above the bar's top (mean), growing upward.
+          const nameColWidth = Math.round(statFontSize * 2.9);
+          const eqGap = Math.round(statFontSize * 0.75); // '=' glyph + clearance before the whisker
+          // The leading space nudges the names right by the same gap that
+          // separates '=' from the values.
+          const text = statLines(s)
+            .map(([name, value]) => `{k| ${name}}{v|= ${value}}`)
+            .join("\n");
           const at = api.coord([idx, s.mean ?? 0]);
           children.push({
             type: "text",
             style: {
               text,
-              x: at[0] - cap - 6 - blockWidth,
+              x: at[0] - nameColWidth - eqGap,
               y: at[1] - 8,
               textAlign: "left",
               textVerticalAlign: "bottom",
-              fontSize: statFontSize,
-              lineHeight: statLineHeight,
-              fill: "#333",
+              rich: {
+                k: { width: nameColWidth, align: "left", fontSize: statFontSize, lineHeight: statLineHeight, fill: "#333" },
+                v: { fontSize: statFontSize, lineHeight: statLineHeight, fill: "#333" },
+              },
             },
           });
 
