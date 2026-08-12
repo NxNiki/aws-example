@@ -60,16 +60,18 @@ function compact(v: number | null, integer = false): string {
 
 // Per-bar summary drawn beside each bar (parity with the legacy plotly tab's
 // annotation). The "95%" qualifier and full precision live in the tooltip.
-function statText(s: GroupStat): string {
+// (name, value) pairs: the renderer lays them out in two columns so the
+// metric names are left-aligned and every '=' lands in the same column.
+function statLines(s: GroupStat): [string, string][] {
   return [
-    `n=${compact(s.n, true)}`,
-    `μ=${compact(s.mean)}`,
-    `med=${compact(s.median)}`,
-    `max=${compact(s.max)}`,
-    `min=${compact(s.min)}`,
-    `CI lo=${compact(s.ci_lower)}`,
-    `CI hi=${compact(s.ci_upper)}`,
-  ].join("\n");
+    ["n", compact(s.n, true)],
+    ["μ", compact(s.mean)],
+    ["med", compact(s.median)],
+    ["max", compact(s.max)],
+    ["min", compact(s.min)],
+    ["CI lo", compact(s.ci_lower)],
+    ["CI hi", compact(s.ci_upper)],
+  ];
 }
 
 export function buildGroupDistributionOption(
@@ -167,25 +169,28 @@ export function buildGroupDistributionOption(
             );
           }
 
-          // Left-aligned stat block to the LEFT of the CI whisker, sitting just
-          // above the bar's top (mean) and growing upward. Right edge clears the
-          // whisker's cap; left edge is offset by the full block width
-          // (estimated from the longest line so wide values still clear it).
-          const text = statText(s);
-          const longest = Math.max(...text.split("\n").map((l) => l.length));
-          const blockWidth = longest * statFontSize * 0.5;
+          // Two-column stat block centered on the bar: a fixed-width name
+          // column (names left-aligned) whose right edge is the error bar's
+          // x, so every '=' sits exactly on the whisker line; values extend
+          // to its right. Anchored just above the bar's top (mean), growing
+          // upward.
+          const nameColWidth = Math.round(statFontSize * 3.1); // fits "CI lo"
+          const text = statLines(s)
+            .map(([name, value]) => `{k|${name}}{v|=${value}}`)
+            .join("\n");
           const at = api.coord([idx, s.mean ?? 0]);
           children.push({
             type: "text",
             style: {
               text,
-              x: at[0] - cap - 6 - blockWidth,
+              x: at[0] - nameColWidth,
               y: at[1] - 8,
               textAlign: "left",
               textVerticalAlign: "bottom",
-              fontSize: statFontSize,
-              lineHeight: statLineHeight,
-              fill: "#333",
+              rich: {
+                k: { width: nameColWidth, align: "left", fontSize: statFontSize, lineHeight: statLineHeight, fill: "#333" },
+                v: { fontSize: statFontSize, lineHeight: statLineHeight, fill: "#333" },
+              },
             },
           });
 
