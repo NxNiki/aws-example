@@ -39,3 +39,4 @@ dist/
 
 # Dashboard metadata builder cache — regenerated locally on first run.
 **/.metadata_cache/
+jobs/output_fish_hunter/
