@@ -170,20 +170,21 @@ export function buildGroupDistributionOption(
           }
 
           // Two-column stat block centered on the bar: a fixed-width name
-          // column (names left-aligned) whose right edge is the error bar's
-          // x, so every '=' sits exactly on the whisker line; values extend
-          // to its right. Anchored just above the bar's top (mean), growing
-          // upward.
-          const nameColWidth = Math.round(statFontSize * 3.1); // fits "CI lo"
+          // column (names left-aligned, sized to snugly fit "CI lo") followed
+          // by the aligned '=' column, positioned so each '=' ends just LEFT
+          // of the error bar; values extend rightward from the whisker.
+          // Anchored just above the bar's top (mean), growing upward.
+          const nameColWidth = Math.round(statFontSize * 2.6);
+          const eqGap = Math.round(statFontSize * 0.75); // '=' glyph + clearance before the whisker
           const text = statLines(s)
-            .map(([name, value]) => `{k|${name}}{v|=${value}}`)
+            .map(([name, value]) => `{k|${name}}{v|= ${value}}`)
             .join("\n");
           const at = api.coord([idx, s.mean ?? 0]);
           children.push({
             type: "text",
             style: {
               text,
-              x: at[0] - nameColWidth,
+              x: at[0] - nameColWidth - eqGap,
               y: at[1] - 8,
               textAlign: "left",
               textVerticalAlign: "bottom",
