@@ -8,15 +8,24 @@ import { colorForIndex, wrapCohort } from "./styles";
 // (parity with the legacy opacity/hatch). Backend returns the summary stats;
 // this just lays them out.
 
+// Past this many bars the chart switches to its compact layout: the x-axis
+// date range wraps onto a second line (so the label no longer dictates bar
+// spacing) and each bar's width budget shrinks. Keeps large cohort
+// selections — e.g. the ss03_ai mathtable-combo picker — from producing a
+// multi-screen-wide chart.
+export const COMPACT_BARS_FROM = 7;
+
 // Width sized to the number of bars so a few groups don't stretch across the
 // full container (which looked bad at 3–6 groups) yet stay readable as bars are
 // added. Each bar needs room for the bar itself, its left-side multi-line stat
-// block (~120px), AND its two-line x-axis label (the full date range runs ~190px
-// wide), so budget ~250px/bar on top of the y-axis gutter (grid.left 96 +
-// grid.right 24). The caller wraps the chart in an overflow-x-auto container so
-// many bars scroll instead of squashing.
+// block (~120px), AND its x-axis label: on one line the full date range runs
+// ~190px, so budget ~250px/bar — but from COMPACT_BARS_FROM the range wraps to
+// two lines (~95px) and the stat text shrinks, so ~160px/bar suffices. The
+// caller wraps the chart in an overflow-x-auto container so many bars scroll
+// instead of squashing.
 export function groupChartWidth(nBars: number): number {
-  return Math.max(620, 120 + nBars * 250);
+  const perBar = nBars >= COMPACT_BARS_FROM ? 160 : 250;
+  return Math.max(620, 120 + nBars * perBar);
 }
 
 function cohortColors(stats: GroupStat[]): Map<string, string> {
@@ -27,8 +36,11 @@ function cohortColors(stats: GroupStat[]): Map<string, string> {
 
 const opacityFor = (rangeIndex: number) => (rangeIndex === 0 ? 1 : 0.45);
 // Multi-line category label: cohort on top (one line per group dimension when
-// two are selected, e.g. lifecycle | daily), the exact date range beneath.
-const label = (s: GroupStat) => `${wrapCohort(s.cohort)}\n${s.range_label}`;
+// two are selected, e.g. lifecycle | daily), the exact date range beneath. In
+// the compact layout the range's end date wraps onto its own line, halving
+// the label width so bars can sit closer together.
+const label = (s: GroupStat, compact: boolean) =>
+  `${wrapCohort(s.cohort)}\n${compact ? s.range_label.replace(" → ", " →\n") : s.range_label}`;
 
 function tooltipText(s: GroupStat): string {
   const f = (v: number | null) => (v == null ? "–" : v.toFixed(3));
@@ -74,12 +86,14 @@ export function buildGroupDistributionOption(
   info = "", // active clip/filter tag, e.g. "clip: [0, 100], filter: [1%, 99%]"
 ): EChartsOption {
   const colors = cohortColors(stats);
-  const categories = stats.map(label);
+  const compact = stats.length >= COMPACT_BARS_FROM;
+  const categories = stats.map((s) => label(s, compact));
   const tips = stats.map(tooltipText);
   const base: EChartsOption = {
     graphic: infoGraphic(info),
     tooltip: { trigger: "axis", formatter: (p) => tips[(Array.isArray(p) ? p[0] : p).dataIndex] ?? "" },
-    grid: { left: 96, right: 24, top: 24, bottom: 88 },
+    // The compact layout's extra label line needs a taller bottom gutter.
+    grid: { left: 96, right: 24, top: 24, bottom: compact ? 108 : 88 },
     xAxis: { type: "category", data: categories, axisLabel: { interval: 0, fontSize: 16, lineHeight: 20 } },
     yAxis: {
       type: "value",
