@@ -127,30 +127,25 @@ export function buildGroupDistributionOption(
     max: Math.ceil((hi + range * 0.95) * 100) / 100,
   };
 
-  // Hollow bars: cohort color on the outline only, so overlapping context
-  // near the bar's base (whiskers, gridlines, neighboring stat text) stays
-  // visible through the body.
-  const bars = stats.map((s) => ({
-    value: s.mean,
-    itemStyle: {
-      color: "transparent",
-      borderColor: colors.get(s.cohort),
-      borderWidth: 2,
-      opacity: opacityFor(s.range_index),
-    },
-  }));
+  // Hollow bars: cohort color on the outline only, and the outline is OPEN at
+  // the bottom (left + top + right, no baseline segment) so gridlines and the
+  // axis stay clean under each bar. ECharts bars can't drop one border side,
+  // so the bar series is an invisible placeholder (layout + axis tooltip) and
+  // the custom series below draws the three-sided frame.
+  const BAR_WIDTH_FRAC = 0.6;
+  const bars = stats.map((s) => ({ value: s.mean, itemStyle: { color: "transparent", borderWidth: 0 } }));
 
   // Per-bar stat text shrinks as bars get more crowded: 19px at ≤3 bars down to
   // 14px at ≥9 bars, linear in between (hardcoded range, clamped at both ends).
   const n = stats.length;
   const t = Math.max(0, Math.min(1, (n - 3) / (9 - 3)));
   const statFontSize = Math.round(19 - t * (19 - 14));
-  const statLineHeight = Math.round(statFontSize * 1.25);
+  const statLineHeight = Math.round(statFontSize * 1.1);
   return {
     ...base,
     yAxis,
     series: [
-      { type: "bar", data: bars },
+      { type: "bar", data: bars, barWidth: `${BAR_WIDTH_FRAC * 100}%` },
       {
         type: "custom",
         // Per category: the CI whisker (ci_lower→ci_upper) plus the summary
@@ -166,6 +161,32 @@ export function buildGroupDistributionOption(
           // renderItem return is the documented escape hatch.
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const children: any[] = [];
+
+          // Open-bottom bar frame: left edge up, across the top, right edge
+          // down — matching the placeholder bar series' width fraction.
+          if (s.mean != null) {
+            const half = (api.size!([1, 0]) as number[])[0] * (BAR_WIDTH_FRAC / 2);
+            const center = api.coord([idx, 0])[0];
+            const yBase = api.coord([idx, 0])[1];
+            const yTop = api.coord([idx, s.mean])[1];
+            children.push({
+              type: "polyline",
+              shape: {
+                points: [
+                  [center - half, yBase],
+                  [center - half, yTop],
+                  [center + half, yTop],
+                  [center + half, yBase],
+                ],
+              },
+              style: {
+                stroke: colors.get(s.cohort),
+                fill: "none",
+                lineWidth: 2,
+                opacity: opacityFor(s.range_index),
+              },
+            });
+          }
 
           if (s.ci_lower != null && s.ci_upper != null) {
             const lo = api.coord([idx, s.ci_lower]);
