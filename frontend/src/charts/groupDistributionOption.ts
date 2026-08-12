@@ -152,7 +152,7 @@ export function buildGroupDistributionOption(
         renderItem: (_params, api) => {
           const idx = api.value(0) as number;
           const s = stats[idx];
-          const stroke = { stroke: "#333", lineWidth: 1.5 };
+          const stroke = { stroke: "rgba(128, 128, 128, 0.6)", lineWidth: 1.5 };
           const cap = 5;
           // ECharts custom-element children are awkward to type precisely; the
           // renderItem return is the documented escape hatch.
@@ -174,10 +174,12 @@ export function buildGroupDistributionOption(
           // by the aligned '=' column, positioned so each '=' ends just LEFT
           // of the error bar; values extend rightward from the whisker.
           // Anchored just above the bar's top (mean), growing upward.
-          const nameColWidth = Math.round(statFontSize * 2.6);
+          const nameColWidth = Math.round(statFontSize * 2.9);
           const eqGap = Math.round(statFontSize * 0.75); // '=' glyph + clearance before the whisker
+          // The leading space nudges the names right by the same gap that
+          // separates '=' from the values.
           const text = statLines(s)
-            .map(([name, value]) => `{k|${name}}{v|= ${value}}`)
+            .map(([name, value]) => `{k| ${name}}{v|= ${value}}`)
             .join("\n");
           const at = api.coord([idx, s.mean ?? 0]);
           children.push({
