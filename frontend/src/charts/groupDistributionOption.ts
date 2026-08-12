@@ -127,9 +127,17 @@ export function buildGroupDistributionOption(
     max: Math.ceil((hi + range * 0.95) * 100) / 100,
   };
 
+  // Hollow bars: cohort color on the outline only, so overlapping context
+  // near the bar's base (whiskers, gridlines, neighboring stat text) stays
+  // visible through the body.
   const bars = stats.map((s) => ({
     value: s.mean,
-    itemStyle: { color: colors.get(s.cohort), opacity: opacityFor(s.range_index) },
+    itemStyle: {
+      color: "transparent",
+      borderColor: colors.get(s.cohort),
+      borderWidth: 2,
+      opacity: opacityFor(s.range_index),
+    },
   }));
 
   // Per-bar stat text shrinks as bars get more crowded: 19px at ≤3 bars down to
