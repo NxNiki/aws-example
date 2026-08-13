@@ -2,9 +2,9 @@
 
 Manual/backfill launcher; the scheduled daily run is the ``etl-fm01`` step of
 the ``slot-cold-data-daily`` pipeline (infra/etl/deploy_slot_cold_data_pipeline.py).
-Runs from a local machine under the trusted DataScience role (the only
-principal the oceanhunter source bucket trusts); the daily/weekly/monthly
-per-user stats are written to S3 under OUTPUT_ROOT.
+Reads the fish_bullets_group_tag bullets dataset (build it first with
+etl_fish_bullets_group_tag_submit.py); the daily/weekly/monthly per-user
+stats are written to S3 under OUTPUT_ROOT.
 """
 
 import boto3
@@ -13,8 +13,8 @@ from sagemaker.session import Session
 from bituslabs_ds.config import LOCAL_ROOT, REGION, S3_BUCKET
 from bituslabs_ds.sagemaker_etl import SPARK_COMMON_PY_FILES, spark_processor
 
-INPUT_ROOT = "s3://oceanhunter-production-data-warehouse/transformed_data/cold_data/bullet"
-OUTPUT_ROOT = f"s3://{S3_BUCKET}/etl-results/jobs/output_fish_hunter_v2_cold_data"
+INPUT_ROOT = f"s3://{S3_BUCKET}/etl-results/jobs/output_fish_bullets_group_tag/bullets"
+OUTPUT_ROOT = f"s3://{S3_BUCKET}/etl-results/jobs/output_fish_hunter_v3_cold_data"
 
 OUTPUT_START = "2026-01-24"  # keep rows with activity date >= this
 OUTPUT_END = "2026-08-03"  # exclusive; align to Monday / 1st so weekly/monthly periods are complete
