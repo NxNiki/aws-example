@@ -24,6 +24,9 @@ from datetime import date, timedelta
 from pyspark.sql import SparkSession, functions as F
 from pyspark.sql.window import Window
 
+# Ships via submit_py_files (see feature_engineer_life_cycle_submit.py).
+from spark_etl_common import prune_partition_days, prune_period_days
+
 USER_DAY_BASE_SQL = """
 WITH order_base AS (
     SELECT
@@ -246,13 +249,15 @@ def main():
 
     # ---- stage 1: monthly user-day base aggregates -------------------------
     bullet = spark.read.parquet(args.input_root)
-    partition_date = F.make_date("year", "month", "day")
 
     output_start = date.fromisoformat(args.output_start)
     output_end = date.fromisoformat(args.output_end)
 
     for label, scan_lo, scan_hi, out_lo, out_hi in month_jobs(output_start, output_end):
-        raw = bullet.filter(partition_date.between(F.to_date(F.lit(str(scan_lo))), F.to_date(F.lit(str(scan_hi)))))
+        # Each pruner no-ops without its partition columns, so the job reads
+        # the fish_bullets_group_tag dataset (period=) or the raw warehouse
+        # (year=/month=/day=) alike.
+        raw = prune_period_days(prune_partition_days(bullet, scan_lo, scan_hi), scan_lo, scan_hi)
         if raw.limit(1).count() == 0:
             print("no data, skip:", label)
             continue

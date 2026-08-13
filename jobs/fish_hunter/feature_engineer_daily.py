@@ -34,6 +34,9 @@ from datetime import date, timedelta
 from pyspark.sql import SparkSession, functions as F
 from pyspark.sql.window import Window as W
 
+# Ships via submit_py_files (see feature_engineer_daily_submit.py).
+from spark_etl_common import prune_partition_days, prune_period_days
+
 # Same session definition as the lifecycle HMM feature job.
 SESSION_BREAK_SECONDS = 180
 # Streaks reset with the session (ss03 uses 200s; here the session break is
@@ -331,7 +334,6 @@ def main():
 
     daily_root = f"{args.output_root}/features_user_daily"
     bullet = spark.read.parquet(args.input_root)
-    partition_date = F.make_date("year", "month", "day")
 
     pre_agg = PRE_AGG_SQL.format(
         currency=args.currency,
@@ -343,7 +345,10 @@ def main():
 
     staging_root = f"{daily_root}_staging"
     for label, scan_lo, scan_hi, out_lo, out_hi in month_jobs(output_start, output_end):
-        raw = bullet.filter(partition_date.between(F.to_date(F.lit(str(scan_lo))), F.to_date(F.lit(str(scan_hi)))))
+        # Each pruner no-ops without its partition columns, so the job reads
+        # the fish_bullets_group_tag dataset (period=) or the raw warehouse
+        # (year=/month=/day=) alike.
+        raw = prune_period_days(prune_partition_days(bullet, scan_lo, scan_hi), scan_lo, scan_hi)
         if raw.limit(1).count() == 0:
             print("no data, skip:", label)
             continue
