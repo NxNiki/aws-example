@@ -33,10 +33,14 @@ the same bets.
   attributes `FourScatter` free-game buy-ins to the following spin's
   mathtable).
 
-**fish_hunter** (`output_fish_hunter_v2`) has its own grain: one row per
-`(activity_date, user_id, daily_group, fish_value)`. `daily_group` assigns
-each whole user-day to one strategy tier (RISK_CONTROLLED > BOOST_POOL >
-DYNAMIC_RTP* > DEFAULT_FALLBACK); `fish_value` is the bullet's target fish
+**fish_hunter** (`output_fish_hunter_v3_cold_data`) has its own grain: one
+row per `(activity_date, user_id, group_tag, fish_value)`. `group_tag` is
+derived per bullet in the `fish_bullets_group_tag` dataset (Athena:
+`bituslabs_ds.fish_bullets_group_tag`) — `dynamic_rtp` (DYNAMIC_RTP_V3),
+`risk_control` (RC_FISHING_* / %RISK_CONTROL%), `retention` (user-id last
+digit 0/1 from the 2026-07-31 00:00 UTC launch), else `default` — and each
+whole user-day collapses to the highest-priority tag in that branch order;
+`fish_value` is the bullet's target fish
 value, so the dashboard can bucket by user-defined "fish level" ranges.
 Metrics that only exist at the user-day level (`user_num_rooms`,
 `user_profit_coef_var`, streaks, session stats) are computed once per
