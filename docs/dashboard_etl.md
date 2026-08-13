@@ -9,6 +9,9 @@ SQL per game is snapshotted in `tests/unit/etl_snapshots/`.
 > AB group assignment (`ab_group`) is derived once, in the
 > `slot_orders_ab_group` dataset every slot ETL reads — including the
 > 2026-08 policy cutover. See [`ab_group_policy.md`](ab_group_policy.md).
+> Fish_hunter's `group_tag` works the same way, via the
+> `fish_bullets_group_tag` dataset. See
+> [`fish_group_tag_policy.md`](fish_group_tag_policy.md).
 
 ## Datasets
 
@@ -37,8 +40,9 @@ the same bets.
 row per `(activity_date, user_id, group_tag, fish_value)`. `group_tag` is
 derived per bullet in the `fish_bullets_group_tag` dataset (Athena:
 `bituslabs_ds.fish_bullets_group_tag`) — `dynamic_rtp` (DYNAMIC_RTP_V3),
-`risk_control` (RC_FISHING_* / CR_FISHING_* / %RISK_CONTROL%), `retention` (user-id last
-digit 0/1 from the 2026-07-31 00:00 UTC launch), else `default` — and each
+`risk_control` (RC_FISHING_* / %RISK_CONTROL%), `retention` (CR_FISHING_*,
+or user-id last digit 0/1 from the 2026-07-31 00:00 UTC launch), else
+`default` — and each
 whole user-day collapses to the highest-priority tag in that branch order;
 `fish_value` is the bullet's target fish
 value, so the dashboard can bucket by user-defined "fish level" ranges.

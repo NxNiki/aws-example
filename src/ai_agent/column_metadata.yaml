@@ -61,21 +61,23 @@ groups:
   group_tag:
     description: >
       Fish Hunter (FM01) grouping column. Each bullet is tagged from its
-      strategy_name — DYNAMIC_RTP_V3 -> dynamic_rtp, RC_FISHING_*/CR_FISHING_*/
-      %RISK_CONTROL% -> risk_control, users with id last digit 0/1 after the
-      2026-07-31 00:00 UTC personalized-retention launch -> retention, else
-      default — and each (user, day) is collapsed to exactly ONE label,
-      priority dynamic_rtp > risk_control > retention > default (a single
-      bullet in a higher tier claims the whole user-day).
+      strategy_name — DYNAMIC_RTP_V3 -> dynamic_rtp, RC_FISHING_*/
+      %RISK_CONTROL% -> risk_control, CR_FISHING_* (the retention treatment)
+      or users with id last digit 0/1 after the 2026-07-31 00:00 UTC
+      personalized-retention launch -> retention, else default — and each
+      (user, day) is collapsed to exactly ONE label, priority dynamic_rtp >
+      risk_control > retention > default (a single bullet in a higher tier
+      claims the whole user-day).
     values:
       dynamic_rtp:
         description: "Bullets served by the DYNAMIC_RTP_V3 strategy."
       risk_control:
-        description: "Bullets served by RC_FISHING_*, CR_FISHING_* or *RISK_CONTROL* strategies."
+        description: "Bullets served by RC_FISHING_* or *RISK_CONTROL* strategies."
       retention:
         description: >
-          Personalized-retention (挽留) cohort: user_id last digit 0 or 1,
-          bets after 2026-07-31 00:00 UTC, no higher-priority strategy that day.
+          Personalized-retention (挽留) cohort: bullets served by CR_FISHING_*
+          (the treatment itself), or user_id last digit 0 or 1 after
+          2026-07-31 00:00 UTC with no higher-priority strategy that day.
       default:
         description: "Everything else (includes legacy BOOST_POOL / DYNAMIC_RTP / DYNAMIC_RTP_V2)."
 

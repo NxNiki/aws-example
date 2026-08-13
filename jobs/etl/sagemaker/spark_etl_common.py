@@ -84,14 +84,17 @@ def fish_group_tag_sql(strategy_expr: str, user_id_expr: str, utc_ts_expr: str) 
     ``utc_ts_expr`` must be a UTC TIMESTAMP (the retention gate is specified
     in UTC). The ``substr`` tests are the escaped ``LIKE '.._FISHING\\_%'``
     (literal underscore); ``'%RISK_CONTROL%'`` also matches the legacy
-    ``RISK_CONTROLLED`` strategy. Rows before the retention launch can never
-    label ``retention``, so applying this to full history preserves the
-    pre-launch tagging unchanged."""
+    ``RISK_CONTROLLED`` strategy. CR_FISHING_* is the personalized-retention
+    treatment itself (served exclusively to digit-0/1 users, including a
+    small canary in the hour before the official launch), so it labels
+    ``retention`` regardless of the gate; otherwise rows before the launch
+    can never label ``retention``, and applying this to full history
+    preserves the pre-launch tagging unchanged."""
     return f"""CASE
             WHEN {strategy_expr} = 'DYNAMIC_RTP_V3' THEN 'dynamic_rtp'
             WHEN substr({strategy_expr}, 1, 11) = 'RC_FISHING_' THEN 'risk_control'
-            WHEN substr({strategy_expr}, 1, 11) = 'CR_FISHING_' THEN 'risk_control'
             WHEN {strategy_expr} LIKE '%RISK_CONTROL%' THEN 'risk_control'
+            WHEN substr({strategy_expr}, 1, 11) = 'CR_FISHING_' THEN 'retention'
             WHEN {utc_ts_expr} >= TIMESTAMP '{FISH_RETENTION_POLICY_START_UTC}'
                 AND CAST({user_id_expr} AS BIGINT) % 10 IN (0, 1) THEN 'retention'
             ELSE 'default'

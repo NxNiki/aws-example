@@ -68,9 +68,10 @@ def test_strategy_branches_apply_to_all_history():
     rows = [
         ("DYNAMIC_RTP_V3", 5, PRE),
         ("RC_FISHING_20260601", 5, PRE),
+        # CR_FISHING is the retention treatment itself: retention regardless
+        # of the launch gate (pre-launch canary) or the user digit.
         ("CR_FISHING_V1:T3:P1", 5, PRE),
-        # CR_FISHING is risk_control even for the retention digits post-launch.
-        ("CR_FISHING_V1:T1:P2", 21, POST),
+        ("CR_FISHING_V1:T1:P2", 25, POST),
         ("AB_RISK_CONTROL_V2", 9, PRE),
         # legacy RISK_CONTROLLED contains the RISK_CONTROL substring.
         ("RISK_CONTROLLED", 3, PRE),
@@ -84,8 +85,8 @@ def test_strategy_branches_apply_to_all_history():
     assert _group_tag_rows(rows) == [
         "dynamic_rtp",
         "risk_control",
-        "risk_control",
-        "risk_control",
+        "retention",
+        "retention",
         "risk_control",
         "risk_control",
         "default",
