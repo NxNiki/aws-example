@@ -3,7 +3,7 @@
 ETL job: bullet-level copy of the oceanhunter warehouse's ``cold_data/bullet``
 rows plus the ``group_tag`` column the raw data lacks — the fish grouping
 policy (``spark_etl_common.fish_group_tag_sql``: DYNAMIC_RTP_V3 ->
-``dynamic_rtp``, RC_FISHING_*/'%RISK_CONTROL%' -> ``risk_control``, user-id
+``dynamic_rtp``, RC_FISHING_*/CR_FISHING_*/'%RISK_CONTROL%' -> ``risk_control``, user-id
 last digit 0/1 from the 2026-07-31 00:00 UTC retention launch ->
 ``retention``, else ``default``). Backs the Athena table
 ``bituslabs_ds.fish_bullets_group_tag`` (register with

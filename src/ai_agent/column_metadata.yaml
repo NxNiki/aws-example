@@ -61,7 +61,7 @@ groups:
   group_tag:
     description: >
       Fish Hunter (FM01) grouping column. Each bullet is tagged from its
-      strategy_name — DYNAMIC_RTP_V3 -> dynamic_rtp, RC_FISHING_*/
+      strategy_name — DYNAMIC_RTP_V3 -> dynamic_rtp, RC_FISHING_*/CR_FISHING_*/
       %RISK_CONTROL% -> risk_control, users with id last digit 0/1 after the
       2026-07-31 00:00 UTC personalized-retention launch -> retention, else
       default — and each (user, day) is collapsed to exactly ONE label,
@@ -71,7 +71,7 @@ groups:
       dynamic_rtp:
         description: "Bullets served by the DYNAMIC_RTP_V3 strategy."
       risk_control:
-        description: "Bullets served by RC_FISHING_* or *RISK_CONTROL* strategies."
+        description: "Bullets served by RC_FISHING_*, CR_FISHING_* or *RISK_CONTROL* strategies."
       retention:
         description: >
           Personalized-retention (挽留) cohort: user_id last digit 0 or 1,
