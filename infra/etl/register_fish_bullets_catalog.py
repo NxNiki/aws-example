@@ -23,7 +23,7 @@ from bituslabs_ds.s3_utils import expand_paths_to_files
 DATABASE = "bituslabs_ds"
 TABLE = "fish_bullets_group_tag"
 LOCATION = f"s3://{S3_BUCKET}/etl-results/jobs/output_fish_bullets_group_tag/bullets/"
-PERIOD_RANGE_START = "2025-05-01"  # earliest fish cold data
+PERIOD_RANGE_START = "2025-05-21"  # earliest fish cold data
 
 _HIVE_TYPES: dict[Any, str] = {
     pl.Int64: "bigint",
