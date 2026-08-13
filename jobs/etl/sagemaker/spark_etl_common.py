@@ -34,6 +34,17 @@ PARTITION_AB_FIRST = "get_json_object(CAST(t.partition_ab AS STRING), '$[0]')"
 # that mixed hour (~600 bets, mostly group-agnostic kakutei bonus tables).
 AB_GROUP_DIGIT_POLICY_START_BJ = "2026-08-04 05:30:00"
 
+# fish_hunter (FM01) group_tag policy: the personalized-retention (个性化挽留)
+# experiment went live 2026-07-30 16:00 PST = 2026-07-31 00:00 UTC, assigning
+# users with id last digit 0/1. Only the retention branch is gated on this
+# moment; the strategy-name branches apply to all history (risk-control
+# strategies keep their label wherever they occur).
+FISH_RETENTION_POLICY_START_UTC = "2026-07-31 00:00:00"
+
+# Branch order of fish_group_tag_sql, which doubles as the user-day collapse
+# priority in fish_group_tag_day_case ('default' is the implicit last tier).
+FISH_GROUP_TAG_PRIORITY = ("dynamic_rtp", "risk_control", "retention")
+
 
 def ab_group_sql(ab_label_expr: str, user_id_expr: str, bj_ts_expr: str, include_ab_tests: bool = True) -> str:
     """CASE expression labeling a bet's AB group under the timestamp-gated
@@ -64,6 +75,39 @@ def ab_group_sql(ab_label_expr: str, user_id_expr: str, bj_ts_expr: str, include
                 WHEN {ab_label_expr} = '{AI_GROUP_ID}' THEN 'AI'{legacy_tests}
                 ELSE 'Default'
             END
+        END"""
+
+
+def fish_group_tag_sql(strategy_expr: str, user_id_expr: str, utc_ts_expr: str) -> str:
+    """CASE expression labeling a single bullet's ``group_tag``.
+
+    ``utc_ts_expr`` must be a UTC TIMESTAMP (the retention gate is specified
+    in UTC). The ``substr`` test is the escaped ``LIKE 'RC_FISHING\\_%'``
+    (literal underscore); ``'%RISK_CONTROL%'`` also matches the legacy
+    ``RISK_CONTROLLED`` strategy. Rows before the retention launch can never
+    label ``retention``, so applying this to full history preserves the
+    pre-launch tagging unchanged."""
+    return f"""CASE
+            WHEN {strategy_expr} = 'DYNAMIC_RTP_V3' THEN 'dynamic_rtp'
+            WHEN substr({strategy_expr}, 1, 11) = 'RC_FISHING_' THEN 'risk_control'
+            WHEN {strategy_expr} LIKE '%RISK_CONTROL%' THEN 'risk_control'
+            WHEN {utc_ts_expr} >= TIMESTAMP '{FISH_RETENTION_POLICY_START_UTC}'
+                AND CAST({user_id_expr} AS BIGINT) % 10 IN (0, 1) THEN 'retention'
+            ELSE 'default'
+        END"""
+
+
+def fish_group_tag_day_case(tag_expr: str) -> str:
+    """Collapse a user-day's row-level tags to ONE label (use inside a
+    GROUP BY user, day aggregate). A single bullet in a higher tier claims
+    the whole user-day; priority is the row CASE's branch order."""
+    branches = "\n            ".join(
+        f"WHEN MAX(CASE WHEN {tag_expr} = '{tag}' THEN 1 ELSE 0 END) > 0 THEN '{tag}'"
+        for tag in FISH_GROUP_TAG_PRIORITY
+    )
+    return f"""CASE
+            {branches}
+            ELSE 'default'
         END"""
 
 
