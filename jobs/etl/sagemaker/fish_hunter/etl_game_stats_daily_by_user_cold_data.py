@@ -13,9 +13,9 @@ Behavior: one row per (user, period, group_tag, fish_value) for EVERY betting
 user -- not only fish-killers (kill-specific metrics are NULL/0 for non-killers;
 the ``user_killed_fish`` flag segments killers). ``group_tag`` collapses each
 (user, day) to exactly ONE group: a single bullet in a higher tier claims the
-whole user-day, priority ``dynamic_rtp`` > ``risk_control`` > ``retention`` >
-``default`` (the row-level policy's branch order; the policy itself is derived
-once, upstream in the bullets dataset). Each run
+whole user-day, priority ``boost_pool`` > ``dynamic_rtp`` > ``risk_control`` >
+``retention`` > ``default`` (the row-level policy's branch order; the policy
+itself is derived once, upstream in the bullets dataset). Each run
 recomputes whole periods in [output-start, output-end) and dynamic-partition-
 overwrites exactly the ``period=`` directories it produced, so windowed re-runs
 are idempotent; a partial trailing period (output-end not on a period boundary)
@@ -40,7 +40,6 @@ from pyspark.sql import functions as F
 # jobs/etl/sagemaker on the path first (the snapshot tests already do).
 from spark_etl_common import (
     BJ_UTC_OFFSET_HOURS,
-    EXCLUDED_OP_CODES,
     beijing_today,
     build_spark_session,
     check_schema,
@@ -77,7 +76,6 @@ REQUIRED_COLUMNS = [
     "profit",
     "fish_value",
     "killed",
-    "op_code",
     "currency_type",
     "game_id",
     "period",
@@ -134,7 +132,6 @@ def generate_query(
             WHERE
                 b.currency_type = '{currency}'
                 AND b.game_id = '{game_id}'
-                AND b.op_code NOT IN {EXCLUDED_OP_CODES}
                 AND CAST(b.created_at AS TIMESTAMP) >= TIMESTAMP '{scan_start_utc:%Y-%m-%d %H:%M:%S}'
                 AND CAST(b.created_at AS TIMESTAMP) < TIMESTAMP '{scan_end_utc:%Y-%m-%d %H:%M:%S}'
         ),

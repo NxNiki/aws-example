@@ -43,7 +43,9 @@ FISH_RETENTION_POLICY_START_UTC = "2026-07-31 00:00:00"
 
 # Branch order of fish_group_tag_sql, which doubles as the user-day collapse
 # priority in fish_group_tag_day_case ('default' is the implicit last tier).
-FISH_GROUP_TAG_PRIORITY = ("dynamic_rtp", "risk_control", "retention")
+# boost_pool outranks everything for legacy data; the strategy no longer
+# exists in new data.
+FISH_GROUP_TAG_PRIORITY = ("boost_pool", "dynamic_rtp", "risk_control", "retention")
 
 
 def ab_group_sql(ab_label_expr: str, user_id_expr: str, bj_ts_expr: str, include_ab_tests: bool = True) -> str:
@@ -84,14 +86,17 @@ def fish_group_tag_sql(strategy_expr: str, user_id_expr: str, utc_ts_expr: str) 
     ``utc_ts_expr`` must be a UTC TIMESTAMP (the retention gate is specified
     in UTC). The ``substr`` tests are the escaped ``LIKE '.._FISHING\\_%'``
     (literal underscore); ``'%RISK_CONTROL%'`` also matches the legacy
-    ``RISK_CONTROLLED`` strategy. CR_FISHING_* is the personalized-retention
-    treatment itself (served exclusively to digit-0/1 users, including a
-    small canary in the hour before the official launch), so it labels
-    ``retention`` regardless of the gate; otherwise rows before the launch
-    can never label ``retention``, and applying this to full history
-    preserves the pre-launch tagging unchanged."""
+    ``RISK_CONTROLLED`` strategy, and the whole DYNAMIC_RTP family shares
+    the ``dynamic_rtp`` label (V1/V2 are legacy date ranges of the same
+    program). CR_FISHING_* is the personalized-retention treatment itself
+    (served exclusively to digit-0/1 users, including a small canary in the
+    hour before the official launch), so it labels ``retention`` regardless
+    of the gate; otherwise rows before the launch can never label
+    ``retention``, and applying this to full history preserves the
+    pre-launch tagging unchanged."""
     return f"""CASE
-            WHEN {strategy_expr} = 'DYNAMIC_RTP_V3' THEN 'dynamic_rtp'
+            WHEN {strategy_expr} = 'BOOST_POOL' THEN 'boost_pool'
+            WHEN {strategy_expr} IN ('DYNAMIC_RTP', 'DYNAMIC_RTP_V2', 'DYNAMIC_RTP_V3') THEN 'dynamic_rtp'
             WHEN substr({strategy_expr}, 1, 11) = 'RC_FISHING_' THEN 'risk_control'
             WHEN {strategy_expr} LIKE '%RISK_CONTROL%' THEN 'risk_control'
             WHEN substr({strategy_expr}, 1, 11) = 'CR_FISHING_' THEN 'retention'

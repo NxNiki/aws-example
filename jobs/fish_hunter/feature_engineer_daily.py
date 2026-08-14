@@ -66,8 +66,7 @@ WITH user_bets AS (
             ELSE 'ultra'
         END AS fish_type
     FROM bullet_raw
-    WHERE op_code NOT IN ('B26','TST','TSB','TSO')
-      AND currency_type = '{currency}'
+    WHERE currency_type = '{currency}'
       AND game_id = '{game_id}'
 ),
 

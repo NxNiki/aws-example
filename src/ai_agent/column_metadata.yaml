@@ -61,25 +61,27 @@ groups:
   group_tag:
     description: >
       Fish Hunter (FM01) grouping column. Each bullet is tagged from its
-      strategy_name — DYNAMIC_RTP_V3 -> dynamic_rtp, RC_FISHING_*/
-      %RISK_CONTROL% -> risk_control, CR_FISHING_* (the retention treatment)
-      or users with id last digit 0/1 after the 2026-07-31 00:00 UTC
-      personalized-retention launch -> retention, else default — and each
-      (user, day) is collapsed to exactly ONE label, priority dynamic_rtp >
-      risk_control > retention > default (a single bullet in a higher tier
-      claims the whole user-day).
+      strategy_name — BOOST_POOL -> boost_pool, DYNAMIC_RTP family ->
+      dynamic_rtp, RC_FISHING_*/%RISK_CONTROL% -> risk_control, CR_FISHING_*
+      (the retention treatment) or users with id last digit 0/1 after the
+      2026-07-31 00:00 UTC personalized-retention launch -> retention, else
+      default — and each (user, day) is collapsed to exactly ONE label,
+      priority boost_pool > dynamic_rtp > risk_control > retention > default
+      (a single bullet in a higher tier claims the whole user-day).
     values:
+      boost_pool:
+        description: "Bullets served by the legacy BOOST_POOL strategy (no longer exists in new data)."
       dynamic_rtp:
-        description: "Bullets served by the DYNAMIC_RTP_V3 strategy."
+        description: "Bullets served by the DYNAMIC_RTP family (DYNAMIC_RTP / _V2 / _V3 — the same program over successive date ranges)."
       risk_control:
-        description: "Bullets served by RC_FISHING_* or *RISK_CONTROL* strategies."
+        description: "Bullets served by RC_FISHING_* or *RISK_CONTROL* strategies (includes legacy RISK_CONTROLLED)."
       retention:
         description: >
           Personalized-retention (挽留) cohort: bullets served by CR_FISHING_*
           (the treatment itself), or user_id last digit 0 or 1 after
           2026-07-31 00:00 UTC with no higher-priority strategy that day.
       default:
-        description: "Everything else (includes legacy BOOST_POOL / DYNAMIC_RTP / DYNAMIC_RTP_V2)."
+        description: "Everything else (DEFAULT_FALLBACK, NULL strategy)."
 
 # ---------------------------------------------------------------------------
 # Game-specific context

@@ -154,8 +154,9 @@ def _ab_group_rows(rows, include_ab_tests=True):
 
 
 def test_slot_orders_query_composition():
-    """The Athena-backing orders copy: raw rows plus the policy ab_group —
-    no status/op-code/currency filtering (downstream queries filter)."""
+    """The Athena-backing orders copy: rows plus the policy ab_group.
+    Incomplete/test bets drop at the source; currency filtering stays
+    downstream (a selection, not junk)."""
     orders_path = REPO_ROOT / "jobs/etl/sagemaker/slot_machine/etl_slot_orders_ab_group.py"
     sys.path.insert(0, str(REPO_ROOT / "jobs/etl/sagemaker"))
     try:
@@ -168,7 +169,8 @@ def test_slot_orders_query_composition():
     sql = mod.generate_query(["SS03", "SS06"], date(2026, 8, 1), date(2026, 8, 5))
     assert "AS ab_group" in sql and "TIMESTAMP '2026-08-04 05:30:00'" in sql and "% 10" in sql
     assert "t.game_id IN ('SS03', 'SS06')" in sql
-    assert "status =" not in sql and "op_code NOT IN" not in sql  # raw copy, unfiltered
+    assert "t.status = 'COMPLETED'" in sql and "op_code NOT IN" in sql
+    assert "currency_type =" not in sql
 
 
 def test_ab_group_policy_timestamp_gate():

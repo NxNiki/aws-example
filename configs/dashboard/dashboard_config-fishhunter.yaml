@@ -16,9 +16,10 @@ stats_by_date:
 
   group_col: "group_tag"
   date_col: "activity_date"
-  # group_tag = the fish grouping policy (dynamic_rtp / risk_control /
-  # retention / default), derived per bullet in the fish_bullets_group_tag
-  # dataset and collapsed to one label per user-day.
+  # group_tag = the fish grouping policy (boost_pool / dynamic_rtp /
+  # risk_control / retention / default; docs/fish_group_tag_policy.md),
+  # derived per bullet in the fish_bullets_group_tag dataset and collapsed
+  # to one label per user-day.
   # life_cycle_group is not a stored column: it is the reserved lifecycle
   # name (LIFECYCLE_COL in dashboard_api services/common.py), and listing it
   # is what enables the "Lifecycle groups" picker (cohorts derived from

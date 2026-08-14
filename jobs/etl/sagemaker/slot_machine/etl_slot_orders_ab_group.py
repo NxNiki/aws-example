@@ -9,8 +9,10 @@ moment on). Backs the Athena table
 ``infra/etl/register_slot_orders_catalog.py``), so ad-hoc queries get correct
 group membership without re-deriving the policy.
 
-Behavior: rows are copied as-is — no status/op-code/currency filtering (this
-is the raw table plus a column; downstream queries filter). ``activity_date``
+Behavior: incomplete bets (status != COMPLETED) and test bets (op_code
+B26/TST/TSB/TSO) are dropped at the source so downstream consumers and
+ad-hoc Athena queries need no status/op-code filter; currency filtering
+stays downstream (a selection, not junk). ``activity_date``
 is the bet's Beijing calendar date and drives the ``period`` partition.
 Output layout: ``<output-root>/orders/game_id=<GAME>/period=YYYY-MM-DD/``.
 Each run recomputes the window's periods with dynamic partition overwrite,
@@ -28,6 +30,7 @@ from textwrap import dedent
 from pyspark.sql import functions as F
 from spark_etl_common import (
     BJ_UTC_OFFSET_HOURS,
+    EXCLUDED_OP_CODES,
     PARTITION_AB_FIRST,
     ab_group_sql,
     beijing_today,
@@ -88,6 +91,8 @@ def generate_query(games: list[str], effective_start: date, output_end: date) ->
         FROM bet_order_raw AS t
         WHERE
             t.game_id IN ({games_in})
+            AND t.status = 'COMPLETED'
+            AND t.op_code NOT IN {EXCLUDED_OP_CODES}
             AND CAST(t.created_at AS TIMESTAMP) >= TIMESTAMP '{scan_start_utc:%Y-%m-%d %H:%M:%S}'
             AND CAST(t.created_at AS TIMESTAMP) < TIMESTAMP '{scan_end_utc:%Y-%m-%d %H:%M:%S}'
         """

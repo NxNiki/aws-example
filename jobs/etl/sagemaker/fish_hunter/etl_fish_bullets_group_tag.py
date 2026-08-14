@@ -2,18 +2,21 @@
 
 ETL job: bullet-level copy of the oceanhunter warehouse's ``cold_data/bullet``
 rows plus the ``group_tag`` column the raw data lacks — the fish grouping
-policy (``spark_etl_common.fish_group_tag_sql``: DYNAMIC_RTP_V3 ->
-``dynamic_rtp``, RC_FISHING_*/'%RISK_CONTROL%' -> ``risk_control``,
+policy (``spark_etl_common.fish_group_tag_sql``: BOOST_POOL ->
+``boost_pool``, DYNAMIC_RTP family -> ``dynamic_rtp``,
+RC_FISHING_*/'%RISK_CONTROL%' -> ``risk_control``,
 CR_FISHING_* or user-id last digit 0/1 from the 2026-07-31 00:00 UTC
-retention launch -> ``retention``, else ``default``). Backs the Athena table
+retention launch -> ``retention``, else ``default``; see
+docs/fish_group_tag_policy.md). Backs the Athena table
 ``bituslabs_ds.fish_bullets_group_tag`` (register with
 ``infra/etl/register_fish_bullets_catalog.py``), so ad-hoc queries get
 correct group membership without re-deriving the policy.
 
-Behavior: rows are copied without status/op-code/currency filtering (this is
-the raw table plus a column; downstream queries filter), keeping only the
-columns the daily-stats and feature-engineering ETLs consume plus
-``strategy_name`` for auditing the tag. ``activity_date`` is the bullet's
+Behavior: test bets (op_code B26/TST/TSB/TSO) are dropped at the source so
+downstream consumers and ad-hoc Athena queries need no op-code filter;
+currency/game filtering stays downstream (those are selections, not junk).
+Keeps only the columns the daily-stats and feature-engineering ETLs consume
+plus ``strategy_name`` for auditing the tag. ``activity_date`` is the bullet's
 Beijing calendar date (from ``created_at``) and drives the ``period``
 partition. Output layout: ``<output-root>/bullets/period=YYYY-MM-DD/``.
 Each run recomputes the window's periods with dynamic partition overwrite,
@@ -31,6 +34,7 @@ from textwrap import dedent
 from pyspark.sql import functions as F
 from spark_etl_common import (
     BJ_UTC_OFFSET_HOURS,
+    EXCLUDED_OP_CODES,
     beijing_today,
     build_spark_session,
     check_schema,
@@ -96,7 +100,8 @@ def generate_query(effective_start: date, output_end: date) -> str:
             {bj_date} AS activity_date
         FROM bullet_raw AS t
         WHERE
-            CAST(t.created_at AS TIMESTAMP) >= TIMESTAMP '{scan_start_utc:%Y-%m-%d %H:%M:%S}'
+            t.op_code NOT IN {EXCLUDED_OP_CODES}
+            AND CAST(t.created_at AS TIMESTAMP) >= TIMESTAMP '{scan_start_utc:%Y-%m-%d %H:%M:%S}'
             AND CAST(t.created_at AS TIMESTAMP) < TIMESTAMP '{scan_end_utc:%Y-%m-%d %H:%M:%S}'
         """
     )

@@ -10,36 +10,39 @@ One row-level CASE, evaluated per bullet in this order (first match wins):
 
 | # | Rule | Tag |
 | --- | --- | --- |
-| 1 | `strategy_name = 'DYNAMIC_RTP_V3'` | `dynamic_rtp` |
-| 2 | `strategy_name LIKE 'RC_FISHING\_%'` (literal `_`) | `risk_control` |
-| 3 | `strategy_name LIKE '%RISK_CONTROL%'` | `risk_control` |
-| 4 | `strategy_name LIKE 'CR_FISHING\_%'` (literal `_`) | `retention` |
-| 5 | `event_timestamp >= 2026-07-31 00:00 UTC` **and** `user_id % 10 IN (0, 1)` | `retention` |
-| 6 | everything else | `default` |
+| 1 | `strategy_name = 'BOOST_POOL'` | `boost_pool` |
+| 2 | `strategy_name IN ('DYNAMIC_RTP', 'DYNAMIC_RTP_V2', 'DYNAMIC_RTP_V3')` | `dynamic_rtp` |
+| 3 | `strategy_name LIKE 'RC_FISHING\_%'` (literal `_`) | `risk_control` |
+| 4 | `strategy_name LIKE '%RISK_CONTROL%'` | `risk_control` |
+| 5 | `strategy_name LIKE 'CR_FISHING\_%'` (literal `_`) | `retention` |
+| 6 | `event_timestamp >= 2026-07-31 00:00 UTC` **and** `user_id % 10 IN (0, 1)` | `retention` |
+| 7 | everything else (`DEFAULT_FALLBACK`, NULL, …) | `default` |
 
 Key properties:
 
-- **The strategy rules (1–4) apply to ALL history**, regardless of date or
-  user digit. This matters because risk-control strategies predate the
-  retention launch: `RISK_CONTROLLED` (matched by rule 3) runs from
-  2026-04-03 and `RC_FISHING_V1:*` from 2026-07-14.
+- **The strategy rules (1–5) apply to ALL history**, regardless of date or
+  user digit. This matters because several strategies predate the retention
+  launch: `RISK_CONTROLLED` (matched by rule 4) runs from 2026-04-03 and
+  `RC_FISHING_V1:*` from 2026-07-14.
+- **Legacy strategies keep their own labels**: `BOOST_POOL` → `boost_pool`
+  (the strategy no longer exists in new data); `DYNAMIC_RTP` /
+  `DYNAMIC_RTP_V2` share `dynamic_rtp` with V3 (the same program over
+  different date ranges); `RISK_CONTROLLED` → `risk_control` (same as
+  RC_*); `DEFAULT_FALLBACK` / NULL → `default`.
 - **`CR_FISHING_*` is the personalized-retention treatment itself** —
   empirically it is served *exclusively* to digit-0/1 users (100.00% of its
   rows, both eras), including a small canary in the hour before the official
   launch (9.5k rows / 13 users from 2026-07-30 23:10 UTC). The explicit rule
-  4 tags those canary bullets `retention` even though they precede the gate.
-- **Only rule 5 is timestamp-gated.** The personalized-retention
+  5 tags those canary bullets `retention` even though they precede the gate.
+- **Only rule 6 is timestamp-gated.** The personalized-retention
   (个性化挽留) experiment went live 2026-07-30 16:00 PST = **2026-07-31
   00:00 UTC** (`FISH_RETENTION_POLICY_START_UTC`), assigning users whose id
   ends in 0 or 1. Apart from the CR_FISHING canary, bullets before that
   moment can never be tagged `retention`, so applying the CASE to full
   history preserves pre-launch tagging unchanged — there is no separate
   "old era" branch.
-- Legacy strategies without a rule of their own (`BOOST_POOL`,
-  `DYNAMIC_RTP`, `DYNAMIC_RTP_V2`, `DEFAULT_FALLBACK`, NULL) fall into
-  `default`. The old dashboard ladder vocabulary (`ab_test_group`:
-  literal RC_*/CR_* labels, `RISK_CONTROLLED`, `BOOST_POOL`, DYNAMIC_RTP
-  family, `DEFAULT_FALLBACK`, plus the `RC_ALL`/`CR_ALL` rollup) is retired.
+- The old dashboard ladder vocabulary (`ab_test_group`: literal RC_*/CR_*
+  labels plus the `RC_ALL`/`CR_ALL` rollup) is retired.
 
 The CASE lives in one place: `jobs/etl/sagemaker/spark_etl_common.py::
 fish_group_tag_sql` (the `RC_/CR_FISHING_` prefixes are `substr` tests —
@@ -50,9 +53,10 @@ matches the literal underscore in `RISK_CONTROLLED`).
 
 The stats grain is one row per `(period, user, group_tag, fish_value)`, so
 each user-day needs exactly ONE tag. `fish_group_tag_day_case` collapses a
-user-day's row tags with the same priority as the CASE branch order:
+user-day's row tags with the same priority as the CASE branch order
+(boost_pool outranks everything for legacy data):
 
-    dynamic_rtp > risk_control > retention > default
+    boost_pool > dynamic_rtp > risk_control > retention > default
 
 A single bullet in a higher tier claims the whole user-day (e.g. a
 retention-cohort user with one `RC_FISHING_*` bullet that day counts as
@@ -62,11 +66,14 @@ retention-cohort user with one `RC_FISHING_*` bullet that day counts as
 
 `jobs/etl/sagemaker/fish_hunter/etl_fish_bullets_group_tag.py` copies the
 oceanhunter warehouse `cold_data/bullet` rows and adds the policy-correct
-`group_tag` (plus the Beijing `activity_date`). Rows are otherwise
-unfiltered — `op_code`, `currency_type`, `game_id` stay as columns for
-downstream queries to filter — and keep only the columns the daily-stats
-and feature-engineering ETLs consume, plus `strategy_name` for auditing
-the tag.
+`group_tag` (plus the Beijing `activity_date`). Test bets (op_code
+B26/TST/TSB/TSO) are dropped at the source, so consumers and ad-hoc Athena
+queries need no op-code filter; `currency_type`/`game_id` filtering stays
+downstream (selections, not junk). The copy keeps only the columns the
+daily-stats and feature-engineering ETLs consume, plus `strategy_name` for
+auditing the tag. (The slot `slot_orders_ab_group` dataset applies the same
+source-level hygiene, additionally dropping `status != 'COMPLETED'`; the
+bullet table has no status column.)
 
 - Dataset: `s3://bituslabs-team-ai/etl-results/jobs/output_fish_bullets_group_tag/bullets/period=YYYY-MM-DD/`
   (full history from 2025-05-21, the earliest fish cold data)

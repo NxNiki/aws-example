@@ -51,8 +51,7 @@ WITH order_base AS (
                 COALESCE(CAST(event_id AS STRING), CAST(bullet_id AS STRING), '')
         ) AS prev_ts_bj
     FROM bullet_raw
-    WHERE op_code NOT IN ('B26','TST','TSB','TSO')
-      AND currency_type = '{currency}'
+    WHERE currency_type = '{currency}'
       AND game_id = '{game_id}'
 ),
 order_enriched AS (

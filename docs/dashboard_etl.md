@@ -39,7 +39,8 @@ the same bets.
 **fish_hunter** (`output_fish_hunter_v3_cold_data`) has its own grain: one
 row per `(activity_date, user_id, group_tag, fish_value)`. `group_tag` is
 derived per bullet in the `fish_bullets_group_tag` dataset (Athena:
-`bituslabs_ds.fish_bullets_group_tag`) — `dynamic_rtp` (DYNAMIC_RTP_V3),
+`bituslabs_ds.fish_bullets_group_tag`) — `boost_pool` (legacy BOOST_POOL),
+`dynamic_rtp` (DYNAMIC_RTP family),
 `risk_control` (RC_FISHING_* / %RISK_CONTROL%), `retention` (CR_FISHING_*,
 or user-id last digit 0/1 from the 2026-07-31 00:00 UTC launch), else
 `default` — and each

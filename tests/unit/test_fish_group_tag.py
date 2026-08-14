@@ -66,6 +66,11 @@ def _group_tag_rows(rows):
 
 def test_strategy_branches_apply_to_all_history():
     rows = [
+        # legacy BOOST_POOL keeps its own label (no longer exists in new data).
+        ("BOOST_POOL", 5, POST),
+        # the whole DYNAMIC_RTP family shares one label across its date ranges.
+        ("DYNAMIC_RTP", 5, PRE),
+        ("DYNAMIC_RTP_V2", 5, POST),
         ("DYNAMIC_RTP_V3", 5, PRE),
         ("RC_FISHING_20260601", 5, PRE),
         # CR_FISHING is the retention treatment itself: retention regardless
@@ -77,19 +82,19 @@ def test_strategy_branches_apply_to_all_history():
         ("RISK_CONTROLLED", 3, PRE),
         # the RC_FISHING match requires the literal underscore (escaped LIKE).
         ("RC_FISHINGX", 5, PRE),
-        # legacy groups without a branch of their own fold into default.
-        ("BOOST_POOL", 5, POST),
-        ("DYNAMIC_RTP", 5, POST),
-        ("DYNAMIC_RTP_V2", 5, POST),
+        ("DEFAULT_FALLBACK", 5, PRE),
+        (None, 5, PRE),
     ]
     assert _group_tag_rows(rows) == [
+        "boost_pool",
+        "dynamic_rtp",
+        "dynamic_rtp",
         "dynamic_rtp",
         "risk_control",
         "retention",
         "retention",
         "risk_control",
         "risk_control",
-        "default",
         "default",
         "default",
         "default",
@@ -121,7 +126,7 @@ def test_retention_is_timestamp_gated_on_user_digit():
         "dynamic_rtp",
         "risk_control",
         "default",
-        "default",
+        "boost_pool",
     ]
 
 
@@ -131,7 +136,10 @@ def test_user_day_collapse_priority():
     con.executemany(
         "INSERT INTO bullets VALUES (?, ?, ?)",
         [
-            # a single higher-tier bullet claims the whole user-day.
+            # a single higher-tier bullet claims the whole user-day;
+            # boost_pool outranks everything for legacy data.
+            ("u0", "d1", "dynamic_rtp"),
+            ("u0", "d1", "boost_pool"),
             ("u1", "d1", "default"),
             ("u1", "d1", "risk_control"),
             ("u1", "d1", "dynamic_rtp"),
@@ -150,6 +158,7 @@ def test_user_day_collapse_priority():
         " GROUP BY user_id, activity_date ORDER BY user_id, activity_date"
     )
     assert list(con.execute(sql)) == [
+        ("u0", "d1", "boost_pool"),
         ("u1", "d1", "dynamic_rtp"),
         ("u1", "d2", "retention"),
         ("u2", "d1", "risk_control"),
@@ -160,11 +169,12 @@ def test_user_day_collapse_priority():
 
 def test_bullets_query_composition():
     """The Athena-backing bullets copy: selected raw columns plus the policy
-    group_tag — no op-code/currency filtering (downstream queries filter)."""
+    group_tag. Test bets drop at the source; currency filtering stays
+    downstream (a selection, not junk)."""
     sql = BULLETS_JOB.generate_query(date(2026, 8, 1), date(2026, 8, 5))
     assert "AS group_tag" in sql and f"TIMESTAMP '{COMMON.FISH_RETENTION_POLICY_START_UTC}'" in sql
     assert "t.strategy_name" in sql  # kept for auditing the tag
-    assert "op_code NOT IN" not in sql and "currency_type =" not in sql
+    assert "op_code NOT IN" in sql and "currency_type =" not in sql
     # group_tag reads the bullet's UTC event_timestamp, not the BJ-shifted one.
     assert "% 10 IN (0, 1)" in sql
 
@@ -179,9 +189,11 @@ def test_stats_query_composition():
         game_id="FM01",
         currency="CNY",
     )
-    # the policy is derived once, upstream in the bullets dataset.
-    assert "strategy_name" not in sql
+    # the policy is derived once, upstream in the bullets dataset; test
+    # op-codes are already dropped there.
+    assert "strategy_name" not in sql and "op_code" not in sql
     assert "b.group_tag" in sql and "user_group_tag" in sql
-    assert "WHEN MAX(CASE WHEN group_tag = 'dynamic_rtp' THEN 1 ELSE 0 END) > 0 THEN 'dynamic_rtp'" in sql
+    assert "WHEN MAX(CASE WHEN group_tag = 'boost_pool' THEN 1 ELSE 0 END) > 0 THEN 'boost_pool'" in sql
+    assert sql.index("'boost_pool'") < sql.index("group_tag = 'dynamic_rtp'")
     assert "GROUP BY b.user_id, u.group_tag, b.fish_value" in sql
     assert "ab_test_group" not in sql
