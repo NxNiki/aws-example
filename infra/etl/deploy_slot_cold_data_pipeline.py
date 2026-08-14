@@ -2,8 +2,9 @@
 
 Builds a SageMaker Pipeline (``slot-cold-data-daily`` -- the name predates the
 fish_hunter step and is pinned by the admin-managed EventBridge schedule) with
-one PySpark processing step per slot game plus a final fish_hunter (FM01)
-step, chained sequentially to stay inside the account's 4x ml.m5.4xlarge
+one PySpark processing step per slot game plus the final fish_hunter (FM01)
+pair (bullets group_tag copy, then stats), chained sequentially to stay inside
+the account's 4x ml.m5.4xlarge
 processing quota, and an EventBridge Scheduler rule that starts it once a day.
 Steps pass no date window, so each run recomputes the job's rolling
 incremental window (last 3 Beijing days; dynamic period= overwrite leaves
@@ -49,8 +50,14 @@ GAME_OUTPUT_ROOTS = {
     "SS06": f"s3://{S3_BUCKET}/etl-results/jobs/output_ss06_pocket_soccer_v2_cold_data",
 }
 
-FISH_INPUT_ROOT = "s3://oceanhunter-production-data-warehouse/transformed_data/cold_data/bullet"
-FISH_OUTPUT_ROOT = f"s3://{S3_BUCKET}/etl-results/jobs/output_fish_hunter_v2_cold_data"
+FISH_WAREHOUSE_ROOT = "s3://oceanhunter-production-data-warehouse/transformed_data/cold_data/bullet"
+# The bullets dataset (raw bullets + policy-correct group_tag; backs the
+# Athena table bituslabs_ds.fish_bullets_group_tag). Built right before the
+# fish stats step, which reads it instead of the warehouse, so group_tag is
+# derived once.
+FISH_BULLETS_OUTPUT_ROOT = f"s3://{S3_BUCKET}/etl-results/jobs/output_fish_bullets_group_tag"
+FISH_BULLETS_DATA_ROOT = f"{FISH_BULLETS_OUTPUT_ROOT}/bullets"
+FISH_OUTPUT_ROOT = f"s3://{S3_BUCKET}/etl-results/jobs/output_fish_hunter_v3_cold_data"
 
 # Cohort variants appended after the base games, (game_id, ab_group, min_run):
 # only the ab_group partition's bets are scanned and only stretches of
@@ -128,17 +135,33 @@ def build_pipeline(session: PipelineSession) -> Pipeline:
             )
         )
 
-    # fish_hunter (FM01) runs last: same 3-node footprint, different source
-    # bucket and job script. The bullet table is higher-volume than bet_order
-    # and the monthly level rescans the whole current month plus the 30-day
-    # kill-streak lookback, hence the bigger spill volume and runtime cap.
+    # fish_hunter (FM01) runs last: bullets copy first (warehouse -> dataset
+    # with group_tag), then the stats step reads the dataset. The bullet
+    # table is higher-volume than bet_order and the monthly stats level
+    # rescans the whole current month plus the 30-day kill-streak lookback,
+    # hence the bigger spill volumes and runtime caps.
+    bullets_processor = spark_processor("fish-bullets-group-tag-daily", session, volume_size_gb=200)
+    bullets_step_args = bullets_processor.run(
+        submit_app=f"{LOCAL_ROOT}/jobs/etl/sagemaker/fish_hunter/etl_fish_bullets_group_tag.py",
+        submit_py_files=SPARK_COMMON_PY_FILES,
+        arguments=[
+            "--input-root",
+            FISH_WAREHOUSE_ROOT,
+            "--output-root",
+            FISH_BULLETS_OUTPUT_ROOT,
+        ],
+    )
+    steps.append(
+        ProcessingStep(name="etl-fish-bullets-group-tag", step_args=bullets_step_args, depends_on=[steps[-1].name])
+    )
+
     fish_processor = spark_processor("fm01-cold-data-daily", session, volume_size_gb=200, max_runtime_hours=3)
     fish_step_args = fish_processor.run(
         submit_app=f"{LOCAL_ROOT}/jobs/etl/sagemaker/fish_hunter/etl_game_stats_daily_by_user_cold_data.py",
         submit_py_files=SPARK_COMMON_PY_FILES,
         arguments=[
             "--input-root",
-            FISH_INPUT_ROOT,
+            FISH_BULLETS_DATA_ROOT,
             "--output-root",
             FISH_OUTPUT_ROOT,
         ],

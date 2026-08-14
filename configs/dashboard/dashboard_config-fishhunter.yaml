@@ -1,31 +1,33 @@
 title: "Fish Hunter Analytics"
 
-stats_by_date: 
+stats_by_date:
   files:
     day: [
-      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter_v2_cold_data/daily_stats",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter_v3_cold_data/daily_stats",
     ]
 
     week: [
-      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter_v2_cold_data/weekly_stats",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter_v3_cold_data/weekly_stats",
     ]
 
     month: [
-      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter_v2_cold_data/monthly_stats",
+      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter_v3_cold_data/monthly_stats",
     ]
 
-  group_col: "ab_test_group"
+  group_col: "group_tag"
   date_col: "activity_date"
-  # ab_test_group_combined = ab_test_group with the RC_*/CR_* strategy
-  # variants collapsed to RC_ALL / CR_ALL (other labels identical).
+  # group_tag = the fish grouping policy (boost_pool / dynamic_rtp /
+  # risk_control / retention / default; docs/fish_group_tag_policy.md),
+  # derived per bullet in the fish_bullets_group_tag dataset and collapsed
+  # to one label per user-day.
   # life_cycle_group is not a stored column: it is the reserved lifecycle
   # name (LIFECYCLE_COL in dashboard_api services/common.py), and listing it
   # is what enables the "Lifecycle groups" picker (cohorts derived from
   # first-bet dates at API time). It intentionally never renders as a
   # regular cohort picker.
-  user_group_cols: [ab_test_group, ab_test_group_combined, fish_value, life_cycle_group]
-  availability_cols: [ab_test_group]
-  # Stored grain is one row per (period, user, ab_test_group, fish_value); the
+  user_group_cols: [group_tag, fish_value, life_cycle_group]
+  availability_cols: [group_tag]
+  # Stored grain is one row per (period, user, group_tag, fish_value); the
   # fish-level picker buckets fish_value by user-defined INCLUSIVE [min, max]
   # ranges, and the API collapses rows back to one per user when unselected.
   user_row_grain: [fish_value]
