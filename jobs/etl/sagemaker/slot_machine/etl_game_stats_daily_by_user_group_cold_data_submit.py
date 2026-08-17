@@ -85,6 +85,10 @@ run_suffix = ("_" + args.ab_group.lower() if args.ab_group else "") + (
 
 for game_id in games:
     output_root = GAME_OUTPUT_ROOTS[game_id] + run_suffix
+    # SS03's dashboard dataset uses the session-day group policy (announced
+    # cutover + old-era user-day collapse); the run/cohort variants keep the
+    # stored row-level label.
+    session_flag = ["--session-day-groups"] if game_id == "SS03" and not run_suffix else []
     processor = spark_processor(
         f"{game_id.lower()}-game-stats-cold-data",
         Session(boto3.Session(region_name=REGION)),
@@ -111,6 +115,7 @@ for game_id in games:
             "--min-mathtable-run",
             str(args.min_mathtable_run),
             *(["--ab-group", args.ab_group] if args.ab_group else []),
+            *session_flag,
         ],
         spark_event_logs_s3_uri=f"{output_root}/spark-event-logs",
         logs=True,
