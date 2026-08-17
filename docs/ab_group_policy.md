@@ -88,13 +88,14 @@ opt out and keep the stored row-level label):
   the platform's **bet_session** (30 minutes without a bet ends the
   session), so cross-midnight play stays on the day it started.
 
-Session vocabulary (three distinct notions — don't mix them):
+Session vocabulary (four distinct notions — don't mix them):
 
 | name | break rule | used for |
 | --- | --- | --- |
 | `bet_session` | 30 min without a bet | day attribution here; delta-t caps (`DELTA_T_MAX_SECONDS`) |
 | `agg_session` | consecutive 30/40/50-bet windows | AI aggregation features |
 | `ai_session` | 12 h without a bet | AI modulation only (ss03 feature ETL `SESSION_BREAK_SECONDS`; multi-day sessions exist) |
+| `hmm_session` | 180 s without a bet | fish_hunter feature engineering only: `bet_date` attribution for the HMM lifecycle features (`jobs/fish_hunter/feature_engineer_{daily,life_cycle}.py` `SESSION_BREAK_SECONDS`) |
 - **Old-era collapse**: each (user, session-day) gets ONE label, priority
   `AI > AB_TEST_A > AB_TEST_B > Default` — old-era assignment was per-bet,
   so a single AI bet claims the user's whole day. Digit-era labels are

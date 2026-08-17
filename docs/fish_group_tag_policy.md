@@ -49,6 +49,18 @@ fish_group_tag_sql` (the `RC_/CR_FISHING_` prefixes are `substr` tests —
 the escaped-underscore LIKE — and rule 4's unescaped `_` wildcard also
 matches the literal underscore in `RISK_CONTROLLED`).
 
+## Session conventions
+
+The fish stats grain does NOT sessionize: a bullet's user-day is its plain
+Beijing calendar date (from `created_at`). Sessions appear only in the
+feature-engineering jobs, which attribute each bet to the Beijing date its
+**`hmm_session`** started (180 s without a bet ends the session —
+`SESSION_BREAK_SECONDS` in `feature_engineer_{daily,life_cycle}.py`), so
+cross-midnight play stays on one `bet_date` for the HMM lifecycle features.
+The repo's full session vocabulary (`bet_session` 30 min, `agg_session`
+consecutive-N bets, `ai_session` 12 h, `hmm_session` 180 s) is tabled in
+[`ab_group_policy.md`](ab_group_policy.md).
+
 ## User-day collapse (dashboard cohorts)
 
 The stats grain is one row per `(period, user, group_tag, fish_value)`, so

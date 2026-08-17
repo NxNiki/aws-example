@@ -73,10 +73,11 @@ DELTA_T_MIN_SECONDS = 1
 # Session gap for the session-day policy's day attribution: the platform's
 # bet_session convention — a session breaks after 30 minutes without a bet
 # (same threshold as DELTA_T_MAX_SECONDS). Distinct from the other "session"
-# notions in this repo: agg_session (consecutive 30/40/50-bet windows for AI
-# aggregation) and ai_session (the ss03 feature ETL's 12h break, used only
-# for AI modulation — its multi-day sessions would collapse weeks into one
-# activity_date here).
+# notions in this repo (tabled in docs/ab_group_policy.md): agg_session
+# (consecutive 30/40/50-bet windows for AI aggregation), ai_session (the
+# ss03 feature ETL's 12h break, AI modulation only — its multi-day sessions
+# would collapse weeks into one activity_date here), and hmm_session (the
+# fish_hunter feature jobs' 180s break).
 SESSION_DAY_GAP_SECONDS = 1800
 # Rolling window for scheduled no-args runs; matches the old ETLScheduler lookback.
 INCREMENTAL_LOOKBACK_DAYS = 3
