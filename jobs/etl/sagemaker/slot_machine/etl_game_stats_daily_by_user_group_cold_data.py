@@ -25,14 +25,16 @@ overwrites exactly the ``period=`` directories it produced. Sequence metrics
 (delta-t / delta-bet / mathtable_change / FG trigger) are DAY-partitioned, so
 windowed runs compose exactly.
 
-``--session-day-groups`` (the SS03 dashboard dataset) switches the day basis
+SS03's standing dashboard policy (``GAME_CONFIG['SS03']['session_day_groups']``,
+not a CLI knob) switches the day basis
 and the group policy: ``activity_date`` becomes the SESSION-START Beijing
-date (180s-gap sessions, so cross-midnight play stays on the day it
-started), the AB label is re-derived from ``partition_ab_label`` under the
-game team's announced 2026-08-03 23:00 UTC cutover
+date (bet_session = 30min-gap sessions, so cross-midnight play stays on the
+day it started), the AB label is re-derived from ``partition_ab_label``
+under the game team's announced 2026-08-03 23:00 UTC cutover
 (``spark_etl_common.ss03_bet_ab_group_sql``), and each user-day collapses to
 ONE label with priority AI > AB_TEST_A > AB_TEST_B > Default (old-era
-assignment was per-bet; the digit era collapses as a no-op).
+assignment was per-bet; the digit era collapses as a no-op). The run/cohort
+variants below opt out and keep the stored row-level label.
 
 ``--min-mathtable-run N`` keeps only bets inside a stretch of >= N consecutive
 same-mathtable bets (per user per Beijing day) — the ss03 AI mathtable-combo
@@ -68,11 +70,14 @@ from spark_etl_common import (
 
 DELTA_T_MAX_SECONDS = 1800
 DELTA_T_MIN_SECONDS = 1
-# Session gap for --session-day-groups day attribution: fish_hunter's
-# session-day convention (feature_engineer_daily), NOT the ss03 feature
-# ETL's 12h break (whose multi-day sessions would collapse weeks into one
-# activity_date).
-SESSION_DAY_GAP_SECONDS = 180
+# Session gap for the session-day policy's day attribution: the platform's
+# bet_session convention — a session breaks after 30 minutes without a bet
+# (same threshold as DELTA_T_MAX_SECONDS). Distinct from the other "session"
+# notions in this repo: agg_session (consecutive 30/40/50-bet windows for AI
+# aggregation) and ai_session (the ss03 feature ETL's 12h break, used only
+# for AI modulation — its multi-day sessions would collapse weeks into one
+# activity_date here).
+SESSION_DAY_GAP_SECONDS = 1800
 # Rolling window for scheduled no-args runs; matches the old ETLScheduler lookback.
 INCREMENTAL_LOOKBACK_DAYS = 3
 
@@ -80,7 +85,10 @@ GAME_CONFIG = {
     "SS01": {},
     "SS01A": {},
     "SS02": {"fourscatter_lead": True},
-    "SS03": {"ab_test_groups": True},
+    # session_day_groups = the SS03 dashboard policy (see the docstring); the
+    # run/cohort variants (--ab-group / --min-mathtable-run) opt out
+    # automatically and keep the stored row-level label.
+    "SS03": {"ab_test_groups": True, "session_day_groups": True},
     "SS06": {"ab_test_groups": True},
 }
 
@@ -540,14 +548,6 @@ def parse_args():
         default="",
         help="only keep bets whose date-gated AB group label equals this; default: all groups",
     )
-    parser.add_argument(
-        "--session-day-groups",
-        action="store_true",
-        help="SS03 dashboard policy: activity_date becomes the session-start"
-        f" ({SESSION_DAY_GAP_SECONDS}s gap) Beijing date, the AB label is re-derived under the"
-        " announced 2026-08-03 23:00 UTC cutover, and each user-day collapses"
-        " to one label (AI > AB_TEST_A > AB_TEST_B > Default)",
-    )
     parser.add_argument("--currency", default="CNY")
     parser.add_argument(
         "--input-region",
@@ -559,11 +559,12 @@ def parse_args():
 
 def main():
     args = parse_args()
-    if args.session_day_groups and (args.ab_group or args.min_mathtable_run):
-        # The run/cohort variants read the stored row-level label on purpose
-        # (the AI-combo dashboard's semantics); combining them with the
-        # session-day policy is undefined.
-        raise SystemExit("--session-day-groups cannot be combined with --ab-group / --min-mathtable-run")
+    # The game's standing policy, not a CLI knob. The run/cohort variants
+    # read the stored row-level label on purpose (the AI-combo dashboard's
+    # semantics), so they opt out.
+    session_day_groups = bool(GAME_CONFIG[args.game_id].get("session_day_groups")) and not (
+        args.ab_group or args.min_mathtable_run
+    )
     # Rolling daily-incremental defaults: the job recomputes only the periods
     # in the window (dynamic period= overwrite), so the scheduled no-args run
     # refreshes recent days without touching history.
@@ -582,9 +583,9 @@ def main():
     # The SS02 FourScatter LEAD looks at the next spin, so scan one day past
     # the output window to attribute buy-ins on the last output day. The
     # session-day policy scans one day on BOTH sides so boundary sessions are
-    # whole (a 180s-gap session spans hours at most; the output filter on the
-    # session-start date keeps windowed runs composing exactly).
-    session_margin = timedelta(days=1 if args.session_day_groups else 0)
+    # whole (a 30min-gap bet_session spans hours at most; the output filter on
+    # the session-start date keeps windowed runs composing exactly).
+    session_margin = timedelta(days=1 if session_day_groups else 0)
     scan_end_margin = max(timedelta(days=1 if GAME_CONFIG[args.game_id].get("fourscatter_lead") else 0), session_margin)
 
     spark = build_spark_session(f"{args.game_id}_game_stats_cold_data", args.input_root, args.input_region)
@@ -592,7 +593,7 @@ def main():
     # Reading inside game_id=<G>/ pins the game by path (no game_id column
     # inside, matching REQUIRED_COLUMNS).
     bet_order = spark.read.parquet(f"{args.input_root}/game_id={args.game_id}")
-    required = REQUIRED_COLUMNS + (["partition_ab_label"] if args.session_day_groups else [])
+    required = REQUIRED_COLUMNS + (["partition_ab_label"] if session_day_groups else [])
     check_schema(bet_order, required, table_name="slot_orders_ab_group orders")
 
     for level in levels:
@@ -620,7 +621,7 @@ def main():
                 currency=args.currency,
                 min_mathtable_run=args.min_mathtable_run,
                 ab_group=args.ab_group,
-                session_day_groups=args.session_day_groups,
+                session_day_groups=session_day_groups,
             )
         )
         df = align_output_schema(df)

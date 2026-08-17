@@ -73,8 +73,10 @@ nothing downstream touches `partition_ab`.
 ## SS03 dashboard exception: announced cutover + session-day collapse
 
 The SS03 game-stats dataset (the dashboard's `ab_group` dimension) does NOT
-use the stored row-level label. Its stats ETL runs with
-`--session-day-groups` (see `etl_game_stats_daily_by_user_group_cold_data.py`):
+use the stored row-level label. Its stats ETL applies the session-day policy
+(`GAME_CONFIG['SS03']['session_day_groups']` in
+`etl_game_stats_daily_by_user_group_cold_data.py`; the run/cohort variants
+opt out and keep the stored row-level label):
 
 - **Cutover**: the game team's ANNOUNCED start, 2026-08-03 16:00 PDT =
   **2026-08-03 23:00 UTC** (`spark_etl_common.SS03_AB_GROUP_ANNOUNCED_START_UTC`),
@@ -82,9 +84,17 @@ use the stored row-level label. Its stats ETL runs with
   serving flip and the announced time keep stale partition_ab labels by
   product decision. The label is re-derived from `partition_ab_label` /
   `user_id` / `created_at` (`ss03_bet_ab_group_sql`).
-- **Day basis**: `activity_date` is the SESSION-START Beijing date (180s-gap
-  sessions, fish_hunter's convention) so cross-midnight play stays on the
-  day it started.
+- **Day basis**: `activity_date` is the SESSION-START Beijing date, using
+  the platform's **bet_session** (30 minutes without a bet ends the
+  session), so cross-midnight play stays on the day it started.
+
+Session vocabulary (three distinct notions — don't mix them):
+
+| name | break rule | used for |
+| --- | --- | --- |
+| `bet_session` | 30 min without a bet | day attribution here; delta-t caps (`DELTA_T_MAX_SECONDS`) |
+| `agg_session` | consecutive 30/40/50-bet windows | AI aggregation features |
+| `ai_session` | 12 h without a bet | AI modulation only (ss03 feature ETL `SESSION_BREAK_SECONDS`; multi-day sessions exist) |
 - **Old-era collapse**: each (user, session-day) gets ONE label, priority
   `AI > AB_TEST_A > AB_TEST_B > Default` — old-era assignment was per-bet,
   so a single AI bet claims the user's whole day. Digit-era labels are

@@ -88,10 +88,6 @@ def build_pipeline(session: PipelineSession) -> Pipeline:
 
     for game_id, output_root in GAME_OUTPUT_ROOTS.items():
         processor = spark_processor(f"{game_id.lower()}-cold-data-daily", session)
-        # SS03's dashboard dataset uses the session-day group policy
-        # (announced cutover + old-era user-day collapse); the AI-run30
-        # variant below intentionally keeps the stored row-level label.
-        extra = ["--session-day-groups"] if game_id == "SS03" else []
         step_args = processor.run(
             submit_app=f"{LOCAL_ROOT}/jobs/etl/sagemaker/slot_machine/etl_game_stats_daily_by_user_group_cold_data.py",
             submit_py_files=SPARK_COMMON_PY_FILES,
@@ -102,8 +98,7 @@ def build_pipeline(session: PipelineSession) -> Pipeline:
                 ORDERS_DATA_ROOT,
                 "--output-root",
                 output_root,
-            ]
-            + extra,
+            ],
         )
         steps.append(
             ProcessingStep(
