@@ -70,6 +70,30 @@ feature-engineer (`etl_feature_engineer_cold_data.py`) — read this dataset
 and use the stored `ab_group` directly. The policy is derived exactly once;
 nothing downstream touches `partition_ab`.
 
+## SS03 dashboard exception: announced cutover + session-day collapse
+
+The SS03 game-stats dataset (the dashboard's `ab_group` dimension) does NOT
+use the stored row-level label. Its stats ETL runs with
+`--session-day-groups` (see `etl_game_stats_daily_by_user_group_cold_data.py`):
+
+- **Cutover**: the game team's ANNOUNCED start, 2026-08-03 16:00 PDT =
+  **2026-08-03 23:00 UTC** (`spark_etl_common.SS03_AB_GROUP_ANNOUNCED_START_UTC`),
+  not the empirical 05:30-Beijing constant — bets in the ~1.5h between the
+  serving flip and the announced time keep stale partition_ab labels by
+  product decision. The label is re-derived from `partition_ab_label` /
+  `user_id` / `created_at` (`ss03_bet_ab_group_sql`).
+- **Day basis**: `activity_date` is the SESSION-START Beijing date (180s-gap
+  sessions, fish_hunter's convention) so cross-midnight play stays on the
+  day it started.
+- **Old-era collapse**: each (user, session-day) gets ONE label, priority
+  `AI > AB_TEST_A > AB_TEST_B > Default` — old-era assignment was per-bet,
+  so a single AI bet claims the user's whole day. Digit-era labels are
+  user-stable, so the collapse is a no-op there.
+
+Everything else — the orders dataset, the other four games' stats, the ss03
+feature ETL (`ai_group`) and the AI-run30 combo dataset — keeps the stored
+row-level `ab_group` under the empirical cutover.
+
 ## Transition-day handling
 
 - **Game stats / dashboards / Athena**: every bet keeps its timestamp-gated

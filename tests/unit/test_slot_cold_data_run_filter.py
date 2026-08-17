@@ -210,3 +210,122 @@ def test_ab_group_policy_timestamp_gate():
         include_ab_tests=False,
     )
     assert no_tests == ["Default", "Default", "AI"]
+
+
+def _ss03_label_rows(rows):
+    """Run the SS03 announced-cutover CASE against sqlite (TIMESTAMP literals
+    stripped; ISO strings compare correctly)."""
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE bets (ab_label, user_id, created_at)")
+    con.executemany("INSERT INTO bets VALUES (?, ?, ?)", rows)
+    case = COMMON.ss03_bet_ab_group_sql("ab_label", "user_id", "created_at")
+    sql = f"SELECT {case} FROM bets ORDER BY rowid".replace("TIMESTAMP '", "'")
+    return [r[0] for r in con.execute(sql)]
+
+
+def test_ss03_announced_cutover_labels():
+    """Old era by partition_ab id (4f1a...=A continues digit-4/5's tables,
+    4a04...=B), new era by digit from the ANNOUNCED 2026-08-03 23:00 UTC."""
+    rows = [
+        (COMMON.AI_GROUP_ID, 15, "2026-08-03 22:59:59"),
+        (COMMON.AB_TEST_GROUP_A, 18, "2026-08-01 00:00:00"),
+        (COMMON.AB_TEST_GROUP_B, 14, "2026-08-03 22:00:00"),
+        ("wytsuj-fothap-5Qixda", 19, "2026-07-01 00:00:00"),
+        (None, 18, "2026-08-03 20:00:00"),
+        # from the announced moment (inclusive) only the digit counts.
+        (COMMON.AI_GROUP_ID, 13, "2026-08-03 23:00:00"),
+        ("whatever", 24, "2026-08-04 06:00:00"),
+        (None, 37, "2026-08-05 00:00:00"),
+        ("whatever", 58, "2026-08-04 23:59:59"),
+    ]
+    assert _ss03_label_rows(rows) == [
+        "AI",
+        "AB_TEST_A",
+        "AB_TEST_B",
+        "Default",
+        "Default",
+        "Default",  # digit 3
+        "AB_TEST_A",  # digit 4
+        "AB_TEST_B",  # digit 7
+        "AI",  # digit 8
+    ]
+
+
+def test_session_day_attribution():
+    """Sessions break on gaps > the threshold; every bet carries its
+    session's start timestamp (numeric epochs stand in for timestamps)."""
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE bet_events (user_id, spin_id, created_at)")
+    con.executemany(
+        "INSERT INTO bet_events VALUES (?, ?, ?)",
+        [
+            # u1: bets at 0, 100, 250 (one session), then 1000 (new session).
+            ("u1", 1, 0),
+            ("u1", 2, 100),
+            ("u1", 3, 250),
+            ("u1", 4, 1000),
+            # u2 interleaves but sessions never bridge users.
+            ("u2", 5, 90),
+        ],
+    )
+    sql = f"WITH {JOB._session_ctes(180)} SELECT user_id, spin_id, session_start_ts FROM session_days ORDER BY spin_id"
+    assert list(con.execute(sql)) == [
+        ("u1", 1, 0),
+        ("u1", 2, 0),
+        ("u1", 3, 0),
+        ("u1", 4, 1000),
+        ("u2", 5, 90),
+    ]
+
+
+def test_day_group_collapse_priority():
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE bets_labeled (user_id, activity_date, bet_ab_group)")
+    con.executemany(
+        "INSERT INTO bets_labeled VALUES (?, ?, ?)",
+        [
+            # one AI bet claims the whole user-day.
+            ("u1", "d1", "Default"),
+            ("u1", "d1", "AI"),
+            ("u1", "d1", "AB_TEST_B"),
+            ("u2", "d1", "AB_TEST_B"),
+            ("u2", "d1", "AB_TEST_A"),
+            ("u3", "d1", "Default"),
+            # days do not bleed into each other.
+            ("u1", "d2", "AB_TEST_B"),
+        ],
+    )
+    case = JOB._day_group_collapse_case("t.bet_ab_group")
+    sql = (
+        f"SELECT DISTINCT t.user_id, t.activity_date, {case} AS g FROM bets_labeled AS t"
+        " ORDER BY t.user_id, t.activity_date"
+    )
+    assert list(con.execute(sql)) == [
+        ("u1", "d1", "AI"),
+        ("u1", "d2", "AB_TEST_B"),
+        ("u2", "d1", "AB_TEST_A"),
+        ("u3", "d1", "Default"),
+    ]
+
+
+def test_generate_query_session_day_groups():
+    kwargs = dict(
+        stats_agg_col="activity_date",
+        game_id="SS03",
+        effective_start=date(2026, 8, 1),
+        output_end=date(2026, 8, 5),
+        scan_start_utc=datetime(2026, 7, 31, 16),
+        scan_end_utc=datetime(2026, 8, 4, 16),
+        currency="CNY",
+    )
+    base = JOB.generate_query(**kwargs)
+    assert "session_start_ts" not in base and "partition_ab_label" not in base
+
+    sess = JOB.generate_query(**kwargs, session_day_groups=True)
+    # day basis = session-start BJ date; label re-derived under the announced
+    # cutover from partition_ab_label; user-day collapse present.
+    assert "t.session_start_ts + INTERVAL '8' HOUR" in sess
+    assert f"TIMESTAMP '{COMMON.SS03_AB_GROUP_ANNOUNCED_START_UTC}'" in sess
+    assert "t.partition_ab_label" in sess and "AS bet_ab_group" in sess
+    assert "WHEN MAX(CASE WHEN t.bet_ab_group = 'AI' THEN 1 ELSE 0 END) OVER" in sess
+    assert "t.ab_group" not in sess.split("bets_labeled")[0].split("WITH")[1]  # stored label unused

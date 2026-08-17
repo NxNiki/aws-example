@@ -80,6 +80,40 @@ def ab_group_sql(ab_label_expr: str, user_id_expr: str, bj_ts_expr: str, include
         END"""
 
 
+# SS03 dashboard grouping uses the game team's ANNOUNCED digit-policy start
+# (2026-08-03 16:00 PDT) instead of the empirically located
+# AB_GROUP_DIGIT_POLICY_START_BJ the shared orders dataset keeps: bets in the
+# ~1.5h between the serving flip and the announced time carry stale
+# partition_ab labels by design (product decision).
+SS03_AB_GROUP_ANNOUNCED_START_UTC = "2026-08-03 23:00:00"
+
+
+def ss03_bet_ab_group_sql(ab_label_expr: str, user_id_expr: str, utc_ts_expr: str) -> str:
+    """Row-level SS03 dashboard AB label under the ANNOUNCED cutover.
+
+    ``utc_ts_expr`` must be a UTC TIMESTAMP. New era: user-id last digit
+    (0-3 Default, 4-5 A, 6-7 B, 8-9 AI). Old era: partition_ab[0] id mapping
+    (4f1a... = A serves the shi-family tables that digit-4/5 users continue,
+    4a04... = B the BGadj_v3 family). The caller collapses each user's
+    session-day to ONE label with priority AI > AB_TEST_A > AB_TEST_B >
+    Default — old-era assignment was per-bet, so a single AI bet claims the
+    whole user-day; new-era digit labels are user-stable and collapse as a
+    no-op."""
+    digit = f"CAST({user_id_expr} AS BIGINT) % 10"
+    return f"""CASE
+            WHEN {utc_ts_expr} >= TIMESTAMP '{SS03_AB_GROUP_ANNOUNCED_START_UTC}' THEN CASE
+                WHEN {digit} >= 8 THEN 'AI'
+                WHEN {digit} >= 6 THEN 'AB_TEST_B'
+                WHEN {digit} >= 4 THEN 'AB_TEST_A'
+                ELSE 'Default'
+            END
+            WHEN {ab_label_expr} = '{AI_GROUP_ID}' THEN 'AI'
+            WHEN {ab_label_expr} = '{AB_TEST_GROUP_A}' THEN 'AB_TEST_A'
+            WHEN {ab_label_expr} = '{AB_TEST_GROUP_B}' THEN 'AB_TEST_B'
+            ELSE 'Default'
+        END"""
+
+
 def fish_group_tag_sql(strategy_expr: str, user_id_expr: str, utc_ts_expr: str) -> str:
     """CASE expression labeling a single bullet's ``group_tag``.
 
