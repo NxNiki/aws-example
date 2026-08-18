@@ -268,7 +268,7 @@ def test_session_day_attribution():
             ("u2", 5, 90),
         ],
     )
-    sql = f"WITH {JOB._session_ctes(180)} SELECT user_id, spin_id, session_start_ts FROM session_days ORDER BY spin_id"
+    sql = f"WITH {COMMON.session_day_ctes('bet_events', 'spin_id', 180)} SELECT user_id, spin_id, session_start_ts FROM session_days ORDER BY spin_id"
     assert list(con.execute(sql)) == [
         ("u1", 1, 0),
         ("u1", 2, 0),
@@ -278,7 +278,7 @@ def test_session_day_attribution():
     ]
 
 
-def test_day_group_collapse_priority():
+def test_user_day_groups_collapse_priority():
     con = sqlite3.connect(":memory:")
     con.execute("CREATE TABLE bets_labeled (user_id, activity_date, bet_ab_group)")
     con.executemany(
@@ -295,7 +295,7 @@ def test_day_group_collapse_priority():
             ("u1", "d2", "AB_TEST_B"),
         ],
     )
-    case = JOB._day_group_collapse_case("t.bet_ab_group")
+    case = JOB._user_day_groups_case("t.bet_ab_group")
     sql = (
         f"SELECT DISTINCT t.user_id, t.activity_date, {case} AS g FROM bets_labeled AS t"
         " ORDER BY t.user_id, t.activity_date"
@@ -308,7 +308,7 @@ def test_day_group_collapse_priority():
     ]
 
 
-def test_generate_query_session_day_groups():
+def test_generate_query_user_day_groups():
     kwargs = dict(
         stats_agg_col="activity_date",
         game_id="SS03",
@@ -318,12 +318,15 @@ def test_generate_query_session_day_groups():
         scan_end_utc=datetime(2026, 8, 4, 16),
         currency="CNY",
     )
+    # session-start day attribution is universal (the midnight fix), group
+    # policy is not: the base query keeps the stored row-level label.
     base = JOB.generate_query(**kwargs)
-    assert "session_start_ts" not in base and "partition_ab_label" not in base
+    assert "t.session_start_ts + INTERVAL '8' HOUR" in base
+    assert "partition_ab_label" not in base and "bet_ab_group" not in base
 
-    sess = JOB.generate_query(**kwargs, session_day_groups=True)
-    # day basis = session-start BJ date; label re-derived under the announced
-    # cutover from partition_ab_label; user-day collapse present.
+    sess = JOB.generate_query(**kwargs, user_day_groups=True)
+    # label re-derived under the announced cutover from partition_ab_label;
+    # user-day collapse present.
     assert "t.session_start_ts + INTERVAL '8' HOUR" in sess
     assert f"TIMESTAMP '{COMMON.SS03_AB_GROUP_ANNOUNCED_START_UTC}'" in sess
     assert "t.partition_ab_label" in sess and "AS bet_ab_group" in sess

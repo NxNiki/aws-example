@@ -70,11 +70,29 @@ feature-engineer (`etl_feature_engineer_cold_data.py`) — read this dataset
 and use the stored `ab_group` directly. The policy is derived exactly once;
 nothing downstream touches `partition_ab`.
 
-## SS03 dashboard exception: announced cutover + session-day collapse
+## Day basis: session-start dates (all game-stats datasets)
+
+Every game-stats dataset (all five slot games, both SS03 variants, and
+fish_hunter) computes `activity_date` as the SESSION-START Beijing date,
+using the platform's **bet_session** (30 minutes without a bet ends the
+session) — the daily-stats midnight fix: cross-midnight play stays on the
+day it started. This is pure day attribution, independent of group labeling
+(a bet's label never depends on which day bucket it lands in).
+
+Session vocabulary (four distinct notions — don't mix them):
+
+| name | break rule | used for |
+| --- | --- | --- |
+| `bet_session` | 30 min without a bet | `activity_date` attribution in ALL game-stats datasets; delta-t caps (`DELTA_T_MAX_SECONDS`) |
+| `agg_session` | consecutive 30/40/50-bet windows | AI aggregation features |
+| `ai_session` | 12 h without a bet | AI modulation only (ss03 feature ETL `SESSION_BREAK_SECONDS`; multi-day sessions exist) |
+| `hmm_session` | 180 s without a bet | fish_hunter feature engineering only: `bet_date` attribution for the HMM lifecycle features (`jobs/fish_hunter/feature_engineer_{daily,life_cycle}.py` `SESSION_BREAK_SECONDS`) |
+
+## SS03 dashboard exception: announced cutover + user-day groups
 
 The SS03 game-stats dataset (the dashboard's `ab_group` dimension) does NOT
-use the stored row-level label. Its stats ETL applies the session-day policy
-(`GAME_CONFIG['SS03']['session_day_groups']` in
+use the stored row-level label. Its stats ETL applies the user-day group
+policy (`GAME_CONFIG['SS03']['user_day_groups']` in
 `etl_game_stats_daily_by_user_group_cold_data.py`; the run/cohort variants
 opt out and keep the stored row-level label):
 
@@ -84,18 +102,6 @@ opt out and keep the stored row-level label):
   serving flip and the announced time keep stale partition_ab labels by
   product decision. The label is re-derived from `partition_ab_label` /
   `user_id` / `created_at` (`ss03_bet_ab_group_sql`).
-- **Day basis**: `activity_date` is the SESSION-START Beijing date, using
-  the platform's **bet_session** (30 minutes without a bet ends the
-  session), so cross-midnight play stays on the day it started.
-
-Session vocabulary (four distinct notions — don't mix them):
-
-| name | break rule | used for |
-| --- | --- | --- |
-| `bet_session` | 30 min without a bet | day attribution here; delta-t caps (`DELTA_T_MAX_SECONDS`) |
-| `agg_session` | consecutive 30/40/50-bet windows | AI aggregation features |
-| `ai_session` | 12 h without a bet | AI modulation only (ss03 feature ETL `SESSION_BREAK_SECONDS`; multi-day sessions exist) |
-| `hmm_session` | 180 s without a bet | fish_hunter feature engineering only: `bet_date` attribution for the HMM lifecycle features (`jobs/fish_hunter/feature_engineer_{daily,life_cycle}.py` `SESSION_BREAK_SECONDS`) |
 - **Old-era collapse**: each (user, session-day) gets ONE label, priority
   `AI > AB_TEST_A > AB_TEST_B > Default` — old-era assignment was per-bet,
   so a single AI bet claims the user's whole day. Digit-era labels are

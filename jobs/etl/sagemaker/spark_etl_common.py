@@ -80,6 +80,47 @@ def ab_group_sql(ab_label_expr: str, user_id_expr: str, bj_ts_expr: str, include
         END"""
 
 
+# Day-attribution session gap, the platform's bet_session convention: a
+# session breaks after 30 minutes without a bet. Every game-stats dataset
+# derives activity_date from the SESSION-START Beijing date so cross-midnight
+# play stays on the day it started (the daily-stats midnight edge fix; see
+# the session vocabulary table in docs/ab_group_policy.md).
+SESSION_DAY_GAP_SECONDS = 1800
+
+
+def session_day_ctes(source_cte: str, tiebreak_col: str, gap_seconds: int = SESSION_DAY_GAP_SECONDS) -> str:
+    """CTE pair sessionizing ``source_cte`` (full user stream, portable window
+    SQL): a new session starts after a gap > gap_seconds; every row carries
+    its session's start timestamp (``session_start_ts``) for day attribution.
+    ``tiebreak_col`` orders simultaneous rows deterministically."""
+    order = f"ORDER BY t.created_at, t.{tiebreak_col}"
+    return f"""sessionized AS (
+            SELECT
+                t.*,
+                SUM(CASE
+                        WHEN t.prev_created_at IS NULL THEN 1
+                        WHEN CAST(t.created_at AS DOUBLE) - CAST(t.prev_created_at AS DOUBLE) > {gap_seconds} THEN 1
+                        ELSE 0
+                    END) OVER (
+                    PARTITION BY t.user_id {order}
+                    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                ) AS session_id
+            FROM (
+                SELECT
+                    t.*,
+                    LAG(t.created_at) OVER (PARTITION BY t.user_id {order}) AS prev_created_at
+                FROM {source_cte} AS t
+            ) AS t
+        ),
+
+        session_days AS (
+            SELECT
+                t.*,
+                MIN(t.created_at) OVER (PARTITION BY t.user_id, t.session_id) AS session_start_ts
+            FROM sessionized AS t
+        )"""
+
+
 # SS03 dashboard grouping uses the game team's ANNOUNCED digit-policy start
 # (2026-08-03 16:00 PDT) instead of the empirically located
 # AB_GROUP_DIGIT_POLICY_START_BJ the shared orders dataset keeps: bets in the

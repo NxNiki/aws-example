@@ -10,7 +10,10 @@ policy-correct ``ab_group``, see etl_slot_orders_ab_group.py), so group
 membership is derived exactly once upstream. Output datasets:
 ``<output-root>/{daily,weekly,monthly}_stats/period=YYYY-MM-DD/``.
 
-Behavior: every bet lives in exactly one (period, user, ab_group, mathtable,
+Behavior: ``activity_date`` is the SESSION-START Beijing date (bet_session =
+30 min without a bet) for every game — the daily-stats midnight fix, so
+cross-midnight play stays on the day it started. Every bet lives in exactly
+one (period, user, ab_group, mathtable,
 bet_level) row, so sums recombine correctly under any dashboard cohort
 selection. ``bet_level`` backs the dashboards' bet-level range picker
 (bet_low/medium/high/ultra ranges over existing bet amounts, like the
@@ -25,11 +28,9 @@ overwrites exactly the ``period=`` directories it produced. Sequence metrics
 (delta-t / delta-bet / mathtable_change / FG trigger) are DAY-partitioned, so
 windowed runs compose exactly.
 
-SS03's standing dashboard policy (``GAME_CONFIG['SS03']['session_day_groups']``,
-not a CLI knob) switches the day basis
-and the group policy: ``activity_date`` becomes the SESSION-START Beijing
-date (bet_session = 30min-gap sessions, so cross-midnight play stays on the
-day it started), the AB label is re-derived from ``partition_ab_label``
+SS03's standing group policy (``GAME_CONFIG['SS03']['user_day_groups']``,
+not a CLI knob; the OTHER games keep the stored row-level ``ab_group``
+unchanged): the AB label is re-derived from ``partition_ab_label``
 under the game team's announced 2026-08-03 23:00 UTC cutover
 (``spark_etl_common.ss03_bet_ab_group_sql``), and each user-day collapses to
 ONE label with priority AI > AB_TEST_A > AB_TEST_B > Default (old-era
@@ -64,21 +65,13 @@ from spark_etl_common import (
     build_spark_session,
     check_schema,
     prune_period_days,
+    session_day_ctes,
     ss03_bet_ab_group_sql,
     warn_on_schema_drift,
 )
 
 DELTA_T_MAX_SECONDS = 1800
 DELTA_T_MIN_SECONDS = 1
-# Session gap for the session-day policy's day attribution: the platform's
-# bet_session convention — a session breaks after 30 minutes without a bet
-# (same threshold as DELTA_T_MAX_SECONDS). Distinct from the other "session"
-# notions in this repo (tabled in docs/ab_group_policy.md): agg_session
-# (consecutive 30/40/50-bet windows for AI aggregation), ai_session (the
-# ss03 feature ETL's 12h break, AI modulation only — its multi-day sessions
-# would collapse weeks into one activity_date here), and hmm_session (the
-# fish_hunter feature jobs' 180s break).
-SESSION_DAY_GAP_SECONDS = 1800
 # Rolling window for scheduled no-args runs; matches the old ETLScheduler lookback.
 INCREMENTAL_LOOKBACK_DAYS = 3
 
@@ -86,10 +79,13 @@ GAME_CONFIG = {
     "SS01": {},
     "SS01A": {},
     "SS02": {"fourscatter_lead": True},
-    # session_day_groups = the SS03 dashboard policy (see the docstring); the
-    # run/cohort variants (--ab-group / --min-mathtable-run) opt out
+    # user_day_groups = the SS03-only group policy (see the docstring):
+    # ONE label per user-day (re-derived under the announced cutover; a
+    # single higher-tier bet claims the whole day) instead of the stored
+    # per-bet label.
+    # The run/cohort variants (--ab-group / --min-mathtable-run) opt out
     # automatically and keep the stored row-level label.
-    "SS03": {"ab_test_groups": True, "session_day_groups": True},
+    "SS03": {"ab_test_groups": True, "user_day_groups": True},
     "SS06": {"ab_test_groups": True},
 }
 
@@ -193,38 +189,7 @@ def _mathtable_run_ctes(day_window: str, min_run: int) -> str:
         )"""
 
 
-def _session_ctes(gap_seconds: int) -> str:
-    """Sessionize bet_events (full user stream, portable window SQL): a new
-    session starts after a gap > gap_seconds; every bet carries its session's
-    start timestamp for day attribution."""
-    return f"""sessionized AS (
-            SELECT
-                t.*,
-                SUM(CASE
-                        WHEN t.prev_created_at IS NULL THEN 1
-                        WHEN CAST(t.created_at AS DOUBLE) - CAST(t.prev_created_at AS DOUBLE) > {gap_seconds} THEN 1
-                        ELSE 0
-                    END) OVER (
-                    PARTITION BY t.user_id ORDER BY t.created_at, t.spin_id
-                    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-                ) AS session_id
-            FROM (
-                SELECT
-                    t.*,
-                    LAG(t.created_at) OVER (PARTITION BY t.user_id ORDER BY t.created_at, t.spin_id) AS prev_created_at
-                FROM bet_events AS t
-            ) AS t
-        ),
-
-        session_days AS (
-            SELECT
-                t.*,
-                MIN(t.created_at) OVER (PARTITION BY t.user_id, t.session_id) AS session_start_ts
-            FROM sessionized AS t
-        )"""
-
-
-def _day_group_collapse_case(label_expr: str) -> str:
+def _user_day_groups_case(label_expr: str) -> str:
     """One AB label per (user, activity_date): a single bet in a higher tier
     claims the whole user-day, priority AI > AB_TEST_A > AB_TEST_B > Default
     (old-era assignment was per-bet; new-era digit labels collapse as a
@@ -250,16 +215,23 @@ def generate_query(
     currency: str,
     min_mathtable_run: int = 0,
     ab_group: str = "",
-    session_day_groups: bool = False,
+    user_day_groups: bool = False,
 ) -> str:
     """Spark-SQL version of the per-game generate_query over ``bet_order_raw``.
+
+    ``activity_date`` is always the SESSION-START Beijing date (bet_session =
+    30 min without a bet), the daily-stats midnight fix: cross-midnight play
+    stays on the day it started. ``user_day_groups`` additionally applies
+    the SS03-only group policy (label re-derived under the announced cutover,
+    one label per user-day); otherwise the stored row-level ``ab_group`` is
+    used unchanged.
 
     Translation notes versus the Redshift dialect: BJ time is
     ``created_at + 8h`` (session timezone is UTC); ``EXTRACT(EPOCH FROM
     interval)`` becomes a ``CAST(ts AS DOUBLE)`` difference to keep
     sub-second deltas.
     """
-    bj_ts = f"CAST(t.created_at AS TIMESTAMP) + INTERVAL '{BJ_UTC_OFFSET_HOURS}' HOUR"
+    sess_bj = f"t.session_start_ts + INTERVAL '{BJ_UTC_OFFSET_HOURS}' HOUR"
     day_window = "PARTITION BY t.user_id, t.activity_date ORDER BY t.spin_id, t.created_at"
     # With the run filter on, sequence metrics are computed on the RETAINED
     # stream: surviving bets on either side of a dropped short run count as
@@ -270,16 +242,15 @@ def generate_query(
     # on, computes runs over the cohort's own bet stream only (the stored
     # slot_orders_ab_group label is already policy-correct).
     ab_where = f"\n                AND t.ab_group = '{ab_group}'" if ab_group else ""
-    group_source_col = "t.partition_ab_label" if session_day_groups else "t.ab_group"
-    if session_day_groups:
-        # SS03 dashboard policy: activity_date is the session-start Beijing
-        # date (a cross-midnight session stays on the day it started), the
-        # label is re-derived under the ANNOUNCED cutover from
-        # partition_ab_label, and each user-day collapses to one label.
-        sess_bj = f"t.session_start_ts + INTERVAL '{BJ_UTC_OFFSET_HOURS}' HOUR"
-        bets_chain = f"""{_session_ctes(SESSION_DAY_GAP_SECONDS)},
-
-        bets_labeled AS (
+    group_source_col = "t.partition_ab_label" if user_day_groups else "t.ab_group"
+    day_cols = f"""CAST({sess_bj} AS DATE) AS activity_date,
+                CAST(DATE_TRUNC('week', {sess_bj}) AS DATE) AS activity_week,
+                CAST(DATE_TRUNC('month', {sess_bj}) AS DATE) AS activity_month"""
+    if user_day_groups:
+        # SS03-only group policy: the label is re-derived under the ANNOUNCED
+        # cutover from partition_ab_label, and each user-day collapses to one
+        # label (a single AI bet claims the whole session-day).
+        bets_chain = f"""bets_labeled AS (
             SELECT
                 t.user_id,
                 t.spin_id,
@@ -289,9 +260,7 @@ def generate_query(
                 t.actual_payout AS payout,
                 t.bet_type,
                 t.actual_payout - t.bet_amount AS profit,
-                CAST({sess_bj} AS DATE) AS activity_date,
-                CAST(DATE_TRUNC('week', {sess_bj}) AS DATE) AS activity_week,
-                CAST(DATE_TRUNC('month', {sess_bj}) AS DATE) AS activity_month,
+                {day_cols},
                 {ss03_bet_ab_group_sql("t.partition_ab_label", "t.user_id", "t.created_at")} AS bet_ab_group
             FROM session_days AS t
         ),
@@ -309,7 +278,7 @@ def generate_query(
                 t.activity_date,
                 t.activity_week,
                 t.activity_month,
-                {_day_group_collapse_case("t.bet_ab_group")} AS ab_group
+                {_user_day_groups_case("t.bet_ab_group")} AS ab_group
             FROM bets_labeled AS t
         )"""
     else:
@@ -323,12 +292,13 @@ def generate_query(
                 t.actual_payout AS payout,
                 t.bet_type,
                 t.actual_payout - t.bet_amount AS profit,
-                CAST({bj_ts} AS DATE) AS activity_date,
-                CAST(DATE_TRUNC('week', {bj_ts}) AS DATE) AS activity_week,
-                CAST(DATE_TRUNC('month', {bj_ts}) AS DATE) AS activity_month,
+                {day_cols},
                 {_ab_group_case(game_id)}
-            FROM bet_events AS t
+            FROM session_days AS t
         )"""
+    bets_chain = f"""{session_day_ctes("bet_events", "spin_id")},
+
+        {bets_chain}"""
     return dedent(
         f"""
         WITH bet_events AS (
@@ -560,10 +530,10 @@ def parse_args():
 
 def main():
     args = parse_args()
-    # The game's standing policy, not a CLI knob. The run/cohort variants
-    # read the stored row-level label on purpose (the AI-combo dashboard's
-    # semantics), so they opt out.
-    session_day_groups = bool(GAME_CONFIG[args.game_id].get("session_day_groups")) and not (
+    # The game's standing group policy, not a CLI knob. The run/cohort
+    # variants read the stored row-level label on purpose (the AI-combo
+    # dashboard's semantics), so they opt out.
+    user_day_groups = bool(GAME_CONFIG[args.game_id].get("user_day_groups")) and not (
         args.ab_group or args.min_mathtable_run
     )
     # Rolling daily-incremental defaults: the job recomputes only the periods
@@ -581,20 +551,19 @@ def main():
         f" min_mathtable_run={args.min_mathtable_run} ab_group={args.ab_group or 'all'}"
     )
     levels = list(AGG_LEVELS) if args.agg == "all" else [args.agg]
-    # The SS02 FourScatter LEAD looks at the next spin, so scan one day past
-    # the output window to attribute buy-ins on the last output day. The
-    # session-day policy scans one day on BOTH sides so boundary sessions are
-    # whole (a 30min-gap bet_session spans hours at most; the output filter on
-    # the session-start date keeps windowed runs composing exactly).
-    session_margin = timedelta(days=1 if session_day_groups else 0)
-    scan_end_margin = max(timedelta(days=1 if GAME_CONFIG[args.game_id].get("fourscatter_lead") else 0), session_margin)
+    # Session-day attribution scans one day on BOTH sides so boundary
+    # sessions are whole (a 30min-gap bet_session spans hours at most; the
+    # output filter on the session-start date keeps windowed runs composing
+    # exactly). The SS02 FourScatter LEAD needs the same one-day end margin.
+    session_margin = timedelta(days=1)
+    scan_end_margin = session_margin
 
     spark = build_spark_session(f"{args.game_id}_game_stats_cold_data", args.input_root, args.input_region)
 
     # Reading inside game_id=<G>/ pins the game by path (no game_id column
     # inside, matching REQUIRED_COLUMNS).
     bet_order = spark.read.parquet(f"{args.input_root}/game_id={args.game_id}")
-    required = REQUIRED_COLUMNS + (["partition_ab_label"] if session_day_groups else [])
+    required = REQUIRED_COLUMNS + (["partition_ab_label"] if user_day_groups else [])
     check_schema(bet_order, required, table_name="slot_orders_ab_group orders")
 
     for level in levels:
@@ -622,7 +591,7 @@ def main():
                 currency=args.currency,
                 min_mathtable_run=args.min_mathtable_run,
                 ab_group=args.ab_group,
-                session_day_groups=session_day_groups,
+                user_day_groups=user_day_groups,
             )
         )
         df = align_output_schema(df)

@@ -51,15 +51,16 @@ matches the literal underscore in `RISK_CONTROLLED`).
 
 ## Session conventions
 
-The fish stats grain does NOT sessionize: a bullet's user-day is its plain
-Beijing calendar date (from `created_at`). Sessions appear only in the
-feature-engineering jobs, which attribute each bet to the Beijing date its
+The stats grain uses the platform **`bet_session`** for day attribution:
+`activity_date` is the Beijing date the bullet's session STARTED (a session
+breaks after 30 minutes without a bet), so cross-midnight play stays on the
+day it started — same rule as every slot game-stats dataset. The
+feature-engineering jobs instead attribute each bet to the Beijing date its
 **`hmm_session`** started (180 s without a bet ends the session —
-`SESSION_BREAK_SECONDS` in `feature_engineer_{daily,life_cycle}.py`), so
-cross-midnight play stays on one `bet_date` for the HMM lifecycle features.
-The repo's full session vocabulary (`bet_session` 30 min, `agg_session`
-consecutive-N bets, `ai_session` 12 h, `hmm_session` 180 s) is tabled in
-[`ab_group_policy.md`](ab_group_policy.md).
+`SESSION_BREAK_SECONDS` in `feature_engineer_{daily,life_cycle}.py`) for the
+HMM lifecycle features. The repo's full session vocabulary (`bet_session`
+30 min, `agg_session` consecutive-N bets, `ai_session` 12 h, `hmm_session`
+180 s) is tabled in [`ab_group_policy.md`](ab_group_policy.md).
 
 ## User-day collapse (dashboard cohorts)
 
