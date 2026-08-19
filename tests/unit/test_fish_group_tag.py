@@ -42,6 +42,19 @@ def _load_common():
 
 
 COMMON = _load_common()
+
+
+def _load_policy():
+    sys.path.insert(0, str(REPO_ROOT / "jobs/etl/sagemaker"))
+    try:
+        import group_policy
+
+        return group_policy
+    finally:
+        sys.path.pop(0)
+
+
+POLICY = _load_policy()
 BULLETS_JOB = _load_module(
     REPO_ROOT / "jobs/etl/sagemaker/fish_hunter/etl_fish_bullets_group_tag.py", "_fish_bullets_job"
 )
@@ -59,7 +72,7 @@ def _group_tag_rows(rows):
     con = sqlite3.connect(":memory:")
     con.execute("CREATE TABLE bullets (strategy_name, user_id, event_ts)")
     con.executemany("INSERT INTO bullets VALUES (?, ?, ?)", rows)
-    case = COMMON.fish_group_tag_sql("strategy_name", "user_id", "event_ts")
+    case = POLICY.fish_group_tag_sql("strategy_name", "user_id", "event_ts")
     sql = f"SELECT {case} FROM bullets ORDER BY rowid".replace("TIMESTAMP '", "'")
     return [r[0] for r in con.execute(sql)]
 
@@ -152,7 +165,7 @@ def test_user_day_collapse_priority():
             ("u1", "d2", "retention"),
         ],
     )
-    case = COMMON.fish_group_tag_day_case("group_tag")
+    case = POLICY.fish_group_tag_day_case("group_tag")
     sql = (
         f"SELECT user_id, activity_date, {case} FROM bullets"
         " GROUP BY user_id, activity_date ORDER BY user_id, activity_date"
@@ -172,7 +185,7 @@ def test_bullets_query_composition():
     group_tag. Test bets drop at the source; currency filtering stays
     downstream (a selection, not junk)."""
     sql = BULLETS_JOB.generate_query(date(2026, 8, 1), date(2026, 8, 5))
-    assert "AS group_tag" in sql and f"TIMESTAMP '{COMMON.FISH_RETENTION_POLICY_START_UTC}'" in sql
+    assert "AS group_tag" in sql and f"TIMESTAMP '{POLICY.FISH_RETENTION_POLICY_START_UTC}'" in sql
     assert "t.strategy_name" in sql  # kept for auditing the tag
     assert "op_code NOT IN" in sql and "currency_type =" not in sql
     # group_tag reads the bullet's UTC event_timestamp, not the BJ-shifted one.

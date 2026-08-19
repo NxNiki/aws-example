@@ -28,14 +28,10 @@ overwrites exactly the ``period=`` directories it produced. Sequence metrics
 (delta-t / delta-bet / mathtable_change / FG trigger) are DAY-partitioned, so
 windowed runs compose exactly.
 
-SS03's standing group policy (``GAME_CONFIG['SS03']['user_day_groups']``,
-not a CLI knob; the OTHER games keep the stored row-level ``ab_group``
-unchanged): the AB label is re-derived from ``partition_ab_label``
-under the game team's announced 2026-08-03 23:00 UTC cutover
-(``spark_etl_common.ss03_bet_ab_group_sql``), and each user-day collapses to
-ONE label with priority AI > AB_TEST_A > AB_TEST_B > Default (old-era
-assignment was per-bet; the digit era collapses as a no-op). The run/cohort
-variants below opt out and keep the stored row-level label.
+Group policy comes from ``group_policy.py`` (every game's rules in one
+config module): SS03's dashboard uses user-day groups under the announced
+cutover, every other game the stored row-level ``ab_group``; the run/cohort
+variants always keep the stored label. Details: docs/ab_group_policy.md.
 
 ``--min-mathtable-run N`` keeps only bets inside a stretch of >= N consecutive
 same-mathtable bets (per user per Beijing day) — the ss03 AI mathtable-combo
@@ -54,10 +50,10 @@ import argparse
 from datetime import date, datetime, time, timedelta
 from textwrap import dedent
 
-from pyspark.sql import functions as F
-
 # Ships via submit_py_files on SageMaker; for local runs/tests put
 # jobs/etl/sagemaker on the path first (the snapshot tests already do).
+from group_policy import SLOT_GROUP_POLICY, slot_day_group_case, slot_stored_label_case, ss03_bet_ab_group_sql
+from pyspark.sql import functions as F
 from spark_etl_common import (
     BJ_UTC_OFFSET_HOURS,
     EXCLUDED_OP_CODES,
@@ -66,7 +62,6 @@ from spark_etl_common import (
     check_schema,
     prune_period_days,
     session_day_ctes,
-    ss03_bet_ab_group_sql,
     warn_on_schema_drift,
 )
 
@@ -79,14 +74,8 @@ GAME_CONFIG = {
     "SS01": {},
     "SS01A": {},
     "SS02": {"fourscatter_lead": True},
-    # user_day_groups = the SS03-only group policy (see the docstring):
-    # ONE label per user-day (re-derived under the announced cutover; a
-    # single higher-tier bet claims the whole day) instead of the stored
-    # per-bet label.
-    # The run/cohort variants (--ab-group / --min-mathtable-run) opt out
-    # automatically and keep the stored row-level label.
-    "SS03": {"ab_test_groups": True, "user_day_groups": True},
-    "SS06": {"ab_test_groups": True},
+    "SS03": {},
+    "SS06": {},
 }
 
 AB_GROUP_LABELS = ["AI", "AB_TEST_A", "AB_TEST_B", "Default"]
@@ -127,14 +116,6 @@ OUTPUT_BIGINT_COLUMNS = [
     "user_neg_delta_bet_num",
     "user_num_delta_bet",
 ]
-
-
-def _ab_group_case(game_id: str) -> str:
-    """The stored slot_orders_ab_group label, collapsed to the game's group
-    vocabulary: games without AB test groups fold AB_TEST_A/B into Default."""
-    if GAME_CONFIG[game_id].get("ab_test_groups"):
-        return "t.ab_group"
-    return "CASE WHEN t.ab_group IN ('AB_TEST_A', 'AB_TEST_B') THEN 'Default' ELSE t.ab_group END AS ab_group"
 
 
 def _math_table_expr(game_id: str) -> str:
@@ -189,20 +170,11 @@ def _mathtable_run_ctes(day_window: str, min_run: int) -> str:
         )"""
 
 
-def _user_day_groups_case(label_expr: str) -> str:
-    """One AB label per (user, activity_date): a single bet in a higher tier
-    claims the whole user-day, priority AI > AB_TEST_A > AB_TEST_B > Default
-    (old-era assignment was per-bet; new-era digit labels collapse as a
-    no-op)."""
-    day = "PARTITION BY t.user_id, t.activity_date"
-    branches = "\n                ".join(
-        f"WHEN MAX(CASE WHEN {label_expr} = '{g}' THEN 1 ELSE 0 END) OVER ({day}) = 1 THEN '{g}'"
-        for g in ("AI", "AB_TEST_A", "AB_TEST_B")
-    )
-    return f"""CASE
-                {branches}
-                ELSE 'Default'
-            END"""
+def _user_day_groups(game_id: str, min_mathtable_run: int, ab_group: str) -> bool:
+    """SS03's standing user-day group policy; the run/cohort variants read
+    the stored row-level label on purpose (the AI-combo dashboard's
+    semantics), so they opt out."""
+    return SLOT_GROUP_POLICY[game_id]["user_day_groups"] and not (min_mathtable_run or ab_group)
 
 
 def generate_query(
@@ -215,16 +187,13 @@ def generate_query(
     currency: str,
     min_mathtable_run: int = 0,
     ab_group: str = "",
-    user_day_groups: bool = False,
 ) -> str:
     """Spark-SQL version of the per-game generate_query over ``bet_order_raw``.
 
-    ``activity_date`` is always the SESSION-START Beijing date (bet_session =
-    30 min without a bet), the daily-stats midnight fix: cross-midnight play
-    stays on the day it started. ``user_day_groups`` additionally applies
-    the SS03-only group policy (label re-derived under the announced cutover,
-    one label per user-day); otherwise the stored row-level ``ab_group`` is
-    used unchanged.
+    ``activity_date`` is always the SESSION-START Beijing date (bet_session,
+    docs/ab_group_policy.md "Day basis"). The game's group policy comes from
+    ``group_policy.SLOT_GROUP_POLICY``; the run/cohort variants keep the
+    stored row-level label (see ``_user_day_groups``).
 
     Translation notes versus the Redshift dialect: BJ time is
     ``created_at + 8h`` (session timezone is UTC); ``EXTRACT(EPOCH FROM
@@ -242,6 +211,7 @@ def generate_query(
     # on, computes runs over the cohort's own bet stream only (the stored
     # slot_orders_ab_group label is already policy-correct).
     ab_where = f"\n                AND t.ab_group = '{ab_group}'" if ab_group else ""
+    user_day_groups = _user_day_groups(game_id, min_mathtable_run, ab_group)
     group_source_col = "t.partition_ab_label" if user_day_groups else "t.ab_group"
     day_cols = f"""CAST({sess_bj} AS DATE) AS activity_date,
                 CAST(DATE_TRUNC('week', {sess_bj}) AS DATE) AS activity_week,
@@ -278,7 +248,7 @@ def generate_query(
                 t.activity_date,
                 t.activity_week,
                 t.activity_month,
-                {_user_day_groups_case("t.bet_ab_group")} AS ab_group
+                {slot_day_group_case("t.bet_ab_group")} AS ab_group
             FROM bets_labeled AS t
         )"""
     else:
@@ -293,7 +263,7 @@ def generate_query(
                 t.bet_type,
                 t.actual_payout - t.bet_amount AS profit,
                 {day_cols},
-                {_ab_group_case(game_id)}
+                {slot_stored_label_case(game_id)}
             FROM session_days AS t
         )"""
     bets_chain = f"""{session_day_ctes("bet_events", "spin_id")},
@@ -530,12 +500,6 @@ def parse_args():
 
 def main():
     args = parse_args()
-    # The game's standing group policy, not a CLI knob. The run/cohort
-    # variants read the stored row-level label on purpose (the AI-combo
-    # dashboard's semantics), so they opt out.
-    user_day_groups = bool(GAME_CONFIG[args.game_id].get("user_day_groups")) and not (
-        args.ab_group or args.min_mathtable_run
-    )
     # Rolling daily-incremental defaults: the job recomputes only the periods
     # in the window (dynamic period= overwrite), so the scheduled no-args run
     # refreshes recent days without touching history.
@@ -563,7 +527,9 @@ def main():
     # Reading inside game_id=<G>/ pins the game by path (no game_id column
     # inside, matching REQUIRED_COLUMNS).
     bet_order = spark.read.parquet(f"{args.input_root}/game_id={args.game_id}")
-    required = REQUIRED_COLUMNS + (["partition_ab_label"] if user_day_groups else [])
+    required = REQUIRED_COLUMNS + (
+        ["partition_ab_label"] if _user_day_groups(args.game_id, args.min_mathtable_run, args.ab_group) else []
+    )
     check_schema(bet_order, required, table_name="slot_orders_ab_group orders")
 
     for level in levels:
@@ -591,7 +557,6 @@ def main():
                 currency=args.currency,
                 min_mathtable_run=args.min_mathtable_run,
                 ab_group=args.ab_group,
-                user_day_groups=user_day_groups,
             )
         )
         df = align_output_schema(df)

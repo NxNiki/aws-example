@@ -55,10 +55,14 @@ The stats grain uses the platform **`bet_session`** for day attribution:
 `activity_date` is the Beijing date the bullet's session STARTED (a session
 breaks after 30 minutes without a bet), so cross-midnight play stays on the
 day it started — same rule as every slot game-stats dataset. The
-feature-engineering jobs instead attribute each bet to the Beijing date its
-**`hmm_session`** started (180 s without a bet ends the session —
-`SESSION_BREAK_SECONDS` in `feature_engineer_{daily,life_cycle}.py`) for the
-HMM lifecycle features. The repo's full session vocabulary (`bet_session`
+**fish_hunter HMM feature jobs** (`feature_engineer_{daily,life_cycle}.py`)
+instead attribute each bet to the Beijing date its **`hmm_session`** started
+(180 s without a bet ends the session, `SESSION_BREAK_SECONDS`). Note this
+Beijing dating is specific to the fish HMM jobs — the slot/MAB feature ETL
+(`etl_feature_engineer_cold_data.py`) keys `session_start_date` /
+`activity_date` by **UTC** dates (its original design; they are stable
+incremental-merge keys, so changing the timezone is a semantic rewrite).
+The repo's full session vocabulary (`bet_session`
 30 min, `agg_session` consecutive-N bets, `ai_session` 12 h, `hmm_session`
 180 s) is tabled in [`ab_group_policy.md`](ab_group_policy.md).
 

@@ -37,16 +37,15 @@ import argparse
 from datetime import date, datetime, time, timedelta
 from textwrap import dedent
 
-from pyspark.sql import functions as F
-
 # Ships via submit_py_files on SageMaker; for local runs/tests put
 # jobs/etl/sagemaker on the path first (the snapshot tests already do).
+from group_policy import fish_group_tag_day_case
+from pyspark.sql import functions as F
 from spark_etl_common import (
     BJ_UTC_OFFSET_HOURS,
     beijing_today,
     build_spark_session,
     check_schema,
-    fish_group_tag_day_case,
     prune_period_days,
     session_day_ctes,
 )
@@ -119,8 +118,7 @@ def generate_query(
 
         {session_day_ctes("filtered", "bullet_id")},
 
-        -- activity_date is the SESSION-START Beijing date (bet_session = 30
-        -- min without a bet): cross-midnight play stays on the day it started.
+        -- activity_date = session-start BJ date (docs/ab_group_policy.md).
         base_data AS (
             SELECT
                 b.user_id,

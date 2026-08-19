@@ -27,12 +27,11 @@ import argparse
 from datetime import date, datetime, time, timedelta
 from textwrap import dedent
 
+from group_policy import PARTITION_AB_FIRST, ab_group_sql
 from pyspark.sql import functions as F
 from spark_etl_common import (
     BJ_UTC_OFFSET_HOURS,
     EXCLUDED_OP_CODES,
-    PARTITION_AB_FIRST,
-    ab_group_sql,
     beijing_today,
     build_spark_session,
     check_schema,

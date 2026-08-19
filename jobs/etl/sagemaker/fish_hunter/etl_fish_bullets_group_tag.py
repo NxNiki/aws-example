@@ -31,6 +31,7 @@ import argparse
 from datetime import date, datetime, time, timedelta
 from textwrap import dedent
 
+from group_policy import fish_group_tag_sql
 from pyspark.sql import functions as F
 from spark_etl_common import (
     BJ_UTC_OFFSET_HOURS,
@@ -38,7 +39,6 @@ from spark_etl_common import (
     beijing_today,
     build_spark_session,
     check_schema,
-    fish_group_tag_sql,
     prune_partition_days,
     warn_on_schema_drift,
 )

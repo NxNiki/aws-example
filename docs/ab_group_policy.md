@@ -85,7 +85,7 @@ Session vocabulary (four distinct notions — don't mix them):
 | --- | --- | --- |
 | `bet_session` | 30 min without a bet | `activity_date` attribution in ALL game-stats datasets; delta-t caps (`DELTA_T_MAX_SECONDS`) |
 | `agg_session` | consecutive 30/40/50-bet windows | AI aggregation features |
-| `ai_session` | 12 h without a bet | AI modulation only (ss03 feature ETL `SESSION_BREAK_SECONDS`; multi-day sessions exist) |
+| `ai_session` | 12 h without a bet | AI modulation only (ss03 feature ETL `SESSION_BREAK_SECONDS`; multi-day sessions exist). NOTE: that ETL's `session_start_date`/`activity_date` are **UTC** dates, not Beijing — original design, stable incremental keys |
 | `hmm_session` | 180 s without a bet | fish_hunter feature engineering only: `bet_date` attribution for the HMM lifecycle features (`jobs/fish_hunter/feature_engineer_{daily,life_cycle}.py` `SESSION_BREAK_SECONDS`) |
 
 ## SS03 dashboard exception: announced cutover + user-day groups
