@@ -73,6 +73,28 @@ feature-engineer (`etl_feature_engineer_cold_data.py`) — read this dataset
 and use the stored `ab_group` directly. The policy is derived exactly once;
 nothing downstream touches `partition_ab`.
 
+### Columns (`bituslabs_ds.slot_orders_ab_group`)
+
+| column | type | description |
+| --- | --- | --- |
+| `game_id` | string, partition | `SS01` / `SS01A` / `SS02` / `SS03` / `SS06` — filter on it to prune partitions |
+| `period` | string, partition | Beijing calendar date of the bet, `yyyy-MM-dd` (string form of `activity_date`) — filter on it to prune partitions |
+| `spin_id` | string | the bet/spin id; ordering tiebreak for sequence logic |
+| `user_id` | bigint | player id (last digit drives the digit-era group) |
+| `created_at` | timestamp | bet creation time, **UTC** — use for timestamp-precise filters (e.g. the cutovers) |
+| `math_table_id` | string | mathtable served for the spin, as stored (SS02's FourScatter re-attribution happens downstream, not here) |
+| `bet_type` | string | `BASE` (paid spin) or `FREE` (free-game spin) |
+| `bet_amount` | double | stake |
+| `actual_payout` | double | payout |
+| `balance_after_bet` | double | balance after the stake was deducted |
+| `balance_after_payout` | double | balance after the payout landed |
+| `currency_type` | string | e.g. `CNY` — NOT pre-filtered; filter in queries |
+| `status` | string | always `COMPLETED` (incomplete bets are dropped at the source) |
+| `op_code` | string | bet operation code; test codes (B26/TST/TSB/TSO) are dropped at the source |
+| `partition_ab_label` | string | first element of the raw `partition_ab` JSON — STALE after the cutover; kept for the old-era derivation and audit only |
+| `ab_group` | string | the derived group label (`Default`/`AB_TEST_A`/`AB_TEST_B`/`AI`) under the EMPIRICAL cutover — use this, never `partition_ab_label`, for group membership |
+| `activity_date` | date | Beijing calendar date of `created_at` (the bet's own date — NOT session-start; the session-day attribution exists only in the stats outputs) |
+
 ## Day basis: session-start dates (all game-stats datasets)
 
 Every game-stats dataset (all five slot games, both SS03 variants, and

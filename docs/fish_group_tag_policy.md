@@ -108,6 +108,33 @@ Downstream consumers: the daily/weekly/monthly stats ETL
 two feature-engineering jobs (`jobs/fish_hunter/feature_engineer_daily.py`,
 `feature_engineer_life_cycle.py`).
 
+### Columns (`bituslabs_ds.fish_bullets_group_tag`)
+
+| column | type | description |
+| --- | --- | --- |
+| `period` | string, partition | Beijing calendar date of the bullet, `yyyy-MM-dd` (string form of `activity_date`) — filter on it to prune partitions |
+| `user_id` | bigint | player id (last digit drives the retention-cohort rule) |
+| `bullet_id` | bigint | the bullet id; ordering tiebreak for sequence logic |
+| `event_id` | string | raw event id (secondary ordering key in the feature jobs) |
+| `room_id` | string | game room the bullet was fired in |
+| `strategy_name` | string | serving strategy — the group policy's input; kept so `group_tag` stays auditable |
+| `event_timestamp` | timestamp | bullet event time, **UTC** — the retention gate reads this column |
+| `created_at` | timestamp | record creation time, **UTC** — drives `activity_date`/`period` and sessionization |
+| `bet` | double | bullet stake |
+| `payout` | double | payout |
+| `profit` | double | as stored (may be NULL — consumers fall back to `payout - bet`) |
+| `prev_balance` | double | balance before the bullet |
+| `curr_balance` | double | balance after the bullet (deposit/withdraw detection compares across rows) |
+| `fish_value` | double | target fish value (the dashboard's fish-level ranges bucket this) |
+| `killed` | int | 1 if the bullet killed the fish, else 0 |
+| `bullet_level` | string | weapon/bullet level, as stored |
+| `multiplier` | string | bet multiplier, as stored |
+| `op_code` | string | operation code; test codes (B26/TST/TSB/TSO) are dropped at the source |
+| `currency_type` | string | e.g. `CNY` — NOT pre-filtered; filter in queries |
+| `game_id` | string | `FM01` (kept as a column; the dataset is not game-partitioned) |
+| `group_tag` | string | the derived policy label (`boost_pool`/`dynamic_rtp`/`risk_control`/`retention`/`default`) — use this, never re-derive from `strategy_name` |
+| `activity_date` | date | Beijing calendar date of `created_at` (the bullet's own date — NOT session-start; the session-day attribution exists only in the stats outputs) |
+
 ## How the schedule picks up code changes
 
 Same rule as the slot pipeline (see `ab_group_policy.md`): the EventBridge
