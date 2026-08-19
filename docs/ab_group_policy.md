@@ -104,7 +104,7 @@ keep the stored row-level per-bet label):
   not the empirical 05:30-Beijing constant — bets in the ~1.5h between the
   serving flip and the announced time keep stale partition_ab labels by
   product decision. The label is re-derived from `partition_ab_label` /
-  `user_id` / `created_at` (`ss03_bet_ab_group_sql`).
+  `user_id` / `created_at` per the `SS03` branches in `group_policy.py`.
 - **Old-era collapse**: each (user, session-day) gets ONE label, priority
   `AI > AB_TEST_A > AB_TEST_B > Default` — old-era assignment was per-bet,
   so a single AI bet claims the user's whole day. Digit-era labels are
