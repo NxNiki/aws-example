@@ -48,13 +48,14 @@ def _load_policy():
     sys.path.insert(0, str(REPO_ROOT / "jobs/etl/sagemaker"))
     try:
         import group_policy
+        import group_policy_sql
 
-        return group_policy
+        return group_policy, group_policy_sql
     finally:
         sys.path.pop(0)
 
 
-POLICY = _load_policy()
+POLICY, POLICY_SQL = _load_policy()
 BULLETS_JOB = _load_module(
     REPO_ROOT / "jobs/etl/sagemaker/fish_hunter/etl_fish_bullets_group_tag.py", "_fish_bullets_job"
 )
@@ -72,7 +73,7 @@ def _group_tag_rows(rows):
     con = sqlite3.connect(":memory:")
     con.execute("CREATE TABLE bullets (strategy_name, user_id, event_ts)")
     con.executemany("INSERT INTO bullets VALUES (?, ?, ?)", rows)
-    case = POLICY.fish_group_tag_sql("strategy_name", "user_id", "event_ts")
+    case = POLICY_SQL.group_label_sql("FM01", {"strategy_name": "strategy_name", "user_id": "user_id"}, "event_ts")
     sql = f"SELECT {case} FROM bullets ORDER BY rowid".replace("TIMESTAMP '", "'")
     return [r[0] for r in con.execute(sql)]
 
@@ -165,7 +166,7 @@ def test_user_day_collapse_priority():
             ("u1", "d2", "retention"),
         ],
     )
-    case = POLICY.fish_group_tag_day_case("group_tag")
+    case = POLICY_SQL.collapse_case_groupby("FM01", "group_tag")
     sql = (
         f"SELECT user_id, activity_date, {case} FROM bullets"
         " GROUP BY user_id, activity_date ORDER BY user_id, activity_date"

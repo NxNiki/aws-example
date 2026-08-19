@@ -39,6 +39,7 @@ TRUSTED_SPARK_ROLE = "arn:aws:iam::338568447110:role/service-role/AmazonSageMake
 SPARK_COMMON_PY_FILES = [
     f"{LOCAL_ROOT}/jobs/etl/sagemaker/spark_etl_common.py",
     f"{LOCAL_ROOT}/jobs/etl/sagemaker/group_policy.py",
+    f"{LOCAL_ROOT}/jobs/etl/sagemaker/group_policy_sql.py",
 ]
 
 SPARK_FRAMEWORK_VERSION = "3.3"  # container runs Python 3.9 — job scripts must stay 3.9-compatible

@@ -52,13 +52,14 @@ def _load_policy():
     sys.path.insert(0, str(REPO_ROOT / "jobs/etl/sagemaker"))
     try:
         import group_policy
+        import group_policy_sql
 
-        return group_policy
+        return group_policy, group_policy_sql
     finally:
         sys.path.pop(0)
 
 
-POLICY = _load_policy()
+POLICY, POLICY_SQL = _load_policy()
 
 DAY_WINDOW = "PARTITION BY t.user_id, t.activity_date ORDER BY t.spin_id, t.created_at"
 
@@ -155,13 +156,20 @@ def test_generate_query_ab_group_scan_filter():
     assert "WHEN t.ab_group IN" not in base  # SS03 keeps the full vocabulary
 
 
-def _ab_group_rows(rows, include_ab_tests=True):
-    """Run the policy CASE against sqlite (TIMESTAMP literals stripped:
-    sqlite compares ISO datetime strings directly)."""
+AI_ID = "jojpin-9mokha-rexQug"
+A_ID = "4f1a46ca-7baa-4452-9a40-ef21d9b33b57"
+B_ID = "4a04df21-c749-4808-8e55-3a0b74c084d2"
+
+
+def _ab_group_rows(rows):
+    """Run the SLOT_ORDERS policy CASE against sqlite (TIMESTAMP literals
+    stripped: sqlite compares ISO datetime strings directly)."""
     con = sqlite3.connect(":memory:")
-    con.execute("CREATE TABLE bets (ab_label, user_id, bj_ts)")
+    con.execute("CREATE TABLE bets (ab_label, user_id, created_utc)")
     con.executemany("INSERT INTO bets VALUES (?, ?, ?)", rows)
-    case = POLICY.ab_group_sql("ab_label", "user_id", "bj_ts", include_ab_tests=include_ab_tests)
+    case = POLICY_SQL.group_label_sql(
+        "SLOT_ORDERS", {"partition_ab_label": "ab_label", "user_id": "user_id"}, "created_utc"
+    )
     sql = f"SELECT {case} FROM bets ORDER BY rowid".replace("TIMESTAMP '", "'")
     return [r[0] for r in con.execute(sql)]
 
@@ -180,7 +188,7 @@ def test_slot_orders_query_composition():
     finally:
         sys.path.pop(0)
     sql = mod.generate_query(["SS03", "SS06"], date(2026, 8, 1), date(2026, 8, 5))
-    assert "AS ab_group" in sql and "TIMESTAMP '2026-08-04 05:30:00'" in sql and "% 10" in sql
+    assert "AS ab_group" in sql and f"TIMESTAMP '{POLICY.AB_GROUP_DIGIT_POLICY_START_UTC}'" in sql and "% 10" in sql
     assert "t.game_id IN ('SS03', 'SS06')" in sql
     assert "t.status = 'COMPLETED'" in sql and "op_code NOT IN" in sql
     assert "currency_type =" not in sql
@@ -188,20 +196,21 @@ def test_slot_orders_query_composition():
 
 def test_ab_group_policy_timestamp_gate():
     """AB groups: partition_ab ids before the empirically-located cutover
-    (2026-08-04 05:30 Beijing — the deploy hour where mathtable serving
-    flips), user-id last digit (0-3 Default, 4-5 A, 6-7 B, 8-9 AI) after."""
+    (2026-08-04 05:30 Beijing = 2026-08-03 21:30 UTC — the deploy hour where
+    mathtable serving flips), user-id last digit (0-3 Default, 4-5 A, 6-7 B,
+    8-9 AI) after. Rows here carry UTC timestamps."""
     rows = [
         # Before the cutover the digit is ignored — only the id counts
-        # (including the early hours of 08-04, which a date gate mislabels).
-        (POLICY.AI_GROUP_ID, 13, "2026-08-03 12:00:00"),
-        (POLICY.AB_TEST_GROUP_A, 18, "2026-08-04 03:00:00"),
-        ("some-other-id", 19, "2026-08-04 05:29:59"),
-        (None, 15, "2026-08-03 23:00:00"),
+        # (including the early BJ hours of 08-04, which a date gate mislabels).
+        (AI_ID, 13, "2026-08-03 04:00:00"),
+        (A_ID, 18, "2026-08-03 19:00:00"),
+        ("some-other-id", 19, "2026-08-03 21:29:59"),
+        (None, 15, "2026-08-03 15:00:00"),
         # From the cutover the id is ignored — only the digit counts.
-        (POLICY.AI_GROUP_ID, 13, "2026-08-04 05:30:00"),
-        ("whatever", 24, "2026-08-04 06:00:00"),
-        (None, 37, "2026-08-05 00:00:00"),
-        ("whatever", 58, "2026-08-04 23:59:59"),
+        (AI_ID, 13, "2026-08-03 21:30:00"),
+        ("whatever", 24, "2026-08-03 22:00:00"),
+        (None, 37, "2026-08-04 16:00:00"),
+        ("whatever", 58, "2026-08-04 15:59:59"),
     ]
     assert _ab_group_rows(rows) == [
         "AI",
@@ -213,16 +222,18 @@ def test_ab_group_policy_timestamp_gate():
         "AB_TEST_B",  # digit 7
         "AI",  # digit 8
     ]
-    # Games without AB test groups collapse the test digits/ids into Default.
-    no_tests = _ab_group_rows(
-        [
-            (POLICY.AB_TEST_GROUP_A, 11, "2026-08-03 12:00:00"),
-            ("x", 25, "2026-08-04 06:00:00"),
-            ("x", 39, "2026-08-04 06:00:00"),
-        ],
-        include_ab_tests=False,
-    )
-    assert no_tests == ["Default", "Default", "AI"]
+    # Games without their own AB arms fold the test labels into Default via
+    # the stats policies' fold config (per-bet labels stay 4-way upstream).
+    fold_case = POLICY_SQL.slot_stored_label_case("SS01", "g").split(" AS ")[0]
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE labels (g)")
+    con.executemany("INSERT INTO labels VALUES (?)", [("AB_TEST_A",), ("AB_TEST_B",), ("AI",), ("Default",)])
+    assert [r[0] for r in con.execute(f"SELECT {fold_case} FROM labels ORDER BY rowid")] == [
+        "Default",
+        "Default",
+        "AI",
+        "Default",
+    ]
 
 
 def _ss03_label_rows(rows):
@@ -231,7 +242,7 @@ def _ss03_label_rows(rows):
     con = sqlite3.connect(":memory:")
     con.execute("CREATE TABLE bets (ab_label, user_id, created_at)")
     con.executemany("INSERT INTO bets VALUES (?, ?, ?)", rows)
-    case = POLICY.ss03_bet_ab_group_sql("ab_label", "user_id", "created_at")
+    case = POLICY_SQL.group_label_sql("SS03", {"partition_ab_label": "ab_label", "user_id": "user_id"}, "created_at")
     sql = f"SELECT {case} FROM bets ORDER BY rowid".replace("TIMESTAMP '", "'")
     return [r[0] for r in con.execute(sql)]
 
@@ -240,13 +251,13 @@ def test_ss03_announced_cutover_labels():
     """Old era by partition_ab id (4f1a...=A continues digit-4/5's tables,
     4a04...=B), new era by digit from the ANNOUNCED 2026-08-03 23:00 UTC."""
     rows = [
-        (POLICY.AI_GROUP_ID, 15, "2026-08-03 22:59:59"),
-        (POLICY.AB_TEST_GROUP_A, 18, "2026-08-01 00:00:00"),
-        (POLICY.AB_TEST_GROUP_B, 14, "2026-08-03 22:00:00"),
+        (AI_ID, 15, "2026-08-03 22:59:59"),
+        (A_ID, 18, "2026-08-01 00:00:00"),
+        ("4a04df21-c749-4808-8e55-3a0b74c084d2", 14, "2026-08-03 22:00:00"),
         ("wytsuj-fothap-5Qixda", 19, "2026-07-01 00:00:00"),
         (None, 18, "2026-08-03 20:00:00"),
         # from the announced moment (inclusive) only the digit counts.
-        (POLICY.AI_GROUP_ID, 13, "2026-08-03 23:00:00"),
+        (AI_ID, 13, "2026-08-03 23:00:00"),
         ("whatever", 24, "2026-08-04 06:00:00"),
         (None, 37, "2026-08-05 00:00:00"),
         ("whatever", 58, "2026-08-04 23:59:59"),
@@ -308,7 +319,7 @@ def test_day_group_collapse_priority():
             ("u1", "d2", "AB_TEST_B"),
         ],
     )
-    case = POLICY.slot_day_group_case("t.bet_ab_group")
+    case = POLICY_SQL.collapse_case_over("SS03", "t.bet_ab_group")
     sql = (
         f"SELECT DISTINCT t.user_id, t.activity_date, {case} AS g FROM bets_labeled AS t"
         " ORDER BY t.user_id, t.activity_date"

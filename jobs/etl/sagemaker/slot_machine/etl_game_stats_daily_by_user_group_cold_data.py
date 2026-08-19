@@ -52,7 +52,7 @@ from textwrap import dedent
 
 # Ships via submit_py_files on SageMaker; for local runs/tests put
 # jobs/etl/sagemaker on the path first (the snapshot tests already do).
-from group_policy import slot_grouping, slot_stored_label_case
+from group_policy_sql import slot_grouping, slot_stored_label_case
 from pyspark.sql import functions as F
 from spark_etl_common import (
     BJ_UTC_OFFSET_HOURS,
@@ -185,8 +185,8 @@ def generate_query(
 
     ``activity_date`` is always the SESSION-START Beijing date (bet_session,
     docs/ab_group_policy.md "Day basis"). The game's group policy comes from
-    ``group_policy.SLOT_GROUP_POLICY``; the run/cohort variants keep the
-    stored row-level label (``group_policy.slot_grouping``).
+    ``group_policy.GROUP_POLICY``; the run/cohort variants keep the
+    stored row-level label (``group_policy_sql.slot_grouping``).
 
     Translation notes versus the Redshift dialect: BJ time is
     ``created_at + 8h`` (session timezone is UTC); ``EXTRACT(EPOCH FROM

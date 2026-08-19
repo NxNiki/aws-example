@@ -16,10 +16,12 @@ The switch was announced on 2026-08-03 (LA time). After the cutover the
 assignment** — post-cutover it agrees with the digit rule only at chance
 level (~30%), so it must never be used for dates past the cutover.
 
-Both rules live in one place: `jobs/etl/sagemaker/group_policy.py::
-ab_group_sql` (a timestamp-gated SQL CASE) with the cutover constant
-`AB_GROUP_DIGIT_POLICY_START_BJ`. Games without AB test groups (SS01, SS01A)
-collapse the test digits / legacy test ids into `Default`.
+Both rules are DECLARED in `jobs/etl/sagemaker/group_policy.py` (the
+per-game group-policy config: ordered branches of label / database column /
+values / effective UTC range) and compiled into SQL by
+`group_policy_sql.py`; ETL scripts carry no policy parameters. Games
+without AB test groups (SS01, SS01A, SS02) fold the test labels into
+`Default` via their policies' `fold` map.
 
 ## How the cutover timestamp was determined
 
@@ -92,10 +94,10 @@ Session vocabulary (four distinct notions — don't mix them):
 ## SS03 dashboard exception: announced cutover + user-day groups
 
 The SS03 game-stats dataset (the dashboard's `ab_group` dimension) does NOT
-use the stored row-level label: its `group_grain` is `"user_day"` in
-`group_policy.SLOT_GROUP_POLICY` (the stats job consumes the recipe via
-`group_policy.slot_grouping`; the run/cohort variants always keep the
-stored row-level per-bet label):
+use the stored row-level label: its policy in `group_policy.GROUP_POLICY` declares its own branches
+(announced cutover) plus a `collapse_priority` (the stats job consumes the
+recipe via `group_policy_sql.slot_grouping`; the run/cohort variants always
+keep the stored row-level per-bet label):
 
 - **Cutover**: the game team's ANNOUNCED start, 2026-08-03 16:00 PDT =
   **2026-08-03 23:00 UTC** (`group_policy.SS03_AB_GROUP_ANNOUNCED_START_UTC`),

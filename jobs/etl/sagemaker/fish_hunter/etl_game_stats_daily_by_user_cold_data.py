@@ -39,7 +39,7 @@ from textwrap import dedent
 
 # Ships via submit_py_files on SageMaker; for local runs/tests put
 # jobs/etl/sagemaker on the path first (the snapshot tests already do).
-from group_policy import fish_group_tag_day_case
+from group_policy_sql import collapse_case_groupby
 from pyspark.sql import functions as F
 from spark_etl_common import (
     BJ_UTC_OFFSET_HOURS,
@@ -155,7 +155,7 @@ def generate_query(
                 activity_date,
                 activity_week,
                 activity_month,
-                {fish_group_tag_day_case("group_tag")} AS group_tag,
+                {collapse_case_groupby("FM01", "group_tag")} AS group_tag,
                 LAG(activity_date) OVER (PARTITION BY user_id ORDER BY activity_date) AS bj_date_last_bet
             FROM base_data
             GROUP BY user_id, activity_date, activity_week, activity_month

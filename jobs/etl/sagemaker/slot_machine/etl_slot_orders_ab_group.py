@@ -2,7 +2,8 @@
 
 ETL job: order-level copy of the slot warehouse's ``bet_order`` rows plus the
 ``ab_group`` column the raw data lacks — the timestamp-gated grouping policy
-(``spark_etl_common.ab_group_sql``: partition_ab ids before the empirically
+(declared in ``group_policy.py``, compiled by
+``group_policy_sql.group_label_sql``: partition_ab ids before the empirically
 located cutover, 2026-08-04 05:30 Beijing; user-id last digit from that
 moment on). Backs the Athena table
 ``bituslabs_ds.slot_orders_ab_group`` (register with
@@ -27,7 +28,8 @@ import argparse
 from datetime import date, datetime, time, timedelta
 from textwrap import dedent
 
-from group_policy import PARTITION_AB_FIRST, ab_group_sql
+from group_policy import PARTITION_AB_FIRST
+from group_policy_sql import group_label_sql
 from pyspark.sql import functions as F
 from spark_etl_common import (
     BJ_UTC_OFFSET_HOURS,
@@ -64,7 +66,11 @@ REQUIRED_COLUMNS = [
 def generate_query(games: list[str], effective_start: date, output_end: date) -> str:
     bj_ts = f"CAST(t.created_at AS TIMESTAMP) + INTERVAL '{BJ_UTC_OFFSET_HOURS}' HOUR"
     bj_date = f"CAST({bj_ts} AS DATE)"
-    ab_group = ab_group_sql(PARTITION_AB_FIRST, "t.user_id", bj_ts)
+    ab_group = group_label_sql(
+        "SLOT_ORDERS",
+        {"partition_ab_label": PARTITION_AB_FIRST, "user_id": "t.user_id"},
+        "CAST(t.created_at AS TIMESTAMP)",
+    )
     games_in = ", ".join(f"'{g}'" for g in games)
     scan_start_utc = datetime.combine(effective_start, time()) - timedelta(hours=BJ_UTC_OFFSET_HOURS)
     scan_end_utc = datetime.combine(output_end, time()) - timedelta(hours=BJ_UTC_OFFSET_HOURS)

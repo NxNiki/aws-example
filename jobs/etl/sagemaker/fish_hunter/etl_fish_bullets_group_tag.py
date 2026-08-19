@@ -2,7 +2,8 @@
 
 ETL job: bullet-level copy of the oceanhunter warehouse's ``cold_data/bullet``
 rows plus the ``group_tag`` column the raw data lacks — the fish grouping
-policy (``spark_etl_common.fish_group_tag_sql``: BOOST_POOL ->
+policy (declared in ``group_policy.py``, compiled by
+``group_policy_sql.group_label_sql``: BOOST_POOL ->
 ``boost_pool``, DYNAMIC_RTP family -> ``dynamic_rtp``,
 RC_FISHING_*/'%RISK_CONTROL%' -> ``risk_control``,
 CR_FISHING_* or user-id last digit 0/1 from the 2026-07-31 00:00 UTC
@@ -31,7 +32,7 @@ import argparse
 from datetime import date, datetime, time, timedelta
 from textwrap import dedent
 
-from group_policy import fish_group_tag_sql
+from group_policy_sql import group_label_sql
 from pyspark.sql import functions as F
 from spark_etl_common import (
     BJ_UTC_OFFSET_HOURS,
@@ -71,7 +72,11 @@ REQUIRED_COLUMNS = [
 def generate_query(effective_start: date, output_end: date) -> str:
     bj_ts = f"CAST(t.created_at AS TIMESTAMP) + INTERVAL '{BJ_UTC_OFFSET_HOURS}' HOUR"
     bj_date = f"CAST({bj_ts} AS DATE)"
-    group_tag = fish_group_tag_sql("t.strategy_name", "t.user_id", "CAST(t.event_timestamp AS TIMESTAMP)")
+    group_tag = group_label_sql(
+        "FM01",
+        {"strategy_name": "t.strategy_name", "user_id": "t.user_id"},
+        "CAST(t.event_timestamp AS TIMESTAMP)",
+    )
     scan_start_utc = datetime.combine(effective_start, time()) - timedelta(hours=BJ_UTC_OFFSET_HOURS)
     scan_end_utc = datetime.combine(output_end, time()) - timedelta(hours=BJ_UTC_OFFSET_HOURS)
     return dedent(

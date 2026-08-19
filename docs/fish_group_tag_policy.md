@@ -44,8 +44,8 @@ Key properties:
 - The old dashboard ladder vocabulary (`ab_test_group`: literal RC_*/CR_*
   labels plus the `RC_ALL`/`CR_ALL` rollup) is retired.
 
-The CASE lives in one place: `jobs/etl/sagemaker/spark_etl_common.py::
-fish_group_tag_sql` (the `RC_/CR_FISHING_` prefixes are `substr` tests —
+The policy is DECLARED in `jobs/etl/sagemaker/group_policy.py` (`FM01`
+entry) and compiled by `group_policy_sql.group_label_sql` (the `RC_/CR_FISHING_` prefixes are `substr` tests —
 the escaped-underscore LIKE — and rule 4's unescaped `_` wildcard also
 matches the literal underscore in `RISK_CONTROLLED`).
 
