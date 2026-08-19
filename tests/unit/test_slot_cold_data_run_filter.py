@@ -291,7 +291,7 @@ def test_session_day_attribution():
     ]
 
 
-def test_user_day_groups_collapse_priority():
+def test_day_group_collapse_priority():
     con = sqlite3.connect(":memory:")
     con.execute("CREATE TABLE bets_labeled (user_id, activity_date, bet_ab_group)")
     con.executemany(
@@ -321,7 +321,7 @@ def test_user_day_groups_collapse_priority():
     ]
 
 
-def test_generate_query_user_day_groups():
+def test_generate_query_group_grain():
     kwargs = dict(
         stats_agg_col="activity_date",
         game_id="SS03",

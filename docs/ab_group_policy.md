@@ -16,7 +16,7 @@ The switch was announced on 2026-08-03 (LA time). After the cutover the
 assignment** — post-cutover it agrees with the digit rule only at chance
 level (~30%), so it must never be used for dates past the cutover.
 
-Both rules live in one place: `jobs/etl/sagemaker/spark_etl_common.py::
+Both rules live in one place: `jobs/etl/sagemaker/group_policy.py::
 ab_group_sql` (a timestamp-gated SQL CASE) with the cutover constant
 `AB_GROUP_DIGIT_POLICY_START_BJ`. Games without AB test groups (SS01, SS01A)
 collapse the test digits / legacy test ids into `Default`.
@@ -52,8 +52,9 @@ bets carry a best-effort boundary.
 `jobs/etl/sagemaker/slot_machine/etl_slot_orders_ab_group.py` copies the raw
 warehouse `bet_order` rows for the five slot games and adds the
 policy-correct `ab_group` (plus `partition_ab_label` and the Beijing
-`activity_date`). Rows are otherwise unfiltered — `status`, `op_code`,
-`currency_type` stay as columns for downstream queries to filter.
+`activity_date`). Incomplete bets (`status != 'COMPLETED'`) and test
+op-codes are dropped at the source; `currency_type` stays a column for
+downstream queries to filter.
 
 - Dataset: `s3://bituslabs-team-ai/etl-results/jobs/output_slot_orders_ab_group/orders/game_id=<G>/period=YYYY-MM-DD/`
 - Athena: **`bituslabs_ds.slot_orders_ab_group`** (external parquet,
@@ -91,13 +92,13 @@ Session vocabulary (four distinct notions — don't mix them):
 ## SS03 dashboard exception: announced cutover + user-day groups
 
 The SS03 game-stats dataset (the dashboard's `ab_group` dimension) does NOT
-use the stored row-level label. Its stats ETL applies the user-day group
-policy (`GAME_CONFIG['SS03']['user_day_groups']` in
-`etl_game_stats_daily_by_user_group_cold_data.py`; the run/cohort variants
-opt out and keep the stored row-level label):
+use the stored row-level label: its `group_grain` is `"user_day"` in
+`group_policy.SLOT_GROUP_POLICY` (the stats job consumes the recipe via
+`group_policy.slot_grouping`; the run/cohort variants always keep the
+stored row-level per-bet label):
 
 - **Cutover**: the game team's ANNOUNCED start, 2026-08-03 16:00 PDT =
-  **2026-08-03 23:00 UTC** (`spark_etl_common.SS03_AB_GROUP_ANNOUNCED_START_UTC`),
+  **2026-08-03 23:00 UTC** (`group_policy.SS03_AB_GROUP_ANNOUNCED_START_UTC`),
   not the empirical 05:30-Beijing constant — bets in the ~1.5h between the
   serving flip and the announced time keep stale partition_ab labels by
   product decision. The label is re-derived from `partition_ab_label` /

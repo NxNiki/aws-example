@@ -52,7 +52,7 @@ from textwrap import dedent
 
 # Ships via submit_py_files on SageMaker; for local runs/tests put
 # jobs/etl/sagemaker on the path first (the snapshot tests already do).
-from group_policy import SLOT_GROUP_POLICY, slot_day_group_case, slot_stored_label_case, ss03_bet_ab_group_sql
+from group_policy import slot_grouping, slot_stored_label_case
 from pyspark.sql import functions as F
 from spark_etl_common import (
     BJ_UTC_OFFSET_HOURS,
@@ -170,13 +170,6 @@ def _mathtable_run_ctes(day_window: str, min_run: int) -> str:
         )"""
 
 
-def _user_day_groups(game_id: str, min_mathtable_run: int, ab_group: str) -> bool:
-    """SS03's standing user-day group policy; the run/cohort variants read
-    the stored row-level label on purpose (the AI-combo dashboard's
-    semantics), so they opt out."""
-    return SLOT_GROUP_POLICY[game_id]["user_day_groups"] and not (min_mathtable_run or ab_group)
-
-
 def generate_query(
     stats_agg_col: str,
     game_id: str,
@@ -193,7 +186,7 @@ def generate_query(
     ``activity_date`` is always the SESSION-START Beijing date (bet_session,
     docs/ab_group_policy.md "Day basis"). The game's group policy comes from
     ``group_policy.SLOT_GROUP_POLICY``; the run/cohort variants keep the
-    stored row-level label (see ``_user_day_groups``).
+    stored row-level label (``group_policy.slot_grouping``).
 
     Translation notes versus the Redshift dialect: BJ time is
     ``created_at + 8h`` (session timezone is UTC); ``EXTRACT(EPOCH FROM
@@ -211,15 +204,13 @@ def generate_query(
     # on, computes runs over the cohort's own bet stream only (the stored
     # slot_orders_ab_group label is already policy-correct).
     ab_where = f"\n                AND t.ab_group = '{ab_group}'" if ab_group else ""
-    user_day_groups = _user_day_groups(game_id, min_mathtable_run, ab_group)
-    group_source_col = "t.partition_ab_label" if user_day_groups else "t.ab_group"
+    group_source_col, bet_label_case, day_collapse_case = slot_grouping(
+        game_id, row_level=bool(min_mathtable_run or ab_group)
+    )
     day_cols = f"""CAST({sess_bj} AS DATE) AS activity_date,
                 CAST(DATE_TRUNC('week', {sess_bj}) AS DATE) AS activity_week,
                 CAST(DATE_TRUNC('month', {sess_bj}) AS DATE) AS activity_month"""
-    if user_day_groups:
-        # SS03-only group policy: the label is re-derived under the ANNOUNCED
-        # cutover from partition_ab_label, and each user-day collapses to one
-        # label (a single AI bet claims the whole session-day).
+    if day_collapse_case:
         bets_chain = f"""bets_labeled AS (
             SELECT
                 t.user_id,
@@ -231,7 +222,7 @@ def generate_query(
                 t.bet_type,
                 t.actual_payout - t.bet_amount AS profit,
                 {day_cols},
-                {ss03_bet_ab_group_sql("t.partition_ab_label", "t.user_id", "t.created_at")} AS bet_ab_group
+                {bet_label_case} AS bet_ab_group
             FROM session_days AS t
         ),
 
@@ -248,7 +239,7 @@ def generate_query(
                 t.activity_date,
                 t.activity_week,
                 t.activity_month,
-                {slot_day_group_case("t.bet_ab_group")} AS ab_group
+                {day_collapse_case} AS ab_group
             FROM bets_labeled AS t
         )"""
     else:
@@ -527,9 +518,8 @@ def main():
     # Reading inside game_id=<G>/ pins the game by path (no game_id column
     # inside, matching REQUIRED_COLUMNS).
     bet_order = spark.read.parquet(f"{args.input_root}/game_id={args.game_id}")
-    required = REQUIRED_COLUMNS + (
-        ["partition_ab_label"] if _user_day_groups(args.game_id, args.min_mathtable_run, args.ab_group) else []
-    )
+    group_source_col = slot_grouping(args.game_id, row_level=bool(args.min_mathtable_run or args.ab_group))[0]
+    required = REQUIRED_COLUMNS + (["partition_ab_label"] if group_source_col == "t.partition_ab_label" else [])
     check_schema(bet_order, required, table_name="slot_orders_ab_group orders")
 
     for level in levels:

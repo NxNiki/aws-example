@@ -29,16 +29,16 @@ AB_GROUP_DIGIT_POLICY_START_BJ = "2026-08-04 05:30:00"
 SS03_AB_GROUP_ANNOUNCED_START_UTC = "2026-08-03 23:00:00"
 
 # Per-game policy. ab_tests: whether the game HAS AB test arms (without them
-# the A/B labels fold into Default). user_day_groups: ONE label per user-day
-# (re-derived under the announced cutover; a single higher-tier bet claims
-# the whole session-day) instead of the stored per-bet label — SS03's
-# dashboard policy; the run/cohort variants opt out in the job.
+# the A/B labels fold into Default). group_grain: "bet" = every bet keeps
+# its stored per-bet label; "user_day" = ONE label per (user, session-day),
+# re-derived under the announced cutover — a single higher-tier bet claims
+# the whole day (SS03's dashboard policy).
 SLOT_GROUP_POLICY = {
-    "SS01": {"ab_tests": False, "user_day_groups": False},
-    "SS01A": {"ab_tests": False, "user_day_groups": False},
-    "SS02": {"ab_tests": False, "user_day_groups": False},
-    "SS03": {"ab_tests": True, "user_day_groups": True},
-    "SS06": {"ab_tests": True, "user_day_groups": False},
+    "SS01": {"ab_tests": False, "group_grain": "bet"},
+    "SS01A": {"ab_tests": False, "group_grain": "bet"},
+    "SS02": {"ab_tests": False, "group_grain": "bet"},
+    "SS03": {"ab_tests": True, "group_grain": "user_day"},
+    "SS06": {"ab_tests": True, "group_grain": "bet"},
 }
 
 # User-day collapse priority (highest first; 'Default' is the implicit last).
@@ -97,6 +97,26 @@ def ss03_bet_ab_group_sql(ab_label_expr: str, user_id_expr: str, utc_ts_expr: st
             WHEN {ab_label_expr} = '{AB_TEST_GROUP_B}' THEN 'AB_TEST_B'
             ELSE 'Default'
         END"""
+
+
+def slot_grouping(game_id: str, row_level: bool = False):
+    """The game's complete grouping recipe for the stats job.
+
+    Returns ``(source_col, bet_label_case, day_collapse_case)``:
+    ``source_col`` is the column the job selects from the orders dataset;
+    when the last two are None the stored per-bet label applies
+    (``slot_stored_label_case``), otherwise each bet gets ``bet_label_case``
+    and every (user, session-day) collapses via ``day_collapse_case``.
+    ``row_level=True`` (the run/cohort variants, i.e. the AI-combo dataset)
+    always uses the stored per-bet label regardless of the game's grain.
+    A future game with a different user-day rule extends the branch below."""
+    if row_level or SLOT_GROUP_POLICY[game_id]["group_grain"] == "bet":
+        return "t.ab_group", None, None
+    return (
+        "t.partition_ab_label",
+        ss03_bet_ab_group_sql("t.partition_ab_label", "t.user_id", "t.created_at"),
+        slot_day_group_case("t.bet_ab_group"),
+    )
 
 
 def slot_stored_label_case(game_id: str) -> str:
