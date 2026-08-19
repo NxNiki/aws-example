@@ -120,8 +120,8 @@ Manual `*_submit.py` runs upload the current local file and are unaffected.
 
 ## Changing the policy again
 
-1. Update `fish_group_tag_sql` (and, if the priority changes,
-   `FISH_GROUP_TAG_PRIORITY`) in `spark_etl_common.py`; extend
+1. Update the `FM01` entry in `group_policy.py` (branches and, if the
+   priority changes, `collapse_priority`); extend
    `tests/unit/test_fish_group_tag.py`.
 2. Rewrite the bullets dataset for the affected window (full history:
    `etl_fish_bullets_group_tag_submit.py --start 2025-01-01`).
