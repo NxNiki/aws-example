@@ -195,10 +195,10 @@ def test_slot_orders_query_composition():
 
 
 def test_ab_group_policy_timestamp_gate():
-    """AB groups: partition_ab ids before the empirically-located cutover
-    (2026-08-04 05:30 Beijing = 2026-08-03 21:30 UTC — the deploy hour where
-    mathtable serving flips), user-id last digit (0-3 Default, 4-5 A, 6-7 B,
-    8-9 AI) after. Rows here carry UTC timestamps."""
+    """AB groups: partition_ab ids before the digit-policy cutover
+    (2026-08-04 05:30 Beijing = 2026-08-03 21:30 UTC; how the moment was
+    located: docs/ab_group_policy.md), user-id last digit (0-3 Default,
+    4-5 A, 6-7 B, 8-9 AI) after. Rows here carry UTC timestamps."""
     rows = [
         # Before the cutover the digit is ignored — only the id counts
         # (including the early BJ hours of 08-04, which a date gate mislabels).

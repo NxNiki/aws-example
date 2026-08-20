@@ -124,7 +124,8 @@ keep the stored row-level per-bet label):
 - **Cutover**: the game team's ANNOUNCED start, 2026-08-03 16:00 PDT =
   **2026-08-03 23:00 UTC** (`group_policy.SS03_AB_GROUP_ANNOUNCED_START_UTC`),
   not the empirical 05:30-Beijing constant — bets in the ~1.5h between the
-  serving flip and the announced time keep stale partition_ab labels by
+  digit-policy serving switch and the announced time keep stale
+  partition_ab labels by
   product decision. The label is re-derived from `partition_ab_label` /
   `user_id` / `created_at` per the `SS03` branches in `group_policy.py`.
 - **Old-era collapse**: each (user, session-day) gets ONE label, priority
