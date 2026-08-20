@@ -36,7 +36,11 @@ TRUSTED_SPARK_ROLE = "arn:aws:iam::338568447110:role/service-role/AmazonSageMake
 
 # Container-side helpers shared by every Spark job; ship with each submit via
 # ``processor.run(..., submit_py_files=SPARK_COMMON_PY_FILES)``.
-SPARK_COMMON_PY_FILES = [f"{LOCAL_ROOT}/jobs/etl/sagemaker/spark_etl_common.py"]
+SPARK_COMMON_PY_FILES = [
+    f"{LOCAL_ROOT}/jobs/etl/sagemaker/spark_etl_common.py",
+    f"{LOCAL_ROOT}/jobs/etl/sagemaker/group_policy.py",
+    f"{LOCAL_ROOT}/jobs/etl/sagemaker/group_policy_sql.py",
+]
 
 SPARK_FRAMEWORK_VERSION = "3.3"  # container runs Python 3.9 — job scripts must stay 3.9-compatible
 DEFAULT_INSTANCE_TYPE = "ml.m5.4xlarge"  # 16 vCPU, 64 GB per node

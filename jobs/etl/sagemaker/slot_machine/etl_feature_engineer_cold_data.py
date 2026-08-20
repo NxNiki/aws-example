@@ -102,7 +102,7 @@ REQUIRED_COLUMNS = [
 
 # ai_group slice -> (output_prefix, ai_group filter SQL, bin sizes, selected label).
 # Mirrors jobs/etl/redshift/ss03_mahjiang_streak/etl_feature_engineer.py GROUPS;
-# the ai_group label itself is the date-gated policy (ab_group_sql).
+# the ai_group label itself is the date-gated policy (group_policy.py).
 GROUPS = {
     "default": ("output_ss03_feature_engineer", "ai_group = 'Default'", [50, 70], "Default"),
     "ai": ("output_ss03_feature_engineer_ai", "ai_group = 'AI'", [30, 50, 70, 100], "AI"),

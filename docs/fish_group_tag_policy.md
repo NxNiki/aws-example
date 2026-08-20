@@ -44,10 +44,27 @@ Key properties:
 - The old dashboard ladder vocabulary (`ab_test_group`: literal RC_*/CR_*
   labels plus the `RC_ALL`/`CR_ALL` rollup) is retired.
 
-The CASE lives in one place: `jobs/etl/sagemaker/spark_etl_common.py::
-fish_group_tag_sql` (the `RC_/CR_FISHING_` prefixes are `substr` tests —
+The policy is DECLARED in `jobs/etl/sagemaker/group_policy.py` (`FM01`
+entry) and compiled by `group_policy_sql.group_label_sql` (the `RC_/CR_FISHING_` prefixes are `substr` tests —
 the escaped-underscore LIKE — and rule 4's unescaped `_` wildcard also
 matches the literal underscore in `RISK_CONTROLLED`).
+
+## Session conventions
+
+The stats grain uses the platform **`bet_session`** for day attribution:
+`activity_date` is the Beijing date the bullet's session STARTED (a session
+breaks after 30 minutes without a bet), so cross-midnight play stays on the
+day it started — same rule as every slot game-stats dataset. The
+**fish_hunter HMM feature jobs** (`feature_engineer_{daily,life_cycle}.py`)
+instead attribute each bet to the Beijing date its **`hmm_session`** started
+(180 s without a bet ends the session, `SESSION_BREAK_SECONDS`). Note this
+Beijing dating is specific to the fish HMM jobs — the slot/MAB feature ETL
+(`etl_feature_engineer_cold_data.py`) keys `session_start_date` /
+`activity_date` by **UTC** dates (its original design; they are stable
+incremental-merge keys, so changing the timezone is a semantic rewrite).
+The repo's full session vocabulary (`bet_session`
+30 min, `agg_session` consecutive-N bets, `ai_session` 12 h, `hmm_session`
+180 s) is tabled in [`ab_group_policy.md`](ab_group_policy.md).
 
 ## User-day collapse (dashboard cohorts)
 
@@ -91,6 +108,33 @@ Downstream consumers: the daily/weekly/monthly stats ETL
 two feature-engineering jobs (`jobs/fish_hunter/feature_engineer_daily.py`,
 `feature_engineer_life_cycle.py`).
 
+### Columns (`bituslabs_ds.fish_bullets_group_tag`)
+
+| column | type | description |
+| --- | --- | --- |
+| `period` | string, partition | Beijing calendar date of the bullet, `yyyy-MM-dd` (string form of `activity_date`) — filter on it to prune partitions |
+| `user_id` | bigint | player id (last digit drives the retention-cohort rule) |
+| `bullet_id` | bigint | the bullet id; ordering tiebreak for sequence logic |
+| `event_id` | string | raw event id (secondary ordering key in the feature jobs) |
+| `room_id` | string | game room the bullet was fired in |
+| `strategy_name` | string | serving strategy — the group policy's input; kept so `group_tag` stays auditable |
+| `event_timestamp` | timestamp | bullet event time, **UTC** — the retention gate reads this column |
+| `created_at` | timestamp | record creation time, **UTC** — drives `activity_date`/`period` and sessionization |
+| `bet` | double | bullet stake |
+| `payout` | double | payout |
+| `profit` | double | as stored (may be NULL — consumers fall back to `payout - bet`) |
+| `prev_balance` | double | balance before the bullet |
+| `curr_balance` | double | balance after the bullet (deposit/withdraw detection compares across rows) |
+| `fish_value` | double | target fish value (the dashboard's fish-level ranges bucket this) |
+| `killed` | int | 1 if the bullet killed the fish, else 0 |
+| `bullet_level` | string | weapon/bullet level, as stored |
+| `multiplier` | string | bet multiplier, as stored |
+| `op_code` | string | operation code; test codes (B26/TST/TSB/TSO) are dropped at the source |
+| `currency_type` | string | e.g. `CNY` — NOT pre-filtered; filter in queries |
+| `game_id` | string | `FM01` (kept as a column; the dataset is not game-partitioned) |
+| `group_tag` | string | the derived policy label (`boost_pool`/`dynamic_rtp`/`risk_control`/`retention`/`default`) — use this, never re-derive from `strategy_name` |
+| `activity_date` | date | Beijing calendar date of `created_at` (the bullet's own date — NOT session-start; the session-day attribution exists only in the stats outputs) |
+
 ## How the schedule picks up code changes
 
 Same rule as the slot pipeline (see `ab_group_policy.md`): the EventBridge
@@ -103,8 +147,8 @@ Manual `*_submit.py` runs upload the current local file and are unaffected.
 
 ## Changing the policy again
 
-1. Update `fish_group_tag_sql` (and, if the priority changes,
-   `FISH_GROUP_TAG_PRIORITY`) in `spark_etl_common.py`; extend
+1. Update the `FM01` entry in `group_policy.py` (branches and, if the
+   priority changes, `collapse_priority`); extend
    `tests/unit/test_fish_group_tag.py`.
 2. Rewrite the bullets dataset for the affected window (full history:
    `etl_fish_bullets_group_tag_submit.py --start 2025-01-01`).

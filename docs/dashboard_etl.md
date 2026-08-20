@@ -20,7 +20,7 @@ Each game writes three datasets to
 
 | Dataset | Period grain (`activity_date`) |
 |---|---|
-| `daily_stats/` | Beijing calendar day (`DATE_START_HOUR` = 0 → midnight boundary) |
+| `daily_stats/` | Beijing SESSION-START date (bet_session = 30 min without a bet; see `ab_group_policy.md` "Day basis") |
 | `weekly_stats/` | Monday-aligned calendar week |
 | `monthly_stats/` | calendar month |
 
@@ -146,19 +146,15 @@ cells) use the same per-user samples.
 
 ## Known limitations / future work
 
-- **Calendar-day attribution.** Bets, deltas, DAU and the retention cohorts
-  all bucket by the bet's own Beijing calendar day. A session spanning
-  midnight is split across two days: its bets count in both days, its
-  cross-midnight delta is dropped (see above), and a through-midnight player
-  "returns on day 1" for retention purposes even though it was one sitting.
-  If this ever matters, the candidate change is **session-start attribution**
-  (all bets of a session bucket to the session's start date) — a deliberate,
-  breaking semantics change: it redefines DAU / daily totals / retention and
-  breaks reconciliation against plain calendar-day `fct_bet_orders` queries,
-  so it needs its own migration and validation pass. A lighter alternative is
-  shifting the day boundary via `DATE_START_HOUR` (e.g. 4 → days run
-  4am–4am), which keeps most late-night sessions whole for every metric at
-  once.
+- **Session-start attribution caveat.** Since 2026-08, all game-stats
+  datasets bucket by the Beijing SESSION-START date (bet_session, 30 min —
+  `ab_group_policy.md` "Day basis"), so cross-midnight sessions stay whole
+  for every metric. Consequence: per-day comparisons against plain
+  calendar-day queries over the raw orders/bullets differ by the
+  cross-midnight tails (global totals still conserve exactly); the
+  raw-derived Athena tables (`slot_orders_ab_group`,
+  `fish_bullets_group_tag`) keep the bet's own calendar date in
+  `activity_date`/`period`.
 - ss01/ss02's `*_pa` variant jobs still produce the legacy single-column
   (`ai_group`) shape and are excluded from the dashboard configs until
   migrated.

@@ -8,7 +8,7 @@ behind the policy cutover timestamp.
 
 | Era | Assignment rule |
 | --- | --- |
-| before 2026-08-04 05:30 Beijing | first element of the raw `partition_ab` JSON: the AI/A/B group ids (see `spark_etl_common.py`), anything else → `Default` |
+| before 2026-08-04 05:30 Beijing | first element of the raw `partition_ab` JSON: the AI/A/B group ids (declared in `group_policy.py`), anything else → `Default` |
 | from 2026-08-04 05:30 Beijing | **last digit of `user_id`**: 0–3 `Default`, 4–5 `AB_TEST_A`, 6–7 `AB_TEST_B`, 8–9 `AI` |
 
 The switch was announced on 2026-08-03 (LA time). After the cutover the
@@ -16,10 +16,12 @@ The switch was announced on 2026-08-03 (LA time). After the cutover the
 assignment** — post-cutover it agrees with the digit rule only at chance
 level (~30%), so it must never be used for dates past the cutover.
 
-Both rules live in one place: `jobs/etl/sagemaker/spark_etl_common.py::
-ab_group_sql` (a timestamp-gated SQL CASE) with the cutover constant
-`AB_GROUP_DIGIT_POLICY_START_BJ`. Games without AB test groups (SS01, SS01A)
-collapse the test digits / legacy test ids into `Default`.
+Both rules are DECLARED in `jobs/etl/sagemaker/group_policy.py` (the
+per-game group-policy config: ordered branches of label / database column /
+values / effective UTC range) and compiled into SQL by
+`group_policy_sql.py`; ETL scripts carry no policy parameters. Games
+without AB test groups (SS01, SS01A, SS02) fold the test labels into
+`Default` via their policies' `fold` map.
 
 ## How the cutover timestamp was determined
 
@@ -52,8 +54,9 @@ bets carry a best-effort boundary.
 `jobs/etl/sagemaker/slot_machine/etl_slot_orders_ab_group.py` copies the raw
 warehouse `bet_order` rows for the five slot games and adds the
 policy-correct `ab_group` (plus `partition_ab_label` and the Beijing
-`activity_date`). Rows are otherwise unfiltered — `status`, `op_code`,
-`currency_type` stay as columns for downstream queries to filter.
+`activity_date`). Incomplete bets (`status != 'COMPLETED'`) and test
+op-codes are dropped at the source; `currency_type` stays a column for
+downstream queries to filter.
 
 - Dataset: `s3://bituslabs-team-ai/etl-results/jobs/output_slot_orders_ab_group/orders/game_id=<G>/period=YYYY-MM-DD/`
 - Athena: **`bituslabs_ds.slot_orders_ab_group`** (external parquet,
@@ -69,6 +72,72 @@ Downstream consumers — the per-game game-stats ETL
 feature-engineer (`etl_feature_engineer_cold_data.py`) — read this dataset
 and use the stored `ab_group` directly. The policy is derived exactly once;
 nothing downstream touches `partition_ab`.
+
+### Columns (`bituslabs_ds.slot_orders_ab_group`)
+
+| column | type | description |
+| --- | --- | --- |
+| `game_id` | string, partition | `SS01` / `SS01A` / `SS02` / `SS03` / `SS06` — filter on it to prune partitions |
+| `period` | string, partition | Beijing calendar date of the bet, `yyyy-MM-dd` (string form of `activity_date`) — filter on it to prune partitions |
+| `spin_id` | string | the bet/spin id; ordering tiebreak for sequence logic |
+| `user_id` | bigint | player id (last digit drives the digit-era group) |
+| `created_at` | timestamp | bet creation time, **UTC** — use for timestamp-precise filters (e.g. the cutovers) |
+| `math_table_id` | string | mathtable served for the spin, as stored (SS02's FourScatter re-attribution happens downstream, not here) |
+| `bet_type` | string | `BASE` (paid spin) or `FREE` (free-game spin) |
+| `bet_amount` | double | stake |
+| `actual_payout` | double | payout |
+| `balance_after_bet` | double | balance after the stake was deducted |
+| `balance_after_payout` | double | balance after the payout landed |
+| `currency_type` | string | e.g. `CNY` — NOT pre-filtered; filter in queries |
+| `status` | string | always `COMPLETED` (incomplete bets are dropped at the source) |
+| `op_code` | string | bet operation code; test codes (B26/TST/TSB/TSO) are dropped at the source |
+| `partition_ab_label` | string | first element of the raw `partition_ab` JSON — STALE after the cutover; kept for the old-era derivation and audit only |
+| `ab_group` | string | the derived group label (`Default`/`AB_TEST_A`/`AB_TEST_B`/`AI`) under the EMPIRICAL cutover — use this, never `partition_ab_label`, for group membership |
+| `activity_date` | date | Beijing calendar date of `created_at` (the bet's own date — NOT session-start; the session-day attribution exists only in the stats outputs) |
+
+## Day basis: session-start dates (all game-stats datasets)
+
+Every game-stats dataset (all five slot games, both SS03 variants, and
+fish_hunter) computes `activity_date` as the SESSION-START Beijing date,
+using the platform's **bet_session** (30 minutes without a bet ends the
+session) — the daily-stats midnight fix: cross-midnight play stays on the
+day it started. This is pure day attribution, independent of group labeling
+(a bet's label never depends on which day bucket it lands in).
+
+Session vocabulary (four distinct notions — don't mix them):
+
+| name | break rule | used for |
+| --- | --- | --- |
+| `bet_session` | 30 min without a bet | `activity_date` attribution in ALL game-stats datasets; delta-t caps (`DELTA_T_MAX_SECONDS`) |
+| `agg_session` | consecutive 30/40/50-bet windows | AI aggregation features |
+| `ai_session` | 12 h without a bet | AI modulation only (ss03 feature ETL `SESSION_BREAK_SECONDS`; multi-day sessions exist). NOTE: that ETL's `session_start_date`/`activity_date` are **UTC** dates, not Beijing — original design, stable incremental keys |
+| `hmm_session` | 180 s without a bet | fish_hunter feature engineering only: `bet_date` attribution for the HMM lifecycle features (`jobs/fish_hunter/feature_engineer_{daily,life_cycle}.py` `SESSION_BREAK_SECONDS`) |
+
+## SS03 dashboard exception: announced cutover + user-day groups
+
+The SS03 game-stats dataset (the dashboard's `ab_group` dimension) does NOT
+use the stored row-level label: its policy in `group_policy.GROUP_POLICY`
+declares its own branches (announced cutover) plus `collapse: True` — ONE
+label per user-day, priority = the order labels first appear in the
+branches. The stats job interpolates the single compiled expression from
+`group_policy_sql.slot_group_expr`; the run/cohort variants always keep the
+stored row-level per-bet label:
+
+- **Cutover**: the game team's ANNOUNCED start, 2026-08-03 16:00 PDT =
+  **2026-08-03 23:00 UTC** (`group_policy.SS03_AB_GROUP_ANNOUNCED_START_UTC`),
+  not the empirical 05:30-Beijing constant — bets in the ~1.5h between the
+  digit-policy serving switch and the announced time keep stale
+  partition_ab labels by
+  product decision. The label is re-derived from `partition_ab_label` /
+  `user_id` / `created_at` per the `SS03` branches in `group_policy.py`.
+- **Old-era collapse**: each (user, session-day) gets ONE label, priority
+  `AI > AB_TEST_A > AB_TEST_B > Default` — old-era assignment was per-bet,
+  so a single AI bet claims the user's whole day. Digit-era labels are
+  user-stable, so the collapse is a no-op there.
+
+Everything else — the orders dataset, the other four games' stats, the ss03
+feature ETL (`ai_group`) and the AI-run30 combo dataset — keeps the stored
+row-level `ab_group` under the empirical cutover.
 
 ## Transition-day handling
 

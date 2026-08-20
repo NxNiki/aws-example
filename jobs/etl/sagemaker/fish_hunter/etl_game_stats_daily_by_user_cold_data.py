@@ -9,7 +9,10 @@ raw warehouse or Redshift ``public.bullet``.
 Output datasets: ``<output-root>/{daily,weekly,monthly}_stats/period=YYYY-MM-DD/``
 where ``period`` is the day / week start / month start of ``activity_date``.
 
-Behavior: one row per (user, period, group_tag, fish_value) for EVERY betting
+Behavior: ``activity_date`` is the SESSION-START Beijing date (bet_session =
+30 min without a bet) — the daily-stats midnight fix, so cross-midnight play
+stays on the day it started. One row per (user, period, group_tag, fish_value)
+for EVERY betting
 user -- not only fish-killers (kill-specific metrics are NULL/0 for non-killers;
 the ``user_killed_fish`` flag segments killers). ``group_tag`` collapses each
 (user, day) to exactly ONE group: a single bullet in a higher tier claims the
@@ -34,17 +37,17 @@ import argparse
 from datetime import date, datetime, time, timedelta
 from textwrap import dedent
 
-from pyspark.sql import functions as F
-
 # Ships via submit_py_files on SageMaker; for local runs/tests put
 # jobs/etl/sagemaker on the path first (the snapshot tests already do).
+from group_policy_sql import collapse_case_groupby
+from pyspark.sql import functions as F
 from spark_etl_common import (
     BJ_UTC_OFFSET_HOURS,
     beijing_today,
     build_spark_session,
     check_schema,
-    fish_group_tag_day_case,
     prune_period_days,
+    session_day_ctes,
 )
 
 DELTA_T_MAX_SECONDS = 1800
@@ -99,10 +102,24 @@ def generate_query(
     ``EXTRACT(EPOCH FROM interval)`` becomes a ``CAST(ts AS DOUBLE)``
     difference to keep the sub-second deltas that DELTA_T_MIN_SECONDS guards.
     """
+    sess_bj = f"b.session_start_ts + INTERVAL '{BJ_UTC_OFFSET_HOURS}' HOUR"
     return dedent(
         f"""
         -- 1. FETCH RAW DATA (Keep strictly RAW columns to enable partition pruning)
-        WITH base_data AS (
+        WITH filtered AS (
+            SELECT b.*
+            FROM bullet_raw b
+            WHERE
+                b.currency_type = '{currency}'
+                AND b.game_id = '{game_id}'
+                AND CAST(b.created_at AS TIMESTAMP) >= TIMESTAMP '{scan_start_utc:%Y-%m-%d %H:%M:%S}'
+                AND CAST(b.created_at AS TIMESTAMP) < TIMESTAMP '{scan_end_utc:%Y-%m-%d %H:%M:%S}'
+        ),
+
+        {session_day_ctes("filtered", "bullet_id")},
+
+        -- activity_date = session-start BJ date (docs/ab_group_policy.md).
+        base_data AS (
             SELECT
                 b.user_id,
                 b.room_id,
@@ -118,22 +135,17 @@ def generate_query(
                 -- self-contained, so incremental pulls and full reloads agree);
                 -- bj_date_last_bet below stays cross-day on purpose.
                 LAG(CAST(b.event_timestamp AS TIMESTAMP)) OVER (
-                    PARTITION BY b.user_id, CAST(CAST(b.created_at AS TIMESTAMP) + INTERVAL '{BJ_UTC_OFFSET_HOURS}' HOUR AS DATE)
+                    PARTITION BY b.user_id, CAST({sess_bj} AS DATE)
                     ORDER BY b.bullet_id, CAST(b.event_timestamp AS TIMESTAMP)
                 ) AS prev_bet_time,
                 LAG(CAST(b.bet AS DOUBLE)) OVER (
-                    PARTITION BY b.user_id, CAST(CAST(b.created_at AS TIMESTAMP) + INTERVAL '{BJ_UTC_OFFSET_HOURS}' HOUR AS DATE)
+                    PARTITION BY b.user_id, CAST({sess_bj} AS DATE)
                     ORDER BY b.bullet_id, CAST(b.event_timestamp AS TIMESTAMP)
                 ) AS prev_bet_amount,
-                CAST(CAST(b.created_at AS TIMESTAMP) + INTERVAL '{BJ_UTC_OFFSET_HOURS}' HOUR AS DATE) AS activity_date,
-                CAST(DATE_TRUNC('week', CAST(b.created_at AS TIMESTAMP) + INTERVAL '{BJ_UTC_OFFSET_HOURS}' HOUR) AS DATE) AS activity_week,
-                CAST(DATE_TRUNC('month', CAST(b.created_at AS TIMESTAMP) + INTERVAL '{BJ_UTC_OFFSET_HOURS}' HOUR) AS DATE) AS activity_month
-            FROM bullet_raw b
-            WHERE
-                b.currency_type = '{currency}'
-                AND b.game_id = '{game_id}'
-                AND CAST(b.created_at AS TIMESTAMP) >= TIMESTAMP '{scan_start_utc:%Y-%m-%d %H:%M:%S}'
-                AND CAST(b.created_at AS TIMESTAMP) < TIMESTAMP '{scan_end_utc:%Y-%m-%d %H:%M:%S}'
+                CAST({sess_bj} AS DATE) AS activity_date,
+                CAST(DATE_TRUNC('week', {sess_bj}) AS DATE) AS activity_week,
+                CAST(DATE_TRUNC('month', {sess_bj}) AS DATE) AS activity_month
+            FROM session_days b
         ),
 
         -- 2. DETERMINE USER DAILY GROUP (Logic applied inside MAX)
@@ -143,7 +155,7 @@ def generate_query(
                 activity_date,
                 activity_week,
                 activity_month,
-                {fish_group_tag_day_case("group_tag")} AS group_tag,
+                {collapse_case_groupby("FM01", "group_tag")} AS group_tag,
                 LAG(activity_date) OVER (PARTITION BY user_id ORDER BY activity_date) AS bj_date_last_bet
             FROM base_data
             GROUP BY user_id, activity_date, activity_week, activity_month
@@ -532,11 +544,13 @@ def main():
         effective_start = period_start(stats_agg_col, output_start)
         # Raw scan window in UTC: BJ midnight minus the fixed offset. The
         # lookback matches the Redshift job so start-boundary kill streaks
-        # (the only cross-day sequence metric) are complete.
+        # (the only cross-day sequence metric) are complete; the end extends
+        # one day so sessions starting on the last output day are whole
+        # (session-start day attribution).
         scan_start_utc = datetime.combine(effective_start - timedelta(days=SCAN_LOOKBACK_DAYS), time()) - timedelta(
             hours=BJ_UTC_OFFSET_HOURS
         )
-        scan_end_utc = datetime.combine(output_end, time()) - timedelta(hours=BJ_UTC_OFFSET_HOURS)
+        scan_end_utc = datetime.combine(output_end + timedelta(days=1), time()) - timedelta(hours=BJ_UTC_OFFSET_HOURS)
 
         raw = prune_period_days(bullet, scan_start_utc.date(), scan_end_utc.date(), margin_days=1)
         if raw.limit(1).count() == 0:

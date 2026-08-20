@@ -17,7 +17,7 @@ INPUT_ROOT = f"s3://{S3_BUCKET}/etl-results/jobs/output_fish_bullets_group_tag/b
 OUTPUT_ROOT = f"s3://{S3_BUCKET}/etl-results/jobs/output_fish_hunter_v3_cold_data"
 
 OUTPUT_START = "2026-01-24"  # keep rows with activity date >= this
-OUTPUT_END = "2026-08-15"  # exclusive; align to Monday / 1st so weekly/monthly periods are complete
+OUTPUT_END = "2026-08-19"  # exclusive; align to Monday / 1st so weekly/monthly periods are complete
 AGG = "all"  # all | daily | weekly | monthly
 
 # Shuffle spill from the per-user window functions lands on local disk; full
