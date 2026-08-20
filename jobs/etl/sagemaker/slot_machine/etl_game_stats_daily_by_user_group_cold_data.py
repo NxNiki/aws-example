@@ -28,10 +28,12 @@ overwrites exactly the ``period=`` directories it produced. Sequence metrics
 (delta-t / delta-bet / mathtable_change / FG trigger) are DAY-partitioned, so
 windowed runs compose exactly.
 
-Group policy comes from ``group_policy.py`` (every game's rules in one
-config module): SS03's dashboard uses user-day groups under the announced
-cutover, every other game the stored row-level ``ab_group``; the run/cohort
-variants always keep the stored label. Details: docs/ab_group_policy.md.
+Group policy is declared per game in ``group_policy.py`` and compiled by
+``group_policy_sql.slot_group_expr`` — this job interpolates ONE expression
+and knows nothing else about grouping. (SS03 declares its own branches
+under the announced cutover plus a per-user-day collapse; the other games
+read the stored per-bet ``ab_group``; the run/cohort variants always keep
+the stored label.) Details: docs/ab_group_policy.md.
 
 ``--min-mathtable-run N`` keeps only bets inside a stretch of >= N consecutive
 same-mathtable bets (per user per Beijing day) — the ss03 AI mathtable-combo
@@ -52,7 +54,7 @@ from textwrap import dedent
 
 # Ships via submit_py_files on SageMaker; for local runs/tests put
 # jobs/etl/sagemaker on the path first (the snapshot tests already do).
-from group_policy_sql import slot_grouping, slot_stored_label_case
+from group_policy_sql import slot_group_expr
 from pyspark.sql import functions as F
 from spark_etl_common import (
     BJ_UTC_OFFSET_HOURS,
@@ -95,6 +97,7 @@ REQUIRED_COLUMNS = [
     "actual_payout",
     "bet_type",
     "ab_group",
+    "partition_ab_label",
     "currency_type",
     "status",
     "op_code",
@@ -183,10 +186,12 @@ def generate_query(
 ) -> str:
     """Spark-SQL version of the per-game generate_query over ``bet_order_raw``.
 
-    ``activity_date`` is always the SESSION-START Beijing date (bet_session,
-    docs/ab_group_policy.md "Day basis"). The game's group policy comes from
-    ``group_policy.GROUP_POLICY``; the run/cohort variants keep the
-    stored row-level label (``group_policy_sql.slot_grouping``).
+    ``activity_date`` here is the SESSION-START Beijing date (bet_session,
+    docs/ab_group_policy.md "Day basis"; the feature ETLs use other
+    conventions). ``ab_group`` is entirely the policy's business:
+    ``group_policy_sql.slot_group_expr`` compiles the game's declaration
+    from ``group_policy.py`` (the run/cohort variants keep the stored
+    per-bet label).
 
     Translation notes versus the Redshift dialect: BJ time is
     ``created_at + 8h`` (session timezone is UTC); ``EXTRACT(EPOCH FROM
@@ -204,57 +209,21 @@ def generate_query(
     # on, computes runs over the cohort's own bet stream only (the stored
     # slot_orders_ab_group label is already policy-correct).
     ab_where = f"\n                AND t.ab_group = '{ab_group}'" if ab_group else ""
-    group_source_col, bet_label_case, day_collapse_case = slot_grouping(
-        game_id, row_level=bool(min_mathtable_run or ab_group)
-    )
-    day_cols = f"""CAST({sess_bj} AS DATE) AS activity_date,
+    ab_group_expr = slot_group_expr(game_id, f"CAST({sess_bj} AS DATE)", row_level=bool(min_mathtable_run or ab_group))
+    bets_chain = f"""bets AS (
+            SELECT
+                t.user_id,
+                t.spin_id,
+                t.created_at,
+                COALESCE(NULLIF(t.math_table_id, ''), '(none)') AS mathtable,
+                t.bet_amount,
+                t.actual_payout AS payout,
+                t.bet_type,
+                t.actual_payout - t.bet_amount AS profit,
+                CAST({sess_bj} AS DATE) AS activity_date,
                 CAST(DATE_TRUNC('week', {sess_bj}) AS DATE) AS activity_week,
-                CAST(DATE_TRUNC('month', {sess_bj}) AS DATE) AS activity_month"""
-    if day_collapse_case:
-        bets_chain = f"""bets_labeled AS (
-            SELECT
-                t.user_id,
-                t.spin_id,
-                t.created_at,
-                COALESCE(NULLIF(t.math_table_id, ''), '(none)') AS mathtable,
-                t.bet_amount,
-                t.actual_payout AS payout,
-                t.bet_type,
-                t.actual_payout - t.bet_amount AS profit,
-                {day_cols},
-                {bet_label_case} AS bet_ab_group
-            FROM session_days AS t
-        ),
-
-        bets AS (
-            SELECT
-                t.user_id,
-                t.spin_id,
-                t.created_at,
-                t.mathtable,
-                t.bet_amount,
-                t.payout,
-                t.bet_type,
-                t.profit,
-                t.activity_date,
-                t.activity_week,
-                t.activity_month,
-                {day_collapse_case} AS ab_group
-            FROM bets_labeled AS t
-        )"""
-    else:
-        bets_chain = f"""bets AS (
-            SELECT
-                t.user_id,
-                t.spin_id,
-                t.created_at,
-                COALESCE(NULLIF(t.math_table_id, ''), '(none)') AS mathtable,
-                t.bet_amount,
-                t.actual_payout AS payout,
-                t.bet_type,
-                t.actual_payout - t.bet_amount AS profit,
-                {day_cols},
-                {slot_stored_label_case(game_id)}
+                CAST(DATE_TRUNC('month', {sess_bj}) AS DATE) AS activity_month,
+                {ab_group_expr} AS ab_group
             FROM session_days AS t
         )"""
     bets_chain = f"""{session_day_ctes("bet_events", "spin_id")},
@@ -271,7 +240,8 @@ def generate_query(
                 CAST(t.bet_amount AS DOUBLE) AS bet_amount,
                 CAST(t.actual_payout AS DOUBLE) AS actual_payout,
                 t.bet_type,
-                {group_source_col}
+                t.ab_group,
+                t.partition_ab_label
             FROM
                 bet_order_raw AS t
             WHERE
@@ -518,9 +488,7 @@ def main():
     # Reading inside game_id=<G>/ pins the game by path (no game_id column
     # inside, matching REQUIRED_COLUMNS).
     bet_order = spark.read.parquet(f"{args.input_root}/game_id={args.game_id}")
-    group_source_col = slot_grouping(args.game_id, row_level=bool(args.min_mathtable_run or args.ab_group))[0]
-    required = REQUIRED_COLUMNS + (["partition_ab_label"] if group_source_col == "t.partition_ab_label" else [])
-    check_schema(bet_order, required, table_name="slot_orders_ab_group orders")
+    check_schema(bet_order, REQUIRED_COLUMNS, table_name="slot_orders_ab_group orders")
 
     for level in levels:
         stats_agg_col, job_name = AGG_LEVELS[level]

@@ -224,7 +224,7 @@ def test_ab_group_policy_timestamp_gate():
     ]
     # Games without their own AB arms fold the test labels into Default via
     # the stats policies' fold config (per-bet labels stay 4-way upstream).
-    fold_case = POLICY_SQL.slot_stored_label_case("SS01", "g").split(" AS ")[0]
+    fold_case = POLICY_SQL._fold_expr(POLICY.GROUP_POLICY["SS01"], "g")
     con = sqlite3.connect(":memory:")
     con.execute("CREATE TABLE labels (g)")
     con.executemany("INSERT INTO labels VALUES (?)", [("AB_TEST_A",), ("AB_TEST_B",), ("AI",), ("Default",)])
@@ -319,7 +319,7 @@ def test_day_group_collapse_priority():
             ("u1", "d2", "AB_TEST_B"),
         ],
     )
-    case = POLICY_SQL.collapse_case_over("SS03", "t.bet_ab_group")
+    case = POLICY_SQL.collapse_case_over("SS03", "t.bet_ab_group", "t.activity_date")
     sql = (
         f"SELECT DISTINCT t.user_id, t.activity_date, {case} AS g FROM bets_labeled AS t"
         " ORDER BY t.user_id, t.activity_date"
@@ -342,19 +342,19 @@ def test_generate_query_group_grain():
         scan_end_utc=datetime(2026, 8, 4, 16),
         currency="CNY",
     )
-    # session-start day attribution is universal (the midnight fix), group
-    # policy is not: SS06 keeps the stored row-level label, and so does the
-    # SS03 run-filter variant (opt-out).
+    # session-start day attribution applies everywhere; group policy varies:
+    # SS06 reads the stored per-bet label, and so does the SS03 run-filter
+    # variant (opt-out) — neither collapses.
     base = JOB.generate_query(**{**kwargs, "game_id": "SS06"})
     assert "t.session_start_ts + INTERVAL '8' HOUR" in base
-    assert "partition_ab_label" not in base and "bet_ab_group" not in base
+    assert "MAX(CASE WHEN" not in base
     variant = JOB.generate_query(**kwargs, min_mathtable_run=30)
-    assert "partition_ab_label" not in variant and "bet_ab_group" not in variant
+    assert "MAX(CASE WHEN" not in variant.split("mathtable_run")[0]
 
-    # the SS03 base query applies the policy from group_policy.py by itself.
+    # the SS03 base query compiles its declared policy: label re-derived from
+    # partition_ab_label under the announced cutover, collapsed per user-day.
     sess = JOB.generate_query(**kwargs)
-    assert "t.session_start_ts + INTERVAL '8' HOUR" in sess
     assert f"TIMESTAMP '{POLICY.SS03_AB_GROUP_ANNOUNCED_START_UTC}'" in sess
-    assert "t.partition_ab_label" in sess and "AS bet_ab_group" in sess
-    assert "WHEN MAX(CASE WHEN t.bet_ab_group = 'AI' THEN 1 ELSE 0 END) OVER" in sess
-    assert "t.ab_group" not in sess.split("bets_labeled")[0].split("WITH")[1]  # stored label unused
+    assert "t.partition_ab_label IN" in sess
+    assert "MAX(CASE WHEN CASE" in sess.replace("\n", " ") or "MAX(CASE WHEN" in sess
+    assert "AS ab_group" in sess

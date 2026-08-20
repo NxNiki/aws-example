@@ -31,6 +31,16 @@ def _branch_condition(branch: dict, col_exprs: dict, ts_expr: str) -> str:
     return " AND ".join(parts)
 
 
+def _collapse_priority(policy: dict) -> list:
+    """Collapse priority = the order labels first appear in ``branches``
+    (the default label is the implicit last tier)."""
+    seen: list = []
+    for b in policy["branches"]:
+        if b["label"] != policy["default"] and b["label"] not in seen:
+            seen.append(b["label"])
+    return seen
+
+
 def group_label_sql(policy_key: str, col_exprs: dict, ts_expr: str) -> str:
     """Row-level CASE assigning the policy's group label (first matching
     branch wins). ``col_exprs`` binds the config's logical column names to
@@ -46,10 +56,7 @@ def group_label_sql(policy_key: str, col_exprs: dict, ts_expr: str) -> str:
         END"""
 
 
-def slot_stored_label_case(policy_key: str, stored_expr: str = "t.ab_group") -> str:
-    """The stored per-bet label, remapped through the policy's ``fold`` (games
-    without their own AB arms fold the test labels into Default)."""
-    policy = GROUP_POLICY[policy_key]
+def _fold_expr(policy: dict, stored_expr: str) -> str:
     fold = policy.get("fold")
     if not fold:
         return stored_expr
@@ -60,17 +67,17 @@ def slot_stored_label_case(policy_key: str, stored_expr: str = "t.ab_group") -> 
         f"WHEN {stored_expr} IN ({', '.join(repr(s) for s in sorted(srcs))}) THEN '{target}'"
         for target, srcs in sorted(by_target.items())
     )
-    return f"CASE {whens} ELSE {stored_expr} END AS {policy['column_name']}"
+    return f"CASE {whens} ELSE {stored_expr} END"
 
 
-def collapse_case_over(policy_key: str, label_expr: str) -> str:
-    """ONE label per (user, activity_date) as a window expression: a single
-    bet in a higher-priority group claims the whole user-day."""
+def collapse_case_over(policy_key: str, label_expr: str, day_expr: str) -> str:
+    """ONE label per (user, day) as a window expression: a bet in a
+    higher-priority group claims the user's whole day."""
     policy = GROUP_POLICY[policy_key]
-    day = "PARTITION BY t.user_id, t.activity_date"
+    day = f"PARTITION BY t.user_id, {day_expr}"
     whens = "\n                ".join(
         f"WHEN MAX(CASE WHEN {label_expr} = '{g}' THEN 1 ELSE 0 END) OVER ({day}) = 1 THEN '{g}'"
-        for g in policy["collapse_priority"]
+        for g in _collapse_priority(policy)
     )
     return f"""CASE
                 {whens}
@@ -82,8 +89,7 @@ def collapse_case_groupby(policy_key: str, label_expr: str) -> str:
     """ONE label per user-day inside a GROUP BY (user, day) aggregate."""
     policy = GROUP_POLICY[policy_key]
     whens = "\n            ".join(
-        f"WHEN MAX(CASE WHEN {label_expr} = '{g}' THEN 1 ELSE 0 END) > 0 THEN '{g}'"
-        for g in policy["collapse_priority"]
+        f"WHEN MAX(CASE WHEN {label_expr} = '{g}' THEN 1 ELSE 0 END) > 0 THEN '{g}'" for g in _collapse_priority(policy)
     )
     return f"""CASE
             {whens}
@@ -91,21 +97,23 @@ def collapse_case_groupby(policy_key: str, label_expr: str) -> str:
         END"""
 
 
-def slot_grouping(game_id: str, row_level: bool = False):
-    """A slot game's complete grouping recipe for the stats job.
+def slot_group_expr(game_id: str, day_expr: str, row_level: bool = False) -> str:
+    """The COMPLETE ``ab_group`` expression for a slot stats query — the one
+    policy entry point the job interpolates (alias it ``AS ab_group``).
 
-    Returns ``(source_col, bet_label_case, day_collapse_case)``: when the
-    last two are None the stored per-bet label applies (via
-    ``slot_stored_label_case``); otherwise each bet is labeled by the game's
-    declared branches and every (user, session-day) collapses.
-    ``row_level=True`` (the run/cohort variants, i.e. the AI-combo dataset)
-    always uses the stored per-bet label."""
+    Games without their own branches read the stored per-bet label (folded
+    per their policy). A game declaring branches + ``collapse: True`` gets
+    its label re-derived per bet and collapsed to ONE label per
+    (user, ``day_expr``). ``row_level=True`` (the run/cohort variants, i.e.
+    the AI-combo dataset) always uses the stored per-bet label."""
     policy = GROUP_POLICY[game_id]
-    if row_level or policy.get("source") == "stored" or "collapse_priority" not in policy:
-        return "t.ab_group", None, None
+    if row_level or "branches" not in policy:
+        return _fold_expr(policy, "t.ab_group")
     label = group_label_sql(
         game_id,
         {"partition_ab_label": "t.partition_ab_label", "user_id": "t.user_id"},
         "t.created_at",
     )
-    return "t.partition_ab_label", label, collapse_case_over(game_id, "t.bet_ab_group")
+    if not policy.get("collapse"):
+        return label
+    return collapse_case_over(game_id, label, day_expr)
