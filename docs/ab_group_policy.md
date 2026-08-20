@@ -8,7 +8,7 @@ behind the policy cutover timestamp.
 
 | Era | Assignment rule |
 | --- | --- |
-| before 2026-08-04 05:30 Beijing | first element of the raw `partition_ab` JSON: the AI/A/B group ids (see `spark_etl_common.py`), anything else → `Default` |
+| before 2026-08-04 05:30 Beijing | first element of the raw `partition_ab` JSON: the AI/A/B group ids (declared in `group_policy.py`), anything else → `Default` |
 | from 2026-08-04 05:30 Beijing | **last digit of `user_id`**: 0–3 `Default`, 4–5 `AB_TEST_A`, 6–7 `AB_TEST_B`, 8–9 `AI` |
 
 The switch was announced on 2026-08-03 (LA time). After the cutover the
@@ -116,10 +116,12 @@ Session vocabulary (four distinct notions — don't mix them):
 ## SS03 dashboard exception: announced cutover + user-day groups
 
 The SS03 game-stats dataset (the dashboard's `ab_group` dimension) does NOT
-use the stored row-level label: its policy in `group_policy.GROUP_POLICY` declares its own branches
-(announced cutover) plus a `collapse_priority` (the stats job consumes the
-recipe via `group_policy_sql.slot_grouping`; the run/cohort variants always
-keep the stored row-level per-bet label):
+use the stored row-level label: its policy in `group_policy.GROUP_POLICY`
+declares its own branches (announced cutover) plus `collapse: True` — ONE
+label per user-day, priority = the order labels first appear in the
+branches. The stats job interpolates the single compiled expression from
+`group_policy_sql.slot_group_expr`; the run/cohort variants always keep the
+stored row-level per-bet label:
 
 - **Cutover**: the game team's ANNOUNCED start, 2026-08-03 16:00 PDT =
   **2026-08-03 23:00 UTC** (`group_policy.SS03_AB_GROUP_ANNOUNCED_START_UTC`),
