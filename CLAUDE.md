@@ -161,6 +161,14 @@ A populated `.env` is present locally with the full set of credentials the servi
 
 The bastion **IP is not stored** (it changes) — pass the current one to `DataLoader(bastion_ip=...)` or a job's `--bastion-ip`. Never print `.env` values or commit them (`.env` is gitignored).
 
+## Confluence Reports
+
+Analysis reports published to Confluence are written in **Simplified Chinese**
+(简体中文) — section headings, prose, table headers, and conclusions. Keep code
+identifiers, table/column names, file paths, and metric field names in English.
+Existing examples: `jobs/ss03_mahjiang_streak/generate_ab_mathtable_report.py`,
+`generate_ai_permutation_report.py`.
+
 ## Jira Tickets
 
 Jira Cloud lives at `https://bituslabs.atlassian.net`. The REST API
