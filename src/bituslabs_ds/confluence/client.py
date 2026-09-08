@@ -401,21 +401,35 @@ def attach_file(
     content_type: str = "image/png",
     comment: str = "",
 ) -> Dict[str, Any]:
-    """Upload an attachment to a page and return its metadata (download URL etc.)."""
-    confluence = _get_client()
-    import io
+    """Upload (create or update-in-place) a page attachment; returns its metadata.
 
-    buffer = io.BytesIO(file_bytes)
-    buffer.name = filename
-    result = confluence.attach_content(
-        content=buffer,
-        name=filename,
-        content_type=content_type,
-        page_id=page_id,
-        comment=comment or f"Uploaded by report agent: {filename}",
+    Raw multipart requests, NOT ``Confluence.attach_content``: that helper
+    re-posts a consumed stream when the name already exists, silently
+    replacing the attachment with a 0-byte version (figures then render as
+    blank/invisible on the page).
+    """
+    session, v2_base = _v2_session()
+    v1_base = v2_base.replace("/api/v2", "/rest/api")
+    headers = {"X-Atlassian-Token": "nocheck"}
+    data = {"minorEdit": "true", "comment": comment or f"Uploaded by report agent: {filename}"}
+
+    resp = session.get(f"{v1_base}/content/{page_id}/child/attachment", params={"filename": filename}, timeout=30)
+    resp.raise_for_status()
+    existing = resp.json().get("results", [])
+    url = (
+        f"{v1_base}/content/{page_id}/child/attachment/{existing[0]['id']}/data"
+        if existing
+        else f"{v1_base}/content/{page_id}/child/attachment"
     )
-    if not isinstance(result, dict):
-        raise RuntimeError(f"Unexpected attachment response: {result!r}")
+    resp = session.post(
+        url, headers=headers, data=data, files={"file": (filename, file_bytes, content_type)}, timeout=60
+    )
+    resp.raise_for_status()
+    result = resp.json()
+    result = result["results"][0] if "results" in result else result
+    size = (result.get("extensions") or {}).get("fileSize")
+    if size is not None and size != len(file_bytes):
+        raise RuntimeError(f"attachment {filename} uploaded {size} bytes, expected {len(file_bytes)}")
     return result
 
 
