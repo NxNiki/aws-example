@@ -65,6 +65,7 @@ export function RangeGroupSelect(props: {
   // Bound-semantics note shown next to the name; the stored-column picker is
   // inclusive on both ends, the period-total picker is half-open [min, max).
   boundsNote?: string;
+  rightExclusive?: boolean; // render "[min, max)" — the max bound is excluded
 }) {
   const toggle = (label: string, checked: boolean) => {
     const next = checked ? [...new Set([...props.selection, label])] : props.selection.filter((v) => v !== label);
@@ -105,7 +106,7 @@ export function RangeGroupSelect(props: {
                   onChange={(v) => props.onSetGroup(i, { ...g, max: v })}
                 />
               )}
-              <span className="text-gray-400">]</span>
+              <span className="text-gray-400">{props.rightExclusive ? ")" : "]"}</span>
             </div>
           ))}
           <label className="flex items-center gap-2 cursor-pointer whitespace-nowrap">

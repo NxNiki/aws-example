@@ -147,6 +147,7 @@ export function StatsByGroup() {
             groups={s.periodTotalGroups[dg.granularity] ?? []}
             values={[]}
             freeBounds
+            rightExclusive
             boundsNote="([min, max) — right-exclusive)"
             selection={c.periodTotalSelection ?? []}
             onSetSelection={(labels) => s.setTabPeriodTotalSelection("group", labels)}
