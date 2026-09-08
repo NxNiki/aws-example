@@ -5,7 +5,7 @@ for the AI ab_group only, compare two windows of Beijing bet dates —
 range 1: 2026-06-19..2026-08-17, range 2: 2026-08-19..2026-09-02 — on
 day-1 retention, per-user-day total bet (CNY), number of BASE bets,
 per-user-day RTP, and pooled RTP across all users per calendar day.
-Also ranks the top ordered mathtable permutations (e.g. ``A-B-C``) per
+Also ranks the top ordered mathtable permutations (e.g. ``A|B|C``) per
 user-day by day-1 retention / total bet / num bets, and compares the AI
 group against the fixed-table groups (Default/AB_TEST_A/AB_TEST_B), each
 labeled by the single math table it played — group names are not shown.
@@ -20,9 +20,10 @@ Definitions:
   only decides the label, and user-days with no surviving block drop out.
   The range summary, daily RTP and AI-vs-fixed-table comparison are unaffected
   by cleaning entirely.
-- **Permutation**: the surviving blocks' math tables in time order, with
-  adjacent duplicates collapsed (duplicates can appear after small blocks
-  are removed), joined with ``-``. Order matters: A-B != B-A.
+- **Permutation**: consecutive same-table runs are split into 50-BASE-bet
+  segments; the label is the kept segments' tables in time order joined with
+  ``|`` (adjacent repeats kept: 100 bets of shi -> "shi|shi"). Label length
+  therefore tracks play volume in ~50-bet units. Order matters: A|B != B|A.
 - **bet_date**: Beijing calendar date of the bet's SESSION start (30-min bet
   gap sessions, repo ``bet_session`` convention) — play crossing midnight
   stays on the day it started, matching analysis_ab_mathtable_retention.py.
@@ -72,6 +73,9 @@ SCAN_PERIOD_END = "2026-09-02"
 # midnight stays on the day it started. Scan 2 extra days before the window
 # so sessions straddling the window start keep their true start date.
 SESSION_GAP_SECONDS = 1800
+# A "bet streak" = consecutive BASE bets each within this many seconds of the
+# previous one; user_max_streak is the day's longest such run.
+STREAK_GAP_SECONDS = 200
 SESSION_SCAN_START = "2026-06-17"
 # AB grouping policy flipped partition_ab -> user-id digits across these
 # Beijing days; AI membership is ambiguous, so they are dropped from cohorts.
@@ -81,9 +85,17 @@ EXCLUDED_COHORT_DATES = (date(2026, 8, 3), date(2026, 8, 4))
 PRESENCE_END = date(2026, 9, 1)
 
 MIN_BLOCK_BETS = 30
+# Consecutive same-table runs are split into 50-BASE-bet segments for the
+# permutation label (100 bets of shi -> "shi|shi", length 2), so label length
+# tracks play volume in comparable units; MIN_BLOCK_BETS applies to the
+# remainder segment.
+SEGMENT_BETS = 50
+# Daily total-bet (CNY) tiers for the AI-vs-single-table comparison,
+# matching the earlier SS03 AB tier analysis: <10 / 10-100 / 100-1000 / 1000+.
+BET_BUCKET_EDGES = (10, 100, 1000)
 # Permutations ranked only over cells with at least this many user-days,
 # so a one-off sequence with 100% retention can't top the table.
-MIN_PERMUTATION_USER_DAYS = 30
+MIN_PERMUTATION_USER_DAYS = 20
 
 FX_AS_OF = "2026-08-20"
 FX_TO_CNY = {
@@ -101,6 +113,7 @@ FX_TO_CNY = {
 OUTPUT_DIR = Path(__file__).resolve().parents[1] / "output_ss03_mahjiang_streak" / "ai_mathtable_permutation"
 BLOCKS_DIR = OUTPUT_DIR / "blocks"
 PRESENCE_DIR = OUTPUT_DIR / "presence"
+SEQ_DIR = OUTPUT_DIR / "seq"
 
 
 def _rate_case() -> str:
@@ -232,6 +245,128 @@ FROM sess
 """
 
 
+def seq_sql() -> str:
+    """Per user-day betting rhythm: median/avg within-session BASE inter-bet
+    interval (seconds) and the longest streak of consecutive BASE bets with
+    gaps under {STREAK_GAP_SECONDS}s. Same sessionization + session-start dating as
+    blocks_sql so the join keys line up."""
+    return f"""
+WITH bets AS (
+    SELECT
+        user_id,
+        spin_id,
+        created_at,
+        COALESCE(NULLIF(math_table_id, ''), '(none)') AS mathtable,
+        bet_type,
+        bet_amount,
+        actual_payout,
+        currency_type,
+        ab_group
+    FROM slot_orders_ab_group
+    WHERE game_id = 'SS03'
+      AND ab_group IN ('AI', 'AB_TEST_A', 'AB_TEST_B', 'Default')
+      AND currency_type = 'CNY'
+      AND period BETWEEN '{SESSION_SCAN_START}' AND '{SCAN_PERIOD_END}'
+),
+
+sess AS (
+    SELECT
+        t.*,
+        SUM(
+            CASE
+                WHEN prev_ts IS NULL OR date_diff('second', prev_ts, created_at) > {SESSION_GAP_SECONDS} THEN 1
+                ELSE 0
+            END
+        ) OVER (PARTITION BY user_id ORDER BY created_at, spin_id ROWS UNBOUNDED PRECEDING) AS session_seq
+    FROM (
+        SELECT
+            *,
+            LAG(created_at) OVER (PARTITION BY user_id ORDER BY created_at, spin_id) AS prev_ts
+        FROM bets
+    ) AS t
+),
+
+labeled AS (
+    SELECT
+        *,
+        CAST(MIN(created_at) OVER (PARTITION BY user_id, session_seq) + INTERVAL '8' HOUR AS DATE) AS bet_date
+    FROM sess
+),
+
+flows AS (
+    SELECT
+        *,
+        SUM(CASE WHEN bet_type <> 'BASE' THEN 1 ELSE 0 END)
+            OVER (PARTITION BY user_id, session_seq ORDER BY created_at, spin_id ROWS UNBOUNDED PRECEDING)
+            AS cnt_free
+    FROM labeled
+),
+
+-- n_free_between > 0 means FREE-game spins played out between the previous
+-- BASE bet and this one: that gap is FG animation, not player pacing, so it
+-- is excluded from interval stats and does NOT break a bet streak.
+base AS (
+    SELECT
+        user_id,
+        bet_date,
+        session_seq,
+        created_at,
+        spin_id,
+        date_diff(
+            'second',
+            LAG(created_at) OVER (PARTITION BY user_id, session_seq ORDER BY created_at, spin_id),
+            created_at
+        ) AS delta,
+        cnt_free - LAG(cnt_free) OVER (PARTITION BY user_id, session_seq ORDER BY created_at, spin_id)
+            AS n_free_between
+    FROM flows
+    WHERE bet_type = 'BASE' AND bet_date >= DATE '{SCAN_PERIOD_START}'
+),
+
+streaked AS (
+    SELECT
+        *,
+        SUM(
+            CASE
+                WHEN delta IS NULL THEN 1
+                WHEN n_free_between > 0 THEN 0
+                WHEN delta >= {STREAK_GAP_SECONDS} THEN 1
+                ELSE 0
+            END
+        )
+            OVER (PARTITION BY user_id, bet_date ORDER BY created_at, spin_id ROWS UNBOUNDED PRECEDING)
+            AS streak_id
+    FROM base
+),
+
+streak_len AS (
+    SELECT user_id, bet_date, streak_id, COUNT(*) AS len
+    FROM streaked
+    GROUP BY user_id, bet_date, streak_id
+),
+
+intervals AS (
+    SELECT
+        user_id,
+        bet_date,
+        approx_percentile(CASE WHEN n_free_between > 0 THEN NULL ELSE delta END, 0.5) AS user_med_interval,
+        AVG(CASE WHEN n_free_between > 0 THEN NULL ELSE delta END) AS user_avg_interval
+    FROM base
+    GROUP BY user_id, bet_date
+),
+
+streaks AS (
+    SELECT user_id, bet_date, MAX(len) AS user_max_streak
+    FROM streak_len
+    GROUP BY user_id, bet_date
+)
+
+SELECT s.user_id, s.bet_date, i.user_med_interval, i.user_avg_interval, s.user_max_streak
+FROM streaks AS s
+LEFT JOIN intervals AS i ON s.user_id = i.user_id AND s.bet_date = i.bet_date
+"""
+
+
 def _run_and_save(sql: str, out_dir: Path, label: str) -> None:
     session = boto3.Session(region_name=REGION)
     logger.info("running Athena extraction for %s", label)
@@ -252,6 +387,7 @@ def _run_and_save(sql: str, out_dir: Path, label: str) -> None:
 def extract() -> None:
     _run_and_save(blocks_sql(), BLOCKS_DIR, "ai-mathtable-blocks")
     _run_and_save(presence_sql(), PRESENCE_DIR, "presence")
+    _run_and_save(seq_sql(), SEQ_DIR, "user-day-seq")
 
 
 def _load(dir_: Path, label: str) -> pl.DataFrame:
@@ -280,28 +416,40 @@ def build_user_day(blocks: pl.DataFrame, min_block_bets: int = 0) -> pl.DataFram
         raise SystemExit("rows with un-mapped currency present — extend FX_TO_CNY and re-extract")
 
     blocks = blocks.sort(["user_id", "bet_date", "block_seq"])
-    kept = blocks.filter(pl.col("n_base") >= min_block_bets)
+    segments = (
+        blocks.with_columns(
+            (pl.col("n_base") // SEGMENT_BETS).alias("_full"),
+            (pl.col("n_base") % SEGMENT_BETS).alias("_rem"),
+        )
+        .with_columns((pl.col("_full") + (pl.col("_rem") > 0).cast(pl.Int64)).alias("_nseg"))
+        .with_columns(pl.int_ranges(0, pl.col("_nseg")).alias("_seg"))
+        .explode("_seg")
+        .drop_nulls("_seg")
+        .with_columns(
+            pl.when(pl.col("_seg") < pl.col("_full"))
+            .then(pl.lit(SEGMENT_BETS))
+            .otherwise(pl.col("_rem"))
+            .alias("_seg_n")
+        )
+    )
+    kept = segments.filter(pl.col("_seg_n") >= min_block_bets) if min_block_bets else segments
     if min_block_bets:
         logger.info(
-            "cleaning (permutation label only): kept %d/%d blocks (>= %d BASE bets), %d/%d user-days",
+            "label cleaning: kept %d/%d %d-bet segments (remainder >= %d BASE bets), %d/%d user-days",
             len(kept),
-            len(blocks),
+            len(segments),
+            SEGMENT_BETS,
             min_block_bets,
             kept.select("user_id", "bet_date").n_unique(),
             blocks.select("user_id", "bet_date").n_unique(),
         )
 
-    # Collapse adjacent duplicate tables that appear once small blocks between
-    # them are removed, then join the sequence into the permutation label.
+    # Label = kept segments in time order, adjacent repeats NOT collapsed —
+    # "shi-shi" (a 100-bet run) is distinct from "shi" (a 50-bet run).
     perm = (
-        kept.with_columns(
-            (pl.col("mathtable") != pl.col("mathtable").shift(1).over("user_id", "bet_date"))
-            .fill_null(True)
-            .alias("is_new")
-        )
-        .filter(pl.col("is_new"))
+        kept.sort(["user_id", "bet_date", "block_seq", "_seg"])
         .group_by("user_id", "bet_date", maintain_order=True)
-        .agg(pl.col("mathtable").str.join("-").alias("permutation"))
+        .agg(pl.col("mathtable").str.join("|").alias("permutation"))
     )
 
     # normal_kakuteiB/C are single-spin bonus sub-tables triggered from a main
@@ -338,6 +486,9 @@ def build_user_day(blocks: pl.DataFrame, min_block_bets: int = 0) -> pl.DataFram
             pl.when(pl.col("user_total_bet") > 0)
             .then(pl.col("payout_cny") / pl.col("user_total_bet"))
             .alias("user_rtp"),
+            pl.when(pl.col("user_num_bets") > 0)
+            .then(pl.col("user_total_bet") / pl.col("user_num_bets"))
+            .alias("user_avg_bet_amount"),
             range_expr(),
         )
         .filter(pl.col("range").is_not_null() & ~pl.col("bet_date").is_in(list(EXCLUDED_COHORT_DATES)))
@@ -361,6 +512,28 @@ def add_retention(ud: pl.DataFrame, presence: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+def bucket_expr() -> pl.Expr:
+    """Daily-spend tier label from the RAW (unclipped) user-day total bet."""
+    edges = BET_BUCKET_EDGES
+    labels = [f"<{edges[0]}"] + [f"{edges[i]}-{edges[i + 1]}" for i in range(len(edges) - 1)] + [f"{edges[-1]}+"]
+    expr: pl.Expr = pl.lit(labels[-1])
+    for edge, label in reversed(list(zip(edges, labels))):
+        expr = pl.when(pl.col("user_total_bet") < edge).then(pl.lit(label)).otherwise(expr)
+    return expr.alias("bet_bucket")
+
+
+def with_retention_ci(df: pl.DataFrame, z: float = 1.96) -> pl.DataFrame:
+    """95% Wilson interval for retention_d1 over the d1_cohort sample."""
+    p, n = pl.col("retention_d1"), pl.col("d1_cohort")
+    denom = 1 + z**2 / n
+    center = (p + z**2 / (2 * n)) / denom
+    half = z * ((p * (1 - p) / n + z**2 / (4 * n**2)).sqrt()) / denom
+    return df.with_columns(
+        ((center - half).clip(0, 1)).alias("retention_ci_lo"),
+        ((center + half).clip(0, 1)).alias("retention_ci_hi"),
+    )
+
+
 # Winsorization level for the user_total_bet / user_num_bets MEANS: values
 # above the 99th percentile are CLIPPED to it (kept, not dropped) — whales are
 # legitimate revenue, but one user-day shouldn't own a cell's mean. Thresholds
@@ -368,7 +541,7 @@ def add_retention(ud: pl.DataFrame, presence: pl.DataFrame) -> pl.DataFrame:
 # (a quantile re-estimated inside a 40-row permutation cell would be noise)
 # and applied to every cell. Medians, retention and RTP stay unclipped.
 CLIP_PCT = 0.99
-CLIP_COLS = ("user_total_bet", "user_num_bets")
+CLIP_COLS = ("user_total_bet", "user_num_bets", "user_avg_bet_amount", "user_med_interval", "user_max_streak")
 
 
 def clip_thresholds(ud_raw_all: pl.DataFrame) -> pl.DataFrame:
@@ -380,7 +553,10 @@ def clip_thresholds(ud_raw_all: pl.DataFrame) -> pl.DataFrame:
 def with_clipped(df: pl.DataFrame, thresholds: pl.DataFrame) -> pl.DataFrame:
     return (
         df.join(thresholds, on="range", how="left")
-        .with_columns(pl.min_horizontal(c, f"_{c}_hi").alias(f"{c}_clip") for c in CLIP_COLS)
+        .with_columns(
+            pl.when(pl.col(c).is_null()).then(None).otherwise(pl.min_horizontal(c, f"_{c}_hi")).alias(f"{c}_clip")
+            for c in CLIP_COLS
+        )
         .drop(f"_{c}_hi" for c in CLIP_COLS)
     )
 
@@ -394,10 +570,108 @@ AGGS = [
     pl.col("user_total_bet").median().alias("med_user_total_bet"),
     pl.col("user_num_bets_clip").mean().alias("avg_user_num_bets"),
     pl.col("user_num_bets").median().alias("med_user_num_bets"),
+    pl.col("user_avg_bet_amount_clip").mean().alias("avg_user_avg_bet"),
+    pl.col("user_avg_bet_amount").median().alias("med_user_avg_bet"),
+    pl.col("user_med_interval_clip").mean().alias("avg_bet_interval"),
+    pl.col("user_med_interval").median().alias("med_bet_interval"),
+    pl.col("user_max_streak_clip").mean().alias("avg_max_streak"),
+    pl.col("user_max_streak").median().alias("med_max_streak"),
+    pl.col("user_total_bet_clip").std().alias("std_user_total_bet"),
+    pl.col("user_num_bets_clip").std().alias("std_user_num_bets"),
+    pl.col("user_avg_bet_amount_clip").std().alias("std_user_avg_bet"),
+    pl.col("user_med_interval_clip").std().alias("std_bet_interval"),
+    pl.col("user_med_interval").count().alias("n_bet_interval"),
+    pl.col("user_max_streak_clip").std().alias("std_max_streak"),
+    pl.col("user_max_streak").count().alias("n_max_streak"),
     pl.col("user_rtp").mean().alias("avg_user_rtp"),
     pl.col("user_rtp").median().alias("med_user_rtp"),
     (pl.col("payout_cny").sum() / pl.col("user_total_bet").sum()).alias("pooled_rtp"),
 ]
+
+
+def ggr_thresholds(ud: pl.DataFrame) -> pl.DataFrame:
+    """p99 clip threshold for USER-level GGR, per range, on the full population."""
+    per_user = (
+        ud.with_columns((pl.col("user_total_bet") - pl.col("payout_cny")).alias("ggr_day"))
+        .group_by("range", "user_id")
+        .agg(pl.col("ggr_day").sum().alias("user_ggr"))
+    )
+    # GGR is signed (negative = the user won), so the mean is winsorized on
+    # BOTH tails (p1/p99) — a one-sided cap would bias it downward.
+    return per_user.group_by("range").agg(
+        pl.col("user_ggr").quantile(0.99, interpolation="linear").alias("_ggr_hi"),
+        pl.col("user_ggr").quantile(0.01, interpolation="linear").alias("_ggr_lo"),
+    )
+
+
+def ggr_stats(ud: pl.DataFrame, label_cols: list[str], thresholds: pl.DataFrame) -> pl.DataFrame:
+    """Per-cell stats of ONE lifetime GGR value per user (bet - payout summed
+    over ALL the user's user-days in this frame's range/condition; negative =
+    the user won). A user whose days span several labels is assigned to their
+    MOST COMMON label; ties go to the label with the larger overall population
+    (user-days) in the range. Mean is clipped at the range's p99 user-GGR
+    thresholds (BOTH tails, p1/p99 — GGR is signed); median raw.
+    """
+    day = ud.with_columns((pl.col("user_total_bet") - pl.col("payout_cny")).alias("ggr_day"))
+    tot = day.group_by("range", "user_id").agg(pl.col("ggr_day").sum().alias("user_ggr"))
+    if label_cols:
+        cell_sizes = day.group_by(["range"] + label_cols).agg(pl.len().alias("_cell_days"))
+        assigned = (
+            day.group_by(["range", "user_id"] + label_cols)
+            .agg(pl.len().alias("_days"))
+            .join(cell_sizes, on=["range"] + label_cols)
+            .sort(["_days", "_cell_days"], descending=[True, True])
+            .group_by("range", "user_id", maintain_order=False)
+            .agg(pl.col(c).first() for c in label_cols)
+        )
+        users = assigned.join(tot, on=["range", "user_id"])
+    else:
+        users = tot
+    users = users.join(thresholds, on="range", how="left").with_columns(
+        pl.max_horizontal(pl.min_horizontal("user_ggr", "_ggr_hi"), "_ggr_lo").alias("user_ggr_clip")
+    )
+    return users.group_by(["range"] + label_cols).agg(
+        pl.col("user_id").n_unique().alias("n_users_ggr"),
+        pl.col("user_ggr_clip").mean().alias("avg_user_ggr"),
+        pl.col("user_ggr").median().alias("med_user_ggr"),
+        pl.col("user_ggr_clip").std().alias("std_user_ggr"),
+    )
+
+
+def corr_rtp_activity(ud_raw: pl.DataFrame) -> pl.DataFrame:
+    """Analysis 4: per-user-day correlation of user_rtp with betting activity.
+
+    user_total_bet / user_num_bets are heavy-tailed (log-normal-ish), so the
+    Pearson column uses log10(x) on both activity and (rtp + 0.01); Spearman
+    (rank) is transform-invariant and reported as the primary statistic.
+    """
+    rows = []
+    base = ud_raw.filter(pl.col("user_rtp").is_not_null())
+    for rng, grp in base.partition_by("range", as_dict=True).items():
+        for col in ("user_total_bet", "user_num_bets"):
+            g = grp.select(
+                pl.col("user_rtp").alias("r"),
+                pl.col(col).alias("x"),
+                (pl.col("user_rtp") + 0.01).log(10).alias("lr"),
+                pl.col(col).log(10).alias("lx"),
+                pl.col("user_rtp").rank().alias("rr"),
+                pl.col(col).rank().alias("rx"),
+            )
+            rows.append(
+                {
+                    "range": rng[0],
+                    "metric": col,
+                    "n": len(g),
+                    "spearman": g.select(pl.corr("rr", "rx")).item(),
+                    "pearson_raw": g.select(pl.corr("r", "x")).item(),
+                    "pearson_loglog": g.select(pl.corr("lr", "lx")).item(),
+                }
+            )
+    out = pl.DataFrame(rows).sort(["range", "metric"])
+    out.write_csv(OUTPUT_DIR / "corr_rtp_activity.csv")
+    ud_raw.select("range", "user_rtp", "user_total_bet", "user_num_bets").write_csv(OUTPUT_DIR / "user_day_ai.csv")
+    logger.info("wrote %s", OUTPUT_DIR / "corr_rtp_activity.csv")
+    return out
 
 
 def analyze() -> None:
@@ -405,19 +679,26 @@ def analyze() -> None:
     presence = _load(PRESENCE_DIR, "presence")
     # Block cleaning applies ONLY to the permutation ranking; the range
     # summary, daily RTP, and AI-vs-fixed-table comparison use all bets.
-    ud_raw_all = add_retention(build_user_day(blocks), presence)
+    seq = _load(SEQ_DIR, "user-day-seq")
+    ud_raw_all = add_retention(build_user_day(blocks), presence).join(seq, on=["user_id", "bet_date"], how="left")
     thresholds = clip_thresholds(ud_raw_all)
     logger.info("p%d clip thresholds:\n%s", int(CLIP_PCT * 100), thresholds.sort("range"))
     ud_raw_all = with_clipped(ud_raw_all, thresholds)
     ud_raw = ud_raw_all.filter(pl.col("ab_group") == "AI")
     ud = with_clipped(
-        add_retention(build_user_day(blocks, MIN_BLOCK_BETS), presence).filter(pl.col("ab_group") == "AI"),
+        add_retention(build_user_day(blocks, MIN_BLOCK_BETS), presence)
+        .filter(pl.col("ab_group") == "AI")
+        .join(seq, on=["user_id", "bet_date"], how="left"),
         thresholds,
     )
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    summary = ud_raw.group_by("range").agg(AGGS).sort("range")
+    gthr = ggr_thresholds(ud_raw_all)
+    logger.info("p99 user-GGR clip thresholds:\n%s", gthr.sort("range"))
+
+    summary = ud_raw.group_by("range").agg(AGGS).join(ggr_stats(ud_raw, [], gthr), on="range", how="left").sort("range")
     summary.write_csv(OUTPUT_DIR / "summary_range.csv")
+    corr_rtp_activity(ud_raw)
 
     # Single-mathtable comparison (uncleaned): Default/AB_TEST_A/AB_TEST_B
     # user-days labeled by the ONE table played that day — group names
@@ -429,14 +710,55 @@ def analyze() -> None:
     fixed = ud_raw_all.filter(pl.col("ab_group") != "AI")
     single = fixed.filter(pl.col("n_real_tables") == 1)
     logger.info("single-table comparison: kept %d/%d non-AI user-days (single-table)", len(single), len(fixed))
-    comparison = pl.concat(
+    cmp_frame = pl.concat(
         [
-            single.group_by("range", pl.col("mt_winner").alias("mathtable")).agg(AGGS),
-            ud_raw.group_by("range").agg(AGGS).with_columns(pl.lit("AI(全部排列)").alias("mathtable")),
+            single.with_columns(pl.col("mt_winner").alias("mathtable")),
+            ud_raw.with_columns(pl.lit("AI(全部排列)").alias("mathtable")),
         ],
         how="diagonal",
-    ).sort(["range", "user_days"], descending=[False, True])
+    )
+    comparison = (
+        pl.concat(
+            [
+                single.group_by("range", pl.col("mt_winner").alias("mathtable")).agg(AGGS),
+                ud_raw.group_by("range").agg(AGGS).with_columns(pl.lit("AI(全部排列)").alias("mathtable")),
+            ],
+            how="diagonal",
+        )
+        .join(ggr_stats(cmp_frame, ["mathtable"], gthr), on=["range", "mathtable"], how="left")
+        .sort(["range", "user_days"], descending=[False, True])
+    )
     comparison.write_csv(OUTPUT_DIR / "summary_range_by_table.csv")
+
+    # Same comparison split by daily total-bet tier (bucket on the raw day
+    # total), with Wilson CIs on retention for the summary barplot.
+    single_b = single.with_columns(bucket_expr())
+    ai_b = ud_raw.with_columns(bucket_expr())
+    bkt_frame = pl.concat(
+        [
+            single_b.with_columns(pl.col("mt_winner").alias("mathtable")),
+            ai_b.with_columns(pl.lit("AI(全部排列)").alias("mathtable")),
+        ],
+        how="diagonal",
+    )
+    comparison_bucket = (
+        with_retention_ci(
+            pl.concat(
+                [
+                    single_b.group_by("range", pl.col("mt_winner").alias("mathtable"), "bet_bucket").agg(AGGS),
+                    ai_b.group_by("range", "bet_bucket")
+                    .agg(AGGS)
+                    .with_columns(pl.lit("AI(全部排列)").alias("mathtable")),
+                ],
+                how="diagonal",
+            )
+        )
+        .join(
+            ggr_stats(bkt_frame, ["mathtable", "bet_bucket"], gthr), on=["range", "mathtable", "bet_bucket"], how="left"
+        )
+        .sort(["range", "mathtable", "bet_bucket"])
+    )
+    comparison_bucket.write_csv(OUTPUT_DIR / "summary_range_by_table_bucket.csv")
 
     daily = (
         ud_raw.group_by("bet_date")
@@ -453,26 +775,37 @@ def analyze() -> None:
     )
     daily.write_csv(OUTPUT_DIR / "daily_all_users.csv")
 
-    perm = ud.group_by("range", "permutation").agg(AGGS).sort(["range", "user_days"], descending=[False, True])
+    perm = with_retention_ci(
+        ud.group_by("range", "permutation")
+        .agg(AGGS)
+        .join(ggr_stats(ud, ["permutation"], gthr), on=["range", "permutation"], how="left")
+    ).sort(["range", "user_days"], descending=[False, True])
     perm.write_csv(OUTPUT_DIR / "summary_permutation.csv")
 
-    ranked = perm.filter(pl.col("user_days") >= MIN_PERMUTATION_USER_DAYS)
+    # Rank WITHIN permutation length (elements in the label, repeats counted:
+    # A-B-A is length 3): engaged users play more bets and therefore pass
+    # through more tables, so comparing permutations of different lengths
+    # reflects engagement (reverse causality), not table effects.
+    perm = perm.with_columns((pl.col("permutation").str.count_matches("|", literal=True) + 1).alias("perm_len"))
+    ranked = perm.filter((pl.col("user_days") >= MIN_PERMUTATION_USER_DAYS) & pl.col("perm_len").is_between(1, 4))
     tops = []
-    for metric in ("retention_d1", "avg_user_total_bet", "avg_user_num_bets"):
+    for metric in ("retention_d1", "avg_user_total_bet", "avg_user_ggr", "avg_max_streak"):
         for rng in RANGES:
-            top = (
-                ranked.filter(pl.col("range") == rng)
-                .sort(metric, descending=True, nulls_last=True)
-                .head(5)
-                .with_columns(pl.lit(metric).alias("ranked_by"), pl.int_range(1, pl.len() + 1).alias("rank"))
-            )
-            tops.append(top)
+            for length in (1, 2, 3, 4):
+                top = (
+                    ranked.filter((pl.col("range") == rng) & (pl.col("perm_len") == length))
+                    .sort(metric, descending=True, nulls_last=True)
+                    .head(5)
+                    .with_columns(pl.lit(metric).alias("ranked_by"), pl.int_range(1, pl.len() + 1).alias("rank"))
+                )
+                tops.append(top)
     top5 = pl.concat(tops).select(["ranked_by", "rank"] + [c for c in perm.columns])
     top5.write_csv(OUTPUT_DIR / "top5_permutations.csv")
 
     for name in (
         "summary_range",
         "summary_range_by_table",
+        "summary_range_by_table_bucket",
         "daily_all_users",
         "summary_permutation",
         "top5_permutations",
