@@ -33,14 +33,20 @@ function BoundSelect(props: { values: number[]; value: number; onChange: (v: num
 
 // Free numeric bound for continuous dimensions (e.g. the "Total bet" picker):
 // a period total has no stable value ladder to pick from, so any number goes.
-function BoundInput(props: { value: number; onChange: (v: number) => void }) {
+// With allowEmpty, clearing the field means open-ended (max = null, shown ∞).
+function BoundInput(props: { value: number | null; allowEmpty?: boolean; onChange: (v: number | null) => void }) {
   return (
     <input
       type="number"
       min={0}
+      placeholder={props.allowEmpty ? "\u221e" : undefined}
       className="w-20 rounded border px-1 py-0.5 text-sm"
-      value={String(props.value)}
+      value={props.value === null ? "" : String(props.value)}
       onChange={(e) => {
+        if (e.target.value === "" && props.allowEmpty) {
+          props.onChange(null);
+          return;
+        }
         const v = Number(e.target.value);
         if (Number.isFinite(v)) props.onChange(v);
       }}
@@ -85,13 +91,13 @@ export function RangeGroupSelect(props: {
               />
               <span className="text-gray-400">[</span>
               {props.freeBounds ? (
-                <BoundInput value={g.min} onChange={(v) => props.onSetGroup(i, { ...g, min: v })} />
+                <BoundInput value={g.min} onChange={(v) => v !== null && props.onSetGroup(i, { ...g, min: v })} />
               ) : (
                 <BoundSelect values={props.values} value={g.min} onChange={(v) => props.onSetGroup(i, { ...g, min: v })} />
               )}
               <span className="text-gray-400">,</span>
               {props.freeBounds ? (
-                <BoundInput value={g.max ?? g.min} onChange={(v) => props.onSetGroup(i, { ...g, max: v })} />
+                <BoundInput value={g.max} allowEmpty onChange={(v) => props.onSetGroup(i, { ...g, max: v })} />
               ) : (
                 <BoundSelect
                   values={props.values}
