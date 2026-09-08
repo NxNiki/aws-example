@@ -45,6 +45,9 @@ export interface TabCohortControls {
   // group DEFINITIONS are global (store.rangeGroups) so ranges mean the same
   // thing on every tab.
   rangeSelection: string[];
+  // Per-tab checked labels of the "Total bet" (period-total) picker; the
+  // definitions are global and per granularity (store.periodTotalGroups).
+  periodTotalSelection: string[];
 }
 
 export interface TabControls {
@@ -68,11 +71,27 @@ const defaultRanges = (): RangeState[] => [
 const defaultDateGroups = (): DateGroupsState => ({ granularity: "day", ranges: defaultRanges() });
 
 const defaultControls = (): TabControls => ({
-  date: { cohortSelection: {}, rangeSelection: [] },
-  group: { cohortSelection: {}, rangeSelection: [] },
-  viz: { cohortSelection: {}, rangeSelection: [] },
-  summaryTable: { cohortSelection: {}, rangeSelection: [] },
+  date: { cohortSelection: {}, rangeSelection: [], periodTotalSelection: [] },
+  group: { cohortSelection: {}, rangeSelection: [], periodTotalSelection: [] },
+  viz: { cohortSelection: {}, rangeSelection: [], periodTotalSelection: [] },
+  summaryTable: { cohortSelection: {}, rangeSelection: [], periodTotalSelection: [] },
 });
+
+// Seed the per-granularity "Total bet" definitions from the config; a
+// granularity missing from the config's defaults falls back to the day list
+// (edges rarely differ — most users play ~1 day per week/month).
+export function periodTotalDefaults(config: ConfigDetail): Partial<Record<Granularity, RangeGroupDef[]>> {
+  if (!config.period_total_col) return {};
+  const d = config.period_total_defaults ?? {};
+  const toDefs = (gs?: RangeGroup[] | null): RangeGroupDef[] =>
+    (gs ?? []).map((g) => ({ label: g.label, min: g.min, max: g.max ?? null }));
+  const day = toDefs(d["day"]);
+  return {
+    day,
+    week: d["week"] ? toDefs(d["week"]) : day,
+    month: d["month"] ? toDefs(d["month"]) : day,
+  };
+}
 
 // ── Global lifecycle groups ────────────────────────────────────────────────
 // UNLIKE the per-tab controls above, the lifecycle-group definitions are
@@ -144,6 +163,7 @@ export function nothingSelected(
 ): boolean {
   if (hasEmptiedCohort(s.controls[tab].cohortSelection)) return true;
   if (s.config?.range_group_col && s.controls[tab].rangeSelection.length === 0) return true;
+  if (s.config?.period_total_col && (s.controls[tab].periodTotalSelection ?? []).length === 0) return true;
   if (s.config?.lifecycle_col && !s.lifecycleAll) {
     const shown = (s.lifecycle[s.dateGroups.granularity] ?? []).some((g) => g.show && g.label.trim());
     if (!shown) return true;
@@ -169,7 +189,7 @@ export function visibleGroupValues(
   values: Record<string, string[]>,
 ): Record<string, string[]> {
   const rest = { ...values };
-  for (const col of [config?.lifecycle_col, config?.range_group_col]) {
+  for (const col of [config?.lifecycle_col, config?.range_group_col, config?.period_total_col]) {
     if (col && col in rest) delete rest[col];
   }
   return rest;
@@ -213,6 +233,49 @@ export function activeRangeGroups(
     }
   }
   return groups.length ? groups : undefined;
+}
+
+// The "Total bet" picker's request payload for one tab: checked labels
+// resolved against the granularity's global definitions, each entry tagged
+// with the derived column so the backend routes it to the period-total
+// dimension (entries without a column address the stored range column).
+export function activePeriodTotalGroups(
+  s: Pick<DashboardState, "config" | "periodTotalGroups">,
+  selection: string[],
+  granularity: Granularity,
+): RangeGroup[] | undefined {
+  const col = s.config?.period_total_col;
+  if (!col || selection.length === 0) return undefined;
+  const defs = s.periodTotalGroups[granularity] ?? [];
+  const groups: RangeGroup[] = [];
+  for (const label of selection) {
+    if (label === "all") {
+      groups.push({ label: "all", column: col, min: 0, max: null });
+      continue;
+    }
+    const def = defs.find((g) => g.label === label);
+    if (def && def.label.trim() && (def.max === null || def.max >= def.min)) {
+      groups.push({
+        label: `${def.label.trim()}[${def.min}, ${def.max ?? "max"}]`,
+        column: col,
+        min: def.min,
+        max: def.max,
+      });
+    }
+  }
+  return groups.length ? groups : undefined;
+}
+
+// Merge the payloads of both range-style pickers for a tab's request.
+export function activeRangeDimensions(
+  s: Pick<DashboardState, "config" | "rangeGroups" | "periodTotalGroups">,
+  c: TabCohortControls,
+  granularity: Granularity,
+): RangeGroup[] | undefined {
+  const stored = activeRangeGroups(s, c.rangeSelection) ?? [];
+  const derived = activePeriodTotalGroups(s, c.periodTotalSelection ?? [], granularity) ?? [];
+  const all = [...stored, ...derived];
+  return all.length ? all : undefined;
 }
 
 // ── Per-panel state ────────────────────────────────────────────────────────
@@ -377,14 +440,21 @@ export interface ViewSnapshot {
   lifecycle?: LifecycleByUnit | LifecycleGroupState[];
   lifecycleAll?: boolean;
   rangeGroups?: RangeGroupDef[];
+  // Global "Total bet" definitions per granularity (optional: older snapshots omit them).
+  periodTotalGroups?: Partial<Record<Granularity, RangeGroupDef[]>>;
   // Active report-spec name when the view was saved; loading the view reloads it.
   reportSpec?: string | null;
 }
 
 function snapshotControls(snap: ViewSnapshot): TabControls {
-  const pick = (t?: { cohortSelection?: Record<string, string[]>; rangeSelection?: string[] }): TabCohortControls => ({
+  const pick = (t?: {
+    cohortSelection?: Record<string, string[]>;
+    rangeSelection?: string[];
+    periodTotalSelection?: string[];
+  }): TabCohortControls => ({
     cohortSelection: t?.cohortSelection ?? snap.cohortSelection ?? {},
     rangeSelection: t?.rangeSelection ?? [],
+    periodTotalSelection: t?.periodTotalSelection ?? [],
   });
   const c = (snap.controls ?? {}) as Partial<Record<TabKey, { cohortSelection?: Record<string, string[]> }>>;
   return { date: pick(c.date), group: pick(c.group), viz: pick(c.viz), summaryTable: pick(c.summaryTable) };
@@ -454,6 +524,14 @@ interface DashboardState {
   rangeGroups: RangeGroupDef[];
   setRangeGroup: (index: number, group: RangeGroupDef) => void;
   setTabRangeSelection: (tab: TabKey, labels: string[]) => void;
+
+  // Global "Total bet" (period-total) group definitions, one set per
+  // granularity (edges can differ by day/week/month, like lifecycle units);
+  // config.period_total_defaults seeds them. Selection is per tab in
+  // controls[tab].periodTotalSelection.
+  periodTotalGroups: Partial<Record<Granularity, RangeGroupDef[]>>;
+  setPeriodTotalGroup: (unit: Granularity, index: number, group: RangeGroupDef) => void;
+  setTabPeriodTotalSelection: (tab: TabKey, labels: string[]) => void;
 
   panels: Record<string, PanelState>; // Stats-by-Date
   group: Record<string, GroupPanelState>; // Stats-by-Group
@@ -679,6 +757,16 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     set((s) => ({ rangeGroups: s.rangeGroups.map((g, i) => (i === index ? group : g)) })),
   setTabRangeSelection: (tab, labels) =>
     set((s) => ({ controls: { ...s.controls, [tab]: { ...s.controls[tab], rangeSelection: labels } } })),
+  periodTotalGroups: {},
+  setPeriodTotalGroup: (unit, index, group) =>
+    set((s) => ({
+      periodTotalGroups: {
+        ...s.periodTotalGroups,
+        [unit]: (s.periodTotalGroups[unit] ?? []).map((g, i) => (i === index ? group : g)),
+      },
+    })),
+  setTabPeriodTotalSelection: (tab, labels) =>
+    set((s) => ({ controls: { ...s.controls, [tab]: { ...s.controls[tab], periodTotalSelection: labels } } })),
   panels: {},
   group: {},
   summaryTable: emptySummaryTable(),
@@ -734,15 +822,21 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       // Range-group picker starts with an explicit 'all' (same rule as the
       // cohort pickers); configs without a range dimension keep it empty.
       const seededRange = config.range_group_col ? ["all"] : [];
+      const seededPeriodTotal = config.period_total_col ? ["all"] : [];
       set((s) => ({
         config,
         controls: {
-          date: { ...s.controls.date, rangeSelection: seededRange },
-          group: { ...s.controls.group, rangeSelection: seededRange },
-          viz: { ...s.controls.viz, rangeSelection: seededRange },
-          summaryTable: { ...s.controls.summaryTable, rangeSelection: seededRange },
+          date: { ...s.controls.date, rangeSelection: seededRange, periodTotalSelection: seededPeriodTotal },
+          group: { ...s.controls.group, rangeSelection: seededRange, periodTotalSelection: seededPeriodTotal },
+          viz: { ...s.controls.viz, rangeSelection: seededRange, periodTotalSelection: seededPeriodTotal },
+          summaryTable: {
+            ...s.controls.summaryTable,
+            rangeSelection: seededRange,
+            periodTotalSelection: seededPeriodTotal,
+          },
         },
         rangeGroups: (config.range_group_defaults ?? []).map((g) => ({ label: g.label, min: g.min, max: g.max ?? null })),
+        periodTotalGroups: periodTotalDefaults(config),
         panels: defaultPanels(config),
         group: defaultGroupPanels(config),
         summaryTable: { ...emptySummaryTable(), metrics: defaultSummaryMetrics(config) },
@@ -921,7 +1015,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     const reqRanges = activeRanges(dateGroups.ranges);
     if (reqRanges.length === 0) return;
     const lifecycleGroups = activeLifecycleGroups(get(), granularity);
-    const rangeGroups = activeRangeGroups(get(), controls.date.rangeSelection);
+    const rangeGroups = activeRangeDimensions(get(), controls.date, granularity);
     const ctxSig = JSON.stringify({ configId, granularity, reqRanges, cohortSelection, lifecycleGroups, rangeGroups });
     await Promise.all(
       Object.entries(panels).map(([panelId, panel]) => {
@@ -1015,7 +1109,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     const reqRanges = activeRanges(dateGroups.ranges);
     if (reqRanges.length === 0) return;
     const lifecycleGroups = activeLifecycleGroups(get(), granularity);
-    const rangeGroups = activeRangeGroups(get(), controls.group.rangeSelection);
+    const rangeGroups = activeRangeDimensions(get(), controls.group, granularity);
     await Promise.all(
       Object.entries(group).map(([panelId, p]) => {
         const key = `group:${panelId}`;
@@ -1091,7 +1185,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     const reqRanges = activeRanges(dateGroups.ranges);
     if (reqRanges.length === 0) return;
     const lifecycleGroups = activeLifecycleGroups(get(), granularity);
-    const rangeGroups = activeRangeGroups(get(), controls.summaryTable.rangeSelection);
+    const rangeGroups = activeRangeDimensions(get(), controls.summaryTable, granularity);
     const key = "summary-table";
     const sig = JSON.stringify({
       configId,
@@ -1170,6 +1264,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       lifecycle: s.lifecycle,
       lifecycleAll: s.lifecycleAll,
       rangeGroups: s.rangeGroups,
+      periodTotalGroups: s.periodTotalGroups,
       panels: Object.fromEntries(Object.entries(s.panels).map(([k, v]) => [k, { ...v, series: [] }])),
       group: Object.fromEntries(Object.entries(s.group).map(([k, v]) => [k, { ...v, stats: [], missing: false }])),
       // Keep the display options (stats / p-values / reference); drop fetched data.
@@ -1200,9 +1295,11 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       // column, then let the snapshot's non-empty selections override. Saved
       // empty selections are treated as 'all' (pre-explicit-defaults views).
       const pickerCols = config.user_group_cols.filter(
-        (c) => c !== config.lifecycle_col && c !== config.range_group_col,
+        (c) => c !== config.lifecycle_col && c !== config.range_group_col && c !== config.period_total_col,
       );
-      const sanitize = <T extends { cohortSelection: Record<string, string[]>; rangeSelection?: string[] }>(
+      const sanitize = <
+        T extends { cohortSelection: Record<string, string[]>; rangeSelection?: string[]; periodTotalSelection?: string[] },
+      >(
         t: T,
       ): T => ({
         ...t,
@@ -1214,6 +1311,10 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         },
         rangeSelection:
           config.range_group_col && !(t.rangeSelection ?? []).length ? ["all"] : (t.rangeSelection ?? []),
+        periodTotalSelection:
+          config.period_total_col && !(t.periodTotalSelection ?? []).length
+            ? ["all"]
+            : (t.periodTotalSelection ?? []),
       });
       const raw = snapshotControls(snap);
       const controls: TabControls = {
@@ -1235,6 +1336,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         rangeGroups:
           snap.rangeGroups ??
           (config.range_group_defaults ?? []).map((g) => ({ label: g.label, min: g.min, max: g.max ?? null })),
+        periodTotalGroups: snap.periodTotalGroups ?? periodTotalDefaults(config),
         groupValuesByGran: {},
         groupAvailableByGran: {},
         groupAvailRangeByGran: {},

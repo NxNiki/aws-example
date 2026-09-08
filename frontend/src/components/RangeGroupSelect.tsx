@@ -31,6 +31,23 @@ function BoundSelect(props: { values: number[]; value: number; onChange: (v: num
   );
 }
 
+// Free numeric bound for continuous dimensions (e.g. the "Total bet" picker):
+// a period total has no stable value ladder to pick from, so any number goes.
+function BoundInput(props: { value: number; onChange: (v: number) => void }) {
+  return (
+    <input
+      type="number"
+      min={0}
+      className="w-20 rounded border px-1 py-0.5 text-sm"
+      value={String(props.value)}
+      onChange={(e) => {
+        const v = Number(e.target.value);
+        if (Number.isFinite(v)) props.onChange(v);
+      }}
+    />
+  );
+}
+
 export function RangeGroupSelect(props: {
   name: string; // display name from the config, e.g. "Fish level"
   groups: RangeGroupDef[];
@@ -38,6 +55,7 @@ export function RangeGroupSelect(props: {
   selection: string[]; // per-tab: checked group labels (may include "all")
   onSetSelection: (labels: string[]) => void;
   onSetGroup: (index: number, group: RangeGroupDef) => void; // global defs
+  freeBounds?: boolean; // numeric inputs instead of the value ladder
 }) {
   const toggle = (label: string, checked: boolean) => {
     const next = checked ? [...new Set([...props.selection, label])] : props.selection.filter((v) => v !== label);
@@ -63,13 +81,21 @@ export function RangeGroupSelect(props: {
                 title="group name (chart legend label)"
               />
               <span className="text-gray-400">[</span>
-              <BoundSelect values={props.values} value={g.min} onChange={(v) => props.onSetGroup(i, { ...g, min: v })} />
+              {props.freeBounds ? (
+                <BoundInput value={g.min} onChange={(v) => props.onSetGroup(i, { ...g, min: v })} />
+              ) : (
+                <BoundSelect values={props.values} value={g.min} onChange={(v) => props.onSetGroup(i, { ...g, min: v })} />
+              )}
               <span className="text-gray-400">,</span>
-              <BoundSelect
-                values={props.values}
-                value={g.max ?? props.values[props.values.length - 1] ?? g.min}
-                onChange={(v) => props.onSetGroup(i, { ...g, max: v })}
-              />
+              {props.freeBounds ? (
+                <BoundInput value={g.max ?? g.min} onChange={(v) => props.onSetGroup(i, { ...g, max: v })} />
+              ) : (
+                <BoundSelect
+                  values={props.values}
+                  value={g.max ?? props.values[props.values.length - 1] ?? g.min}
+                  onChange={(v) => props.onSetGroup(i, { ...g, max: v })}
+                />
+              )}
               <span className="text-gray-400">]</span>
             </div>
           ))}

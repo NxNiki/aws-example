@@ -9,7 +9,7 @@ import { RangeGroupSelect } from "../../components/RangeGroupSelect";
 import { ClipControls } from "../../components/ClipControls";
 import { FilterControls } from "../../components/FilterControls";
 import { MetricCheckList } from "../../components/MetricCheckList";
-import { activeLifecycleGroups, activeRangeGroups, rangeGroupValues, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
+import { activeLifecycleGroups, activeRangeDimensions, rangeGroupValues, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
 import { AddToReportButton } from "../report/AddToReport";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import type { DeepdivePanel as PanelId, HistogramSeries } from "../../api/types";
@@ -199,7 +199,7 @@ function DeepdivePanelView(props: {
                   .map((r) => ({ start: r.start, end: r.end })),
                 cohort_selection: vizControls.cohortSelection,
                 lifecycle_groups: activeLifecycleGroups(useDashboardStore.getState(), dateGroups.granularity) ?? null,
-                range_groups: activeRangeGroups(useDashboardStore.getState(), vizControls.rangeSelection) ?? null,
+                range_groups: activeRangeDimensions(useDashboardStore.getState(), vizControls, dateGroups.granularity) ?? null,
                 panel: props.panelId,
                 mode: panel.mode,
                 metrics: panel.metrics,
@@ -276,7 +276,7 @@ export function DeepDive() {
     ranges: dg.ranges.map((r) => [r.start, r.end, r.show]),
     cohorts: c.cohortSelection,
     lifecycle: activeLifecycleGroups(s, dg.granularity),
-    rangeGroups: activeRangeGroups(s, c.rangeSelection),
+    rangeGroups: activeRangeDimensions(s, c, dg.granularity),
     panels: (["derived", "user"] as PanelId[]).map((id) => {
       const p = s.deepdive[id];
       return [id, p.mode, p.metrics, p.nbins, p.normalize, p.clip, p.filter, p.outliersStd];
@@ -311,6 +311,17 @@ export function DeepDive() {
             selection={c.rangeSelection}
             onSetSelection={(labels) => s.setTabRangeSelection("viz", labels)}
             onSetGroup={s.setRangeGroup}
+          />
+        )}
+        {s.config?.period_total_col && (
+          <RangeGroupSelect
+            name={`${s.config.period_total_name ?? s.config.period_total_col} / ${dg.granularity}`}
+            groups={s.periodTotalGroups[dg.granularity] ?? []}
+            values={[]}
+            freeBounds
+            selection={c.periodTotalSelection ?? []}
+            onSetSelection={(labels) => s.setTabPeriodTotalSelection("viz", labels)}
+            onSetGroup={(i, g) => s.setPeriodTotalGroup(dg.granularity, i, g)}
           />
         )}
       </div>
