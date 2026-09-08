@@ -295,6 +295,12 @@ def projection_columns(
     rcol, _, _ = range_group_cfg(cfg)
     if rcol:
         cols.add(rcol)
+    ptcol, _, pt_source, _ = period_total_group_cfg(cfg)
+    if ptcol:
+        # The derived period-total column is computed from its source column at
+        # request time, so the source must survive projection even when no
+        # requested metric depends on it.
+        cols.add(pt_source)
     for m in metrics:
         if m in DataMetrics.METRICS:
             deps = DataMetrics.metric_user_col_deps(m)
@@ -365,6 +371,32 @@ def range_group_values(cfg: dict[str, Any]) -> list[float]:
     back to the distinct data values from /group-values."""
     rg = stats_by_date_cfg(cfg).get("range_group") or {}
     return [float(v) for v in (rg.get("values") or [])]
+
+
+def period_total_group_cfg(cfg: dict[str, Any]) -> tuple[Optional[str], str, str, dict[str, list[dict[str, Any]]]]:
+    """(column, display name, source column, per-granularity default groups) of
+    the DERIVED period-total range dimension (``stats_by_date.
+    period_total_group``), or (None, "", "", {}) when not configured.
+
+    Dashboard feature: the "Total bet" picker — cohorts of user-periods by the
+    user's TOTAL ``source_col`` over the whole day/week/month, computed at API
+    time by ``attach_period_totals`` (nothing is stored). Unlike ``range_group``
+    (a stored grain column whose ranges re-partition a user's bets), a period
+    total is one value per (user, period): its ranges keep or drop whole
+    user-periods. The column is a VIRTUAL name — list it in user_group_cols
+    (picker order, like life_cycle_group), never in user_row_grain.
+    ``defaults`` may be one list (applies to every granularity) or a
+    {day/week/month: [...]} mapping, since sensible edges scale with the period.
+    """
+    pt = stats_by_date_cfg(cfg).get("period_total_group") or {}
+    col = str(pt.get("column") or "") or None
+    name = str(pt.get("name") or (col or ""))
+    source = str(pt.get("source_col") or "user_total_bet")
+    raw = pt.get("defaults") or {}
+    if isinstance(raw, list):
+        raw = {g: raw for g in ("day", "week", "month")}
+    defaults = {str(g): [dict(d) for d in (v or [])] for g, v in raw.items()}
+    return col, name, source, defaults
 
 
 def lifecycle_col(cfg: dict[str, Any]) -> Optional[str]:
@@ -713,6 +745,25 @@ def attach_lifecycle_periods(cfg: dict[str, Any], df: pl.DataFrame, date_col: st
     return joined.with_columns(periods.alias(PERIODS_COL)).drop("first_bet_date")
 
 
+def attach_period_totals(df: pl.DataFrame, date_col: str, col: str, source_col: str) -> pl.DataFrame:
+    """Add ``col`` = the user's total ``source_col`` across ALL their grain rows
+    in the period. Grain rows partition the period's bets (every bet lives in
+    exactly one row — see ``user_row_grain``), so the sum reconstructs the whole
+    user-day/-week/-month regardless of which grain dimensions exist.
+
+    Dashboard feature: the "Total bet" range picker (``period_total_group``).
+    Computed BEFORE any cohort filtering so the total reflects the user's whole
+    period even when other pickers (mathtable, bet level) are active; constant
+    per (user, period), so its range filters keep or drop whole user-periods
+    and the grain collapse is unaffected (``collapse_user_rows`` carries it
+    through as first()).
+    """
+    if df.is_empty() or "user_id" not in df.columns or source_col not in df.columns:
+        return df.with_columns(pl.lit(None, dtype=pl.Float64).alias(col))
+    totals = df.group_by("user_id", date_col).agg(pl.col(source_col).sum().alias(col))
+    return df.join(totals, on=["user_id", date_col], how="left")
+
+
 def _scan_source(path: str) -> pl.LazyFrame:
     """One lazy scan per configured source path.
 
@@ -938,7 +989,13 @@ def iter_cohorts(
     by_label = {str(g["label"]): g for g in lifecycle or []}
     grain = user_row_grain(cfg)
     rcol, _, _ = range_group_cfg(cfg)
-    range_by_label = {str(g["label"]): g for g in range_groups or []} if rcol else {}
+    ptcol, _, pt_source, _ = period_total_group_cfg(cfg)
+    # A payload entry addresses a range dimension by its ``column``; entries
+    # without one target the stored range column (pre-multi-picker clients).
+    range_by_label = (
+        {str(g["label"]): g for g in (range_groups or []) if (g.get("column") or rcol) == rcol} if rcol else {}
+    )
+    pt_by_label = {str(g["label"]): g for g in (range_groups or []) if ptcol and g.get("column") == ptcol}
     # Attach the derived period offsets whenever the config has a lifecycle
     # dimension (DataMetrics needs them for num_new_users even when no
     # lifecycle groups are selected); lc only gates the lifecycle FILTERS.
@@ -948,12 +1005,20 @@ def iter_cohorts(
         lc = None
     if lc is not None and lc not in cols:
         lc = None
+    # Derived per-(user, period) totals for the "Total bet" picker — attached
+    # before any cohort filter so the total covers the user's whole period.
+    if ptcol and pt_by_label and date_col and "user_id" in df.columns:
+        df = attach_period_totals(df, date_col, ptcol, pt_source)
+    else:
+        pt_by_label = {}
 
     def values(col: str) -> list[str]:
         if col == lc:
             return list(by_label) or ["all"]
         if col == rcol and range_by_label:
             return list(range_by_label)
+        if col == ptcol and pt_by_label:
+            return list(pt_by_label)
         return cohort_values(group_values, col)
 
     def apply(df_: pl.DataFrame, col: str, value: str) -> pl.DataFrame:
@@ -965,6 +1030,12 @@ def iter_cohorts(
             return df_.filter(cond)
         if col == rcol and value in range_by_label and value != "all":
             g = range_by_label[value]
+            cond = pl.col(col) >= float(g["min"])
+            if g.get("max") is not None:
+                cond = cond & (pl.col(col) <= float(g["max"]))
+            return df_.filter(cond)
+        if col == ptcol and value in pt_by_label and value != "all":
+            g = pt_by_label[value]
             cond = pl.col(col) >= float(g["min"])
             if g.get("max") is not None:
                 cond = cond & (pl.col(col) <= float(g["max"]))

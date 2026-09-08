@@ -782,6 +782,86 @@ def test_iter_cohorts_range_groups_bucket_by_value(monkeypatch):
     assert out["all"].sort("user_id")["user_num_bets"].to_list() == [25, 7]
 
 
+def test_iter_cohorts_period_total_groups(monkeypatch):
+    """The derived period-total dimension ("Total bet" picker) buckets whole
+    user-periods by the user's total across ALL grain rows in the period —
+    computed at request time, nothing stored. A user lands entirely inside or
+    outside a range (no re-partition of their rows), the total is taken BEFORE
+    other cohort filters, and grain collapse still applies."""
+
+    df = pl.DataFrame(
+        {
+            "d": ["2026-06-01"] * 3 + ["2026-06-02"],
+            "user_id": ["u1", "u1", "u2", "u1"],
+            "ab_group": ["AI", "AI", "AI", "AI"],
+            "mathtable": ["mt_a", "mt_b", "mt_a", "mt_a"],
+            "user_num_bets": [5, 20, 7, 3],
+            "user_total_bet": [40.0, 80.0, 500.0, 9.0],  # u1 day1 total=120, u2=500, u1 day2=9
+        }
+    ).with_columns(pl.col("d").str.to_datetime())
+    cfg = {
+        "id": "g",
+        "stats_by_date": {
+            "user_group_cols": ["ab_group", "mathtable", "period_total_bet"],
+            "user_row_grain": ["ab_group", "mathtable"],
+            "period_total_group": {"column": "period_total_bet", "name": "Total bet"},
+        },
+    }
+    groups = [
+        {"column": "period_total_bet", "label": "low", "min": 0, "max": 100},
+        {"column": "period_total_bet", "label": "mid", "min": 100, "max": 1000},
+        {"column": "period_total_bet", "label": "all", "min": 0, "max": None},
+    ]
+    out = dict(common.iter_cohorts(cfg, df, {}, date_col="d", range_groups=groups))
+    assert set(out) == {"low", "mid", "all"}
+    # low: only u1's day2 (total 9) — u1 day1 (120) is excluded WHOLE, both rows.
+    assert out["low"].select("user_id", "d").unique().height == 1
+    assert out["low"]["user_num_bets"].to_list() == [3]
+    # mid: u1 day1 (collapsed to one per-user row summing both grain rows) + u2.
+    mid = out["mid"].sort("user_id")
+    assert mid.height == 2
+    assert mid["user_num_bets"].to_list() == [25, 7]
+    assert mid["user_total_bet"].to_list() == [120.0, 500.0]
+    assert out["all"].height == 3  # 3 user-days, grain collapsed
+
+    # Whole-period semantics: pinning a grain dimension does not change the
+    # total — u1 day1 stays "mid" (120) even when only mt_a rows are selected.
+    pinned = dict(common.iter_cohorts(cfg, df, {"mathtable": ["mt_a"]}, date_col="d", range_groups=groups[1:2]))
+    label = next(iter(pinned))
+    assert "mid" in label and "mt_a" in label
+    u1d1 = pinned[label].with_columns(pl.col("d").dt.strftime("%d").alias("dd")).filter(pl.col("dd") == "01")
+    assert u1d1.sort("user_id")["user_num_bets"].to_list() == [5, 7]  # mt_a rows only, but day still in "mid"
+
+    # Payload entries without a column stay on the stored range dimension —
+    # here there is none configured, so they are ignored rather than misapplied.
+    legacy = dict(common.iter_cohorts(cfg, df, {}, date_col="d", range_groups=[{"label": "x", "min": 0, "max": 1}]))
+    assert out["all"].height == 3 and "x" not in legacy
+
+
+def test_period_total_group_cfg_defaults_normalization():
+    """`defaults` accepts one list (applies to every granularity) or a
+    per-granularity mapping, since sensible edges scale with the period."""
+
+    flat = {"stats_by_date": {"period_total_group": {"column": "c", "defaults": [{"label": "a", "min": 0}]}}}
+    col, name, source, defaults = common.period_total_group_cfg(flat)
+    assert col == "c" and name == "c" and source == "user_total_bet"
+    assert set(defaults) == {"day", "week", "month"} and defaults["week"][0]["label"] == "a"
+    per = {
+        "stats_by_date": {
+            "period_total_group": {
+                "column": "c",
+                "name": "Total bet",
+                "source_col": "user_total_cost",
+                "defaults": {"day": [{"label": "d", "min": 0}], "week": [{"label": "w", "min": 0}]},
+            }
+        }
+    }
+    col, name, source, defaults = common.period_total_group_cfg(per)
+    assert name == "Total bet" and source == "user_total_cost"
+    assert list(defaults["day"]) and defaults["week"][0]["label"] == "w" and "month" not in defaults
+    assert common.period_total_group_cfg({"stats_by_date": {}})[0] is None
+
+
 def test_series_request_accepts_ranges():
     """The global Date-groups picker sends up to three windows to /series; old
     clients (and saved report recipes) still use date_from/date_to."""
