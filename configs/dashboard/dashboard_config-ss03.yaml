@@ -49,6 +49,7 @@ stats_by_date:
   # edge set serves every granularity: most users play ~1 day per week/month,
   # so the per-user weekly/monthly totals sit within a few percent of the
   # daily ones (medians 114/110/100 CNY; edges ≈ p25 / median-region / p90).
+  # Ranges are HALF-OPEN [min, max) — adjacent tiers partition exactly.
   period_total_group:
     column: period_total_bet
     name: "Total bet"

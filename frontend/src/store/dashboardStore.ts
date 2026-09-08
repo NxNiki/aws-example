@@ -239,6 +239,8 @@ export function activeRangeGroups(
 // resolved against the granularity's global definitions, each entry tagged
 // with the derived column so the backend routes it to the period-total
 // dimension (entries without a column address the stored range column).
+// Period-total ranges are HALF-OPEN [min, max) — adjacent tiers partition
+// exactly, like lifecycle groups — so labels are tagged "label[min, max)".
 export function activePeriodTotalGroups(
   s: Pick<DashboardState, "config" | "periodTotalGroups">,
   selection: string[],
@@ -254,9 +256,10 @@ export function activePeriodTotalGroups(
       continue;
     }
     const def = defs.find((g) => g.label === label);
-    if (def && def.label.trim() && (def.max === null || def.max >= def.min)) {
+    // Strict max > min: with a right-exclusive bound, max == min is empty.
+    if (def && def.label.trim() && (def.max === null || def.max > def.min)) {
       groups.push({
-        label: `${def.label.trim()}[${def.min}, ${def.max ?? "max"}]`,
+        label: `${def.label.trim()}[${def.min}, ${def.max ?? "\u221e"})`,
         column: col,
         min: def.min,
         max: def.max,

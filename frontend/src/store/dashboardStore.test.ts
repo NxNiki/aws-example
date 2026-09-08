@@ -316,7 +316,7 @@ describe("period-total (Total bet) picker", () => {
     };
     const pt = activePeriodTotalGroups(state, ["low", "all"], "day");
     expect(pt).toEqual([
-      { label: "low[0, 100]", column: "period_total_bet", min: 0, max: 100 },
+      { label: "low[0, 100)", column: "period_total_bet", min: 0, max: 100 },
       { label: "all", column: "period_total_bet", min: 0, max: null },
     ]);
     // week uses that granularity's definitions

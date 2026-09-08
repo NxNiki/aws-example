@@ -1446,7 +1446,7 @@
         "type": "object"
       },
       "RangeGroup": {
-        "description": "One user-defined value-range cohort over a range dimension: rows with\nmin <= value <= max \u2014 both ends INCLUSIVE, ``max=None`` open-ended.\n\nDashboard feature: the \"Fish level\" / \"Bet level\" / \"Total bet\" pickers\nnext to Lifecycle groups. ``column`` says which range dimension the group\naddresses \u2014 the stored range column (``range_group_col``) when omitted\n(pre-multi-picker clients), or the derived period-total column\n(``period_total_col``, one total per user \u00d7 period). The label \"all\" is\nthe no-filter sentinel; ranges may overlap.",
+        "description": "One user-defined value-range cohort over a range dimension: rows with\nmin <= value <= max \u2014 both ends INCLUSIVE, ``max=None`` open-ended.\n\nDashboard feature: the \"Fish level\" / \"Bet level\" / \"Total bet\" pickers\nnext to Lifecycle groups. ``column`` says which range dimension the group\naddresses \u2014 the stored range column (``range_group_col``) when omitted\n(pre-multi-picker clients), or the derived period-total column\n(``period_total_col``, one total per user \u00d7 period). Period-total ranges\nare HALF-OPEN [min, max) so adjacent tiers partition exactly; the stored\nrange column keeps inclusive bounds (they are real ladder values). The\nlabel \"all\" is the no-filter sentinel; ranges may overlap.",
         "properties": {
           "column": {
             "anyOf": [

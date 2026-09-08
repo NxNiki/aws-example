@@ -383,8 +383,11 @@ def period_total_group_cfg(cfg: dict[str, Any]) -> tuple[Optional[str], str, str
     time by ``attach_period_totals`` (nothing is stored). Unlike ``range_group``
     (a stored grain column whose ranges re-partition a user's bets), a period
     total is one value per (user, period): its ranges keep or drop whole
-    user-periods. The column is a VIRTUAL name — list it in user_group_cols
-    (picker order, like life_cycle_group), never in user_row_grain.
+    user-periods, and are HALF-OPEN [min, max) — adjacent tiers partition
+    exactly, like lifecycle groups (the stored range picker stays inclusive:
+    its bounds are real ladder values). The column is a VIRTUAL name — list it
+    in user_group_cols (picker order, like life_cycle_group), never in
+    user_row_grain.
     ``defaults`` may be one list (applies to every granularity) or a
     {day/week/month: [...]} mapping, since sensible edges scale with the period.
     """
@@ -1035,10 +1038,15 @@ def iter_cohorts(
                 cond = cond & (pl.col(col) <= float(g["max"]))
             return df_.filter(cond)
         if col == ptcol and value in pt_by_label and value != "all":
+            # HALF-OPEN [min, max) — unlike the stored range column, whose
+            # inclusive bounds come from a discrete value ladder, period-total
+            # edges are arbitrary numbers: right-exclusive ranges let adjacent
+            # tiers (0-100, 100-1000, ...) partition exactly, like lifecycle
+            # groups.
             g = pt_by_label[value]
             cond = pl.col(col) >= float(g["min"])
             if g.get("max") is not None:
-                cond = cond & (pl.col(col) <= float(g["max"]))
+                cond = cond & (pl.col(col) < float(g["max"]))
             return df_.filter(cond)
         return apply_cohort(df_, col, value)
 

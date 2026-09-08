@@ -56,6 +56,9 @@ export function RangeGroupSelect(props: {
   onSetSelection: (labels: string[]) => void;
   onSetGroup: (index: number, group: RangeGroupDef) => void; // global defs
   freeBounds?: boolean; // numeric inputs instead of the value ladder
+  // Bound-semantics note shown next to the name; the stored-column picker is
+  // inclusive on both ends, the period-total picker is half-open [min, max).
+  boundsNote?: string;
 }) {
   const toggle = (label: string, checked: boolean) => {
     const next = checked ? [...new Set([...props.selection, label])] : props.selection.filter((v) => v !== label);
@@ -65,7 +68,7 @@ export function RangeGroupSelect(props: {
   return (
     <div className="flex flex-col text-base">
       <span className="text-gray-600 mb-1">
-        {props.name} <span className="text-gray-400 text-sm">(inclusive [min, max])</span>
+        {props.name} <span className="text-gray-400 text-sm">{props.boundsNote ?? "(inclusive [min, max])"}</span>
       </span>
       {/* Fixed 4 rows like CohortSelect; extra entries flow into new columns.
           "all" renders last so the four (wide) group rows fill the first column. */}

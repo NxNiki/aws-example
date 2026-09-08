@@ -43,6 +43,7 @@ stats_by_date:
   # spend over the whole day/week/month — derived at API time (virtual
   # column). One default edge set serves every granularity (per-user weekly/
   # monthly totals track the daily ones: medians 448/357/271; edges ≈ p25 /
+  # Ranges are HALF-OPEN [min, max) — adjacent tiers partition exactly.
   # median-region / p90 of the daily distribution, round numbers).
   period_total_group:
     column: period_total_bet

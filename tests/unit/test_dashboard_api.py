@@ -785,18 +785,20 @@ def test_iter_cohorts_range_groups_bucket_by_value(monkeypatch):
 def test_iter_cohorts_period_total_groups(monkeypatch):
     """The derived period-total dimension ("Total bet" picker) buckets whole
     user-periods by the user's total across ALL grain rows in the period —
-    computed at request time, nothing stored. A user lands entirely inside or
+    computed at request time, nothing stored. Ranges are HALF-OPEN [min, max)
+    so adjacent tiers partition exactly. A user lands entirely inside or
     outside a range (no re-partition of their rows), the total is taken BEFORE
     other cohort filters, and grain collapse still applies."""
 
     df = pl.DataFrame(
         {
-            "d": ["2026-06-01"] * 3 + ["2026-06-02"],
-            "user_id": ["u1", "u1", "u2", "u1"],
-            "ab_group": ["AI", "AI", "AI", "AI"],
-            "mathtable": ["mt_a", "mt_b", "mt_a", "mt_a"],
-            "user_num_bets": [5, 20, 7, 3],
-            "user_total_bet": [40.0, 80.0, 500.0, 9.0],  # u1 day1 total=120, u2=500, u1 day2=9
+            "d": ["2026-06-01"] * 3 + ["2026-06-02"] * 2,
+            "user_id": ["u1", "u1", "u2", "u1", "u3"],
+            "ab_group": ["AI"] * 5,
+            "mathtable": ["mt_a", "mt_b", "mt_a", "mt_a", "mt_a"],
+            "user_num_bets": [5, 20, 7, 3, 11],
+            # u1 day1 total=120, u2=500, u1 day2=9, u3 exactly 100 (boundary)
+            "user_total_bet": [40.0, 80.0, 500.0, 9.0, 100.0],
         }
     ).with_columns(pl.col("d").str.to_datetime())
     cfg = {
@@ -814,15 +816,17 @@ def test_iter_cohorts_period_total_groups(monkeypatch):
     ]
     out = dict(common.iter_cohorts(cfg, df, {}, date_col="d", range_groups=groups))
     assert set(out) == {"low", "mid", "all"}
-    # low: only u1's day2 (total 9) — u1 day1 (120) is excluded WHOLE, both rows.
+    # low [0, 100): only u1's day2 (total 9) — u3's exact-boundary 100 is
+    # EXCLUDED (right-exclusive), and u1 day1 (120) is excluded WHOLE.
     assert out["low"].select("user_id", "d").unique().height == 1
     assert out["low"]["user_num_bets"].to_list() == [3]
-    # mid: u1 day1 (collapsed to one per-user row summing both grain rows) + u2.
+    # mid [100, 1000): u1 day1 (collapsed, grain rows summed), u2, and the
+    # boundary user u3 (exactly 100 → mid only, no double count).
     mid = out["mid"].sort("user_id")
-    assert mid.height == 2
-    assert mid["user_num_bets"].to_list() == [25, 7]
-    assert mid["user_total_bet"].to_list() == [120.0, 500.0]
-    assert out["all"].height == 3  # 3 user-days, grain collapsed
+    assert mid.height == 3
+    assert mid["user_num_bets"].to_list() == [25, 7, 11]
+    assert mid["user_total_bet"].to_list() == [120.0, 500.0, 100.0]
+    assert out["all"].height == 4  # 4 user-days, grain collapsed
 
     # Whole-period semantics: pinning a grain dimension does not change the
     # total — u1 day1 stays "mid" (120) even when only mt_a rows are selected.
@@ -835,7 +839,7 @@ def test_iter_cohorts_period_total_groups(monkeypatch):
     # Payload entries without a column stay on the stored range dimension —
     # here there is none configured, so they are ignored rather than misapplied.
     legacy = dict(common.iter_cohorts(cfg, df, {}, date_col="d", range_groups=[{"label": "x", "min": 0, "max": 1}]))
-    assert out["all"].height == 3 and "x" not in legacy
+    assert "x" not in legacy
 
 
 def test_period_total_group_cfg_defaults_normalization():
