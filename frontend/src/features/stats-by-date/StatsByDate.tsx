@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { activeLifecycleGroups, activeRangeGroups, rangeGroupValues, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
+import { activeLifecycleGroups, activeRangeDimensions, rangeGroupValues, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { CohortSelect } from "../../components/CohortSelect";
 import { RangeGroupSelect } from "../../components/RangeGroupSelect";
@@ -23,7 +23,7 @@ export function StatsByDate() {
     ranges: dg.ranges.map((r) => [r.start, r.end, r.show]),
     cohorts: c.cohortSelection,
     lifecycle: activeLifecycleGroups(s, dg.granularity),
-    rangeGroups: activeRangeGroups(s, c.rangeSelection),
+    rangeGroups: activeRangeDimensions(s, c, dg.granularity),
     metrics: Object.entries(s.panels).map(([id, p]) => [id, p.left, p.right]),
   });
   const debouncedKey = useDebouncedValue(fetchKey);
@@ -63,6 +63,19 @@ export function StatsByDate() {
             selection={c.rangeSelection}
             onSetSelection={(labels) => s.setTabRangeSelection("date", labels)}
             onSetGroup={s.setRangeGroup}
+          />
+        )}
+        {s.config?.period_total_col && (
+          <RangeGroupSelect
+            name={`${s.config.period_total_name ?? s.config.period_total_col} / ${dg.granularity}`}
+            groups={s.periodTotalGroups[dg.granularity] ?? []}
+            values={[]}
+            freeBounds
+            rightExclusive
+            boundsNote="([min, max) — right-exclusive)"
+            selection={c.periodTotalSelection ?? []}
+            onSetSelection={(labels) => s.setTabPeriodTotalSelection("date", labels)}
+            onSetGroup={(i, g) => s.setPeriodTotalGroup(dg.granularity, i, g)}
           />
         )}
       </div>

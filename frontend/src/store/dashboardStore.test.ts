@@ -13,7 +13,7 @@ vi.mock("../api/client", () => ({
 }));
 
 import { api } from "../api/client";
-import { useDashboardStore } from "./dashboardStore";
+import { activePeriodTotalGroups, activeRangeDimensions, periodTotalDefaults, useDashboardStore } from "./dashboardStore";
 import type { ConfigDetail } from "../api/types";
 import type { RangeState } from "../components/DateRanges";
 
@@ -33,6 +33,7 @@ const CONFIG = {
   group_col: "",
   user_group_cols: ["user_group"],
   range_group_defaults: [],
+    period_total_defaults: {},
   granularities: ["day"],
   groups: [
     { id: "group1", label: "DAU", metrics: ["num_active_users", "rtp"] },
@@ -49,10 +50,10 @@ const freshRanges = (): RangeState[] => [
 
 // Cohorts are per tab; granularity + date windows are the global Date groups.
 const freshControls = () => ({
-  date: { cohortSelection: {}, rangeSelection: [] },
-  group: { cohortSelection: {}, rangeSelection: [] },
-  viz: { cohortSelection: {}, rangeSelection: [] },
-  summaryTable: { cohortSelection: {}, rangeSelection: [] },
+  date: { cohortSelection: {}, rangeSelection: [], periodTotalSelection: [] },
+  group: { cohortSelection: {}, rangeSelection: [], periodTotalSelection: [] },
+  viz: { cohortSelection: {}, rangeSelection: [], periodTotalSelection: [] },
+  summaryTable: { cohortSelection: {}, rangeSelection: [], periodTotalSelection: [] },
 });
 
 const initialState = () => ({
@@ -152,7 +153,7 @@ describe("dashboardStore", () => {
     ranges[2] = { start: "2025-01-20", end: "2025-01-25", show: true };
     useDashboardStore.setState({
       configId: "ss01",
-      controls: { ...freshControls(), date: { cohortSelection: { user_group: ["new"] }, rangeSelection: [] } },
+      controls: { ...freshControls(), date: { cohortSelection: { user_group: ["new"] }, rangeSelection: [], periodTotalSelection: [] } },
       dateGroups: { granularity: "day", ranges },
       panels: { group1: { left: ["num_active_users"], right: ["rtp"], log: false, threshold: 10, series: [] } },
     });
@@ -277,5 +278,57 @@ describe("range-group and lifecycle selection consistency", () => {
     // Same range again: served from state, no new request.
     await useDashboardStore.getState().ensureGroupValues("day");
     expect(mockApi.groupValues).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("period-total (Total bet) picker", () => {
+  const config = {
+    id: "c",
+    title: "c",
+    date_col: "d",
+    group_col: "g",
+    user_group_cols: ["g", "period_total_bet"],
+    range_group_defaults: [],
+    period_total_defaults: {
+      day: [{ label: "low", min: 0, max: 100 }],
+      week: [{ label: "low_w", min: 0, max: 500 }],
+    },
+    range_group_values: [],
+    period_total_col: "period_total_bet",
+    period_total_name: "Total bet",
+    granularities: ["day", "week", "month"],
+    groups: [],
+    tabs: [],
+  } as unknown as ConfigDetail;
+
+  it("seeds per-granularity definitions, falling back to the day list", () => {
+    const defs = periodTotalDefaults(config);
+    expect(defs.day).toEqual([{ label: "low", min: 0, max: 100 }]);
+    expect(defs.week).toEqual([{ label: "low_w", min: 0, max: 500 }]);
+    expect(defs.month).toEqual(defs.day); // no month defaults configured
+  });
+
+  it("tags payload entries with the derived column and merges both pickers", () => {
+    const state = {
+      config,
+      rangeGroups: [],
+      periodTotalGroups: periodTotalDefaults(config),
+    };
+    const pt = activePeriodTotalGroups(state, ["low", "all"], "day");
+    expect(pt).toEqual([
+      { label: "low[0, 100)", column: "period_total_bet", min: 0, max: 100 },
+      { label: "all", column: "period_total_bet", min: 0, max: null },
+    ]);
+    // week uses that granularity's definitions
+    expect(activePeriodTotalGroups(state, ["low_w"], "week")?.[0].max).toBe(500);
+    // nothing checked → no payload; merged helper mirrors that
+    expect(activePeriodTotalGroups(state, [], "day")).toBeUndefined();
+    const merged = activeRangeDimensions(
+      state,
+      { cohortSelection: {}, rangeSelection: [], periodTotalSelection: ["low"] },
+      "day",
+    );
+    expect(merged).toHaveLength(1);
+    expect(merged?.[0].column).toBe("period_total_bet");
   });
 });

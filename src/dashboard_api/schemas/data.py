@@ -53,21 +53,33 @@ class ConfigDetail(BaseModel):
     range_group_defaults: list["RangeGroup"] = []
     # Config-declared bound ladder for the picker; empty → derive from data.
     range_group_values: list[float] = []
+    # Derived period-total range picker ("Total bet"): virtual column name,
+    # display name, and default groups per granularity (edges scale with the
+    # period, so day/week/month each get their own). None → no picker.
+    period_total_col: Optional[str] = None
+    period_total_name: Optional[str] = None
+    period_total_defaults: dict[str, list["RangeGroup"]] = {}
     granularities: list[Granularity]
     groups: list[MetricGroup]
     tabs: list[str]
 
 
 class RangeGroup(BaseModel):
-    """One user-defined value-range cohort over the config's range column
-    (``range_group_col``, e.g. fish_value): rows with min <= value <= max —
-    both ends INCLUSIVE, ``max=None`` open-ended.
+    """One user-defined value-range cohort over a range dimension: rows with
+    min <= value <= max — both ends INCLUSIVE, ``max=None`` open-ended.
 
-    Dashboard feature: the "Fish level" style picker next to Lifecycle groups.
-    The label "all" is the no-filter sentinel; ranges may overlap.
+    Dashboard feature: the "Fish level" / "Bet level" / "Total bet" pickers
+    next to Lifecycle groups. ``column`` says which range dimension the group
+    addresses — the stored range column (``range_group_col``) when omitted
+    (pre-multi-picker clients), or the derived period-total column
+    (``period_total_col``, one total per user × period). Period-total ranges
+    are HALF-OPEN [min, max) so adjacent tiers partition exactly; the stored
+    range column keeps inclusive bounds (they are real ladder values). The
+    label "all" is the no-filter sentinel; ranges may overlap.
     """
 
     label: str = Field(min_length=1)
+    column: Optional[str] = None
     min: float = Field(ge=0)
     max: Optional[float] = None
 

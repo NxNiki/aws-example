@@ -454,6 +454,17 @@ export interface components {
             id: string;
             /** Lifecycle Col */
             lifecycle_col?: string | null;
+            /** Period Total Col */
+            period_total_col?: string | null;
+            /**
+             * Period Total Defaults
+             * @default {}
+             */
+            period_total_defaults: {
+                [key: string]: components["schemas"]["RangeGroup"][];
+            };
+            /** Period Total Name */
+            period_total_name?: string | null;
             /** Range Group Col */
             range_group_col?: string | null;
             /**
@@ -953,14 +964,21 @@ export interface components {
         };
         /**
          * RangeGroup
-         * @description One user-defined value-range cohort over the config's range column
-         *     (``range_group_col``, e.g. fish_value): rows with min <= value <= max —
-         *     both ends INCLUSIVE, ``max=None`` open-ended.
+         * @description One user-defined value-range cohort over a range dimension: rows with
+         *     min <= value <= max — both ends INCLUSIVE, ``max=None`` open-ended.
          *
-         *     Dashboard feature: the "Fish level" style picker next to Lifecycle groups.
-         *     The label "all" is the no-filter sentinel; ranges may overlap.
+         *     Dashboard feature: the "Fish level" / "Bet level" / "Total bet" pickers
+         *     next to Lifecycle groups. ``column`` says which range dimension the group
+         *     addresses — the stored range column (``range_group_col``) when omitted
+         *     (pre-multi-picker clients), or the derived period-total column
+         *     (``period_total_col``, one total per user × period). Period-total ranges
+         *     are HALF-OPEN [min, max) so adjacent tiers partition exactly; the stored
+         *     range column keeps inclusive bounds (they are real ladder values). The
+         *     label "all" is the no-filter sentinel; ranges may overlap.
          */
         RangeGroup: {
+            /** Column */
+            column?: string | null;
             /** Label */
             label: string;
             /** Max */

@@ -29,6 +29,7 @@ const CONFIG = {
   group_col: "",
   user_group_cols: [] as string[],
   range_group_defaults: [],
+    period_total_defaults: {},
   range_group_values: [] as number[],
   granularities: ["day" as const],
   groups: [{ id: "group1", label: "DAU and Retention", metrics: ["num_active_users", "rtp"] }],

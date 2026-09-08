@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { CohortSelect } from "../../components/CohortSelect";
 import { RangeGroupSelect } from "../../components/RangeGroupSelect";
-import { activeLifecycleGroups, activeRangeGroups, rangeGroupValues, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
+import { activeLifecycleGroups, activeRangeDimensions, rangeGroupValues, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { AddToReportButton } from "../report/AddToReport";
 import { MetricSelector } from "./MetricSelector";
@@ -42,7 +42,7 @@ export function SummaryTable() {
     ranges: dg.ranges.map((r) => [r.start, r.end, r.show]),
     cohorts: c.cohortSelection,
     lifecycle: activeLifecycleGroups(s, dg.granularity),
-    rangeGroups: activeRangeGroups(s, c.rangeSelection),
+    rangeGroups: activeRangeDimensions(s, c, dg.granularity),
     metricOptions: t.metricOptions,
     pvalues: t.showPValues,
   });
@@ -83,6 +83,19 @@ export function SummaryTable() {
             onSetGroup={s.setRangeGroup}
           />
         )}
+        {s.config?.period_total_col && (
+          <RangeGroupSelect
+            name={`${s.config.period_total_name ?? s.config.period_total_col} / ${dg.granularity}`}
+            groups={s.periodTotalGroups[dg.granularity] ?? []}
+            values={[]}
+            freeBounds
+            rightExclusive
+            boundsNote="([min, max) — right-exclusive)"
+            selection={c.periodTotalSelection ?? []}
+            onSetSelection={(labels) => s.setTabPeriodTotalSelection("summaryTable", labels)}
+            onSetGroup={(i, g) => s.setPeriodTotalGroup(dg.granularity, i, g)}
+          />
+        )}
         <div className="flex flex-col gap-2 text-base">
           <span className="text-gray-600">Show stats</span>
           <div className="flex flex-wrap gap-x-3 gap-y-1 max-w-xs">
@@ -117,7 +130,7 @@ export function SummaryTable() {
                 ranges: dg.ranges.filter((r) => r.show && r.start && r.end).map((r) => ({ start: r.start, end: r.end })),
                 cohort_selection: c.cohortSelection,
                 lifecycle_groups: activeLifecycleGroups(s, dg.granularity) ?? null,
-                range_groups: activeRangeGroups(s, c.rangeSelection) ?? null,
+                range_groups: activeRangeDimensions(s, c, dg.granularity) ?? null,
                 metrics: t.metrics,
                 stats: t.stats,
                 reference_key: t.referenceKey,
