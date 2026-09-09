@@ -439,6 +439,11 @@ export interface components {
             max?: number | null;
             /** Min */
             min?: number | null;
+            /**
+             * Percentile
+             * @default false
+             */
+            percentile: boolean;
         };
         /** ConfigDetail */
         ConfigDetail: {
@@ -776,6 +781,11 @@ export interface components {
             max?: number | null;
             /** Min */
             min?: number | null;
+            /**
+             * Percentile
+             * @default true
+             */
+            percentile: boolean;
         };
         /** GenerateProxyResponse */
         GenerateProxyResponse: {

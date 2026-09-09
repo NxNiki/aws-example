@@ -292,9 +292,11 @@ def post_group_distribution(req: GroupDistributionRequest) -> GroupDistributionR
                 req.clip.enable,
                 req.clip.min,
                 req.clip.max,
+                req.clip.percentile,
                 req.filter.enable,
                 req.filter.min,
                 req.filter.max,
+                req.filter.percentile,
             ),
             should_cache=lambda v: bool(v[0]),
         )
@@ -336,7 +338,13 @@ def post_summary_table(req: SummaryTableRequest) -> SummaryTableResponse:
             _lifecycle(req.lifecycle_groups),
             _ranges_dims(req.range_groups),
             {
-                m: {"log": o.log, "clip_enable": o.clip.enable, "clip_min": o.clip.min, "clip_max": o.clip.max}
+                m: {
+                    "log": o.log,
+                    "clip_enable": o.clip.enable,
+                    "clip_min": o.clip.min,
+                    "clip_max": o.clip.max,
+                    "clip_percentile": o.clip.percentile,
+                }
                 for m, o in req.metric_options.items()
             },
             req.pvalues,
@@ -390,9 +398,11 @@ def post_deepdive(req: DeepdiveRequest) -> DeepdiveResponse:
             req.clip.enable,
             req.clip.min,
             req.clip.max,
+            req.clip.percentile,
             req.filter.enable,
             req.filter.min,
             req.filter.max,
+            req.filter.percentile,
             req.nbins,
             req.normalize,
             req.outliers_std,

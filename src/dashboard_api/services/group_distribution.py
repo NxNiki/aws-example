@@ -26,6 +26,7 @@ from dashboard_api.services.common import (
     projection_columns,
     stats_by_date_cfg,
 )
+from dashboard_api.services.reshape import clip_values, filter_values
 
 logger = logging.getLogger(__name__)
 
@@ -34,24 +35,6 @@ N_BOOTSTRAP = 500
 
 def _opt(v: float) -> Optional[float]:
     return None if (np.isnan(v) or np.isinf(v)) else float(v)
-
-
-def _percentile_filter(vals: np.ndarray, enable: bool, lo_pct: Optional[float], hi_pct: Optional[float]) -> np.ndarray:
-    """Drop samples below the lo_pct / above the hi_pct percentile (0–100).
-
-    Dashboard feature: the "filter [min]% [max]%" control next to clip on the
-    Stats-by-Group and Deep Dive tabs. Unlike clip (which pins values to the
-    bound), filtered samples are REMOVED before the summary stats, so the
-    percentile bounds are computed on each (cohort × range) sample itself.
-    """
-    if not enable or len(vals) == 0 or (lo_pct is None and hi_pct is None):
-        return vals
-    mask = np.ones(len(vals), dtype=bool)
-    if lo_pct is not None:
-        mask &= vals >= np.percentile(vals, lo_pct)
-    if hi_pct is not None:
-        mask &= vals <= np.percentile(vals, hi_pct)
-    return vals[mask]
 
 
 def _summary(cohort: str, range_label: str, range_index: int, vals: np.ndarray) -> dict[str, Any]:
@@ -84,9 +67,11 @@ def load_group_distribution(
     clip_enable: bool = False,
     clip_min: Optional[float] = None,
     clip_max: Optional[float] = None,
+    clip_percentile: bool = False,
     filter_enable: bool = False,
     filter_min: Optional[float] = None,
     filter_max: Optional[float] = None,
+    filter_percentile: bool = True,
 ) -> tuple[list[dict[str, Any]], bool]:
     """Return (stats, missing). One stat dict per (cohort × non-empty range)."""
     group_values = group_values or {}
@@ -118,9 +103,6 @@ def load_group_distribution(
     if df_raw.is_empty():
         return [], True
 
-    lo_bound = clip_min if clip_min is not None else -np.inf
-    hi_bound = clip_max if clip_max is not None else np.inf
-
     stats: list[dict[str, Any]] = []
     produced = False
     for label, df_c in iter_cohorts(
@@ -146,9 +128,8 @@ def load_group_distribution(
         for range_index, start_dt, end_dt, range_label in parsed:
             window = metric_df.filter((pl.col(date_col) >= start_dt) & (pl.col(date_col) <= end_dt))
             vals = window.get_column(metric).drop_nulls().to_numpy().astype(float)
-            vals = _percentile_filter(vals, filter_enable, filter_min, filter_max)
-            if clip_enable and (clip_min is not None or clip_max is not None):
-                vals = np.clip(vals, lo_bound, hi_bound)
+            vals = filter_values(vals, filter_enable, filter_min, filter_max, filter_percentile)
+            vals = clip_values(vals, clip_enable, clip_min, clip_max, clip_percentile)
             if len(vals) == 0:
                 continue
             produced = True

@@ -191,20 +191,43 @@ class DateRange(BaseModel):
     end: Optional[str] = None
 
 
-# Display-only value clipping: pin values outside [min, max] to the bound.
+# Display-only clipping: pin values outside [min, max] to the bound (keeps
+# every sample). `percentile` switches the bounds' meaning: False (default,
+# back-compat) = absolute values; True = percentiles in 0–100, computed on
+# each (metric × cohort × range) sample itself.
 class ClipOpts(BaseModel):
     enable: bool = False
     min: Optional[float] = None
     max: Optional[float] = None
+    percentile: bool = False
+
+    @model_validator(mode="after")
+    def _pct_range(self) -> "ClipOpts":
+        if self.percentile:
+            for v in (self.min, self.max):
+                if v is not None and not (0 <= v <= 100):
+                    raise ValueError("percentile clip bounds must be within 0–100")
+        return self
 
 
-# Percentile filter: DROP samples below the min / above the max percentile
-# (both in 0–100). Unlike clip (which pins values and keeps every sample),
-# filtered samples are removed before any stats/binning. Applied before clip.
+# Filter: DROP samples outside [min, max]. Unlike clip (which pins values and
+# keeps every sample), filtered samples are removed before any stats/binning;
+# applied before clip. `percentile` switches the bounds' meaning: True
+# (default, back-compat) = percentiles in 0–100 computed on each sample
+# itself; False = absolute values.
 class FilterOpts(BaseModel):
     enable: bool = False
-    min: Optional[float] = Field(default=None, ge=0, le=100)
-    max: Optional[float] = Field(default=None, ge=0, le=100)
+    min: Optional[float] = None
+    max: Optional[float] = None
+    percentile: bool = True
+
+    @model_validator(mode="after")
+    def _pct_range(self) -> "FilterOpts":
+        if self.percentile:
+            for v in (self.min, self.max):
+                if v is not None and not (0 <= v <= 100):
+                    raise ValueError("percentile filter bounds must be within 0–100")
+        return self
 
 
 class GroupDistributionRequest(BaseModel):

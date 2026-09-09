@@ -4,12 +4,11 @@ import { buildGroupDistributionOption, groupChartWidth } from "../../charts/grou
 import { clipFilterInfo } from "../../charts/clipFilterInfo";
 import { CohortSelect } from "../../components/CohortSelect";
 import { RangeGroupSelect } from "../../components/RangeGroupSelect";
-import { ClipControls } from "../../components/ClipControls";
-import { FilterControls } from "../../components/FilterControls";
+import { ClipFilterControls, type ClipFilterPatch } from "../../components/ClipFilterControls";
 import { activeLifecycleGroups, activeRangeDimensions, rangeGroupValues, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { AddToReportButton } from "../report/AddToReport";
-import type { ClipOpts, FilterOpts, MetricGroup } from "../../api/types";
+import type { MetricGroup } from "../../api/types";
 import type { GroupPanelState } from "../../store/dashboardStore";
 
 // Stats-by-Group tab: per metric group, compare one metric's distribution across
@@ -20,8 +19,7 @@ function GroupPanel(props: {
   panel: GroupPanelState;
   onMetric: (m: string | null) => void;
   onMode: (mode: "box" | "bar") => void;
-  onClip: (c: ClipOpts) => void;
-  onFilter: (f: FilterOpts) => void;
+  onClipFilter: (patch: ClipFilterPatch) => void;
 }) {
   const { group, panel } = props;
   const configId = useDashboardStore((s) => s.configId);
@@ -60,8 +58,12 @@ function GroupPanel(props: {
               </label>
             ))}
           </div>
-          <ClipControls clip={panel.clip} onChange={props.onClip} />
-          <FilterControls filter={panel.filter} onChange={props.onFilter} />
+          <ClipFilterControls
+            clip={panel.clip}
+            filter={panel.filter}
+            rows={panel.clipFilterRows}
+            onChange={props.onClipFilter}
+          />
           <AddToReportButton
             getFigure={() => ({
               title: `${group.label} — ${panel.metric ?? "?"} (${panel.mode})`,
@@ -168,8 +170,7 @@ export function StatsByGroup() {
             panel={panel}
             onMetric={(m) => s.setGroupMetric(g.id, m)}
             onMode={(mode) => s.setGroupMode(g.id, mode)}
-            onClip={(c) => s.setGroupClip(g.id, c)}
-            onFilter={(f) => s.setGroupFilter(g.id, f)}
+            onClipFilter={(patch) => s.setGroupClipFilter(g.id, patch)}
           />
         );
       })}

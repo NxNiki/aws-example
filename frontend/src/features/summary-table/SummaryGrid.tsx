@@ -28,7 +28,8 @@ export function metricNote(opt: SummaryMetricOption | undefined): string {
   if (!opt) return "";
   const parts: string[] = [];
   if (opt.clip.enable && (opt.clip.min != null || opt.clip.max != null)) {
-    parts.push(`clip ${opt.clip.min ?? "−∞"}:${opt.clip.max ?? "∞"}`);
+    const pct = opt.clip.percentile ? "%" : "";
+    parts.push(`clip ${opt.clip.min == null ? "−∞" : `${opt.clip.min}${pct}`}:${opt.clip.max == null ? "∞" : `${opt.clip.max}${pct}`}`);
   }
   if (opt.log) parts.push("log");
   return parts.length ? `  ·  ${parts.join(", ")}` : "";
