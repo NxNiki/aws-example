@@ -14,7 +14,7 @@ stats_by_date:
 
   group_col: "ab_group"
   date_col: "activity_date"
-  user_group_cols: [ab_group, mathtable, bet_level, life_cycle_group]
+  user_group_cols: [ab_group, mathtable, bet_level, period_total_bet, life_cycle_group]
   availability_cols: [mathtable]
   # Stored grain is one row per (period, user, ab_group, mathtable, bet_level):
   # every bet in exactly one row. When a grain dimension is unselected the API
@@ -35,6 +35,20 @@ stats_by_date:
       - {label: bet_medium, min: 2, max: 5}
       - {label: bet_high, min: 8, max: 30}
       - {label: bet_ultra, min: 50, max: null}
+  # "Total bet" picker: cohorts of user-periods by the user's TOTAL bet over
+  # the whole day/week/month — derived at API time (period_total_bet is a
+  # virtual column, never stored; see period_total_group_cfg). One default
+  # edge set serves every granularity (medians ~72; edges ≈ p25 / median-region / p90).
+  # Ranges are HALF-OPEN [min, max) — adjacent tiers partition exactly.
+  period_total_group:
+    column: period_total_bet
+    name: "Total bet"
+    source_col: user_total_bet
+    defaults:
+      - {label: spend_micro, min: 0, max: 10}
+      - {label: spend_low, min: 10, max: 100}
+      - {label: spend_mid, min: 100, max: 1000}
+      - {label: spend_high, min: 1000, max: null}
   aggregate_stats_from_user_rows: true
   # Parquet columns required before enrich: ENRICH_USER_ROW_INPUT_COLUMNS ∪ (columns below − enrich outputs)
   # — see dashboards/user_stats_aggregates.py.
