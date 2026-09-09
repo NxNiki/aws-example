@@ -18,6 +18,7 @@ import importlib.util
 import os
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -69,17 +70,12 @@ SS02 = GameFeatureConfig(
     session_break_threshold_seconds=60 * 60 * 12,
 )
 
-SS03 = GameFeatureConfig(
-    game_id="SS03",
-    output_prefix="output_ss03_feature_engineer",
-    date_start="2026-01-01",
-    date_end="2026-05-01",
-    ai_groups=("AI", "AB_TEST_A", "AB_TEST_B", "Default"),
-    selected_groups=("Default",),
-    partition_cols=("math_table_id",),
-    bin_size=[30, 50, 70, 100],
-    session_break_threshold_seconds=60 * 60 * 12,
-)
+# SS03 fans out per ai_group slice (GROUPS/build_config in the job script);
+# the configs are loaded from the job so the snapshots cannot drift from it.
+_SS03_JOB = "jobs/etl/redshift/ss03_mahjiang_streak/etl_feature_engineer.py"
+_ss03_build_config: Any = _load_jobs_config(_SS03_JOB, attr="build_config")
+_ss03_groups: Any = _load_jobs_config(_SS03_JOB, attr="GROUPS")
+SS03_CONFIGS: dict[str, GameFeatureConfig] = {group: _ss03_build_config(group) for group in sorted(_ss03_groups)}
 
 
 def _check_snapshot(actual: str, snapshot_path: Path, label: str) -> None:
@@ -101,25 +97,29 @@ def _check_snapshot(actual: str, snapshot_path: Path, label: str) -> None:
 
 
 # Enriched is bin-independent -> one snapshot per game (no bin in the name).
-@pytest.mark.parametrize("config", [SS01, SS02, SS03], ids=lambda c: c.game_id.lower())
+def _snapshot_stem(config: GameFeatureConfig) -> str:
+    return config.output_prefix.removeprefix("output_").replace("_feature_engineer", "")
+
+
+@pytest.mark.parametrize("config", [SS01, SS02, *SS03_CONFIGS.values()], ids=lambda c: _snapshot_stem(c))
 def test_enriched_snapshot(config: GameFeatureConfig) -> None:
     actual = compose_enriched_query(config, config.date_start)
-    _check_snapshot(actual, SNAPSHOTS_DIR / f"{config.game_id.lower()}_enriched.sql", f"{config.game_id} enriched")
+    _check_snapshot(actual, SNAPSHOTS_DIR / f"{_snapshot_stem(config)}_enriched.sql", f"{config.game_id} enriched")
 
 
 # Grouped depends on bin_size -> one snapshot per (game, bin_size), composed from
 # a scalar-bin_size config (mirroring how FeaturePipelineRunner fans out).
-_GROUPED_CASES = [(cfg, n) for cfg in (SS01, SS02, SS03) for n in cfg.bin_sizes()]
+_GROUPED_CASES = [(cfg, n) for cfg in (SS01, SS02, *SS03_CONFIGS.values()) for n in cfg.bin_sizes()]
 
 
 @pytest.mark.parametrize(
     "config,bin_size",
     _GROUPED_CASES,
-    ids=lambda v: v.game_id.lower() if isinstance(v, GameFeatureConfig) else str(v),
+    ids=lambda v: _snapshot_stem(v) if isinstance(v, GameFeatureConfig) else str(v),
 )
 def test_grouped_snapshot(config: GameFeatureConfig, bin_size: int) -> None:
     actual = compose_grouped_query(replace(config, bin_size=bin_size), config.date_start)
-    snapshot_path = SNAPSHOTS_DIR / f"{config.game_id.lower()}_grouped_binsize_{bin_size}.sql"
+    snapshot_path = SNAPSHOTS_DIR / f"{_snapshot_stem(config)}_grouped_binsize_{bin_size}.sql"
     _check_snapshot(actual, snapshot_path, f"{config.game_id} grouped binsize={bin_size}")
 
 
@@ -128,24 +128,20 @@ def test_grouped_snapshot(config: GameFeatureConfig, bin_size: int) -> None:
 # must declare a CONFIG identical to the one used to generate the snapshot.
 # ---------------------------------------------------------------------------
 def test_ss01_jobs_config_matches_snapshot_config() -> None:
-    jobs_config = _load_jobs_config("jobs/ss01_wucaishen/etl_feature_engineer.py")
+    jobs_config = _load_jobs_config("jobs/etl/redshift/ss01_wucaishen/etl_feature_engineer.py")
     assert jobs_config == SS01, (
-        "jobs/ss01_wucaishen/etl_feature_engineer.py CONFIG drifted from the snapshot's SS01 config. "
+        "jobs/etl/redshift/ss01_wucaishen/etl_feature_engineer.py CONFIG drifted from the snapshot's SS01 config. "
         "If the change is intentional, update both and regenerate the snapshot."
     )
 
 
 def test_ss02_jobs_config_matches_snapshot_config() -> None:
-    jobs_config = _load_jobs_config("jobs/ss02_deepdive/etl_feature_engineer.py")
+    jobs_config = _load_jobs_config("jobs/etl/redshift/ss02_deepdive/etl_feature_engineer.py")
     assert jobs_config == SS02, (
-        "jobs/ss02_deepdive/etl_feature_engineer.py CONFIG drifted from the snapshot's SS02 config. "
+        "jobs/etl/redshift/ss02_deepdive/etl_feature_engineer.py CONFIG drifted from the snapshot's SS02 config. "
         "If the change is intentional, update both and regenerate the snapshot."
     )
 
 
-def test_ss03_jobs_config_matches_snapshot_config() -> None:
-    jobs_config = _load_jobs_config("jobs/ss03_mahjiang_streak/etl_feature_engineer.py")
-    assert jobs_config == SS03, (
-        "jobs/ss03_mahjiang_streak/etl_feature_engineer.py CONFIG drifted from the snapshot's SS03 config. "
-        "If the change is intentional, update both and regenerate the snapshot."
-    )
+# (No ss03 parity test: SS03_CONFIGS are loaded from the job script itself,
+# so job-vs-snapshot drift shows up directly as a snapshot diff.)

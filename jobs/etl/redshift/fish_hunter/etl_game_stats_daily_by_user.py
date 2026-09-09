@@ -1,0 +1,487 @@
+import argparse
+import os
+from textwrap import dedent
+from typing import Optional
+
+from bituslabs_ds.config import (
+    DATE_START_HOUR,
+    DEFAULT_BASTION_IP,
+    DEFAULT_ETL_OUTPUT,
+    ETL_CURRENCY_CODES,
+    ETL_DELTA_T_MAX_SECONDS,
+    ETL_DELTA_T_MIN_SECONDS_FISH_HUNTER,
+    ETL_EXCLUDED_OP_CODES,
+    LOCAL_ROOT,
+    REDSHIFT_HOST,
+    REDSHIFT_PORT,
+    TIMEZONE_SHANGHAI,
+    get_redshift_password,
+    get_redshift_user,
+    setup_logging,
+)
+from bituslabs_ds.etl import AggCol, DataLoader, ETLScheduler, RedshiftBackend, effective_start_date
+
+DEFAULT_DATE_START = "2025-01-01"
+RETURN_USER_DAYS = 30
+RETENTION_DAYS = 3
+STREAK_SESSION_THRESH = 600
+STREAK_KILL_THRESH = 3  # nearly 10% of all killing intervals.
+
+
+def generate_query(stats_agg_col: AggCol, start_date: str = DEFAULT_DATE_START, end_date: Optional[str] = None):
+    """Generate the fish_hunter daily/weekly/monthly per-user game-stats SQL.
+
+    ETL job: produces the ``daily_group`` dimension plus the ``user_*`` metrics
+    in ``output_fish_hunter_v2/{daily,weekly,monthly}_stats`` (dashboard fish_hunter
+    tab). ``start_date`` filters both raw data and output for incremental lookback.
+    ``end_date`` (exclusive, must be aligned to a period start) bounds the window
+    so a long backfill can run as several small queries instead of one
+    cluster-pinning scan.
+
+    One row per (user, period, daily_group) for EVERY betting user -- not only
+    fish-killers. Kill-specific metrics (kill ratios, killed-fish values, kill
+    streaks, seconds/bets-to-kill) are NULL/0 for users who never killed; the
+    ``user_killed_fish`` 0/1 flag segments killers. This is required for correct
+    downstream user counts and retention (day0_num_users, num_active_users, ...).
+
+    ``daily_group`` assignment: each (user, day) is collapsed to exactly ONE
+    group, derived purely from the bullet ``strategy_name`` column. A single bet
+    under a higher-priority strategy claims the whole user-day for that group.
+    Priority high -> low:
+        1. RISK_CONTROLLED
+        2. BOOST_POOL
+        3. DYNAMIC_RTP family (DYNAMIC_RTP, DYNAMIC_RTP_V2, DYNAMIC_RTP_V3) --
+           the literal strategy_name is kept; if several coexist in a day, the
+           lexicographically smallest (MIN) wins as a deterministic tie-break.
+        4. DEFAULT_FALLBACK -- any other / NULL strategy_name.
+    """
+    effective_start = effective_start_date(stats_agg_col, start_date)
+    end_raw_filter = (
+        f"""
+                AND b.created_at < CONVERT_TIMEZONE('{TIMEZONE_SHANGHAI}', 'UTC', CAST('{end_date}' AS TIMESTAMP))"""
+        if end_date
+        else ""
+    )
+    end_output_filter = (
+        f"""
+          AND t1.{stats_agg_col} < '{end_date}'"""
+        if end_date
+        else ""
+    )
+
+    query = dedent(
+        f"""
+        -- 1. FETCH RAW DATA (Keep strictly RAW columns to enable Index Scans)
+        WITH base_data AS (
+            SELECT
+                b.user_id,
+                b.room_id,
+                b.bullet_id,
+                b.strategy_name, -- Keep Raw
+                b.event_timestamp AS bet_time,
+                b.payout,
+                b.bet,
+                b.fish_value,
+                b.killed,
+                b.profit,
+                -- Sequence metrics are DAY-partitioned (each activity_date is
+                -- self-contained, so incremental pulls and full reloads agree);
+                -- bj_date_last_bet below stays cross-day on purpose.
+                LAG(b.event_timestamp) OVER (PARTITION BY b.user_id, CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', b.created_at))) AS DATE) ORDER BY b.bullet_id, b.event_timestamp) AS prev_bet_time,
+                LAG(b.bet) OVER (PARTITION BY b.user_id, CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', b.created_at))) AS DATE) ORDER BY b.bullet_id, b.event_timestamp) AS prev_bet_amount,
+                CAST(DATE_TRUNC('day', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', b.created_at))) AS DATE) AS activity_date,
+                CAST(DATE_TRUNC('week', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', b.created_at))) AS DATE) AS activity_week,
+                CAST(DATE_TRUNC('month', DATEADD(hour, -{DATE_START_HOUR}, CONVERT_TIMEZONE('UTC', '{TIMEZONE_SHANGHAI}', b.created_at))) AS DATE) AS activity_month
+            FROM public.bullet b
+            WHERE
+                b.currency_type IN {ETL_CURRENCY_CODES}
+                AND b.op_code NOT IN {ETL_EXCLUDED_OP_CODES}
+
+                -- ---------------------------------------------------------
+                -- FAST FILTERING: Transform the INPUTS, not the COLUMN
+                -- ---------------------------------------------------------
+                
+                -- 1. Reverse the date math for START (use effective_start so monthly/weekly get full period)
+                -- Logic: We want events where (EventTime + UserDays) >= Start
+                -- So: EventTime >= Start - UserDays
+                AND b.created_at >= CONVERT_TIMEZONE('{TIMEZONE_SHANGHAI}', 'UTC',
+                       DATEADD(day, -{RETURN_USER_DAYS}, CAST('{effective_start}' AS TIMESTAMP))){end_raw_filter}
+
+        ),
+
+        -- 2. DETERMINE USER DAILY GROUP (Logic applied inside SUM)
+        user_daily_group AS (
+            SELECT
+                user_id,
+                activity_date,
+                activity_week,
+                activity_month,
+                -- Assign the whole user-day to its highest-priority strategy_name.
+                -- A single bet in a higher tier claims the day. See generate_query docstring.
+                CASE
+                    WHEN MAX(CASE WHEN strategy_name = 'RISK_CONTROLLED' THEN 1 ELSE 0 END) > 0 THEN 'RISK_CONTROLLED'
+                    WHEN MAX(CASE WHEN strategy_name = 'BOOST_POOL' THEN 1 ELSE 0 END) > 0 THEN 'BOOST_POOL'
+                    WHEN MAX(CASE WHEN strategy_name IN ('DYNAMIC_RTP', 'DYNAMIC_RTP_V2', 'DYNAMIC_RTP_V3') THEN 1 ELSE 0 END) > 0
+                        THEN MIN(CASE WHEN strategy_name IN ('DYNAMIC_RTP', 'DYNAMIC_RTP_V2', 'DYNAMIC_RTP_V3') THEN strategy_name END)
+                    ELSE 'DEFAULT_FALLBACK'
+                END AS daily_group,
+                LAG(activity_date) OVER (PARTITION BY user_id ORDER BY activity_date) AS bj_date_last_bet
+            FROM base_data
+            GROUP BY user_id, activity_date, activity_week, activity_month
+        ),
+
+        -- GET KILL STREAK LENGTH:
+        base_kills AS (
+            SELECT
+                user_id,
+                activity_date,
+                bullet_id,
+                bet_time
+            FROM base_data
+            WHERE killed = 1
+        ),
+
+        calculate_islands AS (
+            SELECT
+                user_id,
+                activity_date,
+                bullet_id,
+                bet_time,
+                -- Checks if ANY fish was killed recently.
+                CASE
+                    WHEN DATEDIFF(SECOND, LAG(bet_time) OVER(PARTITION BY user_id ORDER BY bullet_id, bet_time), bet_time) > {STREAK_KILL_THRESH}
+                        OR LAG(bet_time) OVER(PARTITION BY user_id ORDER BY bullet_id, bet_time) IS NULL
+                    THEN 1 ELSE 0
+                END AS is_new_global_streak
+            FROM base_kills
+        ),
+
+        streak_ids AS (
+            SELECT
+                user_id,
+                activity_date,
+                bet_time,
+                SUM(is_new_global_streak) OVER(PARTITION BY user_id ORDER BY bullet_id, bet_time ROWS UNBOUNDED PRECEDING) AS global_streak_id
+            FROM calculate_islands
+        ),
+
+        streak_lengths AS (
+            SELECT
+                user_id,
+                activity_date,
+                -- Calculate the length of the specific streak instance this row belongs to
+                COUNT(*) OVER(PARTITION BY user_id, global_streak_id) AS global_streak_len
+            FROM streak_ids
+        ),
+
+        max_kill_streak_length AS (
+            SELECT
+                user_id,
+                activity_date,
+                MAX(global_streak_len) AS max_kill_streak,
+                AVG(global_streak_len) AS avg_kill_streak
+            FROM streak_lengths
+            GROUP BY user_id, activity_date
+        ),
+
+        -- GET BET SESSION STATS:
+        user_session_id AS (
+            SELECT
+                t.activity_date,
+                t.user_id,
+                t.bet_time,
+                t.killed,
+                SUM(CASE
+                        WHEN DATEDIFF(SECOND, t.prev_bet_time, t.bet_time) < {STREAK_SESSION_THRESH} THEN 0 
+                        ELSE 1 
+                    END) OVER (
+                        PARTITION BY t.activity_date, t.user_id 
+                        ORDER BY t.bullet_id, t.bet_time 
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                    ) AS session_id,
+                ROW_NUMBER() OVER (
+                        PARTITION BY t.activity_date, t.user_id 
+                        ORDER BY t.bullet_id, t.bet_time 
+                    ) AS bet_index
+                
+            FROM base_data t
+        ),
+
+        user_session_length AS (
+            SELECT
+                t.activity_date,
+                t.user_id,
+                t.session_id,
+
+                DATEDIFF(SECOND, MIN(t.bet_time), MIN(CASE WHEN t.killed = 1 THEN t.bet_time END)) AS seconds_to_kill_fish,
+
+                MIN(CASE WHEN t.killed = 1 THEN t.bet_index END) - MIN(bet_index) AS bets_to_kill_fish,
+
+                COUNT(t.user_id) AS session_length
+            FROM user_session_id t
+            GROUP BY t.user_id, t.activity_date, t.session_id
+        ),
+
+        user_session_stats AS (
+            SELECT
+                t.activity_date,
+                t.user_id,
+                COUNT(DISTINCT t.session_id) AS num_streak_sessions,
+                AVG(CAST(t.session_length AS FLOAT)) AS avg_streak_length,
+                MAX(t.session_length) AS max_streak_length,
+                MIN(t.session_length) AS min_streak_length,
+
+                AVG(seconds_to_kill_fish) AS seconds_to_kill_fish,
+
+                AVG(bets_to_kill_fish) AS bets_to_kill_fish
+
+            FROM user_session_length t
+            GROUP BY t.user_id, t.activity_date
+        ),
+
+        user_session_stats_agg AS (
+            SELECT
+                u.daily_group,
+                t.user_id,
+                u.{stats_agg_col},
+                SUM(t.num_streak_sessions)      AS user_num_streak_sessions,
+                AVG(t.avg_streak_length)        AS user_avg_streak_length,
+                MAX(t.max_streak_length)        AS user_max_streak_length,
+                MIN(t.min_streak_length)        AS user_min_streak_length,
+
+                AVG(t.seconds_to_kill_fish)         AS user_seconds_to_kill_fish,
+
+                AVG(t.bets_to_kill_fish)        AS user_bets_to_kill_fish
+            FROM user_session_stats t
+            JOIN user_daily_group u ON t.user_id = u.user_id AND t.activity_date = u.activity_date
+            GROUP BY u.daily_group, t.user_id, u.{stats_agg_col}
+        ),
+
+        max_kill_streak_length_agg AS (
+            SELECT
+                u.daily_group,
+                t.user_id,
+                u.{stats_agg_col},
+                MAX(t.max_kill_streak)          AS user_max_kill_streak,
+
+                AVG(t.avg_kill_streak)          AS user_avg_kill_streak
+            FROM max_kill_streak_length t
+            JOIN user_daily_group u ON t.user_id = u.user_id AND t.activity_date = u.activity_date
+            GROUP BY u.daily_group, t.user_id, u.{stats_agg_col}
+        ),
+
+        -- 4a. USER-DAY LEVEL COLUMNS that cannot be sliced by fish_value
+        -- (distinct rooms overlap across slices; the CV needs the full sample).
+        user_day_stats AS (
+            SELECT
+                b.user_id,
+                u.daily_group,
+                b.{stats_agg_col},
+                COUNT(DISTINCT b.user_id || '-' || b.room_id)     AS user_num_rooms,
+                STDDEV(b.profit) / NULLIF(ABS(AVG(b.profit)), 0)  AS user_profit_coef_var
+            FROM base_data b
+            JOIN user_daily_group u ON b.user_id = u.user_id AND b.activity_date = u.activity_date
+            GROUP BY b.user_id, u.daily_group, b.{stats_agg_col}
+        ),
+
+        -- 4. USER-LEVEL STATS BY DAILY GROUP AND FISH VALUE. One row per
+        -- (period, user, daily_group, fish_value): each bullet in exactly one
+        -- row, so the dashboard's custom fish-level ranges ([min, max]
+        -- inclusive over fish_value) recombine every sliced metric exactly.
+        stats_by_user_date AS (
+            SELECT
+                b.user_id,
+                u.daily_group,
+                b.fish_value,
+                b.{stats_agg_col},
+                COUNT(b.user_id)                              AS user_num_bets,
+
+                SUM(b.killed)                                 AS user_num_killed_bullets,
+
+                SUM(b.bet)                                                             AS user_total_bet,
+                AVG(b.bet)                                                             AS user_avg_bet_amount,
+                AVG(CASE WHEN EXTRACT(EPOCH FROM (b.bet_time - b.prev_bet_time)) <= {ETL_DELTA_T_MAX_SECONDS} THEN GREATEST(EXTRACT(EPOCH FROM (b.bet_time - b.prev_bet_time)), {ETL_DELTA_T_MIN_SECONDS_FISH_HUNTER}) END)
+                                                                                       AS user_avg_delta_t_seconds,
+                COUNT(CASE WHEN EXTRACT(EPOCH FROM (b.bet_time - b.prev_bet_time)) <= {ETL_DELTA_T_MAX_SECONDS} THEN 1 END)
+                                                                                       AS user_num_delta_t,
+                SUM(b.payout)                                                          AS user_total_payout,
+                SUM(b.profit)                                                          AS user_total_profit,
+                MAX(b.profit)                                                          AS user_max_profit,
+                ROUND(CAST(SUM(b.payout) AS FLOAT) / NULLIF(SUM(b.bet), 0), 3)        AS user_rtp,
+                MAX(CASE WHEN b.killed >= 1 THEN 1 ELSE 0 END)                        AS user_killed_fish,
+
+                AVG(b.fish_value)                                                      AS user_avg_fish_value,
+                AVG(CASE WHEN b.killed = 1 THEN b.fish_value END)                     AS user_avg_killed_fish_value,
+                AVG(b.profit)                                                          AS user_bullet_avg_profit,
+                AVG(CASE WHEN b.killed = 1 THEN b.profit END)                         AS user_bullet_kill_avg_profit,
+
+                -- delta bet amount metrics:
+                SUM(CASE WHEN (b.bet - b.prev_bet_amount) > 0 THEN (b.bet - b.prev_bet_amount) END) AS user_accu_pos_delta_bet,
+                SUM(CASE WHEN (b.bet - b.prev_bet_amount) < 0 THEN (b.bet - b.prev_bet_amount) END) AS user_accu_neg_delta_bet,
+                AVG(CASE WHEN (b.bet - b.prev_bet_amount) > 0 THEN (b.bet - b.prev_bet_amount) END) AS user_accu_pos_delta_bet_avg,
+                AVG(CASE WHEN (b.bet - b.prev_bet_amount) < 0 THEN (b.bet - b.prev_bet_amount) END) AS user_accu_neg_delta_bet_avg,
+                SUM(b.bet - b.prev_bet_amount) AS user_accu_delta_bet,
+                AVG(b.bet - b.prev_bet_amount) AS user_accu_delta_bet_avg,
+                COUNT(CASE WHEN (b.bet - b.prev_bet_amount) > 0 THEN 1 END) AS user_pos_delta_bet_num,
+                COUNT(CASE WHEN (b.bet - b.prev_bet_amount) < 0 THEN 1 END) AS user_neg_delta_bet_num,
+                COUNT(b.prev_bet_amount) AS user_num_delta_bet
+            FROM base_data b
+            JOIN user_daily_group u ON b.user_id = u.user_id AND b.activity_date = u.activity_date
+            GROUP BY b.user_id, u.daily_group, b.fish_value, b.{stats_agg_col}
+            -- Include ALL betting users, not only fish-killers. Kill-specific metrics
+            -- already degrade to NULL/0 for non-killers (CASE WHEN killed / NULLIF), while
+            -- downstream user counts & retention (day0_num_users, num_active_users, …) need
+            -- the full active-user set; a `HAVING MAX(b.killed) > 0` here undercounted them.
+            -- Segment to killers downstream via the user_killed_fish flag when needed.
+        )
+
+        -- 5. FINAL JOIN & FORMATTING. Row grain: (period, user, daily_group,
+        -- fish_value). The session/streak columns (t4/t5) and the user-day
+        -- columns (t6) are computed per user-day and repeat identically on
+        -- each of the user's fish_value rows; the dashboard keeps their first
+        -- value when collapsing.
+        SELECT
+            t1.user_id,
+            t1.daily_group,
+            t1.fish_value,
+            t1.{stats_agg_col} AS activity_date,
+            t6.user_num_rooms,
+            t1.user_num_bets,
+            t1.user_num_killed_bullets,
+            t1.user_killed_fish,
+
+            -- Bet / payout / profit:
+            t1.user_total_bet,
+            t1.user_avg_bet_amount,
+            t1.user_avg_delta_t_seconds,
+            t1.user_num_delta_t,
+            t1.user_total_payout,
+            t1.user_total_profit,
+            t1.user_max_profit,
+            t1.user_rtp,
+            t6.user_profit_coef_var,
+            ROUND(CAST(t1.user_num_killed_bullets AS FLOAT) / NULLIF(t1.user_num_bets, 0), 3) AS user_bullet_kill_ratio,
+
+            -- Fish value:
+            t1.user_avg_fish_value,
+            t1.user_avg_killed_fish_value,
+            t1.user_bullet_avg_profit,
+            t1.user_bullet_kill_avg_profit,
+
+            -- delta bet amount metrics:
+            t1.user_accu_pos_delta_bet,
+            t1.user_accu_neg_delta_bet,
+            t1.user_accu_pos_delta_bet_avg,
+            t1.user_accu_neg_delta_bet_avg,
+            t1.user_accu_delta_bet,
+            t1.user_accu_delta_bet_avg,
+            t1.user_pos_delta_bet_num,
+            t1.user_neg_delta_bet_num,
+            t1.user_num_delta_bet,
+
+            -- Session stats:
+            t4.user_num_streak_sessions,
+            t4.user_avg_streak_length,
+            t4.user_max_streak_length,
+            t4.user_min_streak_length,
+            t4.user_seconds_to_kill_fish,
+            t4.user_bets_to_kill_fish,
+
+            -- Kill streak stats:
+            t5.user_max_kill_streak,
+            t5.user_avg_kill_streak
+        FROM stats_by_user_date t1
+        LEFT JOIN user_session_stats_agg t4
+            ON t1.user_id = t4.user_id
+            AND t1.{stats_agg_col} = t4.{stats_agg_col}
+            AND t1.daily_group = t4.daily_group
+        LEFT JOIN max_kill_streak_length_agg t5
+            ON t1.user_id = t5.user_id
+            AND t1.{stats_agg_col} = t5.{stats_agg_col}
+            AND t1.daily_group = t5.daily_group
+        LEFT JOIN user_day_stats t6
+            ON t1.user_id = t6.user_id
+            AND t1.{stats_agg_col} = t6.{stats_agg_col}
+            AND t1.daily_group = t6.daily_group
+        WHERE t1.{stats_agg_col} >= '{effective_start}'{end_output_filter}
+        ORDER BY t1.{stats_agg_col}, t1.daily_group
+        ;
+
+        """
+    )
+
+    return query
+
+
+if __name__ == "__main__":
+
+    setup_logging(f"{LOCAL_ROOT}/jobs/log", log_filename=os.path.splitext(os.path.basename(__file__))[0] + ".log")
+
+    parser = argparse.ArgumentParser(description="ETL Game Stats Daily by User Group")
+    parser.add_argument(
+        "--bastion-ip",
+        type=str,
+        default=DEFAULT_BASTION_IP,
+        help=f"Bastion IP address for Redshift tunnel (default: {DEFAULT_BASTION_IP})",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        default=False,
+        help="Overwrite existing S3/local output (full reload from default start date)",
+    )
+    args = parser.parse_args()
+
+    redshift_loader = DataLoader(
+        backend=RedshiftBackend(
+            host=REDSHIFT_HOST,
+            database="transform-agfish-game",
+            user=get_redshift_user(),
+            password=get_redshift_password(),
+            port=REDSHIFT_PORT,
+            bastion_ip=args.bastion_ip,
+        )
+    )
+
+    # Initialize Scheduler with a default 3-day lookback
+    scheduler = ETLScheduler(
+        redshift_loader,
+        f"{DEFAULT_ETL_OUTPUT}/jobs/output_fish_hunter_v2",
+        lookback_days=3,
+        overwrite=args.overwrite,
+        default_start_date=DEFAULT_DATE_START,
+    )
+
+    scheduler.run_incremental_job(
+        job_name="daily_stats",
+        query_func=lambda start_date, end_date=None: generate_query("activity_date", start_date, end_date),
+        key_cols=["activity_date", "user_id", "daily_group", "fish_value"],
+        date_col="activity_date",
+        partition_level="none",
+        lookback=3,
+        backfill_chunk_days=30,
+    )
+
+    # Overrides to 7 days because weekly data takes longer to settle
+    scheduler.run_incremental_job(
+        job_name="weekly_stats",
+        query_func=lambda start_date, end_date=None: generate_query("activity_week", start_date, end_date),
+        key_cols=["activity_date", "user_id", "daily_group", "fish_value"],
+        date_col="activity_date",  # Always check max activity_date
+        partition_level="none",
+        lookback=7,
+        backfill_chunk_days=28,
+    )
+
+    # Overrides to 31 days because weekly data takes longer to settle
+    scheduler.run_incremental_job(
+        job_name="monthly_stats",
+        query_func=lambda start_date, end_date=None: generate_query("activity_month", start_date, end_date),
+        key_cols=["activity_date", "user_id", "daily_group", "fish_value"],
+        date_col="activity_date",  # Always check max activity_date
+        partition_level="none",
+        lookback=31,
+        backfill_chunk_days=62,
+    )
+
+    redshift_loader.close()

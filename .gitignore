@@ -10,11 +10,17 @@ log
 **/*.onnx
 **/features/
 !src/bituslabs_ds/features/
+!frontend/src/features/
+!frontend/src/features/**
 **/figures/
 **/model_output/
 **/output/
 **/eda_output/
-**/output_*/
+# ignore output_* contents but keep .html reports (dirs must stay
+# un-ignored or the !*.html re-include cannot take effect)
+**/output_*/**
+!**/output_*/**/
+!**/output_*/**/*.html
 **/*_output/
 **/.ipynb_checkpoints/*
 **.png
@@ -33,3 +39,4 @@ dist/
 
 # Dashboard metadata builder cache — regenerated locally on first run.
 **/.metadata_cache/
+jobs/output_fish_hunter/

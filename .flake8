@@ -1,0 +1,14 @@
+[flake8]
+# Align flake8 with black (line length 120). E203/W503 are black-compatible
+# disables (slicing whitespace, line break before binary operator).
+max-line-length = 120
+extend-ignore = E203, W503
+exclude =
+    .git,
+    .venv,
+    venv,
+    build,
+    dist,
+    __pycache__,
+    *.egg-info,
+    frontend

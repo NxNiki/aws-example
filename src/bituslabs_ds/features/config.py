@@ -2,7 +2,7 @@
 
 A ``GameFeatureConfig`` captures every knob that differs across SS01 /
 SS02 / SS03 today. The SQL CTE builders consume the config; per-game
-job scripts under ``jobs/ss0x/`` construct one and hand it to
+job scripts under ``jobs/etl/redshift/ss0x/`` construct one and hand it to
 ``FeaturePipelineRunner``.
 
 Adding a new game ideally requires only a new ``GameFeatureConfig``

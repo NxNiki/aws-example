@@ -22,7 +22,7 @@ from typing import List, Optional
 import yaml
 
 from bituslabs_ds.config import DEFAULT_RAG_INDEX_URI
-from dashboards.confluence_client import extract_folder_ids_from_urls, extract_page_ids_from_urls
+from bituslabs_ds.confluence.client import extract_folder_ids_from_urls, extract_page_ids_from_urls
 
 _THIS_DIR = Path(__file__).resolve().parent
 _DEFAULT_SOURCES_PATH = _THIS_DIR / "config" / "rag_sources.yaml"

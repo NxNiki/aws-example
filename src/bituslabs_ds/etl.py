@@ -239,6 +239,11 @@ class RedshiftBackend(DatabaseBackend):
                 print(f"Error connecting to Bastion host: {e}")
                 raise
 
+            # Long queries send nothing for minutes; without keepalives an idle
+            # NAT/firewall drops the connection and the client blocks forever on
+            # a dead socket instead of erroring.
+            self.ssh.get_transport().set_keepalive(30)
+
             # 2. Start Tunnel
             self.tunnel_thread = threading.Thread(
                 target=_forward_tunnel,
@@ -482,6 +487,31 @@ class ETLScheduler:
         self.lookback_days = lookback_days
         self.default_start_date = default_start_date
         self.overwrite = overwrite
+        # Data-integrity problems raised during this scheduler's runs (also
+        # pushed to Slack); callers can inspect after run_incremental_job.
+        self.alerts: List[str] = []
+
+    def _alert(self, job_name: str, message: str) -> None:
+        """Escalate a data-integrity problem: ERROR log, record on self.alerts,
+        and best-effort Slack (SLACK_USER_TOKEN/SLACK_BOT_TOKEN + SLACK_CHANNEL_ID).
+
+        Compaction/dedup failures MUST NOT stay log-only: a skipped compaction
+        leaves each run's lookback re-pull as duplicate rows that downstream
+        consumers (the dashboard) silently sum twice."""
+        full = f"[{job_name}] {message}"
+        logger.error(full)
+        self.alerts.append(full)
+        token = os.environ.get("SLACK_USER_TOKEN") or os.environ.get("SLACK_BOT_TOKEN")
+        channel = os.environ.get("SLACK_CHANNEL_ID")
+        if not token or not channel:
+            logger.warning("Slack alert skipped (SLACK_USER_TOKEN/SLACK_BOT_TOKEN or SLACK_CHANNEL_ID not set).")
+            return
+        try:
+            from slack_sdk import WebClient
+
+            WebClient(token=token).chat_postMessage(channel=channel, text=f":rotating_light: ETL alert {full}")
+        except Exception as e:
+            logger.warning(f"Slack alert failed: {e}")
 
     @property
     def is_s3(self) -> bool:
@@ -677,7 +707,18 @@ class ETLScheduler:
                 if not path_str.endswith("/"):
                     path_str = path_str + "/"
                 if partition_level == "none":
-                    df = wr.s3.read_parquet(path=path_str, dataset=True)
+                    try:
+                        df = wr.s3.read_parquet(path=path_str, dataset=True)
+                    except (pa.ArrowInvalid, pa.ArrowTypeError) as merge_err:
+                        # Files written by different stacks can disagree on Arrow
+                        # types (e.g. string vs large_string) and the dataset-level
+                        # read refuses to merge them. Skipping compaction here would
+                        # silently accumulate duplicate lookback rows on every run,
+                        # so fall back to per-file reads — pandas concat unifies the
+                        # types — and let the rewrite below normalize the dataset.
+                        logger.warning(f"[{job_name}] Dataset read failed ({merge_err}); retrying file-by-file.")
+                        files = wr.s3.list_objects(path_str, suffix=".parquet")
+                        df = pd.concat([wr.s3.read_parquet(path=f) for f in files], ignore_index=True)
                 else:
 
                     def _pf(part: dict[str, str]) -> bool:
@@ -758,16 +799,99 @@ class ETLScheduler:
 
             logger.info(f"[{job_name}] Scoped compaction complete (partitions consolidated and de-duplicated).")
         except Exception as e:
-            logger.error(f"[{job_name}] Compaction failed: {e}")
+            self._alert(
+                job_name,
+                f"Compaction FAILED — each run's lookback re-pull will accumulate as duplicate rows "
+                f"(downstream sums read ~2x) until this is fixed: {e}",
+            )
+
+    def _verify_unique_keys(
+        self,
+        job_name: str,
+        key_cols: List[str],
+        partition_level: PartitionLevel,
+        incremental_start: date,
+    ) -> None:
+        """Post-run invariant: the on-disk dataset must be unique on key_cols
+        within the compaction scope. A violation means de-duplication silently
+        failed (whatever the cause), so it alerts rather than just logging."""
+        try:
+            job_path = self._job_path(job_name)
+            if self._is_s3:
+                path_str = output_path_as_str(job_path)
+                if not path_str.endswith("/"):
+                    path_str = path_str + "/"
+                if partition_level == "none":
+                    try:
+                        keys = wr.s3.read_parquet(path=path_str, dataset=True, columns=key_cols)
+                    except (pa.ArrowInvalid, pa.ArrowTypeError):
+                        files = wr.s3.list_objects(path_str, suffix=".parquet")
+                        keys = pd.concat(
+                            [wr.s3.read_parquet(path=f, columns=key_cols) for f in files], ignore_index=True
+                        )
+                else:
+
+                    def _pf(part: dict[str, str]) -> bool:
+                        return _partition_intersects_incremental_start(partition_level, part, incremental_start)
+
+                    keys = wr.s3.read_parquet(path=path_str, dataset=True, partition_filter=_pf, columns=key_cols)
+            else:
+                path = job_path if isinstance(job_path, Path) else Path(job_path)
+                if not path.exists() or not any(path.iterdir()):
+                    return
+                dataset = ds.dataset(output_path_as_str(path), format="parquet")
+                keys = dataset.to_table(columns=key_cols).to_pandas()
+        except Exception as e:
+            self._alert(job_name, f"Data integrity check could not read the dataset: {e}")
+            return
+
+        dups = int(keys.duplicated(subset=key_cols).sum())
+        if dups:
+            self._alert(
+                job_name,
+                f"Data integrity check FAILED: {dups} duplicate {key_cols} keys on disk — "
+                f"downstream consumers are summing these rows more than once.",
+            )
+        else:
+            logger.info(f"[{job_name}] Data integrity check passed ({len(keys):,} rows, keys unique).")
+
+    def _chunk_windows(self, start_date_str: str, chunk_days: int, days_to_lookback: int) -> List[tuple]:
+        """Split [start, now) into ~chunk_days fetch windows whose boundaries are
+        aligned to the aggregation period (month starts when lookback >= 30,
+        Mondays when >= 7), so every window holds only complete periods and a
+        chunked backfill returns exactly the rows one full query would. The last
+        window's end is None (open-ended, catches up to now)."""
+
+        def align(d: date) -> date:
+            if days_to_lookback >= 30:
+                return d.replace(day=1)
+            if days_to_lookback >= 7:
+                return d - timedelta(days=d.weekday())
+            return d
+
+        cur = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+        today = datetime.now().date()
+        windows: List[tuple] = []
+        while True:
+            nxt = align(cur + timedelta(days=chunk_days))
+            if nxt <= cur:
+                nxt = cur + timedelta(days=chunk_days)
+            if nxt >= today:
+                windows.append((cur.strftime("%Y-%m-%d"), None))
+                return windows
+            windows.append((cur.strftime("%Y-%m-%d"), nxt.strftime("%Y-%m-%d")))
+            cur = nxt
 
     def run_incremental_job(
         self,
         job_name: str,
-        query_func: Callable[[str], str],
+        query_func: Callable[..., str],
         key_cols: List[str],
         date_col: str = "activity_date",
         lookback: Optional[int] = None,
         partition_level: PartitionLevel = "month",
+        backfill_chunk_days: Optional[int] = None,
+        chunk_pause_seconds: float = 60.0,
     ) -> None:
         """
         Executes an incremental ETL job. We assume if lookback days >= 30, the query get stats by month. So will truncate
@@ -777,9 +901,19 @@ class ETLScheduler:
         Args:
             job_name: The directory name for the specific ETL output.
             query_func: A function that takes a start_date string and returns a SQL query.
+                When backfill_chunk_days is set it must also accept an end_date
+                (exclusive) as a second argument.
             date_col: The column used to determine the watermark (max date).
             lookback: Override for the default class lookback_days.
             partition_cols: Columns to use for Parquet partitioning on disk.
+            backfill_chunk_days: When set, a catch-up longer than this many days is
+                fetched as several period-aligned windows instead of one query.
+                One full-history query pins the cluster CPU for its whole runtime
+                (window sorts over all rows); bounded windows keep each query
+                short, and each chunk lands on S3 so a failure resumes from the
+                watermark instead of refetching everything.
+            chunk_pause_seconds: Pause between chunked fetches so the cluster
+                gets breathing room between bursts.
         """
         job_path = self._job_path(job_name)
         days_to_lookback = lookback if lookback is not None else self.lookback_days
@@ -809,46 +943,97 @@ class ETLScheduler:
             else:
                 logger.info(f"[{job_name}] No existing data found. Starting full load from {start_date_str}")
 
-        # 2. Fetch Data via the provided Loader
-        try:
-            sql = query_func(start_date_str)
-            df = self.loader.query_to_df(query=sql)
-        except Exception as e:
-            logger.error(f"[{job_name}] Failed to fetch data from database: {e}")
-            return
-
-        if df is None or df.empty:
-            logger.info(f"[{job_name}] No new records to process.")
-            return
+        # 2. Fetch Data via the provided Loader, in one open-ended window
+        # normally, or several period-aligned windows when chunking is on.
+        if backfill_chunk_days:
+            windows = self._chunk_windows(start_date_str, backfill_chunk_days, days_to_lookback)
+        else:
+            windows = [(start_date_str, None)]
+        if len(windows) > 1:
+            logger.info(f"[{job_name}] Fetching in {len(windows)} windows of ~{backfill_chunk_days}d.")
 
         partition_cols = self._get_partition_cols(partition_level)
         write_mode: Literal["append", "overwrite"] = "overwrite" if self.overwrite else "append"
 
-        # 2b. Schema change detection (append mode): if any existing file is missing
-        # one of the current query's columns, do a full reload and overwrite.
-        if write_mode == "append":
-            required_columns = set(df.columns)
-            has_incomplete = self._dataset_has_incomplete_columns(job_path, required_columns)
-            if has_incomplete:
-                logger.info(
-                    f"[{job_name}] Schema change detected (e.g. new columns in query). "
-                    "Doing full reload to keep dataset consistent."
-                )
-                start_date_str = self.default_start_date
-                try:
-                    sql = query_func(start_date_str)
-                    df = self.loader.query_to_df(query=sql)
-                except Exception as e:
-                    logger.error(f"[{job_name}] Full reload fetch failed: {e}")
-                    return
-                if df is None or df.empty:
-                    logger.warning(f"[{job_name}] Full reload returned no data.")
-                    return
-                write_mode = "overwrite"
-            else:
+        schema_checked = write_mode != "append"
+        wrote_any = False
+        i = 0
+        while i < len(windows):
+            w_start, w_end = windows[i]
+            try:
+                sql = query_func(w_start, w_end) if w_end else query_func(w_start)
+                df = self.loader.query_to_df(query=sql)
+            except Exception as e:
+                logger.error(f"[{job_name}] Failed to fetch data from database: {e}")
+                return
+            i += 1
+
+            if df is None or df.empty:
+                logger.info(f"[{job_name}] No records in window {w_start} .. {w_end or 'now'}.")
+                continue
+
+            # 2b. Schema change detection (append mode, first fetched data): if any
+            # existing file is missing one of the current query's columns, restart
+            # as a full reload and overwrite.
+            if not schema_checked:
+                schema_checked = True
+                required_columns = set(df.columns)
+                if self._dataset_has_incomplete_columns(job_path, required_columns):
+                    logger.info(
+                        f"[{job_name}] Schema change detected (e.g. new columns in query). "
+                        "Doing full reload to keep dataset consistent."
+                    )
+                    start_date_str = self.default_start_date
+                    if backfill_chunk_days:
+                        windows = self._chunk_windows(start_date_str, backfill_chunk_days, days_to_lookback)
+                    else:
+                        windows = [(start_date_str, None)]
+                    write_mode = "overwrite"
+                    i = 0
+                    continue
                 logger.info(
                     f"[{job_name}] Schema check passed (existing data has all {len(required_columns)} columns)."
                 )
+
+            self._write_window(job_name, df, date_col, partition_cols, "append" if wrote_any else write_mode)
+            wrote_any = True
+
+            if i < len(windows) and chunk_pause_seconds > 0:
+                logger.info(f"[{job_name}] Window {i}/{len(windows)} written; pausing {chunk_pause_seconds:.0f}s.")
+                time.sleep(chunk_pause_seconds)
+
+        if not wrote_any:
+            logger.info(f"[{job_name}] No new records to process.")
+            return
+
+        self._compact_partitions(
+            job_name=job_name,
+            key_cols=key_cols,
+            partition_level=partition_level,
+            overwrite=self.overwrite,
+            start_date_str=start_date_str,
+            default_start_date=self.default_start_date,
+        )
+
+        # Same scope compaction runs on: incremental runs only (a full load /
+        # overwrite writes each key exactly once by construction).
+        if not self.overwrite and start_date_str != self.default_start_date:
+            self._verify_unique_keys(
+                job_name=job_name,
+                key_cols=key_cols,
+                partition_level=partition_level,
+                incremental_start=pd.to_datetime(start_date_str).date(),
+            )
+
+    def _write_window(
+        self,
+        job_name: str,
+        df: pd.DataFrame,
+        date_col: str,
+        partition_cols: List[str],
+        write_mode: Literal["append", "overwrite"],
+    ) -> None:
+        job_path = self._job_path(job_name)
 
         # 3. Data Preparation & Partitioning
         # Ensure date_col is datetime objects for extraction
@@ -911,15 +1096,6 @@ class ETLScheduler:
                 logger.info(f"[{job_name}] Successfully updated partitions. New max date: {df[date_col].max().date()}")
             except Exception as e:
                 logger.error(f"[{job_name}] Failed to save parquet data: {e}")
-
-        self._compact_partitions(
-            job_name=job_name,
-            key_cols=key_cols,
-            partition_level=partition_level,
-            overwrite=self.overwrite,
-            start_date_str=start_date_str,
-            default_start_date=self.default_start_date,
-        )
 
 
 if __name__ == "__main__":

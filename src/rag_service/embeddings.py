@@ -43,7 +43,7 @@ _PROVIDER_DEFAULTS = {
 
 def _resolve_provider() -> str:
     """Return 'openai' or 'gemini' based on env preference and available keys."""
-    from dashboards.aws_secrets import get_secret as _get_secret
+    from bituslabs_ds.aws_secrets import get_secret as _get_secret
 
     raw = (os.environ.get("RAG_EMBEDDING_PROVIDER") or "auto").lower()
     if raw in ("openai", "gemini"):
@@ -74,7 +74,7 @@ class _OpenAIEmbedder:
     def __init__(self, model: str) -> None:
         from openai import OpenAI
 
-        from dashboards.aws_secrets import get_secret as _get_secret
+        from bituslabs_ds.aws_secrets import get_secret as _get_secret
 
         api_key = _get_secret("OPENAI_API_KEY")
         if not api_key:
@@ -99,7 +99,7 @@ class _GeminiEmbedder:
     """
 
     def __init__(self, model: str, dim: int) -> None:
-        from dashboards.aws_secrets import get_secret as _get_secret
+        from bituslabs_ds.aws_secrets import get_secret as _get_secret
 
         try:
             import google.generativeai as genai  # type: ignore[import-untyped]

@@ -19,7 +19,7 @@ rebuilds rather than live writes.
    and folder URLs are auto-classified — folders use the Cloud REST
    v2 `direct-children` endpoint and recurse into subfolders.
 2. **Page fetch + chunking.** `confluence_loader` resolves each
-   source into page records reusing `dashboards.confluence_client`;
+   source into page records reusing `bituslabs_ds.confluence.client`;
    `chunker` splits page text into overlapping windows (default
    1200 chars / 200 overlap).
 3. **Embedding.** `embeddings.Embedder` calls OpenAI
@@ -117,7 +117,7 @@ once. The data flow upstream of the index is unchanged.
 | Concern | Module |
 | --- | --- |
 | What to index | `config/rag_sources.yaml` |
-| Page / folder fetch (auth, URL parsing, v2 folder API) | `dashboards.confluence_client` |
+| Page / folder fetch (auth, URL parsing, v2 folder API) | `bituslabs_ds.confluence.client` |
 | Source resolution + dedup | `confluence_loader.py` |
 | Chunking | `chunker.py` |
 | Embedding (OpenAI / Gemini) | `embeddings.py` |
@@ -128,7 +128,7 @@ once. The data flow upstream of the index is unchanged.
 | HTTP API | `app.py` |
 | Agent-side client | `client.py` |
 
-`dashboards.confluence_client` is the single home for Confluence
+`bituslabs_ds.confluence.client` is the single home for Confluence
 auth and HTTP — both `rag_service` and `report_agent` consume it,
 so adding a new Confluence capability (folders, attachments,
 labels, …) only happens once.

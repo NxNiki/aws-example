@@ -4,6 +4,7 @@ import logging
 import os
 import shutil
 import subprocess
+import time
 import urllib.request
 from collections import Counter
 from collections.abc import Sequence
@@ -614,3 +615,51 @@ def get_ip_location(ip: str, *, timeout: float = 5.0, lang: str = "zh-CN") -> st
     if not key:
         return "Timeout/Failed"
     return _resolve_ip_location(key, timeout, lang)
+
+
+_BATCH_IP_CACHE: dict[tuple[str, str], str] = {}
+
+
+def get_ip_locations(ips: Iterable[str], *, timeout: float = 10.0, lang: str = "zh-CN") -> dict[str, str]:
+    """Batch-resolve IP locations via ip-api.com's /batch endpoint.
+
+    One POST resolves up to 100 IPs, and the endpoint allows 15 requests/min —
+    ~1500 IPs/min versus ~45/min for single lookups (which silently degrade to
+    "Timeout/Failed" once throttled). Honors the X-Rl/X-Ttl rate-limit headers
+    by sleeping when the window is exhausted. Results are cached per process;
+    failures resolve to "Timeout/Failed" (same contract as get_ip_location).
+    """
+    todo = list(dict.fromkeys(str(ip).strip() for ip in ips if str(ip).strip()))
+    results = {ip: _BATCH_IP_CACHE[(ip, lang)] for ip in todo if (ip, lang) in _BATCH_IP_CACHE}
+    todo = [ip for ip in todo if ip not in results]
+
+    for start in range(0, len(todo), 100):
+        chunk = todo[start : start + 100]
+        rate_remaining, rate_reset_s = 1, 60
+        try:
+            request = urllib.request.Request(
+                f"http://ip-api.com/batch?lang={lang}",
+                data=json.dumps(chunk).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                payload = json.loads(response.read().decode())
+                rate_remaining = int(response.headers.get("X-Rl") or 1)
+                rate_reset_s = int(response.headers.get("X-Ttl") or 60)
+            for item in payload:
+                ip = str(item.get("query", ""))
+                if item.get("status") == "success":
+                    location = f"{item.get('country')} {item.get('regionName')} {item.get('city')}"
+                else:
+                    location = "Timeout/Failed"
+                results[ip] = location
+                _BATCH_IP_CACHE[(ip, lang)] = location
+        except Exception:
+            for ip in chunk:
+                results.setdefault(ip, "Timeout/Failed")
+        if rate_remaining <= 0 and start + 100 < len(todo):
+            time.sleep(rate_reset_s + 1)
+
+    for ip in todo:
+        results.setdefault(ip, "Timeout/Failed")
+    return results

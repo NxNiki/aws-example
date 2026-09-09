@@ -108,7 +108,7 @@ def grep_codebase(pattern: str, path: str = "", file_glob: str = "") -> str:
     - Start with the most distinctive SINGLE token from the user's question
       (``"clip"``, ``"outlier"``, ``"weighted_average"``, ``"BOOST_POOL"``).
       If that's too noisy, narrow with ``\\b<token>\\b`` for word-boundary
-      match, or pass ``path=`` to scope to one module (``"src/dashboards"``),
+      match, or pass ``path=`` to scope to one module (``"src/bituslabs_ds"``),
       or ``file_glob=`` to filter file types (``"*.py"``).
     - If the first single-token search returns nothing, try variants before
       giving up: stem (``"clipping"`` → ``"clip"``), the verb form

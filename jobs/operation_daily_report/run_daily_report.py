@@ -124,9 +124,10 @@ def main():
         help="Run PA ETL (default: skip). PA data is static, used as year-ago comparison",
     )
     parser.add_argument(
-        "--skip-report",
+        "--skip-ss01",
         action="store_true",
-        help="Skip step 3 (display daily report)",
+        help="Skip the SS01 stats report display AND the HG/PA ETLs that only feed it "
+        "(the PID difference check still runs; use --skip-pid-check for that)",
     )
     parser.add_argument(
         "--skip-pid-check",
@@ -156,7 +157,7 @@ def main():
 
     # Run PA ETL when: --reload-cached-etl, --run-pa-etl, or file missing (and display needs it)
     run_pa_etl = args.reload_cached_etl or args.run_pa_etl
-    if not run_pa_etl and not args.skip_report and not stats_by_day_pa.exists():
+    if not run_pa_etl and not args.skip_ss01 and not stats_by_day_pa.exists():
         run_pa_etl = True  # Display needs stats_by_day_pa; run PA ETL if file missing
 
     pa_etl_args = ["--reload"] if args.reload_cached_etl else []
@@ -164,9 +165,11 @@ def main():
     # --- ETL steps (subprocess) ---
     scripts = [
         (
+            # SS01 stats pull whose output (stats_by_date.parquet) feeds ONLY the
+            # report display; the dashboard uses the ss01_wucaishen ETL instead.
             "ETL game stats daily by group (HG)",
             OP_DIR / "etl_game_stats_daily_by_group.py",
-            True,
+            not args.skip_ss01,
             [],
         ),
         ("ETL game stats daily by group PA", OP_DIR / "etl_game_stats_daily_by_group_pa.py", run_pa_etl, pa_etl_args),
@@ -190,7 +193,7 @@ def main():
     # --- Report steps (import and call, capture output) ---
     report_chunks = []
 
-    if not args.skip_report:
+    if not args.skip_ss01:
         print(f"\n{'='*60}\nRunning: Display daily report\n{'='*60}")
         try:
             daily_report = _get_daily_report(lookback_days=args.lookback_days)

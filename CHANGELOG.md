@@ -7,6 +7,322 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **SS03 feature engineering on SageMaker cold data + monthly schedule.**
+  The per-bet feature pipeline (`features_enriched` +
+  `features_grouped_binsize_{N}`, four ai_group slices) moved from manual
+  Redshift-via-bastion runs to one PySpark job reading
+  `partition_cold_data/bet_order`, scheduled monthly via EventBridge
+  (`ss03-feature-engineer-monthly`, 1st of month 20:00 LA). SQL ported 1:1
+  (binary-JSON `partition_ab`, truncating second-diffs, integer-division
+  binning, Redshift's integer-AVG truncation reproduced); outputs stay
+  byte-compatible with the awswrangler-era files (same roots, column order,
+  parquet dtypes). Incremental model: whole-month recompute with dynamic
+  partition overwrite — replaces the ETLScheduler key-dedup compaction and
+  its mutable-key leak — with a self-healing window (a missed firing widens
+  the next run), guards for the pre-cold-data Feb 2026 history and
+  partial-month truncation, and the sidecar semantic-drift check. Validated
+  against the Redshift-produced July output (100% key parity on enriched,
+  exact agreement on all money columns) and re-validated refactor-neutral
+  (all 14 datasets row-identical across the review refactor).
+- **Reusable SageMaker ETL modules.** `bituslabs_ds.sagemaker_etl` (the
+  trusted-role PySpark processor, EventBridge scheduler role/schedule
+  helpers with admin-permission fallbacks and ClientRequestToken dedup, the
+  shared upsert-with-schedule deploy tail) and
+  `jobs/etl/sagemaker/spark_etl_common.py` (container-side helpers shipped
+  via `submit_py_files`: AB-group ids + `partition_ab` extraction, common
+  Spark session, schema check, partition pruning, window helpers) — used by
+  the feature-engineering and daily-stats jobs and all four launchers. The
+  monthly schedule reuses the daily pipeline's scheduler role via a
+  per-pipeline inline policy.
+- **SQL snapshot tests for the cold-data feature queries.** One golden file
+  per ai_group slice (enriched) and per slice × bin size (grouped) under
+  `tests/unit/feature_cold_data_snapshots/`, mirroring the Redshift suite
+  (`REGENERATE_SNAPSHOTS=1` to update).
+- **Dashboard response cache + window sharing.** Identical concurrent/repeated
+  `/api/data/series` and `/api/data/group-distribution` requests compute once
+  and share the result (single-flight, 150 s TTL, keyed by the full request
+  JSON; errors and empty results are never cached). Requests whose date
+  window and columns are contained in a fresh cached window are served by an
+  in-memory slice of that frame instead of a new S3 collect.
+- **Column-projected data loads.** Series and Stats-by-Group requests collect
+  only the columns their metrics need (cohort/grain dimensions, each
+  metric's transitive `user_*` dependencies, and the components
+  `collapse_user_rows` recombines); parquet projection pushdown reads just
+  those chunks from S3, so loaded frames stay small at any date span.
+- **Hive-aware scans with `period=` path pruning.** Each configured source
+  loads through one `scan_parquet` (single listing + one schema read) and
+  `collect_window` restricts the hive `period` column to the request window,
+  so partitions outside it are skipped by path. Request latency now scales
+  with the window, not a game's history length (ss01: 248 files / 15 MB,
+  cold 8.6 s → 4.4 s).
+- **Scale-to-zero.** dashboard-api (min 0 / max 1) scales to zero after 60
+  idle minutes — only `/api/*` requests count as activity, so public-ALB
+  scanner noise can't keep it awake — and wakes on the ALB 5xx a visit
+  produces (~2–3 min task start).
+- **Fish hunter on the daily cold-data schedule.** The fish ETL gained the
+  slot games' rolling 3-Beijing-day incremental window and an `etl-fm01`
+  step in the `slot-cold-data-daily` pipeline; daily/weekly/monthly stats
+  were backfilled (2026-01-24 →) and the dashboard config now reads the
+  partitioned cold-data datasets for all three granularities.
+- **Data-edge auto refresh.** The SPA re-checks date bounds on tab focus and
+  hourly; if the data max advanced and the user hasn't moved the
+  default window off the previous edge, the window slides forward
+  (forward-only — week/month period-start labels can't drag it back) and the
+  tab refetches.
+- **Scoped availability scans.** New `stats_by_date.availability_cols`
+  limits the per-date-range cohort availability scan to dimensions that
+  rotate over time (`mathtable`, `ab_test_group`); static vocabularies are
+  always selectable.
+- `docs/dashboard_dataflow.md` — backend dataflow: request lifecycles,
+  the read path, every cache layer with TTLs, ETL freshness guarantees.
+
+- **Fish-level range groups (fish_hunter).** The fish_hunter ETL now stores
+  one row per (period, user, daily_group, **fish_value**) in
+  `output_fish_hunter_v2`, replacing the fixed per-fish-type wide columns
+  (`user_num_hits_fish_low/…` and their `_20_200` variants) with
+  dashboard-side bucketing: a "Fish level" picker with user-editable names
+  and INCLUSIVE `[min, max]` bounds (defaults low [0, 10], medium [11, 130],
+  high [131, 200], ultra [201, max]). Definitions are global per game;
+  selection is per tab, next to the cohort pickers. Buckets may overlap and
+  are collapsed per user at query time (weighted means recombined by their
+  exact bet/kill counts). Also adds `user_num_delta_t` / `user_num_delta_bet`
+  recombination weights and drops the pre-bucketed hit/kill ratio columns.
+- **Two-column group grain: `ab_group` × `mathtable`.** The slot-game ETLs
+  (ss01/ss01a/ss02/ss03/ss06) now store one row per (period, user, ab_group,
+  mathtable) instead of UNION-ing every bet into overlapping `ai_group`
+  labels: datasets shrink 34–46%, the `group_col_partition` workaround is
+  obsolete, and AB-arm × mathtable combinations become directly selectable.
+  The dashboard exposes the two columns as independent cohort pickers
+  (crossable with lifecycle groups) and re-aggregates per-user stats when a
+  dimension is unselected. Sequence metrics (delta_t / delta_bet /
+  mathtable_change / FG trigger) are now DAY-partitioned — uniform and
+  load-order-independent (previously a mix of full-stream and window-truncated
+  semantics); `num_new_users` is derived from the first-bet map (it had
+  silently gone missing with the stored `user_group` column) and now means
+  "first-ever bet in the period". The flawed `user_avg_remaining_bet_amount`
+  metric is removed. Full metric reference: `docs/dashboard_etl.md`.
+- **Date-groups picker (dashboard-wide).** Granularity and up to three date
+  windows moved from per-tab controls to a global bar above the tab selector
+  (and above Lifecycle groups): defined once per game, read by every tab.
+  Stats-by-Date plots the shown windows concatenated horizontally on each line
+  chart (small gap between windows, one legend entry per cohort × metric,
+  weekend stripes per window); the comparison tabs use them side by side as
+  before. `/api/data/series` accepts an optional `ranges` list and tags each
+  series with `range_index`/`range_label`; loading a saved view migrates old
+  per-tab date settings into the global picker.
+
+- **Lifecycle-group picker (dashboard-wide).** New bar above the tab selector:
+  up to three user-defined cohorts as half-open ranges `[start, end)` of
+  periods since the user's first bet, with an "all" overlay. Units follow the
+  active tab's granularity (days / calendar weeks / calendar months, one
+  definition per unit); defined once per game and shared by every tab, report
+  figure, and saved view. Cohort labels carry the range
+  (`new[0, 3)`, `old[7, max)`).
+
+- **SS01A (Golden Goal) game-stats pipeline.** New ETL
+  (`jobs/ss01a_golden_goal/`) producing daily/weekly/monthly per-user stats
+  with AI/Default groups and per-mathtable variants (no AB arms, no `HG`
+  copy), wired into the nightly scheduler, plus the matching
+  `dashboard_config-ss01a.yaml` (lifecycle picker enabled,
+  `group_col_partition: [AI, Default]`).
+- **ETL data-integrity alerts.** Compaction failures and a new post-run
+  invariant check (on-disk keys must be unique within the incremental scope)
+  now send a Slack alert and are recorded on `ETLScheduler.alerts`, instead of
+  being visible only in the job log — a silently skipped compaction previously
+  let duplicate lookback rows accumulate unnoticed.
+
+### Changed
+
+- **Explicit, one-to-one picker semantics.** Every dimension picker (cohorts,
+  fish/bet-level range groups, lifecycle bar) starts with an explicit `all`
+  selected, and fully unselecting any of them shows *no data* on that tab —
+  server-side too: a cohort column present with an empty selection yields no
+  cohorts (an absent column still means `all` for API callers). Saved views
+  were migrated to explicit selections (originals in
+  `dashboard-views-backup/`); stale renamed columns were dropped.
+- **First launch fetches one panel.** Stats-by-Date seeds only the first
+  panel's first metric; Stats-by-Group defaults to `num_active_users` in the
+  first panel with a `<None>` option on every panel. Selections persist
+  across tab switches.
+- **Large-sample CIs use the m-out-of-n bootstrap.** Samples above 10k values
+  resample at m=10k and rescale deviations by √(m/n) — empirical shape kept,
+  correct width, cost capped (~0.03 s at n=1M vs ~2 s); resampling is one
+  integer-indexed draw at a time (~80 KB transient instead of a
+  hundreds-of-MB matrix). Smaller samples keep the plain percentile
+  bootstrap.
+- **dashboard-api task 1 → 2 vCPU** (8 GB unchanged): after the software
+  fixes, memory sat under 50% while CPU still pinned at 100% in busy
+  windows; polars aggregation + CI computation is CPU-bound.
+- **SPA cache headers.** `index.html` serves `Cache-Control: no-cache`
+  (revalidates every load; ETag 304s) and hashed assets are immutable —
+  browsers no longer run stale bundles after deploys.
+- Cache TTLs tightened against compound staleness: response 300→150 s,
+  first-bet map 3600→900 s, group-values vocabulary 3600→600 s.
+- **Lifecycle cohorts are derived at query time.** `dashboard_api` computes
+  each user's first bet date from the daily user rows (cached per config) and
+  filters cohorts by period range on demand
+  (`lifecycle_groups` on the data endpoints), instead of reading a stored
+  label. Custom ranges therefore apply retroactively to all history.
+- Loading a saved view now drops cohort selections for columns the config no
+  longer defines, so stale snapshots can't silently filter the data; re-saving
+  the view persists the cleaned state.
+
+### Fixed
+
+- **Redshift ss03 feature-SQL snapshot tests were silently red** since the
+  job moved to its per-slice `GROUPS`/`build_config` structure: the test's
+  inline config copy had drifted and the parity check hit an
+  `AttributeError`. The configs are now loaded from the job script itself
+  and fan out per slice, so drift shows up as a reviewable snapshot diff.
+- **Empty results are never cached.** A read racing the ETL's dynamic
+  partition overwrite (delete-then-rewrite) could collect an empty frame for
+  a window that has data; caching it pinned "no data" on every panel for the
+  TTL. Empty windows, empty covering slices, and empty responses are now
+  returned but recomputed on the next request.
+- **Group-values cache stampede.** The picker vocabulary cache had no lock
+  across the request threadpool, warmup and refresh threads; concurrent cold
+  misses each ran a full-parquet scan. Now lock-guarded with per-key
+  single-flight (one scan, shared result).
+- **Backward window slide.** The data-edge refresh compared week/month
+  period-start labels against the day-granularity max and could pull an
+  up-to-date window back two days; it now only advances.
+- **Duplicate startup fetches.** `selectConfig` and the tab effect both fired
+  `loadAllSeries`; the second aborted and re-issued an identical request.
+  In-flight requests with the same signature are now left to land.
+- **Fish hunter daily stats had no schedule.** The cold-data cutover left the
+  fish ETL running only manually with hardcoded dates; its dashboard data
+  froze at the last manual run until the pipeline step above landed.
+- **Silent ETL compaction failure duplicated recent rows on every game.** The
+  2026-07-17 in-place parquet rewrite produced Arrow `large_string` columns
+  while the ETL writes `string`; `_compact_partitions`' dataset read refused
+  to merge the two types and the error was only logged, so each incremental
+  run appended its lookback re-pull as duplicate keys (daily rows for
+  2026-07-15→07-18 doubled; weekly/monthly windows back to early July / May —
+  SS03 total_bet read 2× its true value on the duplicated dates; distinct
+  user counts, ratios, and per-user means were unaffected). Compaction now
+  falls back to per-file reads on Arrow type mismatches, and all 18 S3
+  prefixes were de-duplicated and type-normalized in place (~515k rows
+  removed; originals under
+  `s3://bituslabs-team-ai/etl-results/backup/dup_type_repair_20260720/`).
+- **"all" cohort double-counted bets on the ss games.** The ss01/ss02/ss03/ss06
+  ETLs UNION every bet into a combined AB-test label AND a per-mathtable
+  re-partition of the same bets (ss01 adds a third full `HG` copy); the
+  dashboard's "all" summed every row, inflating totals ~1.4–3× and polluting
+  per-user averages/distributions (SS03 total_bet showed 147.8M for
+  2026-06-01→07-20 where the true figure is 103.9M). Configs now declare the
+  disjoint labels (`group_col_partition`) and "all" aggregates only those;
+  individually selected groups are unchanged.
+
+### Removed
+
+- **Stored `user_group` / `user_group2` columns.** Dropped from the game-stats
+  ETLs (ss01/ss02/ss03/ss06/fish_hunter) and removed in place from the
+  existing dashboard parquet on S3 (originals backed up under
+  `s3://bituslabs-team-ai/etl-results/backup/user_group_drop_20260717/`).
+  The fixed new/beginner/old split is superseded by the lifecycle-group
+  picker's default ranges.
+
+## [0.5.0] - 2026-07-14
+
+Major release. The legacy Dash dashboard is replaced by a FastAPI `dashboard_api`
+service + a React/TypeScript SPA, alongside new metrics, two new game pipelines,
+and the SS03 clustering / AB-test workflow.
+
+### Added
+
+- **New dashboard: `dashboard_api` (FastAPI) + React/TypeScript SPA (`frontend/`).**
+  Replaces the Dash `game_stats_monitor`. Tabs: Stats-by-Date, Stats-by-Group,
+  Deep Dive, Summary Table, and Report; plus a group-distribution endpoint and an
+  OpenAPI-generated typed frontend client (`scripts/gen_openapi_client.sh`).
+  Deployed to ECS Fargate via `infra/dashboard_api/`.
+- **Dashboard configs served from S3 at runtime.** `dashboard_api` reads
+  `dashboard_config-*.yaml` from an `s3://` `config_dir` (default
+  `s3://<bucket>/dashboard-configs`) with a short TTL cache, so adding a config is
+  an S3 upload — no image rebuild/redeploy. Added `read_yaml_from_s3` and
+  `uri_basename` to `s3_utils`.
+- **Summary Table tab** (dedicated Stat column, per-metric red→green colormap for
+  ±%) with Confluence HTML export; Report-tab figure reordering and
+  summary-above-figures.
+- **Retention metrics day-5/7/10/15/30** (and `dayN_num_users`) in `DataMetrics`,
+  exposed in dashboard configs + agent metadata.
+- **numpy-only Welch t-test and one-way ANOVA** for group comparisons.
+- **SS06 (pocket_soccer)** ETL pipeline + dashboard config.
+- **risk_control user-aggregate ETLs** (`etl_{risk,control}_user_aggregates`,
+  aggregated in Redshift), a `get_ip_locations` ip-api `/batch` helper, and
+  anomaly-flagged user-id groups (group4/5) in `risk_users.json`.
+- **Apply a pretrained KMeans model to new cohorts from S3 (no retraining).**
+  `ClusterAnalysisPipeline` gains `pretrained_model_dir`,
+  `ensure_pretrained_artifacts()` (fetch model + `feature_order.json` +
+  `clip_bounds.json` from a prior S3 run into the current run) and
+  `save_apply_run_info()`; apply-only groups (`default`/`ab_test_a`/`ab_test_b`) in
+  the SS03 cluster config; run_id-keyed S3 upload so groups sharing a `--run-id`
+  land in one folder.
+- **SS03 user daily stats ETL** (`etl_user_daily_stats.py`): per
+  `(user_id, session_start_date, cluster)` rows with a dominant `ab_group` label
+  and nominal `"cluster N"` labels; feeds the "SS03 Cluster & AB Test" dashboard.
+- **SS03 AB-test feature-engineering groups** (`ab_test_a` / `ab_test_b`) with
+  per-group `date_start`.
+- **fish_hunter FTUE report** enhancements: per-bin bet-behavior time series with
+  95% CI bands, per-active-user means / raw totals / grouped metrics, bet
+  increase/decrease counts and ratios, a strategy-comparison section, and a
+  bet-behavior markdown export.
+- **fish_hunter SQL query snapshots** in `tests/unit/etl_snapshots/` with a
+  self-verifying `tests/unit/test_etl_sql_snapshots.py` (regenerate via
+  `REGENERATE_SNAPSHOTS=1`).
+- **Feature engineering feature reference** in `docs/feature_engineering.md`:
+  feature dictionary for the SS01/SS02/SS03 bet-segmentation pipeline
+  (`src/bituslabs_ds/features/`) covering the pipeline key steps, the common
+  `features_enriched` / `features_grouped_binsize_{N}` columns, per-game
+  configuration differences, and a placeholder section for future
+  game-specific features.
+
+### Changed
+
+- **`ml` lazily imports matplotlib/seaborn/skl2onnx** so the module imports with
+  just the `ml` dependency group (no viz/onnx stack needed for
+  clustering/prediction).
+- **`load_raw_data` no longer bakes `row_filters` into the local cache** — filters
+  are applied at read time by `load_cluster_data`/`load_attach_data`, so changing a
+  filter no longer needs a manual cache bust (only a source-data change needs
+  `reload`).
+- **risk_control stats are aggregated in Redshift** instead of pulling raw bullet
+  events; the control ETL uses full history (short random windows sampled mostly
+  inactive users).
+- **`dashboard_api` ECS deploy is a steady-state deployer** (one-time cutover
+  logic removed).
+- Frontend polish: per-tab granularity/date/cohort controls, incremental
+  per-panel loading with request cancellation, number precision/formatting, and
+  chart sizing.
+
+### Fixed
+
+- **fish_hunter daily/weekly/monthly user stats only counted fish-killers**
+  (`HAVING MAX(b.killed) > 0` in `stats_by_user_date`), skewing distinct-user
+  metrics (retention, `num_active_users`, RTP). All betting users are now emitted;
+  re-run with `--overwrite` to backfill.
+- **SS03 `AB_TEST_A` / `AB_TEST_B` partition_ab ids were swapped**, so the ETL
+  labeled the cohorts inversely; ids corrected and historical datasets relabeled
+  with `--overwrite`.
+- **`dashboard_api` memory / caching**: single-flight window cache shared across
+  Stats-by-Group / Deep Dive, batched bootstrap-CI resampling, and 8 GB / 1 vCPU /
+  single-worker task sizing to stop OOMs; the window cache no longer served the
+  wrong game's data across config switches.
+- **Any-group retention** read the cohort slice instead of the full population.
+- **Deep-dive log axes** broke on non-positive values.
+- Frontend: `crypto.randomUUID` crash on HTTP; chat sent on IME-composition Enter;
+  tooltip CI bounds; assorted display fixes.
+- Infra: associate target groups with the ALB before ECS attach; unblock the
+  `dashboard_api` image build.
+
+### Removed
+
+- **Legacy Dash dashboard decommissioned:** `src/dashboards/game_stats_monitor.py`,
+  `weekly_report.py`, `report_agent/`, and the old `infra/dashboard/` deploy —
+  superseded by `dashboard_api` + `frontend/`.
+- `jobs/risk_control/etl_get_risk_user_stats.py` (replaced by the aggregate ETLs).
+
 ## [0.4.0] - 2026-06-17
 
 ### Added
@@ -201,6 +517,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Production cutover: the React dashboard replaced the legacy Dash app**
+  (frontend redesign Phase 5). `dashboard_api` (FastAPI: SPA + `/api/data/*` +
+  `/api/report/*`) now serves the same production URL the Dash app did,
+  behind the existing `game-stats-dashboard-alb` — no new ALB. The listener
+  default was flipped from the Dash target group to `dashboard-api-tg`
+  (atomic `modify_listener`), and a priority-10 `/api/agent/*` rule routes
+  browser chat traffic to the `ai-chat-agent` service via a second target
+  group on that ALB (a TG belongs to one ALB, so the agent service carries two
+  — note: recreating that service from scratch silently drops the extra TG).
+  ALB idle timeout raised 60 → 300 s for SSE chat streams. The fleet stays at
+  three ECS services (dashboard-api, ai-chat-agent, rag-service); the legacy
+  `game-stats-dashboard` service is parked at desired-count 0 for a rollback
+  bake, with its scale-to-zero alarms/policies removed (the scale-out alarm
+  watched the shared ALB's 503 count and would otherwise resurrect Dash).
+  `infra/dashboard_api/deploy_ecs.py` performs the whole sequence idempotently
+  and prints a rollback runbook. The Weekly Report placeholder tab was removed
+  from the SPA (its nightly ETL job is kept). `dashboard_api` also emits the
+  `Dashboard/UserRequestCount` metric (scale-to-zero idle signal), gated on
+  `DASHBOARD_SERVICE_NAME`.
+- **Repository reorganization (moves-only, behavior-preserving).** Shared
+  infrastructure that lived inside the legacy `dashboards` package moved into
+  the `bituslabs_ds` library so the Dash package can be deleted after the bake:
+  `metrics/user_stats_aggregates.py` (DataMetrics + `_bootstrap_ci`),
+  `confluence/{client,export_html,references}.py`, and `aws_secrets.py`.
+  One-line re-export shims remain at the old `dashboards.*` paths so the frozen
+  legacy image stays rebuildable until deletion; `dashboard_api`, `ai_agent`,
+  `rag_service`, and tests import from the new paths, and the three service
+  Dockerfiles drop their per-file `src/dashboards` COPY lines (the modules ride
+  the existing `COPY src/bituslabs_ds`). The six `dashboard_config-*.yaml`
+  moved out of `src/dashboards/` to a top-level `configs/dashboard/`, resolved
+  via `DASHBOARD_CONFIG_DIR` everywhere — which also fixed a latent bug where
+  `ai_agent`'s `chat_api` resolved configs from a directory that never held
+  any YAMLs, silently dropping every `dashboard_config` request. Eleven
+  root-level one-off scripts moved to `jobs/analyses/` (scheduled job paths are
+  frozen — EventBridge bakes them into rule targets — and stayed put); see the
+  new `jobs/README.md`.
 - Renamed `src/dashboards/secrets.py` → `src/dashboards/aws_secrets.py`
   to avoid shadowing the Python stdlib ``secrets`` module. Running any
   module under ``src/dashboards/`` as a path (e.g. ``python
@@ -292,6 +644,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **dashboard_api served the wrong game's data after a config switch.** The
+  in-process window cache (`services/common.py`, added with the OOM fixes
+  below) keyed each cached user-row frame on `cfg.get("id")` — but the raw
+  config YAML has no `id` (it's derived from the filename), so the key was
+  `(None, granularity, start, end)` for *every* config. Switching games with
+  the same granularity and date window (e.g. ss02 → ss03) hit the previous
+  game's cached frame and rendered its numbers under the new config. Affected
+  all three data tabs (series, deep dive, group distribution).
+  - Surfaced two ways: (1) the freshly loaded config showed the previous
+    game's values; (2) **retention appeared to "change" when the date range
+    changed** — not a retention-calculation problem, but because the range is
+    part of the cache key, so changing it forced a cache *miss* that finally
+    fetched the correct config's data. With the cache keyed correctly, both
+    go away.
+  - Fix: `load_raw_config` now stamps `cfg["id"] = config_id` (the single load
+    chokepoint every data route uses), and `collect_window` raises rather than
+    caching under a `None` id, so a future caller that forgets fails loudly
+    instead of silently serving another game's rows. Regression tests cover
+    the no-collision keying and the missing-id guard. Verified in production:
+    ss02 vs ss03 `user_total_bet` now return distinct means (1041.80 vs
+    1082.78), stable across a round-trip.
+- **dashboard_api task OOM-killed under real dashboard load (502s).** Three
+  compounding causes, fixed in sequence: (1) the per-config parquet cache is
+  held in-process, so two uvicorn workers doubled it — pinned to a single
+  worker; (2) a tab render fires one `/api/data/*` request per panel in
+  parallel, and each collected its own copy of the same user-row window —
+  added the single-flight, byte-budgeted `collect_window` cache so one render
+  collects once; (3) `_bootstrap_ci` allocated the full `(n_boot × len(arr))`
+  resample matrix at once (~800 MB for a 200k-row per-user metric, several
+  landing concurrently) — now resampled in batches (~80 MB transient,
+  statistically identical CIs). Task sized to 8 GB / 1 vCPU.
+
 - **Chat agent silently fell back to live Confluence instead of RAG.**
   `search_confluence_rag` raised `ImportError` inside the slim
   ai-agent Docker image because `rag_service/client.py` wasn't copied
@@ -344,6 +728,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run; the reader now drops an unreadable cache and reloads from source.
 - **ETL partition columns are built in a single concat** rather than inserted
   one at a time, avoiding pandas DataFrame-fragmentation warnings.
+
+### Removed
+
+- **Legacy Dash dashboard decommissioned (frontend redesign Phase 5
+  complete).** After a clean one-week production bake of the React dashboard
+  (steady traffic, zero errors, legacy service idle at desired 0), the old Dash
+  app and its infra were deleted: `src/dashboards/` (the ~7,200-LOC
+  `game_stats_monitor.py`, `weekly_report.py`, the legacy `report_agent`
+  exporter/data_summary, and the back-compat shims left by the reorg) and
+  `infra/dashboard/`. The `dashboards` package entry and the `dashboard` poetry
+  group (dash, plotly, kaleido, gunicorn, matplotlib) were dropped from
+  `pyproject.toml` — every shared dep in that group remains available via the
+  `ds`/`dev`/`dashboard_api` groups. AWS teardown removed the
+  `game-stats-dashboard` ECS service, its task-definition family,
+  `game-stats-dashboard-tg`, the legacy task security group, the
+  `/ecs/game-stats-dashboard` log group, and the `bituslabs-ds-dashboard` ECR
+  repository. **Kept:** the production ALB (`game-stats-dashboard-alb`, now
+  fronting `dashboard-api`) and its security group; the weekly-report ETL job
+  and its scheduled-jobs registry entry. Rollback to Dash is no longer a
+  one-line ALB flip — it requires rebuilding from a pre-deletion git SHA.
 
 ## [0.2.0] - 2026-05-06
 

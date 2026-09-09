@@ -283,7 +283,7 @@ def read_etl_source(file_path: str, column_name: str = "") -> str:
     SQL snippets are stored in the metadata cache.
 
     Args:
-        file_path: Path to the ETL file (e.g. "jobs/fish_hunter/etl_game_stats_daily_by_user.py").
+        file_path: Path to the ETL file (e.g. "jobs/etl/redshift/fish_hunter/etl_game_stats_daily_by_user.py").
                    Use get_dashboard_config_summary or lookup_column to discover which ETL files
                    are relevant for the current dashboard.
         column_name: Optional column name to highlight in the SQL output.
@@ -380,7 +380,7 @@ def search_confluence(query: str, space_key: str = "") -> str:
         space_key: Optional Confluence space key to narrow the search
     """
     try:
-        from dashboards.confluence_client import search_pages as _search
+        from bituslabs_ds.confluence.client import search_pages as _search
     except ImportError:
         return "Confluence integration is not available (atlassian-python-api not installed)."
     try:
@@ -413,7 +413,7 @@ def read_confluence_page(page_id: str) -> str:
         page_id: The Confluence page ID (numeric string from search results)
     """
     try:
-        from dashboards.confluence_client import get_page_content as _get_page
+        from bituslabs_ds.confluence.client import get_page_content as _get_page
     except ImportError:
         return "Confluence integration is not available (atlassian-python-api not installed)."
     try:
@@ -605,7 +605,7 @@ MODEL_CATALOG = {
 }
 
 # Secrets Manager secret name (stores GOOGLE_API_KEY and OPENAI_API_KEY).
-from dashboards.aws_secrets import get_secret as _get_secret  # noqa: F401  (re-export for callers)
+from bituslabs_ds.aws_secrets import get_secret as _get_secret  # noqa: F401  (re-export for callers)
 
 
 def _build_llm(model_key: Optional[str] = None) -> BaseChatModel:
@@ -668,10 +668,15 @@ def _build_llm(model_key: Optional[str] = None) -> BaseChatModel:
     return ChatOpenAI(model=model, temperature=0, api_key=SecretStr(api_key))
 
 
-def create_agent(model_key: Optional[str] = None):
-    """Create and return the LangGraph ReAct agent."""
+def create_agent(model_key: Optional[str] = None, extra_tools: Optional[List[Any]] = None):
+    """Create and return the LangGraph ReAct agent.
+
+    ``extra_tools`` lets a caller append capability-specific tools (e.g. the
+    dashboard-action tools used by the streaming /api/agent/chat endpoint)
+    without changing the default tool set for /api/chat and Slack.
+    """
     llm = _build_llm(model_key=model_key)
-    return _create_langchain_agent(llm, _TOOLS)
+    return _create_langchain_agent(llm, _TOOLS + (extra_tools or []))
 
 
 def init_metadata(

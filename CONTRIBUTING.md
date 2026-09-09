@@ -10,7 +10,7 @@ feature/* ──► dev ──► main (tagged release)
 
 - **`main`** — release branch. Tagged with semver. Never receive direct commits.
 - **`dev`** — integration branch. Direct commits allowed for small fixes; feature branches merge here first.
-- **`feature/*`** — short-lived, per-topic branches. Branch off `dev`, rebase onto `dev` during development, merge back to `dev` via squash-merge PR, then delete. One topic → one branch → one PR.
+- **`feature/*`** — short-lived, per-topic branches. Branch off `dev`, rebase onto `dev` during development, merge back to `dev` via a merge-commit PR, then delete. One topic → one branch → one PR.
 
 ### Never rewrite shared history
 
@@ -52,7 +52,7 @@ For anything non-trivial: new ETL, new dashboard, refactor, multi-file change.
                     /
     o---o------o---S              <- dev
         ^      ^   ^
-        |      |   [feat] new metric (squash-merge: W+W+P collapsed into 1)
+        |      |   [feat] new metric (PR merge commit)
         |      [fix] log level
         feature branched here
 ```
@@ -93,12 +93,12 @@ git push --force-with-lease origin feature/my-thing
 gh pr create --base dev --title "[feat] ..." --body "..."
 ```
 
-**Merge to `dev`: always squash-merge.** Each feature becomes one clean commit on `dev`. This keeps `dev`'s history readable (one commit per feature), makes reverts trivial, and decouples your local wip granularity from the public history.
+**Merge to `dev`: merge commit** (squash-merge is disabled on this repo). The PR's individual commits land on `dev` under a merge commit, so keep the branch's commits clean (one logical concern each — see the commit guidelines).
 
-- GitHub UI: pick "Squash and merge" on the PR; check the "Delete branch" option.
-- Terminal: `gh pr merge <num> --squash --delete-branch`
+- GitHub UI: pick "Merge pull request" on the PR; check the "Delete branch" option.
+- Terminal: `gh pr merge <num> --merge --delete-branch`
 
-**Always delete the feature branch after the squash-merge.** Then start the next piece of work from a fresh branch off `dev`. Reusing a squash-merged branch is *not supported* by this workflow — the branch's commits are already represented in `dev` as the squash commit, so any further work on the same branch creates divergent history that's painful to clean up.
+**Always delete the feature branch after the merge**, locally too (`git branch -d <branch>`; `git fetch --prune` cleans up remote-tracking refs). Every merged branch is fully recoverable from its merge commit and PR, so kept branches are pure clutter. Start the next piece of work from a fresh branch off current `dev`.
 
 ```bash
 # delete locally if not already done by gh
@@ -109,7 +109,7 @@ git branch -D feature/my-thing
 git checkout -b feature/next-thing
 ```
 
-If your branch naming scheme has been per-developer (e.g. `nx/dashboard-work`) rather than per-topic, switch to per-topic names (`feat/dashboard-num-bets`, `fix/etl-time-range`). Per-topic names map cleanly to one PR → one squash → delete.
+If your branch naming scheme has been per-developer (e.g. `nx/dashboard-work`) rather than per-topic, switch to per-topic names (`feat/dashboard-num-bets`, `fix/etl-time-range`). Per-topic names map cleanly to one PR → one merge → delete.
 
 ### 3. Release: `dev` → `main` with tag
 
@@ -186,17 +186,17 @@ git push origin dev
 
 ### 4. Multi-person feature → sub-branches → integration branch → PR to `dev`
 
-For a feature too large for one person, branch a long-lived **integration feature branch** off `dev`, then have each developer work on a short-lived **sub-branch** that fans into it. Sub-branches follow Workflow 2 (rebase + squash-merge); the integration branch is *shared* — no history rewrites.
+For a feature too large for one person, branch a long-lived **integration feature branch** off `dev`, then have each developer work on a short-lived **sub-branch** that fans into it. Sub-branches follow Workflow 2 (rebase + merge-commit PR); the integration branch is *shared* — no history rewrites.
 
 ```text
     dev          o---o---o---o
                   \           \
-    feature/big    I---I'---I''---M    <- integration (squash-merged into dev)
+    feature/big    I---I'---I''---M    <- integration (merge-commit PR into dev)
                     \   ^   ^
                      \  |   |
-    feature/big/A     a-a'  |          (squash-merged into feature/big)
+    feature/big/A     a-a'  |          (merge-commit PR into feature/big)
                             |
-    feature/big/B           b---b'     (squash-merged into feature/big)
+    feature/big/B           b---b'     (merge-commit PR into feature/big)
 ```
 
 ```bash
@@ -214,9 +214,9 @@ git fetch origin
 git rebase origin/feature/big
 git push --force-with-lease origin feature/big/component-a
 
-# 4. open a PR from sub-branch into the integration branch, squash-merge, delete
+# 4. open a PR from sub-branch into the integration branch, merge, delete
 gh pr create --base feature/big --title "[feat] component A of big-thing"
-gh pr merge <num> --squash --delete-branch
+gh pr merge <num> --merge --delete-branch
 
 # 5. keep the integration branch current with dev — MERGE, don't rebase
 #    (rebase would rewrite SHAs that other sub-branches are based on)
@@ -225,9 +225,9 @@ git fetch origin
 git merge origin/dev
 git push origin feature/big
 
-# 6. when the whole feature is ready: PR feature/big → dev, squash-merge as usual
+# 6. when the whole feature is ready: PR feature/big → dev, merge as usual
 gh pr create --base dev --title "[feat] big-thing"
-gh pr merge <num> --squash --delete-branch
+gh pr merge <num> --merge --delete-branch
 ```
 
 **When to choose Workflow 4 over Workflow 2**

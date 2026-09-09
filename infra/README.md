@@ -7,7 +7,7 @@ operational details. Shared deploy plumbing lives in `shared/`.
 | Folder | Purpose | Entry points |
 | --- | --- | --- |
 | [`shared/`](shared/) | Common deploy helpers + base Docker image | `ecs_helpers.py`, `Dockerfile.base`, `build_base.sh` |
-| [`dashboard/`](dashboard/README.md) | Dash web app on ECS Fargate behind an ALB | `deploy_ecs.py`, `build.sh`, `Dockerfile` |
+| [`dashboard_api/`](dashboard_api/README.md) | React SPA + data/report API (FastAPI) on ECS Fargate behind an ALB | `deploy_ecs.py`, `build.sh`, `Dockerfile` |
 | [`ai_agent/`](ai_agent/README.md) | FastAPI chat service + Slack bot on ECS Fargate | `deploy_ecs.py`, `build.sh`, `Dockerfile` |
 | [`rag_service/`](rag_service/) | RAG retrieval microservice on ECS Fargate | `deploy_ecs.py`, `build.sh`, `Dockerfile`, `docker-compose.opensearch.yml` |
 | [`etl/`](etl/README.md) | Fargate-scheduled ETL jobs (EventBridge → ECS) | `build.sh`, `setup_schedule.sh`, `ecs_task_def.json`, `Dockerfile` |
@@ -22,8 +22,8 @@ operational details. Shared deploy plumbing lives in `shared/`.
   the project root as the working directory so Docker's build context picks
   up `pyproject.toml`, `poetry.lock`, `src/`, `jobs/`, etc.
   ```bash
-  bash infra/dashboard/build.sh
-  python infra/dashboard/deploy_ecs.py --build-first
+  bash infra/dashboard_api/build.sh
+  python infra/dashboard_api/deploy_ecs.py --build-first
   ```
 - **Shared helpers** in `shared/ecs_helpers.py` (account-id lookup, default
   VPC discovery, ECR repo + ECS execution role idempotent create,

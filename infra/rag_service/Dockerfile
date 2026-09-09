@@ -37,13 +37,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /app/.venv /app/.venv
 
-# RAG service code (and the confluence_client + aws_secrets module it reuses).
-# We deliberately do NOT copy chat_agent.py — it pulls in langchain at module
-# top, which the slim rag_service image isn't supposed to ship.
+# RAG service code; the confluence client + aws_secrets it reuses live in
+# bituslabs_ds and ride that COPY. We deliberately do NOT copy chat_agent.py —
+# it pulls in langchain at module top, which this slim image isn't supposed to
+# ship.
 COPY src/rag_service ./src/rag_service
-COPY src/dashboards/__init__.py           ./src/dashboards/__init__.py
-COPY src/dashboards/aws_secrets.py        ./src/dashboards/aws_secrets.py
-COPY src/dashboards/confluence_client.py  ./src/dashboards/confluence_client.py
 COPY src/bituslabs_ds ./src/bituslabs_ds
 
 # Index-rebuild script. Lets the same image be used by the scheduled

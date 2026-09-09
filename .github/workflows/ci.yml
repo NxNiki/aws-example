@@ -1,0 +1,91 @@
+name: CI
+
+# Phase-0 gate for the React/TypeScript redesign (docs/frontend_redesign.md).
+# Backend lint is scoped to the NEW surfaces (make lint-new) — the legacy tree
+# carries pre-existing flake8 debt and joins the gate as the rewrite ports each
+# module. Frontend is fully gated. A third job fails the build if the generated
+# OpenAPI TS client has drifted from the dashboard_api Pydantic models.
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# The repo commits poetry.toml with virtualenvs.create=false (devs install into
+# their conda env). On CI that aims Poetry at the runner's base Python, whose
+# Debian-managed packages pip can't uninstall — so force a real venv here. An
+# env var outranks the committed config file.
+env:
+  POETRY_VIRTUALENVS_CREATE: "true"
+
+jobs:
+  backend:
+    name: Backend (lint-new + dashboard_api tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install Poetry
+        run: pipx install poetry
+      - name: Install dependencies
+        run: poetry install --with dev,test,dashboard_api --no-interaction
+      - name: Lint (new/migrated surfaces only)
+        run: make lint-new   # Makefile recipes already wrap tools in `poetry run`
+      - name: Test dashboard_api
+        run: poetry run pytest tests/unit/test_dashboard_api.py
+
+  frontend:
+    name: Frontend (typecheck + test + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm test
+      - name: Build
+        run: npm run build
+
+  openapi-drift:
+    name: OpenAPI client up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install Poetry
+        run: pipx install poetry
+      - name: Install backend (dashboard_api) + frontend deps
+        run: |
+          poetry install --with dashboard_api --no-interaction
+          npm --prefix frontend ci
+      - name: Regenerate OpenAPI schema + TS client
+        run: poetry run make openapi   # gen script calls bare `python`; run it in the venv
+      - name: Fail if the generated client drifted
+        run: |
+          git diff --exit-code frontend/openapi.json frontend/src/api/schema.d.ts \
+            || (echo "::error::OpenAPI client is stale. Run 'make openapi' and commit the result." && exit 1)

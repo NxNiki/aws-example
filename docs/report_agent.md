@@ -300,7 +300,7 @@ snapshot:
 | User-curated reference loader: URL → Confluence page → stripped, truncated body; cached | `src/dashboards/report_agent/references.py` |
 | Render PNGs, attach, write the snapshot region (with trailing References section) | `src/dashboards/report_agent/exporter.py` |
 | Report tab layout + callbacks (add/render/describe/remove figure, summarize, persist edits, add/remove/persist/render reference, export) | `src/dashboards/game_stats_monitor.py` (`_layout_report_tab`, `_register_report_tab_callbacks`) |
-| Confluence read / attach / update API wrapper, tinyurl decoding, HTTP redirect fallback | `src/dashboards/confluence_client.py` |
+| Confluence read / attach / update API wrapper, tinyurl decoding, HTTP redirect fallback | `src/bituslabs_ds/confluence/client.py` |
 | LLM factory used by description/summary; auto-mode provider pick | `src/ai_agent/chat_agent.py:_build_llm` |
 
 

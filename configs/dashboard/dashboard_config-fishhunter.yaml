@@ -1,0 +1,148 @@
+title: "Fish Hunter Analytics"
+
+stats_by_date:
+  files:
+    day: [
+      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter_v3_cold_data/daily_stats",
+    ]
+
+    week: [
+      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter_v3_cold_data/weekly_stats",
+    ]
+
+    month: [
+      "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter_v3_cold_data/monthly_stats",
+    ]
+
+  group_col: "group_tag"
+  date_col: "activity_date"
+  # group_tag = the fish grouping policy (boost_pool / dynamic_rtp /
+  # risk_control / retention / default; docs/fish_group_tag_policy.md),
+  # derived per bullet in the fish_bullets_group_tag dataset and collapsed
+  # to one label per user-day.
+  # life_cycle_group is not a stored column: it is the reserved lifecycle
+  # name (LIFECYCLE_COL in dashboard_api services/common.py), and listing it
+  # is what enables the "Lifecycle groups" picker (cohorts derived from
+  # first-bet dates at API time). It intentionally never renders as a
+  # regular cohort picker.
+  user_group_cols: [group_tag, fish_value, period_total_bet, life_cycle_group]
+  availability_cols: [group_tag]
+  # Stored grain is one row per (period, user, group_tag, fish_value); the
+  # fish-level picker buckets fish_value by user-defined INCLUSIVE [min, max]
+  # ranges, and the API collapses rows back to one per user when unselected.
+  user_row_grain: [fish_value]
+  range_group:
+    column: fish_value
+    name: "Fish level"
+    defaults:
+      - {label: low, min: 2, max: 10}
+      - {label: medium, min: 15, max: 130}
+      - {label: high, min: 150, max: 200}
+      - {label: ultra, min: 500, max: 1000}
+  # "Total bet" picker: cohorts of user-periods by the user's TOTAL bullet
+  # spend over the whole day/week/month — derived at API time (virtual
+  # column). One default edge set serves every granularity (per-user weekly/
+  # monthly totals track the daily ones: medians 448/357/271; edges ≈ p25 /
+  # Ranges are HALF-OPEN [min, max) — adjacent tiers partition exactly.
+  # median-region / p90 of the daily distribution, round numbers).
+  period_total_group:
+    column: period_total_bet
+    name: "Total bet"
+    source_col: user_total_bet
+    defaults:
+      - {label: spend_micro, min: 0, max: 100}
+      - {label: spend_low, min: 100, max: 1000}
+      - {label: spend_mid, min: 1000, max: 10000}
+      - {label: spend_high, min: 10000, max: null}
+
+  group1_label: "DAU and Retention"
+  group1_columns: [
+    "num_active_users",
+    "day0_num_users",
+    "day1_num_users",
+    "day3_num_users",
+    "day5_num_users",
+    "day7_num_users",
+    "day10_num_users",
+    "day15_num_users",
+    "day30_num_users",
+    "retention_rate_day1",
+    "retention_rate_day3",
+    "retention_rate_day5",
+    "retention_rate_day7",
+    "retention_rate_day10",
+    "retention_rate_day15",
+    "retention_rate_day30",
+  ]
+
+  # Per-user aggregates (mean across users, bootstrap CI on the dashboard).
+  group2_label: "User Level Metrics"
+  group2_columns: [
+    "user_num_bets",
+    "user_num_killed_bullets",
+    "user_bullet_kill_ratio",
+    "user_killed_fish",
+    "user_num_rooms",
+    "user_total_bet",
+    "user_avg_bet_amount",
+    "user_total_payout",
+    "user_total_profit",
+    "user_max_profit",
+    "user_rtp",
+    "user_profit_coef_var",
+    "user_bullet_avg_profit",
+    "user_bullet_kill_avg_profit",
+    "user_avg_fish_value",
+    "user_avg_killed_fish_value",
+    "user_avg_delta_t_seconds",
+    "user_accu_pos_delta_bet",
+    "user_accu_neg_delta_bet",
+    "user_accu_pos_delta_bet_avg",
+    "user_accu_neg_delta_bet_avg",
+    "user_accu_delta_bet",
+    "user_accu_delta_bet_avg",
+    "user_pos_delta_bet_num",
+    "user_neg_delta_bet_num",
+    "user_num_streak_sessions",
+    "user_avg_streak_length",
+    "user_max_streak_length",
+    "user_min_streak_length",
+    "user_seconds_to_kill_fish",
+    "user_bets_to_kill_fish",
+    "user_max_kill_streak",
+    "user_avg_kill_streak",
+  ]
+
+  # Pooled over all users in the (period, group) — one value per cohort.
+  group3_label: "Group Level Metrics"
+  group3_columns: [
+    "total_num_bets",
+    "total_bet",
+    "total_payout",
+    "total_profit",
+    "rtp",
+    "user_rtp_median",
+    "user_rtp_ultilization_ratio",
+    "num_active_user_0_rtp",
+    "active_user_0_rtp_ratio",
+    "active_user_rtp_less_0_1_ratio",
+    "active_user_rtp_less_0_2_ratio",
+    "active_user_rtp_less_0_3_ratio",
+    "active_user_rtp_less_0_4_ratio",
+    "active_user_rtp_less_0_5_ratio",
+  ]
+
+stats_by_bet:
+  files: [
+    "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/bullet_stats_by_index.parquet",
+    "s3://bituslabs-team-ai/etl-results/jobs/output_fish_hunter/bullet_stats_by_index_pa.parquet",
+  ]
+
+  group_col: "session_group"
+
+# Weekly ops report (ETL: jobs/operation_daily_report/etl_weekly_report_all_games.py)
+weekly_report:
+  game_id: "FM01"
+  currency_type: "CNY"
+  files:
+    - "s3://bituslabs-team-ai/etl-results/jobs/output_weekly_report_all_games/ops_daily_report"

@@ -2,7 +2,11 @@
 Run scheduled ETL/report jobs in a fixed sequence.
 
 Intended usage:
-  poetry run python jobs/run_scheduled_etl_jobs.py [--skip-daily_report] [--overwrite] [--lookback-days N]
+  poetry run python jobs/run_scheduled_etl_jobs.py [--skip-daily_report] [--lookback-days N]
+
+Always runs the ETLs incrementally. To force a full reload of a game's data,
+run that job directly with its own --overwrite flag (long full reloads over the
+bastion tunnel are fragile, so overwrite one job at a time and verify).
 
 This orchestrator is code-level job logic and should live under `jobs/`.
 Infrastructure tooling (EventBridge/ECS/Step Functions/Terraform/CDK) should call
@@ -47,17 +51,17 @@ def _run_python_script(script_path: Path, script_args: list[str]) -> bool:
     return False
 
 
+# Daily-report PID-check job (first entry in the list below): paused — flip to
+# True to run it again on the schedule.
+RUN_PID_CHECK = False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run scheduled ETL/report jobs.")
     parser.add_argument(
         "--skip-daily_report",
         action="store_true",
         help="Skip the first job in the scheduled jobs list (operation daily report).",
-    )
-    parser.add_argument(
-        "--overwrite",
-        action="store_true",
-        help="Pass --overwrite to ETL jobs that support it.",
     )
     parser.add_argument(
         "--lookback-days",
@@ -67,67 +71,38 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    # Set args per script directly in this list, and mark whether --overwrite is supported.
-    jobs: list[tuple[str, Path, list[str], bool]] = [
+    # Set args per script directly in this list.
+    jobs: list[tuple[str, Path, list[str]]] = [
         (
-            "operation daily report",
+            # --skip-ss01 disables the SS01 stats daily-report table and the
+            # HG/PA ETLs that only feed it; the job still runs the PID
+            # difference check (sent to Slack).
+            "operation daily report (PID check only)",
             JOBS_DIR / "operation_daily_report" / "run_daily_report.py",
-            ["--lookback-days", str(args.lookback_days), "--send-slack"],
-            False,
+            ["--lookback-days", str(args.lookback_days), "--send-slack", "--skip-ss01"],
         ),
-        (
-            "ss01_wucaishen ETL",
-            JOBS_DIR / "ss01_wucaishen" / "etl_game_stats_daily_by_user_group.py",
-            [],
-            True,
-        ),
-        (
-            "ss02_deepdive ETL",
-            JOBS_DIR / "ss02_deepdive" / "etl_game_stats_daily_by_user_group.py",
-            [],
-            True,
-        ),
-        (
-            "ss03_mahjiang_streak ETL",
-            JOBS_DIR / "ss03_mahjiang_streak" / "etl_game_stats_daily_by_user_group.py",
-            [],
-            True,
-        ),
-        (
-            "fish_hunter ETL",
-            JOBS_DIR / "fish_hunter" / "etl_game_stats_daily_by_user.py",
-            [],
-            True,
-        ),
-        (
-            "fish_hunter FTUE ETL",
-            JOBS_DIR / "fish_hunter" / "etl_game_stats_ftue.py",
-            [],
-            True,
-        ),
+        # The per-game user-stats ETLs run on the SageMaker cold-data pipeline;
+        # the jobs/etl/redshift versions are rollback-only and their old S3
+        # output roots were deleted (2026-08-03) — re-adding one here would
+        # trigger a full-history Redshift reload, not an incremental top-up.
         (
             "operation daily weekly report ETL",
             JOBS_DIR / "operation_daily_report" / "etl_weekly_report_all_games.py",
             [],
-            False,
         ),
     ]
 
-    if args.skip_daily_report:
-        print("[INFO] --skip-daily_report enabled, skipping first scheduled job.")
+    if not RUN_PID_CHECK or args.skip_daily_report:
+        print("[INFO] Skipping the operation daily report (PID check) job.")
         jobs = jobs[1:]
 
     failures: list[str] = []
 
-    for name, script_path, base_args, supports_overwrite in jobs:
+    for name, script_path, script_args in jobs:
         if not script_path.exists():
             print(f"[ERROR] Missing script: {script_path}")
             failures.append(name)
             continue
-
-        script_args = [*base_args]
-        if args.overwrite and supports_overwrite:
-            script_args.append("--overwrite")
 
         ok = _run_python_script(script_path, script_args)
         if not ok:

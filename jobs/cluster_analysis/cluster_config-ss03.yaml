@@ -1,6 +1,6 @@
 # SS03 Mahjiang Streak Cluster Analysis Configuration
 # This file contains configuration specific to the ss03 clustering project.
-# Input files are produced by jobs/ss03_mahjiang_streak/etl_feature_engineer.py and
+# Input files are produced by jobs/etl/redshift/ss03_mahjiang_streak/etl_feature_engineer.py and
 # written by ETLScheduler to S3 under
 #   s3://bituslabs-team-ai/etl-results/jobs/output_ss03_feature_engineer/
 #     features_grouped/   (cluster_data below)
@@ -205,6 +205,46 @@ groups:
       local_cache: "ss03_features_enriched_ai.parquet"
     output_tag: "ai"  # -> enriched_data_ai_cluster_{k}.parquet
 
+  # Apply-only groups: score each ai_group with the pretrained model from
+  # cluster_analysis.pretrained_model_dir (no training). Run all three under one shared
+  # --run-id so their labels land in the same cluster_labels.parquet and one output
+  # folder uploads to S3. output_tag keeps each group's files distinct.
+  # math_table_id filters: Default's normal_zero is the table the model was trained on;
+  # normal_kakuteiB (a guaranteed-bonus table present in every cohort) is always kept.
+  # The AB arms each run their own primary table (A=normal_zero_95_kai, B=BG97 variant)
+  # plus normal_kakuteiB, so they take ALL math tables (filter disabled) rather than a
+  # normal_zero filter that would match nothing.
+  default:  # (ai_group=Default) score the training group itself with the pretrained model.
+    cluster_data:
+      prefix: "etl-results/jobs/output_ss03_feature_engineer/features_grouped_binsize_50/"
+      row_filters: {currency: "", math_table_id: ["normal_zero", "normal_kakuteiB"], ai_group: "Default"}
+      local_cache: "ss03_features_grouped_default.parquet"
+    attach_data:
+      prefix: "etl-results/jobs/output_ss03_feature_engineer/features_enriched/"
+      row_filters: {currency: "", math_table_id: ["normal_zero", "normal_kakuteiB"], ai_group: "Default"}
+      local_cache: "ss03_features_enriched_default.parquet"
+    output_tag: "default"  # -> enriched_data_default_cluster_{k}_binsize50.parquet
+  ab_test_a:  # (ai_group=AB_TEST_A) AB-test arm A -> normal_zero_95_kai (+ normal_kakuteiB).
+    cluster_data:
+      prefix: "etl-results/jobs/output_ss03_feature_engineer_ab_test_a/features_grouped_binsize_50/"
+      row_filters: {currency: "", math_table_id: "", ai_group: "AB_TEST_A"}
+      local_cache: "ss03_features_grouped_ab_test_a.parquet"
+    attach_data:
+      prefix: "etl-results/jobs/output_ss03_feature_engineer_ab_test_a/features_enriched/"
+      row_filters: {currency: "", math_table_id: "", ai_group: "AB_TEST_A"}
+      local_cache: "ss03_features_enriched_ab_test_a.parquet"
+    output_tag: "ab_test_a"  # -> enriched_data_ab_test_a_cluster_{k}_binsize50.parquet
+  ab_test_b:  # (ai_group=AB_TEST_B) AB-test arm B -> BG97 variant (+ normal_kakuteiB).
+    cluster_data:
+      prefix: "etl-results/jobs/output_ss03_feature_engineer_ab_test_b/features_grouped_binsize_50/"
+      row_filters: {currency: "", math_table_id: "", ai_group: "AB_TEST_B"}
+      local_cache: "ss03_features_grouped_ab_test_b.parquet"
+    attach_data:
+      prefix: "etl-results/jobs/output_ss03_feature_engineer_ab_test_b/features_enriched/"
+      row_filters: {currency: "", math_table_id: "", ai_group: "AB_TEST_B"}
+      local_cache: "ss03_features_enriched_ab_test_b.parquet"
+    output_tag: "ab_test_b"  # -> enriched_data_ab_test_b_cluster_{k}_binsize50.parquet
+
 output:
   bucket: "bituslabs-team-ai"  # S3 bucket for output data
   prefix: "ss03_cluster_analysis"  # Base S3 prefix; uploads land at <prefix>/<model>_<time_tag>/...
@@ -362,6 +402,13 @@ cluster_analysis:
   dbscan_min_samples: 50  # DBSCAN: min samples in eps-neighborhood for a core point.
   n_clusters: 3  # Number of clusters for K-means. The `ai` apply run reuses this to resolve the trained model.
   top_features: 40  # Number of top features to use. The inference run reuses this to resolve the trained model.
+  # Apply a previously-trained model (no retraining). When set, the apply-only groups
+  # (default / ab_test_a / ab_test_b) fetch the pipeline pickle + feature_order.json +
+  # clip_bounds.json (and the importance list / cluster centers, if present) from this
+  # prior S3 run folder into the current run, then predict. top_features / n_clusters /
+  # model above must match this folder so the pickle name resolves
+  # (kmeans_model_top40_features_k_3.pkl). Leave unset for the normal train flow.
+  pretrained_model_dir: "s3://bituslabs-team-ai/ss03_cluster_analysis/kmeans_2026-06-17_14-19-07_binsize50"
 
 # Pipeline switches keyed by group; the active_group's block is used for the run.
 # top_features / n_clusters above are shared, so the `ai` apply run always loads the
@@ -380,3 +427,20 @@ pipeline:
     attach_cluster_label: true  # Attach cluster indices -> enriched_data_ai_cluster_{k}.parquet
     get_cluster_stats: false
     upload_result_to_s3: true  # Upload this run's output folder to S3
+  # Apply-only groups: predict with the pretrained model, save aggregated + raw features
+  # per cluster. No elbow/cluster_analysis (never sweep or refit).
+  default:
+    apply_model: true
+    attach_cluster_label: true
+    get_cluster_stats: false
+    upload_result_to_s3: true
+  ab_test_a:
+    apply_model: true
+    attach_cluster_label: true
+    get_cluster_stats: false
+    upload_result_to_s3: true
+  ab_test_b:
+    apply_model: true
+    attach_cluster_label: true
+    get_cluster_stats: false
+    upload_result_to_s3: true

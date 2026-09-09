@@ -39,7 +39,7 @@ poetry run python jobs/<script>.py
 
 **Four source packages** (all under `src/`, configured in pyproject.toml):
 - `bituslabs_ds` — Core library: ETL, S3 utilities, ML, EDA, Athena, PySpark helpers
-- `dashboards` — Dash web app (game stats, Report tab UI) + a small set of shared utilities (`confluence_client.py`, `secrets.py`, `user_stats_aggregates.py`) that the ai_agent and rag_service also import
+- `dashboards` — LEGACY Dash web app (replaced in production by dashboard_api + the React SPA; deleted after the post-cutover bake). Shared utilities formerly here now live in `bituslabs_ds` (`metrics/user_stats_aggregates.py`, `confluence/{client,export_html,references}.py`, `aws_secrets.py`); one-line shims remain at the old import paths until deletion
 - `ai_agent` — FastAPI chat service: LangChain ReAct agent, Slack bot, metadata cache, Report-tab LLM endpoints
 - `rag_service` — FastAPI retrieval microservice: Confluence loader, embeddings, Faiss/OpenSearch backed retriever
 
@@ -59,11 +59,11 @@ Redshift (prod) → SSH bastion tunnel → DataLoader (etl.py) → S3 parquet ca
 **Entry points:**
 - `jobs/run_scheduled_etl_jobs.py` — Master ETL orchestrator (EventBridge/Fargate)
 - `entry_points/etl_dispatcher.py` — Dynamic job runner
-- `infra/dashboard/deploy_ecs.py` — Dashboard deployment to ECS
+- `infra/dashboard_api/deploy_ecs.py` — Dashboard (React SPA + data/report API) deployment to ECS
 - `infra/ai_agent/deploy_ecs.py` — AI agent deployment to ECS
 - `infra/emr/deploy.py` — EMR cluster management
 
-**Infrastructure:** `infra/` is organized one subfolder per service — `dashboard/`, `ai_agent/`, `rag_service/`, `etl/`, `sagemaker/`, `operation_report/`, `emr/` — each containing its own `Dockerfile`, `build.sh`, deploy script, and README where relevant. Shared deploy plumbing (base Docker image, ECS helpers) lives in `infra/shared/`. See `infra/README.md` for the index.
+**Infrastructure:** `infra/` is organized one subfolder per service — `dashboard_api/`, `ai_agent/`, `rag_service/`, `etl/`, `sagemaker/`, `operation_report/`, `emr/` — each containing its own `Dockerfile`, `build.sh`, deploy script, and README where relevant. Shared deploy plumbing (base Docker image, ECS helpers) lives in `infra/shared/`. See `infra/README.md` for the index.
 
 ## Code Style
 
@@ -80,6 +80,11 @@ hidden constraint, a subtle invariant, a workaround for a specific bug,
 behavior that would surprise a reader. Don't restate what well-named code
 already conveys. Don't reference the current task, PR, or callers — those
 belong in commit messages and rot fast.
+
+Never narrate change history in code: no "formerly", "moved to", "no longer",
+"removed", "replaced by" comments, and no tombstone comments where deleted
+code used to be. Describe only the code that exists now; migration notes
+belong in commit messages and `CHANGELOG.md`.
 
 **Narrow exception — user-facing feature surfaces.** Functions that
 implement a user-facing feature *do* get a purpose docstring, because they
@@ -147,13 +152,55 @@ features and should be split.
 
 Never commit secrets. Copy `.env.example` → `.env` and set `REDSHIFT_USER`, `REDSHIFT_PASSWORD`, `BASTION_KEY_PATH`. On ECS, secrets come from environment variables / Secrets Manager.
 
+A populated `.env` is present locally with the full set of credentials the services and jobs use:
+- **Redshift + bastion:** `REDSHIFT_USER`, `REDSHIFT_PASSWORD`, `BASTION_KEY_PATH` — run ground-truth Redshift queries via `bituslabs_ds.etl.DataLoader` (e.g. to validate dashboard/ETL numbers against the source).
+- **Confluence:** `CONFLUENCE_URL`, `CONFLUENCE_EMAIL`, `CONFLUENCE_TOKEN`.
+- **LLM:** `GOOGLE_API_KEY` (Gemini).
+- **Slack:** `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_USER_TOKEN`, `SLACK_CHANNEL_ID`.
+- **Services:** `RAG_SERVICE_URL`.
+
+The bastion **IP is not stored** (it changes) — pass the current one to `DataLoader(bastion_ip=...)` or a job's `--bastion-ip`. Never print `.env` values or commit them (`.env` is gitignored).
+
+## Confluence Reports
+
+Analysis reports published to Confluence are written in **Simplified Chinese**
+(简体中文) — section headings, prose, table headers, and conclusions. Keep code
+identifiers, table/column names, file paths, and metric field names in English.
+Existing examples: `jobs/ss03_mahjiang_streak/generate_ab_mathtable_report.py`,
+`generate_ai_permutation_report.py`.
+
+## Jira Tickets
+
+Jira Cloud lives at `https://bituslabs.atlassian.net`. The REST API
+(`/rest/api/3/...`) accepts basic auth with the `.env` `CONFLUENCE_EMAIL` +
+`CONFLUENCE_TOKEN` (one Atlassian token covers Confluence and Jira) — no
+separate credential. Never print the token.
+
+- **Project:** data-science work goes in **AIP (AI Projects)**. Dashboard
+  work files under epic **AIP-314 "DS Dashboard"**. Per-game projects
+  (SS01A, SS02, SS06, FM, …) exist for game-team work — don't file DS
+  tickets there.
+- **Issue types on AIP:** Epic, Bug, Task, Sub-task. Link to an epic via the
+  `parent` field at create time.
+- **Format:** descriptions are ADF (Atlassian Document Format) JSON, not
+  markdown/wiki markup.
+- **Content:** short outcome-oriented summary; description with a one-line
+  context paragraph, grouped bullets (what changed / why), and links to the
+  PR and any relevant docs. One ticket per deliverable, not per commit.
+- **Title prefix:** tickets under an epic start their summary with the epic
+  name in brackets, followed by a lowercase component tag — e.g. under
+  AIP-314 the title is `[DS Dashboard][etl] <outcome summary>` (components:
+  `etl`, `api`, `frontend`, `infra`, `ai-agent`, …).
+- **When:** create tickets only when asked — creating one is an
+  outward-facing action visible to the whole team.
+
 ## Branch & Merge Workflow
 
 Full workflow rules live in `CONTRIBUTING.md`. Highlights:
 
 - **Never commit to `main` directly.** Releases flow `feature/* → dev → main`.
 - **`dev` accepts direct commits** for small fixes; non-trivial work goes through a feature branch + PR.
-- **Feature → dev**: rebase onto `dev` during development, **squash-merge** the PR. Feature branches are kept (not deleted) and reused after rebasing onto fresh `dev`.
+- **Feature → dev**: rebase onto `dev` during development, then **merge the PR with a merge commit** (`gh pr merge --merge`). Squash-merge is **disabled** on this repo — do not attempt it. **Delete the feature branch after merge** (remote and local; `git fetch --prune`) — merged branches are recoverable from their merge commit/PR. Start the next piece of work from a fresh branch off current `dev`.
 - **dev → main**: **`--no-ff` merge commit** (preserves history), then create an **annotated semver tag** (`MAJOR.MINOR.PATCH`, no `v` prefix) on the merge commit. Update `CHANGELOG.md` (Keep a Changelog format) before the merge.
 - **Pause for confirmation** before any push to `main`, any tag push, or any force-push.
 - When opening a PR, draft a structured description (Summary / Changes / Test plan / Breaking changes / Related). Template in `CONTRIBUTING.md`.

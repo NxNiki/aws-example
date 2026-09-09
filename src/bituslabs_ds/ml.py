@@ -13,14 +13,15 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import joblib
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
+from botocore.exceptions import ClientError
 from joblib import parallel_backend
 from scipy.stats import skew
-from skl2onnx import convert_sklearn
-from skl2onnx.common.data_types import FloatTensorType
+
+# matplotlib / seaborn (group: ds) and skl2onnx (ONNX export) are imported lazily
+# inside the handful of methods that use them, so importing this module for
+# clustering/prediction works with just the `ml` group (no viz/onnx stack needed).
 from sklearn.base import ClusterMixin
 from sklearn.cluster import DBSCAN, AgglomerativeClustering, KMeans
 from sklearn.compose import ColumnTransformer
@@ -31,7 +32,15 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import MinMaxScaler, PowerTransformer, RobustScaler, StandardScaler
 
 from bituslabs_ds.config import DEFAULT_MAX_JOBS, LOCAL_ROOT
-from bituslabs_ds.s3_utils import apply_row_filters, list_s3_files, read_files, read_local_cache, save_local_cache
+from bituslabs_ds.s3_utils import (
+    apply_row_filters,
+    get_s3_client,
+    list_s3_files,
+    parse_s3_path,
+    read_files,
+    read_local_cache,
+    save_local_cache,
+)
 from bituslabs_ds.utils import (
     clip_outliers,
     column_iterator,
@@ -290,6 +299,18 @@ class ClusterAnalysisPipeline:
         return self._pipeline_flags.get("cluster_analysis", False)
 
     @property
+    def pretrained_model_dir(self) -> Optional[str]:
+        """S3 URI of a prior run folder to apply (no retraining).
+
+        When set (``cluster_analysis.pretrained_model_dir``), an apply-only run fetches
+        the trained pipeline + its ``feature_order.json`` / ``clip_bounds.json`` /
+        importance list from ``<dir>/models`` and ``<dir>/features`` into this run's
+        folder, so scoring reuses the exact training-time preprocessing and the new
+        run folder is self-contained / reproducible.
+        """
+        return self._config["cluster_analysis"].get("pretrained_model_dir")
+
+    @property
     def pickle_model_name(self):
         return f"kmeans_model_top{self.n_top_features}_features_k_{self.n_clusters}.pkl"
 
@@ -354,15 +375,23 @@ class ClusterAnalysisPipeline:
         raise ValueError(f"unsupported cache file format: {base_name}")
 
     def load_raw_data(self, data_label, reload: bool = False) -> pd.DataFrame:
-        """
-        load preprocessed data from s3.
+        """Load the raw S3 pull (column-projected, NOT row-filtered) with local caching.
+
+        ``row_filters`` are deliberately NOT applied here. ``read_files`` bakes whatever
+        filter it receives into the cached parquet and never re-checks it on a cache hit,
+        so passing the volatile filters (currency / math_table_id / ai_group) would freeze
+        them into the cache: a later run with a broadened/changed filter would silently get
+        the stale narrower rows. Instead the cache holds the row-unfiltered pull (still
+        scoped by ``columns`` + the per-group S3 ``prefix``), and the callers
+        (:meth:`load_cluster_data` / :meth:`load_attach_data`) apply ``row_filters`` at read
+        time via ``apply_row_filters``. Changing a filter then needs no manual cache bust;
+        only a source-data change needs ``reload=True``.
         """
 
         if data_label == "attach_data":
             files = self._attach_data_files
             output_file = self._data_loader["attach_data"]["local_cache"]
             columns = self._data_loader["attach_data"]["columns_to_read"]
-            row_filters = self._data_loader["attach_data"]["row_filters"]
             data_types = self.get_data_types("attach_data")
         elif data_label == "cluster_data":
             files = self._cluster_data_files
@@ -372,7 +401,6 @@ class ClusterAnalysisPipeline:
             # load_cluster_data can drop incomplete bins.
             if self.remove_short_sessions and self.session_count_column not in columns:
                 columns = columns + [self.session_count_column]
-            row_filters = self._data_loader["cluster_data"]["row_filters"]
             data_types = self.get_data_types("cluster_data")
         else:
             raise ValueError(f"unsupported data_label: {data_label!r}")
@@ -388,7 +416,6 @@ class ClusterAnalysisPipeline:
             files,
             local_cache_path=f"{self.work_dir}/{raw_output_file}",
             columns=columns,
-            row_filters=row_filters,
             data_types=data_types,
             reload=reload,
             lazy_load=False,
@@ -488,6 +515,27 @@ class ClusterAnalysisPipeline:
             save_local_cache(cast(pd.DataFrame, data), local_cache_path)
 
         data = apply_row_filters(cast(pd.DataFrame, data), row_filters)
+        # Drop rows where these columns are NaN, BEFORE the runner's fillna(0): for
+        # datasets where NaN means "undefined" (e.g. history features on a user's
+        # first bet-day), filling zeros would invent rows the model should not see.
+        dropna_columns = self._data_loader["cluster_data"].get("dropna_columns")
+        if dropna_columns:
+            before = len(data)
+            data = data.dropna(subset=dropna_columns)
+            logger.info(f"dropna_columns {dropna_columns}: dropped {before - len(data)} of {before} rows")
+        # Fixed log1p at load time, for features whose producing codebase defines
+        # them on a log1p scale (e.g. the HMM's LOG1P_FEATURES). Unlike the
+        # pipeline's PowerTransformer this is not fitted, so the same transform
+        # is guaranteed at train and apply time. Downstream consumers see these
+        # columns already transformed.
+        log1p_columns = self._data_loader["cluster_data"].get("log1p_columns")
+        if log1p_columns:
+            if (data[log1p_columns] < 0).any().any():
+                bad = [c for c in log1p_columns if (data[c] < 0).any()]
+                raise ValueError(f"log1p_columns contain negative values: {bad}")
+            data = data.copy()
+            data[log1p_columns] = np.log1p(data[log1p_columns])
+            logger.info(f"applied log1p to {log1p_columns}")
         return cast(pd.DataFrame, data)
 
     def preprocess_data(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -590,6 +638,9 @@ class ClusterAnalysisPipeline:
         return features_ordered_by_importance
 
     def _plot_feature_importance(self, feature_importance: pd.DataFrame):
+
+        import matplotlib.pyplot as plt
+        import seaborn as sns
 
         plt.figure(figsize=(9, 12))
         colors = sns.color_palette("viridis", len(feature_importance))
@@ -786,6 +837,8 @@ class ClusterAnalysisPipeline:
         """
 
         title = f"Elbow Method for Optimal {param_label} n_features({n_features})"
+        import matplotlib.pyplot as plt
+
         fig, ax1 = plt.subplots(figsize=(12, 9))
 
         x_label = "Number of Clusters (k)" if param_label == "k" else "DBSCAN eps"
@@ -1031,7 +1084,12 @@ class ClusterAnalysisPipeline:
         clipped with the bounds fitted during training (``clip_bounds.json``). Requires
         that ``top_features`` / ``n_clusters`` match the trained model so the pickle path
         and column count line up.
+
+        When ``cluster_analysis.pretrained_model_dir`` is set, the model + feature order
+        + clip bounds are fetched from that prior S3 run first, so applying a previously
+        trained model needs no local training run.
         """
+        self.ensure_pretrained_artifacts()
         feature_columns = self._load_feature_order()[: self.n_top_features]
         clipped = self._apply_clip_bounds(cast(pd.DataFrame, data[feature_columns]))
         pipeline = self.load_trained_model(model_path)
@@ -1044,7 +1102,109 @@ class ClusterAnalysisPipeline:
         new_labels[self.cluster_label_column] = cluster_labels
         self._write_cluster_labels(new_labels)
 
+        # Persist the aggregated (grouped) features alongside their predicted label, so
+        # this group's per-bin stats are inspectable next to the raw per-bet output that
+        # attach_cluster_label writes. Tagged + bin-size-suffixed to avoid collisions
+        # across the groups scored into the same run folder.
+        self._save_grouped_with_labels(data, cluster_labels)
+
+        # Radar over the standardized features the model actually clusters on (the loaded
+        # pipeline's transform == training-time power-transform + scaler), so the per-group
+        # cluster profiles are comparable to the training radar.
+        x_transformed = pipeline[:-1].transform(cast(pd.DataFrame, clipped))
+        radar_tag = self.output_tag or "group"
+        self.plot_radar_chart(
+            pd.DataFrame(x_transformed, columns=pd.Index(feature_columns)),
+            cluster_labels,
+            output_file_name=f"radar_apply_{radar_tag}",
+        )
+
         return cluster_labels
+
+    def _save_grouped_with_labels(self, data: pd.DataFrame, cluster_labels: np.ndarray) -> None:
+        """Write the aggregated (grouped) cluster_data with its predicted cluster label.
+
+        Output: ``output/grouped_data_<tag>_cluster_label_binsize{N}.parquet`` (the
+        merge keys + every grouped feature + the ``cluster_label_column``). This is the
+        aggregated-feature counterpart to the raw per-bet files attach_cluster_label
+        writes.
+        """
+        out = data.copy()
+        out[self.cluster_label_column] = cluster_labels
+        tag = f"_{self.output_tag}" if self.output_tag else ""
+        file_name = f"grouped_data{tag}_cluster_label_binsize{self.bin_size}.parquet"
+        out.to_parquet(self.output_path / "output" / file_name, index=False)
+        logger.info(f"saved aggregated features with cluster label to {self.output_path / 'output' / file_name}")
+
+    def ensure_pretrained_artifacts(self) -> None:
+        """Fetch the pretrained model + preprocessing sidecars from S3 into this run.
+
+        No-op when ``pretrained_model_dir`` is unset (normal two-phase flow where the
+        local training run produced the artifacts). Idempotent: files already present
+        are kept, so the three per-group apply runs sharing one run_id download once.
+
+        Required artifacts (apply fails without them): the model pickle,
+        ``feature_order.json``, ``clip_bounds.json``. Optional provenance copied when
+        present: cluster centers and the importance-ordered feature list.
+        """
+        src = self.pretrained_model_dir
+        if not src:
+            return
+        src = src.rstrip("/")
+        required = {self.pickle_model_name, "feature_order.json", "clip_bounds.json"}
+        artifacts = [
+            ("models", self.pickle_model_name),
+            ("models", "feature_order.json"),
+            ("models", "clip_bounds.json"),
+            ("models", f"cluster_centers_standardized_{self.n_top_features}_k_{self.n_clusters}.csv"),
+            ("features", "important_features.json"),
+        ]
+        client = get_s3_client()
+        for subdir, name in artifacts:
+            dest = self.output_path / subdir / name
+            if dest.exists():
+                continue
+            bucket, key = parse_s3_path(f"{src}/{subdir}/{name}")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                client.download_file(bucket, key, str(dest))
+                logger.info(f"fetched pretrained artifact s3://{bucket}/{key} -> {dest}")
+            except ClientError:
+                if name in required:
+                    raise
+                logger.warning(f"optional pretrained artifact not found, skipping: s3://{bucket}/{key}")
+        self.save_apply_run_info()
+
+    def save_apply_run_info(self) -> None:
+        """Write ``models/apply_run_info.json`` so the prediction is reproducible.
+
+        Records the source model folder, the exact pickle used, the hyperparameters
+        that resolve it (top_features / n_clusters / bin_size), the cluster-label column
+        name, and the top-N feature order the model consumes (clip bounds + full
+        importance list sit beside it as their own JSON files).
+        """
+        info_path = self.output_path / "models" / "apply_run_info.json"
+        if info_path.exists():
+            return
+        try:
+            feature_order = self._load_feature_order()
+        except FileNotFoundError:
+            feature_order = []
+        info = {
+            "pretrained_model_dir": self.pretrained_model_dir,
+            "pickle_model_name": self.pickle_model_name,
+            "cluster_model": self.cluster_model,
+            "top_features": self.n_top_features,
+            "n_clusters": self.n_clusters,
+            "bin_size": self.bin_size,
+            "cluster_label_column": self.cluster_label_column,
+            "feature_order_used": feature_order[: self.n_top_features],
+            "clip_bounds_file": "clip_bounds.json",
+            "feature_order_file": "feature_order.json",
+        }
+        with open(info_path, "w") as f:
+            json.dump(info, f, indent=2)
+        logger.info(f"wrote apply run info to {info_path}")
 
     def plot_pca(
         self,
@@ -1054,6 +1214,9 @@ class ClusterAnalysisPipeline:
         output_file_name: str = "PCA_Clusters",
     ) -> None:
         """Plot PCA visualization of clusters and pairwise plots for n_components > 3 using seaborn.pairplot."""
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+
         pca = PCA(n_components=n_components)
         x_pca = pca.fit_transform(data)
         n_clusters = len(np.unique(cluster_label))
@@ -1110,9 +1273,18 @@ class ClusterAnalysisPipeline:
         data.loc[:, "_cluster"] = data_cluster
         cluster_means = data.groupby("_cluster").mean().T
         cluster_means.sort_index(ascending=True, inplace=True)
+        # Persist the per-cluster feature means that the radar draws, so the plot is
+        # reproducible / consumable downstream without re-deriving it from raw output.
+        cluster_means.to_csv(
+            self.output_path
+            / "output"
+            / f"{output_file_name}_cluster_means_k({self.n_clusters})_n_features({self.n_top_features}).csv"
+        )
         categories = cluster_means.index
         angles = np.linspace(0, 2 * np.pi, len(categories), endpoint=False).tolist()
         angles += angles[:1]
+
+        import matplotlib.pyplot as plt
 
         fig, ax = plt.subplots(figsize=(20, 16), subplot_kw=dict(polar=True))
         for cluster, values in cluster_means.items():
@@ -1193,6 +1365,9 @@ class ClusterAnalysisPipeline:
         if self.cluster_model == "kmeans":
             onnx_opset_version = self.onnx_opset_version
             logger.info(f"Using ONNX opset version: {onnx_opset_version}")
+            from skl2onnx import convert_sklearn
+            from skl2onnx.common.data_types import FloatTensorType
+
             initial_type = [("float_input", FloatTensorType([None, self.n_top_features]))]
             onnx_convert_result = convert_sklearn(pipeline, initial_types=initial_type, target_opset=onnx_opset_version)
             onnx_model = onnx_convert_result[0] if isinstance(onnx_convert_result, tuple) else onnx_convert_result
