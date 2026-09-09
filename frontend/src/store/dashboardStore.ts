@@ -257,9 +257,11 @@ export function activePeriodTotalGroups(
     }
     const def = defs.find((g) => g.label === label);
     // Strict max > min: with a right-exclusive bound, max == min is empty.
+    // Legend label is just the range — the tier names (spend_mid, ...) are
+    // picker handles, and dropping them keeps chart legends short.
     if (def && def.label.trim() && (def.max === null || def.max > def.min)) {
       groups.push({
-        label: `${def.label.trim()}[${def.min}, ${def.max ?? "\u221e"})`,
+        label: `[${def.min}, ${def.max ?? "\u221e"})`,
         column: col,
         min: def.min,
         max: def.max,
