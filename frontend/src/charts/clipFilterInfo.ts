@@ -6,10 +6,19 @@ import type { ClipOpts, FilterOpts } from "../api/types";
 export function clipFilterInfo(clip?: ClipOpts | null, filter?: FilterOpts | null): string {
   const parts: string[] = [];
   if (clip?.enable && (clip.min != null || clip.max != null)) {
-    parts.push(`clip: [${clip.min ?? "-inf"}, ${clip.max ?? "inf"}]`);
+    parts.push(
+      clip.percentile
+        ? `clip: [${clip.min ?? 0}%, ${clip.max ?? 100}%]`
+        : `clip: [${clip.min ?? "-inf"}, ${clip.max ?? "inf"}]`,
+    );
   }
   if (filter?.enable && (filter.min != null || filter.max != null)) {
-    parts.push(`filter: [${filter.min ?? 0}%, ${filter.max ?? 100}%]`);
+    // pre-percentile figure sources lack the flag; they were percentile filters
+    parts.push(
+      (filter.percentile ?? true)
+        ? `filter: [${filter.min ?? 0}%, ${filter.max ?? 100}%]`
+        : `filter: [${filter.min ?? "-inf"}, ${filter.max ?? "inf"}]`,
+    );
   }
   return parts.join(", ");
 }

@@ -34,8 +34,7 @@ from dashboard_api.schemas.data import (
 from dashboard_api.services import common, configs, series as series_mod
 from dashboard_api.services.common import SeriesError, availability_cols, collect_window, projection_columns
 from dashboard_api.services.configs import build_config_detail, load_raw_config
-from dashboard_api.services.deepdive import _percentile_filter, _percentile_row_mask
-from dashboard_api.services.group_distribution import _percentile_filter as _gd_filter
+from dashboard_api.services.reshape import clip_values, filter_row_mask, filter_values
 
 
 def test_health_ok():
@@ -128,27 +127,49 @@ def test_load_config_from_s3(monkeypatch, mock_s3_client):
 
 
 def test_percentile_filter_drops_tails():
-    """The Stats-by-Group / Deep Dive "filter [min]% [max]%" control removes
-    samples outside the percentile bounds (unlike clip, which pins them)."""
+    """The Stats-by-Group / Deep Dive "filter %" row removes samples outside
+    the percentile bounds (unlike clip, which pins them)."""
 
     vals = np.arange(101, dtype=float)  # 0..100: value == its own percentile
-    for fn in (_percentile_filter, _gd_filter):
-        out = fn(vals, True, 10, 90)
-        assert out.min() == 10 and out.max() == 90 and len(out) == 81
-        assert len(fn(vals, False, 10, 90)) == 101  # disabled → untouched
-        assert len(fn(vals, True, None, None)) == 101  # no bounds → untouched
-        assert fn(vals, True, 0, 100).tolist() == vals.tolist()  # full range keeps all
-        assert len(fn(np.array([]), True, 10, 90)) == 0  # empty stays empty
+    out = filter_values(vals, True, 10, 90, percentile=True)
+    assert out.min() == 10 and out.max() == 90 and len(out) == 81
+    assert len(filter_values(vals, False, 10, 90, percentile=True)) == 101  # disabled → untouched
+    assert len(filter_values(vals, True, None, None, percentile=True)) == 101  # no bounds → untouched
+    assert filter_values(vals, True, 0, 100, percentile=True).tolist() == vals.tolist()  # full range keeps all
+    assert len(filter_values(np.array([]), True, 10, 90, percentile=True)) == 0  # empty stays empty
 
-    one_sided = _percentile_filter(vals, True, None, 50)
+    one_sided = filter_values(vals, True, None, 50, percentile=True)
     assert one_sided.max() == 50 and one_sided.min() == 0
 
     # Row mask: a row is kept only when EVERY column is inside its own bounds.
     arr = np.column_stack([vals, vals[::-1]])
-    mask = _percentile_row_mask(arr, 10, 90)
+    mask = filter_row_mask(arr, 10, 90, percentile=True)
     kept = arr[mask]
     assert kept[:, 0].min() >= 10 and kept[:, 0].max() <= 90
     assert kept[:, 1].min() >= 10 and kept[:, 1].max() <= 90
+
+
+def test_value_based_filter_and_percentile_clip():
+    """The clip-filter box's new rows: "filter" drops samples outside an
+    ABSOLUTE [min, max]; "clip %" pins values to PERCENTILE bounds computed
+    on the sample itself."""
+
+    vals = np.arange(101, dtype=float)
+
+    out = filter_values(vals, True, 5, 95, percentile=False)
+    assert out.min() == 5 and out.max() == 95 and len(out) == 91
+    one_sided = filter_values(vals, True, None, 500, percentile=False)  # bound beyond data keeps all
+    assert len(one_sided) == 101
+
+    clipped = clip_values(vals, True, 10, 90, percentile=True)
+    assert clipped.min() == 10 and clipped.max() == 90 and len(clipped) == 101  # pinned, not dropped
+    assert clip_values(vals, True, 10, 90, percentile=False).min() == 10  # value clip unchanged
+    assert len(clip_values(np.array([]), True, 10, 90, percentile=True)) == 0
+
+    # Row mask with absolute bounds: every column must be inside [min, max].
+    arr = np.column_stack([vals, vals[::-1]])
+    kept = arr[filter_row_mask(arr, 20, 80, percentile=False)]
+    assert kept.min() >= 20 and kept.max() <= 80
 
 
 def _lifecycle_fixture():

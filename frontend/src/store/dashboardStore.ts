@@ -8,6 +8,7 @@ import { useReportStore } from "./reportStore";
 import type { RangeState } from "../components/DateRanges";
 import type { LifecycleGroupState } from "../components/LifecycleGroups";
 import type { RangeGroupDef } from "../components/RangeGroupSelect";
+import { type ClipFilterRows, noClip, noFilter } from "../components/clipFilter";
 import type {
   ClipOpts,
   ConfigDetail,
@@ -299,7 +300,8 @@ export interface GroupPanelState {
   metric: string | null;
   mode: "box" | "bar";
   clip: ClipOpts;
-  filter: FilterOpts; // percentile filter: drop samples outside [min%, max%]
+  filter: FilterOpts;
+  clipFilterRows: ClipFilterRows; // inactive rows' bound memory (see components/clipFilter.ts)
   stats: GroupStat[];
   missing: boolean;
 }
@@ -327,7 +329,8 @@ export interface DeepdivePanelState {
   logY: boolean; // histogram count axis (display)
   normalize: boolean;
   clip: ClipOpts;
-  filter: FilterOpts; // percentile filter: drop samples outside [min%, max%]
+  filter: FilterOpts;
+  clipFilterRows: ClipFilterRows; // inactive rows' bound memory (see components/clipFilter.ts)
   outliersStd: number | null; // scatter: drop rows beyond N std (null = off)
   scatterLogX: boolean; // scatter x axis (display)
   scatterLogY: boolean; // scatter y axis (display)
@@ -338,8 +341,6 @@ export interface DeepdivePanelState {
 }
 
 const DEFAULT_THRESHOLD = 10;
-const noClip = (): ClipOpts => ({ enable: false, min: null, max: null });
-const noFilter = (): FilterOpts => ({ enable: false, min: null, max: null });
 
 function defaultPanels(config: ConfigDetail): Record<string, PanelState> {
   // Only the FIRST panel starts with a metric selected, so first launch fires
@@ -363,6 +364,7 @@ const defaultGroupPanel = (): GroupPanelState => ({
   mode: "bar",
   clip: noClip(),
   filter: noFilter(),
+  clipFilterRows: {},
   stats: [],
   missing: false,
 });
@@ -407,6 +409,7 @@ const emptyDeepdivePanel = (): DeepdivePanelState => ({
   normalize: false,
   clip: noClip(),
   filter: noFilter(),
+  clipFilterRows: {},
   outliersStd: null,
   scatterLogX: false,
   scatterLogY: false,
@@ -415,6 +418,16 @@ const emptyDeepdivePanel = (): DeepdivePanelState => ({
   scatters: [],
   missing: [],
 });
+
+function normalizeDeepdivePanel(v?: Partial<DeepdivePanelState>): DeepdivePanelState {
+  return {
+    ...emptyDeepdivePanel(),
+    ...(v ?? {}),
+    // pre-percentile snapshots lack the flag; defaults keep the old meanings
+    clip: { ...noClip(), ...(v?.clip ?? {}) },
+    filter: { ...noFilter(), ...(v?.filter ?? {}) },
+  };
+}
 
 // A serializable snapshot of the dashboard's UI selections (NOT fetched data /
 // figures) — the React-era "save/load config". Persisted opaquely to S3.
@@ -576,8 +589,7 @@ interface DashboardState {
   // Stats-by-Group
   setGroupMetric: (panelId: string, metric: string | null) => void;
   setGroupMode: (panelId: string, mode: "box" | "bar") => void;
-  setGroupClip: (panelId: string, clip: ClipOpts) => void;
-  setGroupFilter: (panelId: string, filter: FilterOpts) => void;
+  setGroupClipFilter: (panelId: string, patch: { clip: ClipOpts; filter: FilterOpts; clipFilterRows: ClipFilterRows }) => void;
   loadGroupDistribution: () => Promise<void>;
 
   // Summary table
@@ -1093,10 +1105,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     set((s) => (s.group[panelId] ? { group: { ...s.group, [panelId]: { ...s.group[panelId], metric } } } : {})),
   setGroupMode: (panelId, mode) =>
     set((s) => (s.group[panelId] ? { group: { ...s.group, [panelId]: { ...s.group[panelId], mode } } } : {})),
-  setGroupClip: (panelId, clip) =>
-    set((s) => (s.group[panelId] ? { group: { ...s.group, [panelId]: { ...s.group[panelId], clip } } } : {})),
-  setGroupFilter: (panelId, filter) =>
-    set((s) => (s.group[panelId] ? { group: { ...s.group, [panelId]: { ...s.group[panelId], filter } } } : {})),
+  setGroupClipFilter: (panelId, patch) =>
+    set((s) => (s.group[panelId] ? { group: { ...s.group, [panelId]: { ...s.group[panelId], ...patch } } } : {})),
 
   loadGroupDistribution: async () => {
     const { configId, controls, dateGroups, group } = get();
@@ -1351,7 +1361,16 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         group: {
           ...defaultGroupPanels(config),
           ...Object.fromEntries(
-            Object.entries(snap.group ?? {}).map(([k, v]) => [k, { ...defaultGroupPanel(), ...v }]),
+            Object.entries(snap.group ?? {}).map(([k, v]) => [
+              k,
+              {
+                ...defaultGroupPanel(),
+                ...v,
+                // pre-percentile snapshots lack the flag; defaults keep the old meanings
+                clip: { ...noClip(), ...(v.clip ?? {}) },
+                filter: { ...noFilter(), ...(v.filter ?? {}) },
+              },
+            ]),
           ),
         },
         summaryTable: {
@@ -1363,8 +1382,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
           missing: false,
         },
         deepdive: {
-          derived: { ...emptyDeepdivePanel(), ...(snap.deepdive?.derived ?? {}) },
-          user: { ...emptyDeepdivePanel(), ...(snap.deepdive?.user ?? {}) },
+          derived: normalizeDeepdivePanel(snap.deepdive?.derived),
+          user: normalizeDeepdivePanel(snap.deepdive?.user),
         },
       });
       await get().ensureGroupValues(get().dateGroups.granularity);

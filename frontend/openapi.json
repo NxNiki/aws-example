@@ -29,6 +29,11 @@
               }
             ],
             "title": "Min"
+          },
+          "percentile": {
+            "default": false,
+            "title": "Percentile",
+            "type": "boolean"
           }
         },
         "title": "ClipOpts",
@@ -894,8 +899,6 @@
           "max": {
             "anyOf": [
               {
-                "maximum": 100.0,
-                "minimum": 0.0,
                 "type": "number"
               },
               {
@@ -907,8 +910,6 @@
           "min": {
             "anyOf": [
               {
-                "maximum": 100.0,
-                "minimum": 0.0,
                 "type": "number"
               },
               {
@@ -916,6 +917,11 @@
               }
             ],
             "title": "Min"
+          },
+          "percentile": {
+            "default": true,
+            "title": "Percentile",
+            "type": "boolean"
           }
         },
         "title": "FilterOpts",

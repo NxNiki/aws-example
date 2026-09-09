@@ -24,6 +24,7 @@ import polars as pl
 from bituslabs_ds.metrics.stat_tests import compare_groups
 from bituslabs_ds.metrics.user_stats_aggregates import RETENTION_LOAD_EXTRA_DAYS, DataMetrics
 from dashboard_api.services.common import SeriesError, collect_window, iter_cohorts, load_lazy, stats_by_date_cfg
+from dashboard_api.services.reshape import clip_values
 
 logger = logging.getLogger(__name__)
 
@@ -47,13 +48,16 @@ def _cell(vals: np.ndarray) -> dict[str, Any]:
 
 
 def _reshape(vals: np.ndarray, opt: Optional[dict[str, Any]]) -> np.ndarray:
-    """Apply a metric's clip then signed-log1p (per-metric display reshaping)."""
+    """Apply a metric's clip (value- or percentile-based) then signed-log1p."""
     if not opt:
         return vals
-    if opt.get("clip_enable") and (opt.get("clip_min") is not None or opt.get("clip_max") is not None):
-        lo = opt["clip_min"] if opt.get("clip_min") is not None else -np.inf
-        hi = opt["clip_max"] if opt.get("clip_max") is not None else np.inf
-        vals = np.clip(vals, lo, hi)
+    vals = clip_values(
+        vals,
+        bool(opt.get("clip_enable")),
+        opt.get("clip_min"),
+        opt.get("clip_max"),
+        bool(opt.get("clip_percentile")),
+    )
     if opt.get("log"):
         vals = np.sign(vals) * np.log1p(np.abs(vals))
     return vals

@@ -1,7 +1,8 @@
-import { ClipControls } from "../../components/ClipControls";
+import { ClipFilterControls } from "../../components/ClipFilterControls";
+import { noClip, noFilter } from "../../components/clipFilter";
 import type { MetricGroup, SummaryMetricOption } from "../../api/types";
 
-const NO_OPT: SummaryMetricOption = { log: false, clip: { enable: false, min: null, max: null } };
+const NO_OPT: SummaryMetricOption = { log: false, clip: noClip() };
 
 // One metric group's picker for the Summary-table tab: a checkbox per metric to
 // include it, and — once selected — its own log toggle + clip (min/max) on the
@@ -38,7 +39,13 @@ export function MetricSelector(props: {
                     />
                     log
                   </label>
-                  <ClipControls clip={opt.clip} onChange={(clip) => props.onOption(m, { ...opt, clip })} />
+                  <ClipFilterControls
+                    clip={opt.clip}
+                    filter={noFilter()}
+                    rows={opt.clipRows ?? {}}
+                    kinds={["clip_value", "clip_pct"]}
+                    onChange={({ clip, clipFilterRows }) => props.onOption(m, { ...opt, clip, clipRows: clipFilterRows })}
+                  />
                 </div>
               )}
             </div>

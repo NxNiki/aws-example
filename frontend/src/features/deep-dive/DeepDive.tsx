@@ -6,8 +6,7 @@ import { buildScatterOption } from "../../charts/scatterOption";
 import { clipFilterInfo } from "../../charts/clipFilterInfo";
 import { CohortSelect } from "../../components/CohortSelect";
 import { RangeGroupSelect } from "../../components/RangeGroupSelect";
-import { ClipControls } from "../../components/ClipControls";
-import { FilterControls } from "../../components/FilterControls";
+import { ClipFilterControls } from "../../components/ClipFilterControls";
 import { MetricCheckList } from "../../components/MetricCheckList";
 import { activeLifecycleGroups, activeRangeDimensions, rangeGroupValues, useDashboardStore, visibleGroupValues } from "../../store/dashboardStore";
 import { AddToReportButton } from "../report/AddToReport";
@@ -185,8 +184,12 @@ function DeepdivePanelView(props: {
               </label>
             </div>
           )}
-          <ClipControls clip={panel.clip} onChange={(clip) => props.onPatch({ clip })} />
-          <FilterControls filter={panel.filter} onChange={(filter) => props.onPatch({ filter })} />
+          <ClipFilterControls
+            clip={panel.clip}
+            filter={panel.filter}
+            rows={panel.clipFilterRows}
+            onChange={(patch) => props.onPatch(patch)}
+          />
           <AddToReportButton
             getFigure={() => ({
               title: `Deep Dive ${props.panelId} — ${panel.mode}: ${panel.metrics.join(", ") || "no metrics"}`,

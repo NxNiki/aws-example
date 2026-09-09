@@ -23,50 +23,13 @@ import polars as pl
 
 from bituslabs_ds.metrics.user_stats_aggregates import RETENTION_LOAD_EXTRA_DAYS, DataMetrics
 from dashboard_api.services.common import SeriesError, collect_window, iter_cohorts, load_lazy, stats_by_date_cfg
+from dashboard_api.services.reshape import clip_columns, clip_values, filter_row_mask, filter_values
 
 logger = logging.getLogger(__name__)
 
 # Cap points shipped per scatter series; sampled deterministically so the plot
 # is stable across refetches. Legacy ships all points (client-side Plotly).
 MAX_SCATTER_POINTS = 5000
-
-
-def _clip(vals: np.ndarray, enable: bool, lo: Optional[float], hi: Optional[float]) -> np.ndarray:
-    if enable and (lo is not None or hi is not None):
-        return np.clip(vals, lo if lo is not None else -np.inf, hi if hi is not None else np.inf)
-    return vals
-
-
-def _percentile_filter(vals: np.ndarray, enable: bool, lo_pct: Optional[float], hi_pct: Optional[float]) -> np.ndarray:
-    """Drop samples below the lo_pct / above the hi_pct percentile (0–100).
-
-    Dashboard feature: the "filter [min]% [max]%" control next to clip on the
-    Deep Dive tab. Unlike clip (which pins values to the bound), filtered
-    samples are REMOVED before binning; bounds are computed on each
-    (metric × cohort × range) sample itself.
-    """
-    if not enable or len(vals) == 0 or (lo_pct is None and hi_pct is None):
-        return vals
-    mask = np.ones(len(vals), dtype=bool)
-    if lo_pct is not None:
-        mask &= vals >= np.percentile(vals, lo_pct)
-    if hi_pct is not None:
-        mask &= vals <= np.percentile(vals, hi_pct)
-    return vals[mask]
-
-
-def _percentile_row_mask(arr: np.ndarray, lo_pct: Optional[float], hi_pct: Optional[float]) -> np.ndarray:
-    """Keep rows inside the [lo_pct, hi_pct] percentile bounds on EVERY column
-    (each column's bounds computed from that column). Row semantics mirror
-    _outlier_mask so heatmap/scatter observations stay aligned across metrics."""
-    mask = np.ones(arr.shape[0], dtype=bool)
-    for k in range(arr.shape[1]):
-        col = arr[:, k]
-        if lo_pct is not None:
-            mask &= col >= np.percentile(col, lo_pct)
-        if hi_pct is not None:
-            mask &= col <= np.percentile(col, hi_pct)
-    return mask
 
 
 def _metric_values(
@@ -147,9 +110,11 @@ def load_deepdive(
     clip_enable: bool = False,
     clip_min: Optional[float] = None,
     clip_max: Optional[float] = None,
+    clip_percentile: bool = False,
     filter_enable: bool = False,
     filter_min: Optional[float] = None,
     filter_max: Optional[float] = None,
+    filter_percentile: bool = True,
     nbins: int = 50,
     normalize: bool = False,
     outliers_std: Optional[float] = None,
@@ -218,10 +183,10 @@ def load_deepdive(
                     if vals is None or len(vals) == 0:
                         continue
                     produced.add(m)
-                    vals = _percentile_filter(vals, filter_enable, filter_min, filter_max)
+                    vals = filter_values(vals, filter_enable, filter_min, filter_max, filter_percentile)
                     if len(vals) == 0:
                         continue
-                    vals = _clip(vals, clip_enable, clip_min, clip_max)
+                    vals = clip_values(vals, clip_enable, clip_min, clip_max, clip_percentile)
                     counts, edges = np.histogram(vals, bins=nbins, density=normalize)
                     histograms.append(
                         {
@@ -246,11 +211,8 @@ def load_deepdive(
             produced.update(cols)
             arr = obs.to_numpy().astype(float)
             if filter_enable and arr.shape[0] > 0 and (filter_min is not None or filter_max is not None):
-                arr = arr[_percentile_row_mask(arr, filter_min, filter_max)]
-            if clip_enable and (clip_min is not None or clip_max is not None):
-                arr = np.clip(
-                    arr, clip_min if clip_min is not None else -np.inf, clip_max if clip_max is not None else np.inf
-                )
+                arr = arr[filter_row_mask(arr, filter_min, filter_max, filter_percentile)]
+            arr = clip_columns(arr, clip_enable, clip_min, clip_max, clip_percentile)
 
             if mode == "heatmap":
                 if arr.shape[0] < 2:

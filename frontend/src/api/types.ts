@@ -157,6 +157,9 @@ export interface ReportSpec {
 export interface SummaryMetricOption {
   log: boolean;
   clip: ClipOpts;
+  // UI-only bound memory for the inactive clip row (see components/clipFilter.ts);
+  // the server ignores it.
+  clipRows?: import("../components/clipFilter").ClipFilterRows;
 }
 
 export interface SummaryTableRequest {
